@@ -30,7 +30,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
-// test/services/pty-manager.test.ts and test/routes/sessions.test.ts, so
+// test/helpers/pty-manager-harness.ts and test/routes/sessions.test.ts, so
 // this file exercises the route/DB layer without depending on a real
 // `systemd --user` session existing in CI. This file is the one place
 // `POST /api/sessions` was still hitting a real spawn: CI's runner can't
@@ -647,7 +647,7 @@ describe("projects route", () => {
       // project's own root. `app.pty.get(id)?.liveCwd` is stubbed rather than
       // driven through a real spawned shell (this test's actual concern is
       // resolveSessionCwdTargets's merge logic, not PtyManager's OSC-7
-      // wiring — already covered by test/services/pty-manager.test.ts's own
+      // wiring — already covered by test/services/pty-manager-scrollback.test.ts's own
       // liveCwd tests — and a real spawn depends on a live systemd --user
       // session, which isn't guaranteed in every test environment).
       const { execFileSync } = await import("node:child_process");

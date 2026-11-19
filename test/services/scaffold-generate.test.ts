@@ -6,6 +6,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
 import { gitEnv } from "../../src/services/git-env.js";
+import { fixtureGit as git, initFixtureRepo as initRepo } from "../helpers/git-fixture-repo.js";
 import { LOCAL_HOST_ID } from "../../src/services/host-registry.js";
 import {
   buildGenerationPrompt,
@@ -67,18 +68,6 @@ function probeBwrapUsableSync(): boolean {
   }
 }
 const describeIfBwrap = probeBwrapUsableSync() ? describe : describe.skip;
-
-function git(cwd: string, args: string[]) {
-  execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
-}
-
-function initRepo(cwd: string) {
-  fs.mkdirSync(cwd, { recursive: true });
-  git(cwd, ["init", "-b", "main"]);
-  fs.writeFileSync(path.join(cwd, "README.md"), "# test repo\n");
-  git(cwd, ["add", "-A"]);
-  git(cwd, ["commit", "-m", "initial commit", "--no-verify"]);
-}
 
 function validOutput(slug: string, extra = ""): string {
   return (
@@ -923,12 +912,10 @@ describe("wrapWithSandbox", () => {
       "--bind",
       "/tmp/some/scratch-worktree",
       "/tmp/some/scratch-worktree",
+      "--unshare-pid",
       "--die-with-parent",
       "--",
-      "claude",
-      "-p",
-      "--",
-      "hello",
+      ...["claude", "-p", "--", "hello"],
     ]);
   });
 
@@ -1961,45 +1948,43 @@ describeIfBwrap(
 
     it("execFile's own timeout still kills the whole sandboxed subtree (no orphaned inner process)", async () => {
       // Not just "the outer execFile promise rejected as killed" — that
-      // alone doesn't prove the INNER sandboxed process actually died too
-      // (the exact orphaned-process failure mode --die-with-parent exists
-      // to prevent). `exec sleep 30` replaces the shell with `sleep`
-      // in-place, so the PID this script writes to disk IS the real PID of
-      // the long-running process bwrap wraps (confirmed live: bwrap does
-      // not `--unshare-pid` here, so it shares the host's PID namespace —
-      // `pstree` during manual verification showed `bwrap(N)---sleep(M)`,
-      // i.e. two real, checkable PIDs, not one opaque subtree).
-      const pidFile = path.join(scratchWorktree, "inner.pid");
-      const script = `echo $$ > ${JSON.stringify(pidFile)}; exec sleep 30`;
-      const { bin, args } = wrapWithSandbox("/bin/sh", ["-c", script], scratchWorktree);
+      // alone doesn't prove the INNER sandboxed process died too (the
+      // orphaned-process failure mode --die-with-parent/--unshare-pid exist
+      // to prevent). The sandbox has its own PID namespace, so a PID the
+      // script writes would be the namespace's, not the host's. Instead the
+      // process is found from the host by a unique argv marker in
+      // /proc/*/cmdline (`exec sleep` makes the marker the sleep's own argv).
+      const marker = `30.${process.pid}${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+      const hostHasMarker = (): boolean =>
+        fs.readdirSync("/proc").some((entry) => {
+          try {
+            const argv = fs.readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0");
+            return !!argv[0]?.endsWith("sleep") && argv[1] === marker;
+          } catch {
+            return false; // not a process dir, or it exited mid-scan
+          }
+        });
+      const waitFor = async (want: boolean, ms: number): Promise<boolean> => {
+        const end = Date.now() + ms;
+        while (hostHasMarker() !== want && Date.now() < end)
+          await new Promise((r) => setTimeout(r, 25));
+        return hostHasMarker();
+      };
+      const { bin, args } = wrapWithSandbox(
+        "/bin/sh",
+        ["-c", `exec sleep ${marker}`],
+        scratchWorktree,
+      );
 
       const start = Date.now();
-      await expect(execFileAsync(bin, args, { timeout: 1000 })).rejects.toMatchObject({
-        killed: true,
-      });
-      const elapsedMs = Date.now() - start;
-      // Generous upper bound — proves the 30s sleep did NOT run to
-      // completion, i.e. timeout actually killed the sandboxed subtree.
-      expect(elapsedMs).toBeLessThan(10_000);
-
-      const innerPid = Number(fs.readFileSync(pidFile, "utf8").trim());
-      expect(Number.isInteger(innerPid)).toBe(true);
-      // process.kill(pid, 0) throws ESRCH once the process is actually
-      // gone — the real, checkable proof `sleep` didn't survive as an
-      // orphan under whatever reparented it (e.g. pid 1). SIGTERM delivery
-      // and process teardown aren't instantaneous, so poll briefly rather
-      // than asserting immediately after the outer promise settles.
-      const deadlineMs = Date.now() + 3000;
-      let stillAlive = true;
-      while (Date.now() < deadlineMs) {
-        try {
-          process.kill(innerPid, 0);
-          await new Promise((r) => setTimeout(r, 50));
-        } catch {
-          stillAlive = false;
-          break;
-        }
-      }
+      const running = execFileAsync(bin, args, { timeout: 1500 });
+      running.catch(() => {}); // no unhandled rejection while scanning
+      // Must be visible BEFORE the timeout, else "gone" below proves nothing.
+      expect(await waitFor(true, 1200)).toBe(true);
+      await expect(running).rejects.toMatchObject({ killed: true });
+      // Generous bound: the 30s sleep did not run to completion.
+      expect(Date.now() - start).toBeLessThan(10_000);
+      const stillAlive = await waitFor(false, 3000);
       expect(stillAlive).toBe(false);
     });
   },

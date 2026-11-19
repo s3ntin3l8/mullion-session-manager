@@ -15,6 +15,7 @@ import {
   validateModel,
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
+  resolveWorkerSpawnModels,
 } from "../../src/services/task-model-resolve.js";
 import {
   isClaudeModelAlias,
@@ -525,5 +526,42 @@ describe("isClaudeModelAlias / validateClaudeSmallModel (#2032)", () => {
     expect(validateClaudeSmallModel("haiku")).toBe(false);
     expect(validateClaudeSmallModel("newalias[1m]")).toBe(false);
     expect(validateClaudeSmallModel("$(x); y")).toBe(false);
+  });
+});
+
+const NO_OVERRIDES = { modelOverride: null, smallModelOverride: null, body: null };
+
+describe("resolveWorkerSpawnModels", () => {
+  beforeEach(() => {
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue({
+      claudeCode: { defaultModel: "sonnet", reviewerModel: null, smallModel: null },
+      codex: { defaultModel: null, reviewerModel: null },
+      agy: { defaultModel: "gemini-4-hydrogen-medium", reviewerModel: null },
+      opencode: { implementerModel: null, reviewerModel: null, defaultSmallModel: null },
+    });
+  });
+
+  it("gives an agy worker the install default when the task has no override", () => {
+    expect(resolveWorkerSpawnModels(mockApp(), "agy", NO_OVERRIDES)).toEqual({
+      model: "gemini-4-hydrogen-medium",
+      smallModel: undefined,
+    });
+  });
+
+  it("prefers the task override", () => {
+    expect(
+      resolveWorkerSpawnModels(mockApp(), "agy", {
+        ...NO_OVERRIDES,
+        modelOverride: "gemini-4-argon",
+      }).model,
+    ).toBe("gemini-4-argon");
+  });
+
+  it("returns nothing for a command with no model concept", () => {
+    expect(resolveWorkerSpawnModels(mockApp(), "bash", NO_OVERRIDES)).toEqual({
+      model: undefined,
+      smallModel: undefined,
+    });
   });
 });

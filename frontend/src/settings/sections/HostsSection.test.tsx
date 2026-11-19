@@ -99,6 +99,74 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText("2 leaked browsers")).toBeInTheDocument();
   });
 
+  it("flags an outdated agent with both versions in the explanation (issue #2969)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({ id: "local", name: "This machine", isLocal: true, mullionVersion: "0.3.62" }),
+        makeHost({
+          id: "old",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          legacyAgent: true,
+          mullionVersion: "0.3.50",
+        }),
+        makeHost({ id: "new", name: "current", legacyAgent: false }),
+      ],
+    });
+    render(<HostsSection />);
+    const badge = screen.getByText("Outdated agent — upgrade");
+    expect(badge).toHaveAttribute("title", expect.stringMatching(/v0\.3\.50.*v0\.3\.62/s));
+    expect(screen.getAllByText("Outdated agent — upgrade")).toHaveLength(1);
+  });
+
+  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [makeHost({ id: "h", name: "mac", legacyAgent: true, mullionVersion: "0.3.62" })],
+    });
+    render(<HostsSection />);
+    const label = screen.getByText("Not registered — set primary URL");
+    expect(label).toHaveAttribute("title", expect.stringMatching(/MULLION_PRIMARY_URL/));
+    expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
+  });
+
+  it("sends a cleared address as null for a host with a machine identity (issue #3091)", async () => {
+    const patches: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "PATCH") {
+          patches.push(JSON.parse(String(init.body)));
+          return Promise.resolve(jsonResponse(200, useDashboardStore.getState().hosts[0]));
+        }
+        if (url === "/api/hosts") {
+          return Promise.resolve(jsonResponse(200, useDashboardStore.getState().hosts));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      }),
+    );
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "mac",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+        }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    await user.click(screen.getByText("Edit"));
+    await user.clear(screen.getByLabelText(/^Base URL/));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await vi.waitFor(() => expect(patches).toEqual([{ name: "macbook", baseUrl: null }]));
+  });
+
   it("flags a possible duplicate and offers Remove stale host on the older row only (issue #2582)", async () => {
     stubFetch({});
     useDashboardStore.setState({
@@ -139,6 +207,45 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText("Xcode · Android emulator")).toBeInTheDocument();
     expect(screen.getByText("capabilities unknown")).toBeInTheDocument();
     expect(screen.getByText("no extra capabilities")).toBeInTheDocument();
+  });
+
+  it("shows the session environment, a fallback warning, and 'not reported' (#3156)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "mac",
+          sessionEnv: {
+            shell: "/bin/zsh",
+            interactiveResolve: "fallback",
+            reason: "timeout",
+            path: ["/usr/bin", "/bin"],
+            recoveredKeys: [],
+          },
+        }),
+        makeHost({ id: "h2", name: "old", sessionEnv: null }),
+        makeHost({
+          id: "h3",
+          name: "fine",
+          sessionEnv: {
+            shell: "/bin/bash",
+            interactiveResolve: "ok",
+            reason: null,
+            path: ["/opt/bin"],
+            recoveredKeys: ["ANDROID_HOME"],
+          },
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    const warning = screen.getByTestId("host-session-env-warning-h1");
+    expect(warning).toHaveTextContent("PATH recovery fell back: timeout");
+    expect(screen.getByTestId("host-session-env-h1")).not.toHaveAttribute("open");
+    expect(screen.getByText("/usr/bin")).toBeInTheDocument();
+    expect(screen.getByTestId("host-session-env-h2")).toHaveTextContent("not reported");
+    expect(screen.queryByTestId("host-session-env-warning-h3")).not.toBeInTheDocument();
+    expect(screen.getByText("Recovered: ANDROID_HOME")).toBeInTheDocument();
   });
 
   it("shows the protocol version, legacy hosts, incompatibility and missing operations", () => {
@@ -216,5 +323,73 @@ describe("HostsSection token rotation", () => {
 
     expect(await screen.findByText(/boom/)).toBeInTheDocument();
     expect(screen.queryByText(/New token for/)).not.toBeInTheDocument();
+  });
+
+  it("for a live-identity host says the agent is unaffected and offers rotate-and-discard", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "win-pc",
+          baseUrl: null,
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+        }),
+      ],
+    });
+    stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    await user.click(screen.getByText("Rotate token"));
+    await user.click(screen.getByText("Click again to rotate (agent unaffected)"));
+
+    expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
+    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/keeps working/);
+    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/leaked/);
+    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/another rotation/);
+    expect(screen.queryByText(/can no longer reach this primary/)).not.toBeInTheDocument();
+  });
+
+  it("rotate-and-discard never renders the token and keeps no dialog open", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "win-pc",
+          baseUrl: null,
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+        }),
+      ],
+    });
+    const calls = stubFetch({ rotate: () => jsonResponse(200, { token: "secret-token-xyz" }) });
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    await user.click(screen.getByText("Rotate token and discard it"));
+    await user.click(screen.getByText("Click again to rotate (token not shown)"));
+
+    await vi.waitFor(() => expect(calls).toContain("POST /api/hosts/h1/rotate-token"));
+    expect(screen.queryByText(/New token for/)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("secret-token-xyz");
+    expect(JSON.stringify(useDashboardStore.getState())).not.toContain("secret-token-xyz");
+  });
+
+  it("for a host without a live identity keeps the lockout copy and offers no discard", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [makeHost({ id: "h1", name: "win-pc", baseUrl: null })],
+    });
+    stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });
+    render(<HostsSection />);
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    expect(screen.queryByText("Rotate token and discard it")).not.toBeInTheDocument();
+    await user.click(screen.getByText("Rotate token"));
+    await user.click(screen.getByText("Click again to rotate"));
+
+    expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
+    expect(screen.queryByTestId("rotate-unaffected")).not.toBeInTheDocument();
+    expect(screen.getByText(/can no longer reach this primary/)).toBeInTheDocument();
   });
 });

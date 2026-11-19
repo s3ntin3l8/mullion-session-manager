@@ -41,10 +41,14 @@ const tempStatus = (
 const inspectDockerStorage = vi.fn(
   async (..._args: unknown[]): Promise<DockerStorage.DockerStorageStatus> => dockerStatus(),
 );
-const pruneDockerStorage = vi.fn(async (_mode?: string) => ({ output: "", reclaimedBytes: 5 }));
+const pruneDockerStorage = vi.fn(async (_mode?: string, _options?: unknown) => ({
+  output: "",
+  reclaimedBytes: 5,
+}));
 vi.mock("../../src/services/docker-storage.js", () => ({
   inspectDockerStorage: (...args: unknown[]) => inspectDockerStorage(...args),
-  pruneDockerStorage: (mode?: string) => pruneDockerStorage(mode),
+  pruneDockerStorage: (mode?: string, _spawn?: unknown, options?: unknown) =>
+    pruneDockerStorage(mode, options),
 }));
 
 const inspectTempStorage = vi.fn(
@@ -56,7 +60,9 @@ const pruneTempStorage = vi.fn(
     reclaimedBytes: 7,
   }),
 );
-vi.mock("../../src/services/temp-storage.js", () => ({
+vi.mock("../../src/services/temp-storage.js", async (importOriginal) => ({
+  // cache-storage's real sizing helpers, for the keepNewest route test.
+  ...(await importOriginal<typeof TempStorage>()),
   inspectTempStorage: (...args: unknown[]) => inspectTempStorage(...args),
   pruneTempStorage: (mode?: string, options?: unknown) => pruneTempStorage(mode, options),
 }));
@@ -99,6 +105,7 @@ vi.mock("../../src/services/dev-worktrees.js", () => ({
   pruneDevWorktrees: (...args: unknown[]) => pruneDevWorktrees(...args),
 }));
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import { projects, sessions } from "../../src/db/schema.js";
 import { defaultClaudeSessionsDir } from "../../src/services/claude-scratch.js";
@@ -137,6 +144,10 @@ async function setCacheDirs(app: App, cacheDirs: string[]) {
     url: "/api/settings",
     payload: { diskCleanup: { cacheDirs } },
   });
+}
+
+async function setOptIns(app: App, optIns: string[]) {
+  await app.inject({ method: "PATCH", url: "/api/settings", payload: { diskCleanup: { optIns } } });
 }
 
 describe("/api/storage/cleanup", () => {
@@ -201,7 +212,7 @@ describe("/api/storage/cleanup", () => {
     pruneDevWorktrees.mockClear();
     const { job } = await runCleanup(app, { mode: "safe" });
     expect(sources(job)).toEqual(["docker", "temp"]);
-    expect(pruneDockerStorage).toHaveBeenLastCalledWith("safe");
+    expect(pruneDockerStorage).toHaveBeenLastCalledWith("safe", { pruneVolumes: false });
     expect(pruneTempStorage.mock.lastCall?.[0]).toBe("safe");
     expect(pruneCacheStorage).not.toHaveBeenCalled();
     expect(pruneOpencodeStorage).not.toHaveBeenCalled();
@@ -215,7 +226,7 @@ describe("/api/storage/cleanup", () => {
     const { job } = await runCleanup(app, { mode: "aggressive" });
     expect(job.mode).toBe("aggressive");
     expect(sources(job)).toEqual(["docker", "temp", "caches", "opencode", "worktrees"]);
-    expect(pruneDockerStorage).toHaveBeenLastCalledWith("aggressive");
+    expect(pruneDockerStorage).toHaveBeenLastCalledWith("aggressive", { pruneVolumes: false });
     expect(pruneTempStorage.mock.lastCall?.[0]).toBe("aggressive");
     expect(job.steps.reduce((sum, s) => sum + s.reclaimedBytes, 0)).toBe(5 + 7 + 9 + 11 + 3);
   });
@@ -250,6 +261,35 @@ describe("/api/storage/cleanup", () => {
       // Nothing requested: fall back to the saved set.
       await runCleanup(app, { mode: "aggressive" });
       expect(pruneCacheStorage).toHaveBeenLastCalledWith(["pip", "go-build"]);
+    });
+
+    it("removes only the removable children of a keepNewest cache", async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "cleanup-route-home-"));
+      try {
+        const dir = path.join(home, ".local/share/claude/versions");
+        await fs.mkdir(dir, { recursive: true });
+        for (const v of ["2.1.99", "2.1.302", "2.1.322"])
+          await fs.writeFile(path.join(dir, v), "x");
+        const proc = path.join(home, "proc");
+        await fs.mkdir(path.join(proc, "9"), { recursive: true });
+        await fs.symlink(path.join(dir, "2.1.302"), path.join(proc, "9", "exe"));
+        const actual = await vi.importActual<typeof CacheStorage>(
+          "../../src/services/cache-storage.js",
+        );
+        pruneCacheStorage.mockImplementationOnce((ids) =>
+          actual.pruneCacheStorage(ids ?? [], {
+            homeDir: home,
+            procDir: proc,
+            now: Date.now() + 3_600_000,
+          }),
+        );
+        const app = await buildTestApp();
+        await setCacheDirs(app, ["claude-versions"]);
+        await runCleanup(app, { mode: "aggressive", cacheDirs: ["claude-versions"] });
+        expect((await fs.readdir(dir)).sort()).toEqual(["2.1.302", "2.1.322"]);
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
     });
 
     it("leaves caches out when nothing is opted in", async () => {
@@ -447,6 +487,75 @@ describe("/api/storage/cleanup", () => {
     await runCleanup(app);
     await app.inject({ method: "GET", url: "/api/storage/temp" });
     expect(inspectTempStorage).toHaveBeenCalledTimes(2);
+  });
+
+  describe("docker volumes opt-in", () => {
+    const volumesRun = () => pruneDockerStorage.mock.lastCall?.[1];
+    // Settings live in one temp DB for the whole file: start each test clean.
+    const freshApp = async () => {
+      const app = await buildTestApp();
+      await setOptIns(app, []);
+      return app;
+    };
+
+    it("prunes volumes only when the id is both requested and stored", async () => {
+      const app = await freshApp();
+      await setOptIns(app, ["docker-volumes"]);
+      await runCleanup(app, { mode: "aggressive", optIns: ["docker-volumes"] });
+      expect(volumesRun()).toEqual({ pruneVolumes: true });
+    });
+
+    it("never prunes volumes for a request without a stored opt-in", async () => {
+      const app = await freshApp();
+      await runCleanup(app, { mode: "aggressive", optIns: ["docker-volumes"] });
+      expect(volumesRun()).toEqual({ pruneVolumes: false });
+    });
+
+    it("never prunes volumes for a stored opt-in the request does not carry", async () => {
+      const app = await freshApp();
+      await setOptIns(app, ["docker-volumes"]);
+      await runCleanup(app, { mode: "aggressive", optIns: [] });
+      expect(volumesRun()).toEqual({ pruneVolumes: false });
+      // No list at all is not "fall back to stored": nothing runs.
+      await runCleanup(app, { mode: "aggressive" });
+      expect(volumesRun()).toEqual({ pruneVolumes: false });
+    });
+
+    it("never prunes volumes in safe mode, whatever is stored and requested", async () => {
+      const app = await freshApp();
+      await setOptIns(app, ["docker-volumes"]);
+      await runCleanup(app, { mode: "safe", optIns: ["docker-volumes"] });
+      expect(volumesRun()).toEqual({ pruneVolumes: false });
+    });
+
+    it("drops unknown ids from the stored set and ignores unknown requested ids", async () => {
+      const app = await freshApp();
+      await setOptIns(app, ["bogus", "docker-volumes", "docker-volumes"]);
+      const stored = await app.inject({ method: "GET", url: "/api/settings" });
+      expect(stored.json().diskCleanup.optIns).toEqual(["docker-volumes"]);
+      await setOptIns(app, ["bogus"]);
+      await runCleanup(app, { mode: "aggressive", optIns: ["bogus", "volumes"] });
+      expect(volumesRun()).toEqual({ pruneVolumes: false });
+    });
+
+    it("rejects more than 20 opt-in ids", async () => {
+      const app = await freshApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/storage/cleanup",
+        payload: { mode: "aggressive", optIns: Array.from({ length: 21 }, () => "docker-volumes") },
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("asks the Docker inspection to count volumes only when opted in", async () => {
+      const app = await freshApp();
+      await app.inject({ method: "GET", url: "/api/storage/docker?refresh=1" });
+      expect(inspectDockerStorage.mock.lastCall?.[1]).toEqual({ countVolumes: false });
+      await setOptIns(app, ["docker-volumes"]);
+      await app.inject({ method: "GET", url: "/api/storage/docker?refresh=1" });
+      expect(inspectDockerStorage.mock.lastCall?.[1]).toEqual({ countVolumes: true });
+    });
   });
 
   it("keeps the last job so a reloaded page can still show it", async () => {

@@ -85,8 +85,8 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   same issue.
 
   A task that failed this way was never claimed, so it has no preserved
-  branch — Retry (`failed → backlog`/`ready`, below) can't resume it
-  (`no-worktree`), which used to leave it permanently orphaned: not local
+  branch — Retry has nothing to resume, so it resets the task to `ready`
+  instead. Before that, such a task was left permanently orphaned: not local
   (so the delete route refused it), and past `backlog`/`ready` (so did the
   delete route's other guard). `DELETE /api/tasks/:id` (#729) carves out
   exactly this case: a `failed` GitHub-linked task with **no preserved
@@ -176,9 +176,12 @@ remaining }`) is modeled on `git-worktree.ts`'s own
   acceptable either. Resolved explicitly, per row: only force-deletes once
   a fresh `getPullRequestByNumber` read confirms the task's PR actually
   merged; otherwise the branch is reported skipped with its reason
-  (`no-pr`/`not-merged`/`merge-check-failed`/`rate-limited`/the
+  (`no-pr`/`not-merged`/`merge-check-failed`/`rate-limited`/`no-host-path`/the
   `DeleteBranchReason` a local `git branch -D` itself can fail with) and
-  **left alone** — a branch failure never blocks the row deletion, which
+  **left alone**. A placed task's branch is deleted in the worker's clone
+  (that host's mapped project path), not the primary's; `no-host-path` means
+  that host has no mapped path, so the branch is left alone rather than
+  deleted against a guessed one. A branch failure never blocks the row deletion, which
   already committed by the time the branch check runs. Branch deletes run
   strictly serially (never `Promise.all`), the same posture every other
   bulk git operation in this codebase takes — concurrent git operations
@@ -316,7 +319,12 @@ waiting for a free concurrency slot. It never holds a session; see the
   dead session forever), on exceeding the per-task time budget (see Safety
   envelope below), or on the no-commits case the `* → reviewing` bullet
   above describes — `failureReason: "agent ended its turn with no commits on
-<branch>"`. That last one first attempts a machine-made salvage commit
+<branch>"`. Before that failure, a live, idle worker gets up to two
+  continuation nudges — one short message typed into its session saying
+  nothing is committed yet and to carry on or state the blocker
+  ([`tasks-internals.md`](tasks-internals.md#continuation-nudge)); only a
+  worker that cannot be typed into, that ends its turn empty after both
+  nudges, or whose nudged turn never starts, fails. That failure first attempts a machine-made salvage commit
   (`commitWipChanges`/`commitHostWipChanges`, `git-worktree.ts`/
   `host-git.ts` — both local and remote-hosted hosts, since `#1100`) so the
   branch isn't left truly empty and Retry (below) can actually resume the
@@ -345,6 +353,65 @@ waiting for a free concurrency slot. It never holds a session; see the
   task copy that a
   project merge superseded is refused with a 409 instead of retried
   (`#2292` — see "Merging two projects" below).
+- **Where a retry runs** (`#3194`) — the preserved branch normally lives on
+  the host the task's worker ran on, so that is where the retry resumes it.
+  When that host is **offline** (or parked), the retry cannot start there —
+  and the branch is usually only there (a budget failure or a rate-limit
+  park happens before the worker's commits are pushed). The retry then
+  decides, in this order:
+  1. **the original host**, if it is up and still satisfies the task's
+     `Platform:` / `Host:` / `Capability:` requirement — the preserved branch
+     is resumed there, exactly as before;
+  2. **another eligible host** that satisfies the requirement — but **only if
+     the task's branch is on `origin`**, confirmed through the project's
+     GitHub helpers and never assumed. The replacement host checks the
+     branch out from `origin` (it needs the project mapped there, or a
+     checkout cloned for it — the same `needsCheckout` placement computes),
+     the agent CLI and the required capability, the task's `worktreePath`
+     moves to that host, and the new worker session decides the host from
+     then on (the reviewer and the rebase worker follow it). The checkout is
+     taken at **`origin`'s tip**, not at whatever the host happens to hold: a
+     branch ref outlives the worktree it was checked out in, so the host
+     fetches the branch first (after pruning any stale worktree registration
+     it left behind, which would otherwise refuse the fetch on its own) and
+     refuses the resume when it cannot take `origin`'s tip — it may no
+     longer be on `origin`, this host may hold commits `origin` does not
+     have, or it may already have a checkout of that branch. It never
+     continues the task from an older commit;
+
+     a checkout that cannot be prepared on the replacement host (the clone
+     fails) leaves the retry **queued**, with the reason on the card, and
+     the clone is tried again until the ordinary 6-hour give-up ends it
+     (see [A queued task that cannot
+     dispatch](#a-queued-task-that-cannot-dispatch)). Nothing is stranded
+     on the original host in that wait — the branch is on `origin`, which
+     is the only reason the retry may leave it — so failing the task frees
+     something, and the wait offers no **Start fresh**: the retry is not
+     waiting for a host, and the branch it resumes is the one on `origin`;
+
+  3. **otherwise the retry waits** for its original host: the card and the
+     task sidebar show the reason (naming the host and its real state —
+     offline, parked, or no longer eligible for the task's requirement — and
+     whether the branch is on `origin`). When the branch is **confirmed to
+     be only on that host**, the task is **not** failed after 6 hours: the
+     branch is there, so failing it would free nothing. A wait whose branch
+     is safely on `origin` — or whose `origin` state could not be confirmed
+     at all (no repository, no token, a rate limit) — is an ordinary
+     placement wait and keeps the 6-hour give-up (see
+     [A queued task that cannot dispatch](#a-queued-task-that-cannot-dispatch)).
+     A task with no placement requirement follows the same order.
+
+     **Start fresh** (`POST /api/tasks/:id/start-fresh`, offered on the card
+     and in the task sidebar) is the operator's way out of a wait that never
+     ends: it abandons the preserved branch — it stays on that host, with its
+     commits — and re-queues the task as a new claim that starts from
+     scratch. It is offered for **every** wait of this kind, whatever the
+     `origin` state is: a project whose `origin` can never be confirmed (a
+     local-only repository, a project with no GitHub token) is exactly the
+     one whose wait would otherwise never end, and the give-up would fail it
+     without the branch ever being abandoned. Only the **give-up
+     exemption** is narrower — it applies to a wait whose branch is
+     _confirmed_ to be on that host and nowhere else.
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same
@@ -607,6 +674,18 @@ stopped and only you can move it. `tasks.needsHumanReason` says why:
 
 - `cap`, `no-progress`, `finding-persisted` — the review loop stopped (round
   cap, a worker that came back unchanged, the same finding open twice).
+- `ci-unfixable`, `ci-still-red` — a CI check is red and no further automatic step
+  will clear it, and the card names the check. `ci-unfixable`: the worker was sent
+  back for it and reported that no change to the PR can fix it (an upstream advisory
+  with no patched release, an outside service down); its reason is on the card.
+  `ci-still-red`: the worker pushed nothing and two reruns of the failed jobs did
+  not clear it. If the check is not required, **Approve** the task and use **Merge
+  anyway** (it applies to that commit only; a new push voids it). If it is
+  required, fix the cause on the base branch and update the PR's branch, which
+  re-arms the task.
+- `review-inconclusive` — both review attempts (the first and the automatic
+  re-run) ended without a verdict. Click **Retry review**, or review the PR by
+  hand.
 - `rebase-exhausted` — the PR conflicts with main and the auto-rebase budget
   (two attempts) is spent. Rebase it by hand, or **Reject** it: Reject resets
   the budget, so a fresh conflict can be auto-rebased again.
@@ -774,7 +853,11 @@ non-Abandon-path task) are not gated either way.
   row is gone, teardown is best-effort: any live worker/review session is
   killed, the worktree is force-removed (not the clean-check-gated removal
   every automatic cleanup path uses — the whole point of Abandon is to
-  discard whatever's there), and the branch is force-deleted last. A
+  discard whatever's there), and the branch is force-deleted last. Both
+  happen on the host the worker ran on, using that host's mapped project
+  path. When that host has no mapped path, Abandon leaves the worktree and
+  the branch in place (it does not guess a path) and still answers `204`;
+  only a server-side warning records the skip. A
   leftover session/worktree/branch after a teardown failure is a cleanup
   gap, not a correctness problem, since the task row itself is already
   gone. When the host's connection drops after the worktree removal or the
@@ -1002,9 +1085,23 @@ The reason is not hidden:
   task is failed (`via: dispatch-give-up`) with
   `gave up after 6h of failed dispatch attempts — last: <reason>`; the usual
   recovery (`failed → ready`) applies. Retry has nothing to resume at that
-  point, since no worktree was ever cut.
+  point, since no worktree was ever cut, so it does exactly that: it resets
+  the task to `ready`.
+- **One wait is exempt from the 6-hour give-up**: a _retry_ waiting for its
+  original host because the preserved branch is **confirmed to be on that
+  host and not on `origin`** (`#3194` — there is nowhere else to run it).
+  Failing it would throw the work away without freeing anything. Such a wait
+  shows the same "Not dispatched yet: …" notice, names the host it waits for,
+  and offers **Start fresh** (see the `failed → in_progress` bullet above).
+  The exemption is narrower than that affordance: **Start fresh** is offered
+  for every wait of that kind, but only a wait whose branch is _confirmed_ to
+  be on that host is exempt from the give-up — a wait whose branch is safely
+  on `origin`, or whose `origin` state could not be confirmed at all, is an
+  ordinary placement wait: the 6-hour give-up applies to it, and it keeps the
+  preserved branch (a later **Retry** resumes that branch instead of cutting
+  a new one).
 
-## Where a task runs: `Platform:` and `Host:`
+## Where a task runs: `Platform:`, `Host:` and `Capability:`
 
 By default Task Master places each task's worker by load (see
 [multi-host](multi-host.md#automatic-placement)): a `pinned` project runs on
@@ -1023,10 +1120,22 @@ Host: 3f2a9c1e-…
 - `Platform: <os>` — any eligible host of that platform (`darwin`, `linux`,
   `win32`; matched case-insensitively). `Host: <host id>` — exactly that host.
   Give both and both must hold ("this host, and it must be a Mac").
+- `Capability: <name>[,<name>…]` — the host must report every named capability
+  (`xcode`, `android-emulator`; lower-cased, no spaces after the comma). It adds
+  to the project's own capability requirement (**Edit project → Placement**), so
+  one iOS task in a mixed project can say "needs Xcode ready" without
+  constraining the whole project. It combines with `Platform:`/`Host:` or stands
+  alone (any host with the capability). A host that has not reported its
+  capabilities yet is not excluded; a host known to lack one is. A name that is
+  not a known capability is refused at claim time naming it.
 - Matched like the other directives: key case-insensitive, alone on its line,
-  one-word value, first match wins (so a `Host: localhost` line in a pasted HTTP
-  example _is_ read as the directive; the refusal names the line it came from,
-  and a line behind a `- ` bullet or `> ` quote prefix is not matched). A value no host reports (`mac` instead of
+  one-word value, first match wins (so a `Host: localhost` line in plain prose
+  _is_ read as the directive; the refusal names the line it came from,
+  and a line behind a `- ` bullet or `> ` quote prefix is not matched). Lines
+  inside a fenced code block (``` or ~~~) are ignored by every directive
+  (`Host:`, `Platform:`, `Capability:`, `Agent:`, `Model:`, `Manual:`, ...), so a quoted
+  snippet or HTTP example is safe; an unterminated fence ignores the rest of
+  the body. A value no host reports (`mac` instead of
   `darwin`) matches nothing and is refused naming it.
 - **It is a hard requirement.** Only an _eligible_ host qualifies — online, not
   parked, reporting its capacity, and with a path for this project (the
@@ -1054,6 +1163,10 @@ Host: 3f2a9c1e-…
   a past placement can be explained.
 - The target host needs an agent build new enough to serve the task routes
   (see [Known limitations](#known-limitations)).
+- `Platform: darwin` only guarantees a darwin host, not a working iOS or
+  Android toolchain on it — add `Capability: xcode` to require a host that
+  reports Xcode ready; see
+  [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 
 ## Configuring Task Master
 
@@ -1092,17 +1205,18 @@ env default; see [`configuration.md`](configuration.md) for the
 authoritative description of each env var — this table's own job is
 mapping each one to its Settings key and explaining what it actually gates.
 
-| Control                               | Setting (overrides the env default)          | Env default                                    | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------------------------------- | -------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Whether Task Master runs at all       | `settings.taskMaster.enabled`                | `MULLION_TASK_MASTER_ENABLED` (`false`)        | Gates every _new_ piece of autonomous work: the watcher's GitHub ingest + auto-claim, the claim/approve/retry endpoints (all refuse with 403/501 while off), and the reconciler's `in_progress` → `reviewing` transition itself (which includes spawning the review-agent session) — a finished session while disabled is left in `in_progress` instead, still reachable by the budget force-fail below, and transitions normally on the next tick once re-enabled. **`reject`/give-up/re-review are deliberately NOT gated** (Hermes review, PR #480, fourth pass; extended to give-up by `#483` and to re-review by `#1345`): they're the only routes that can act on an already-`reviewing` task, so a task that reached `reviewing` before the toggle flipped off — the one case the transition-gate above can't prevent — still has an escape hatch instead of being stranded until re-enabled; `approve`/`retry` stay gated since they create a real PR/spawn a real session. Does **not** gate an already-in-flight task's own budget enforcement or `in_progress` status sync to GitHub — that stays a safety net regardless. The local task board (create/edit/drag/delete) works regardless too, as does Abandon/Archive. |
-| Max concurrent autonomous workers     | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)            | Only tasks in `in_progress` count against this cap (task-claim queueing, rate-limit-storm fix) — `claimed` is the queue, and `reviewing` never held it. `dispatchClaimedTask`'s own transactional reservation (count `in_progress` + flip `claimed → in_progress`) is the sole correctness authority for a fresh claim; a queued Retry reserves the same way in `dispatchQueuedRetry` (see "Lifecycle" above). A manual claim, auto-claim, and Retry are all cap-checked, so this is an actual ceiling on live workers, not a soft throttle — it's just no longer a ceiling on how many tasks may be QUEUED, which is unbounded by design (that's the whole point: a manual claim past capacity queues instead of 429ing). `reviewing` deliberately isn't counted either, even though it can hold a live review-agent session and an open draft PR.                                                                                                                                                                                                                                                                                                                                                                                 |
-| Per-task time budget                  | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)          | The reconciler force-fails and terminates the session of any `in_progress` task that's been running longer than this, measured from `claimedAt` (stamped at dispatch, when the worker spell actually starts, not at enqueue — time spent queued never counts). One exception: a task past its deadline whose worker has already finished — cleanly, or stuck behind a stale background shell job past `SHELL_TAIL_GRACE_MS` (5 minutes) — with commits on the branch is handed to the normal `→ reviewing` gate instead of force-failed, so completed work isn't thrown away purely because the handoff was a few minutes late; see [`tasks-internals.md`](tasks-internals.md#the-no-commits-gate-and-turn-finished-check). A second exception: a task still inside its rate-limit grace window (`lastRateLimitAt` within `rateLimitGraceMinutes`) is not force-failed for the budget; the budget applies again once that window has elapsed (#2930). `0` = unlimited.                                                                                                                                                                                                                                                              |
-| Runtime kill-switch                   | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)         | Checked by the auto-claim sweep every poll. Stops the watcher picking new candidates off `ready`; it does **not** stop dispatch draining the queue — a task a human already queued (or that was auto-claimed before the pause) still dispatches once a slot is free, same as if the toggle were off. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`) | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)      | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual launches (the New session launcher and the command palette) and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| Task Master reviews (Hermes)          | `settings.reviewRelay.taskMasterReviewer`    | — (no env equivalent; default `false`)         | Settings → Review relay → Connection → "Task Master reviews". Allows `hermes` as a review agent at every tier (task, project, install-wide), run on the relay's Hermes connection (same URL and key; Test connection sits beside it). The board card and task drawer then show a "Hermes review · running / finished / could not be sent" badge in place of a review-session link. See [`tasks-internals.md`](tasks-internals.md#hermes-as-the-review-agent).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)            | How long the reconciler holds a `reviewing` task whose PR has CI still `in_progress` or not yet registered before spawning the review agent anyway. `0` disables waiting. See [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Rate-limit grace window               | `settings.taskMaster.rateLimitGraceMinutes`  | `MULLION_TASK_RATE_LIMIT_GRACE_MINUTES` (`5`)  | How long the reconciler holds a task alive after the agent reports a subscription-quota `rate_limit` failure (Claude Code's weekly limit, opencode go's quota, agy's `RESOURCE_EXHAUSTED`) before falling through to the normal fail path. Max 1440 (24h); `0` opts out. Durable on the task row, so it survives the session's own error-state TTL clearing — see [`tasks-internals.md`](tasks-internals.md#rate-limit-grace) for the full mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Control                               | Setting (overrides the env default)          | Env default                                     | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------- | -------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Whether Task Master runs at all       | `settings.taskMaster.enabled`                | `MULLION_TASK_MASTER_ENABLED` (`false`)         | Gates every _new_ piece of autonomous work: the watcher's GitHub ingest + auto-claim, the claim/approve/retry endpoints (all refuse with 403/501 while off), and the reconciler's `in_progress` → `reviewing` transition itself (which includes spawning the review-agent session) — a finished session while disabled is left in `in_progress` instead, still reachable by the budget force-fail below, and transitions normally on the next tick once re-enabled. **`reject`/give-up/re-review are deliberately NOT gated** (Hermes review, PR #480, fourth pass; extended to give-up by `#483` and to re-review by `#1345`): they're the only routes that can act on an already-`reviewing` task, so a task that reached `reviewing` before the toggle flipped off — the one case the transition-gate above can't prevent — still has an escape hatch instead of being stranded until re-enabled; `approve`/`retry` stay gated since they create a real PR/spawn a real session. Does **not** gate an already-in-flight task's own budget enforcement or `in_progress` status sync to GitHub — that stays a safety net regardless. The local task board (create/edit/drag/delete) works regardless too, as does Abandon/Archive. |
+| Max concurrent autonomous workers     | `settings.taskMaster.maxConcurrent`          | `MULLION_TASK_MAX_CONCURRENT` (`2`)             | Only tasks in `in_progress` count against this cap (task-claim queueing, rate-limit-storm fix) — `claimed` is the queue, and `reviewing` never held it. `dispatchClaimedTask`'s own transactional reservation (count `in_progress` + flip `claimed → in_progress`) is the sole correctness authority for a fresh claim; a queued Retry reserves the same way in `dispatchQueuedRetry` (see "Lifecycle" above). A manual claim, auto-claim, and Retry are all cap-checked, so this is an actual ceiling on live workers, not a soft throttle — it's just no longer a ceiling on how many tasks may be QUEUED, which is unbounded by design (that's the whole point: a manual claim past capacity queues instead of 429ing). `reviewing` deliberately isn't counted either, even though it can hold a live review-agent session and an open draft PR.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Per-task time budget                  | `settings.taskMaster.budgetMinutes`          | `MULLION_TASK_BUDGET_MINUTES` (`120`)           | The reconciler force-fails and terminates the session of any `in_progress` task that's been running longer than this, measured from `claimedAt` (stamped at dispatch, when the worker spell actually starts, not at enqueue — time spent queued never counts). One exception: a task past its deadline whose worker has already finished — cleanly, or stuck behind a stale background shell job past `SHELL_TAIL_GRACE_MS` (5 minutes) — with commits on the branch is handed to the normal `→ reviewing` gate instead of force-failed, so completed work isn't thrown away purely because the handoff was a few minutes late (a worker with no commits yet is never handed off behind a shell tail; it keeps running until the budget fires, if one is set); see [`tasks-internals.md`](tasks-internals.md#the-no-commits-gate-and-turn-finished-check). A second exception: a task still inside its rate-limit grace window (`lastRateLimitAt` within `rateLimitGraceMinutes`) is not force-failed for the budget; the budget applies again once that window has elapsed (#2930). `0` = unlimited.                                                                                                                               |
+| Runtime kill-switch                   | `settings.taskMaster.autoClaimPaused`        | — (no env equivalent; default `false`)          | Checked by the auto-claim sweep every poll. Stops the watcher picking new candidates off `ready`; it does **not** stop dispatch draining the queue — a task a human already queued (or that was auto-claimed before the pause) still dispatches once a slot is free, same as if the toggle were off. Surfaced in Settings → Task Master as "Pause auto-claim", disabled with a hint while Task Master itself is off.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Progress-comment throttle             | `settings.taskMaster.progressCommentMinutes` | `MULLION_TASK_PROGRESS_COMMENT_MINUTES` (`15`)  | Minimum minutes between two `in_progress` progress comments the GitHub sync posts to the same linked issue, so a chatty agent (or a reconciler tick observing "still working" repeatedly) can't spam one comment per poll. `0` = no throttle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Skip permissions on unattended spawns | `settings.taskMaster.skipPermissions`        | `MULLION_TASK_SKIP_PERMISSIONS` (`false`)       | When on, a claim/auto-claim/retry/review-agent spawn passes the resolved agent's own skip-permissions flag (e.g. `--dangerously-skip-permissions`), so an unattended agent doesn't stall at a permission/trust prompt with no one to answer it. Off by default — an autonomous agent bypassing every tool-permission check is an explicit opt-in, not a safe default. Independent of `settings.launchers.skipPermissionsAgents`, which only drives the frontend's manual-launch CommandPalette and never reaches these spawns.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Task Master reviews (Hermes)          | `settings.reviewRelay.taskMasterReviewer`    | — (no env equivalent; default `false`)          | Settings → Review relay → Connection → "Task Master reviews". Allows `hermes` as a review agent at every tier (task, project, install-wide), run on the relay's Hermes connection (same URL and key; Test connection sits beside it). The board card and task drawer then show a "Hermes review · running / finished / could not be sent" badge in place of a review-session link. See [`tasks-internals.md`](tasks-internals.md#hermes-as-the-review-agent).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Review-agent CI wait                  | `settings.taskMaster.reviewCiWaitMinutes`    | — (no env equivalent; default `15`)             | How long the reconciler holds a `reviewing` task whose PR has CI still `in_progress` or not yet registered before spawning the review agent anyway. `0` disables waiting. See [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Rate-limit grace window               | `settings.taskMaster.rateLimitGraceMinutes`  | `MULLION_TASK_RATE_LIMIT_GRACE_MINUTES` (`5`)   | How long the reconciler holds a task alive after the agent reports a subscription-quota `rate_limit` failure (Claude Code's weekly limit, opencode go's quota, agy's `RESOURCE_EXHAUSTED`) before falling through to the normal fail path. Max 1440 (24h); `0` opts out. Durable on the task row, so it survives the session's own error-state TTL clearing — see [`tasks-internals.md`](tasks-internals.md#rate-limit-grace) for the full mechanism.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Longest rate-limit park               | `settings.taskMaster.rateLimitMaxParkHours`  | `MULLION_TASK_RATE_LIMIT_MAX_PARK_HOURS` (`24`) | #3234 — when a rate-limited worker's provider reset is within this many hours (Codex's "try again at …" or agy's "Resets in 102h16m12s"), the worker is stopped and the task parked `ready` until the reset. A reset further out fails the task instead, with `needsHumanReason: "rate-limited"`, the reset in `rateLimitUntil` and the provider's text in `rateLimitMessage`; the card reads "Quota exhausted · resets in 4d" and Retry works once the quota is back. Enforced once in `parkRateLimitedTask`, so it covers every CLI. Max 168 (a week); `0` never parks.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 ### Trusted authors
 
@@ -1409,19 +1523,20 @@ extensive design comments.
   on and Task Master is enabled; the task's agent can take a seeded prompt;
   the task still has a worktree; and the automatic round cap
   (`maxAutoReturnRounds`) is not already spent — once it is, the task stays in
-  Reviewing with one PR comment naming the failing check(s), and "Merge now"
-  is the override. A check that is only _pending_ never returns the worker, and
+  Reviewing with one PR comment naming the failing check(s), and "Merge anyway"
+  is the override when only non-required checks are red. A check that is only _pending_ never returns the worker, and
   neither does a red check while the head's Actions runs are still going. The
   worker is also not sent back twice for the same commit: if the check is still
   red and the head has not moved, Mullion re-runs the failed jobs itself and, if
-  that does not clear it, parks the task as "worker returned without a change"
-  with one PR comment. See
+  that does not clear it, parks the task as "CI still red after the worker and two
+  reruns" with one PR comment. A worker that says the failure cannot be fixed from
+  the PR (see "Needs a human") parks it at once, with its reason. See
   [`tasks-internals.md`](tasks-internals.md#auto-approve).
-- **Retry says `no-worktree` and refuses.** The task failed before it ever
-  had a branch/worktree (e.g. it failed while still `backlog`/`ready`, or
-  it's a `#729`-deleted-and-recreated GitHub-linked task) — there's nothing
-  for Retry to resume. See "Task model" above for the relabel-resurrection
-  path that handles this case instead.
+- **Retry put the task in Ready instead of running it.** The task failed
+  before it ever had a branch/worktree (e.g. no host matched its `Platform:`
+  line), so there is nothing to resume: Retry resets it to `ready` and a
+  normal claim starts it fresh. If the project's auto-claim is paused, claim
+  it by hand.
 - **A task's GitHub label/comment never appeared.** Check
   `tasks.githubSyncError` in the task detail — GitHub sync is best-effort
   and does not retry a missed write; see

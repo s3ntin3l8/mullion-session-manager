@@ -77,7 +77,7 @@ export const FAILURE_REASON_LABEL_LOST = "GitHub issue lost its tracking label";
 export const FAILURE_REASON_ISSUE_CLOSED = "GitHub issue was closed";
 
 export type TaskSyncEvent =
-  "claimed" | "in_progress" | "reviewing" | "done" | "failed" | "rejected";
+  "claimed" | "in_progress" | "reviewing" | "done" | "failed" | "rejected" | "rate_limited";
 
 type TaskRow = typeof tasks.$inferSelect;
 // Narrowed to exactly what resolveRepoRef needs, not the full projects row
@@ -155,7 +155,13 @@ async function runSync(
   app: FastifyInstance,
   task: TaskRow,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats },
+  extra: {
+    feedback?: string;
+    prUrl?: string;
+    diffStat?: GitDiffStats;
+    resumeAt?: Date;
+    message?: string;
+  },
 ): Promise<boolean> {
   // Non-null: syncTaskTransition already returned early when
   // task.issueNumber is null.
@@ -248,6 +254,22 @@ async function runSync(
       lastProgressCommentAt.delete(task.id);
       break;
     }
+    case "rate_limited": {
+      // #2940 — a parked worker resumes by itself, so this is a pause notice
+      // (not the terminal failure above); the claim on resume re-adds the label.
+      await removeLabel(token, owner, repo, issueNumber, LABEL_CLAIMED);
+      await createComment(
+        token,
+        owner,
+        repo,
+        issueNumber,
+        extra.resumeAt
+          ? `Paused: the agent hit its provider usage limit${extra.message ? ` (${extra.message})` : ""}. It resumes automatically after ${extra.resumeAt.toISOString().replace(/\.\d{3}Z$/, "Z")}.`
+          : "Paused: the agent hit its provider usage limit. It resumes automatically after the reset.",
+      );
+      lastProgressCommentAt.delete(task.id);
+      break;
+    }
     case "rejected": {
       await createComment(
         token,
@@ -328,7 +350,13 @@ export async function syncTaskTransition(
   task: TaskRow,
   project: ProjectRef,
   event: TaskSyncEvent,
-  extra: { feedback?: string; prUrl?: string; diffStat?: GitDiffStats } = {},
+  extra: {
+    feedback?: string;
+    prUrl?: string;
+    diffStat?: GitDiffStats;
+    resumeAt?: Date;
+    message?: string;
+  } = {},
 ): Promise<void> {
   if (task.issueNumber === null) return;
   const repoRef = await resolveRepoRef(app, project);
@@ -1054,12 +1082,15 @@ export async function postReviewFindingsComment(
         // reliably name the offender — retrying per-comment would mean up
         // to N extra round-trips to find it. Deliberately coarse for v1:
         // drop every anchor and fall back to `params.body`, which already
-        // has the findings folded in as plain bullets. #737: also drops
-        // back to a plain COMMENT from the primary identity — an
-        // unexpected 422 on a gating attempt (the reviewer App turning out
-        // not to be a distinct-enough identity after all, a GitHub
-        // behavior change) must still land the round's findings, same as
-        // it always has, rather than losing them entirely.
+        // has the findings folded in as plain bullets. A gating attempt
+        // with anchors first retries as the reviewer App, same verdict, no
+        // anchors (the verdict must keep its identity). #737: only if that
+        // also 422s (or there were no anchors to blame) does it drop back
+        // to a plain COMMENT from the primary identity — an unexpected 422
+        // on a gating attempt (the reviewer App turning out not to be a
+        // distinct-enough identity after all, a GitHub behavior change)
+        // must still land the round's findings, same as it always has,
+        // rather than losing them entirely.
         //
         // Independent review, PR #827: this retry must trigger on `event
         // !== undefined` too, not just `anchored.length > 0` — a `clean`
@@ -1075,14 +1106,44 @@ export async function postReviewFindingsComment(
           err.statusCode === 422 &&
           (anchored.length > 0 || event !== undefined)
         ) {
-          app.log.warn(
-            { taskId: task.id, prNumber: task.prNumber, err },
-            "[task-github-sync] PR review rejected (422) — retrying as a plain COMMENT from the primary identity, with findings folded into the body",
-          );
-          await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
-            body: marker + params.body,
-            commitId,
-          });
+          // Step down one level at a time. A 422 on an anchored gating
+          // attempt is most often a stale anchor (a finding on a file that
+          // dropped out of the PR diff after a fix — PR #3354 round 3), not
+          // an identity problem, so first retry WITHOUT anchors but with the
+          // same reviewer token and gating event: dropping to the primary
+          // identity there posts a COMMENT from the PR's author, which can
+          // never supersede the reviewer App's earlier CHANGES_REQUESTED.
+          let landed = false;
+          if (event !== undefined && reviewerToken && anchored.length > 0) {
+            app.log.warn(
+              { taskId: task.id, prNumber: task.prNumber, err },
+              "[task-github-sync] PR review rejected (422) — retrying as the reviewer App with the same verdict, anchors dropped and findings folded into the body",
+            );
+            try {
+              await createPullRequestReview(
+                reviewerToken,
+                repoRef.owner,
+                repoRef.repo,
+                task.prNumber,
+                { body: marker + params.body, commitId, event },
+              );
+              landed = true;
+            } catch (retryErr) {
+              if (!(retryErr instanceof GitHubApiError && retryErr.statusCode === 422)) {
+                throw retryErr;
+              }
+            }
+          }
+          if (!landed) {
+            app.log.warn(
+              { taskId: task.id, prNumber: task.prNumber, err },
+              "[task-github-sync] PR review rejected (422) — retrying as a plain COMMENT from the primary identity, with findings folded into the body",
+            );
+            await createPullRequestReview(token, repoRef.owner, repoRef.repo, task.prNumber, {
+              body: marker + params.body,
+              commitId,
+            });
+          }
         } else {
           throw err;
         }

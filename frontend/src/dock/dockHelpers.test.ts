@@ -17,6 +17,8 @@ import {
   dockMonitorMinWidthPx,
   imagePillLabel,
   imageTag,
+  resolveRememberedValueFromRunning,
+  resolveSelectedValue,
 } from "./dockHelpers.js";
 import { makeSession } from "../test/fixtures.js";
 import { STORAGE_KEYS } from "../lib/persistedState.js";
@@ -725,5 +727,132 @@ describe("subscribeDockManualProjectIds", () => {
 
     unsubscribe();
     expect(storageHandlers.size).toBe(0);
+  });
+});
+
+describe("resolveSelectedValue", () => {
+  const OPTIONS = new Set([
+    "/home/x/mullion",
+    "/home/x/mullion-wt",
+    "branch:feat/ahead",
+    "branch:topic-0",
+  ]);
+
+  it("returns the remembered branch:<name> when no session is running and the option exists", () => {
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: "branch:feat/ahead",
+        optionValues: OPTIONS,
+        refsLoaded: true,
+        mainCheckoutPath: "/home/x/mullion",
+        controlCwd: "/home/x/mullion",
+      }),
+    ).toBe("branch:feat/ahead");
+  });
+
+  it("falls back to the main checkout when no session is running and the remembered branch:<name> option no longer exists", () => {
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: "branch:deleted-branch",
+        optionValues: OPTIONS,
+        refsLoaded: true,
+        mainCheckoutPath: "/home/x/mullion",
+        controlCwd: "/home/x/mullion",
+      }),
+    ).toBe("/home/x/mullion");
+  });
+
+  it("falls back to the main checkout when no session is running and the remembered worktree path no longer exists", () => {
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: "/home/x/mullion-wt-gone",
+        optionValues: OPTIONS,
+        refsLoaded: true,
+        mainCheckoutPath: "/home/x/mullion",
+        controlCwd: "/home/x/mullion",
+      }),
+    ).toBe("/home/x/mullion");
+  });
+
+  it("keeps a remembered worktree path while git refs have not loaded yet", () => {
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: "/home/x/mullion-wt",
+        optionValues: new Set(),
+        refsLoaded: false,
+        mainCheckoutPath: undefined,
+        controlCwd: "/home/x/mullion",
+      }),
+    ).toBe("/home/x/mullion-wt");
+  });
+
+  it("never returns a dock-preview path even if passed as storedValue or running.cwd", () => {
+    const previewCwd = "/home/x/mullion/.mullion-worktrees/dock-preview-feat-ahead-1234";
+    expect(
+      resolveSelectedValue({
+        running: makeSession({ kind: "dock", cwd: previewCwd }),
+        storedValue: previewCwd,
+        optionValues: OPTIONS,
+        refsLoaded: true,
+        mainCheckoutPath: "/home/x/mullion",
+        controlCwd: undefined,
+      }),
+    ).toBe("/home/x/mullion");
+    expect(
+      resolveSelectedValue({
+        running: undefined,
+        storedValue: previewCwd,
+        optionValues: new Set(),
+        refsLoaded: false,
+        mainCheckoutPath: undefined,
+        controlCwd: "/home/x/mullion",
+      }),
+    ).toBe("/home/x/mullion");
+  });
+});
+
+describe("resolveRememberedValueFromRunning", () => {
+  const OPTIONS = new Set(["/home/x/mullion", "/home/x/mullion-wt", "branch:feat/ahead"]);
+
+  it("returns branch:<name> for a running preview session when the option exists", () => {
+    const session = makeSession({
+      kind: "dock",
+      previewBranch: "feat/ahead",
+      cwd: "/home/x/mullion/.mullion-worktrees/dock-preview-feat-ahead-1234",
+    });
+    expect(resolveRememberedValueFromRunning(session, OPTIONS)).toBe("branch:feat/ahead");
+  });
+
+  it("returns null for a running preview session whose branch option is missing (never its dock-preview cwd)", () => {
+    const session = makeSession({
+      kind: "dock",
+      previewBranch: "feat/deleted",
+      cwd: "/home/x/mullion/.mullion-worktrees/dock-preview-feat-deleted-1234",
+    });
+    expect(resolveRememberedValueFromRunning(session, OPTIONS)).toBeNull();
+  });
+
+  it("returns cwd for a running non-preview session when it is a valid option", () => {
+    const session = makeSession({
+      kind: "dock",
+      cwd: "/home/x/mullion-wt",
+    });
+    expect(resolveRememberedValueFromRunning(session, OPTIONS)).toBe("/home/x/mullion-wt");
+  });
+
+  it("returns null for a running non-preview session whose cwd is not in optionValues", () => {
+    const session = makeSession({
+      kind: "dock",
+      cwd: "/home/x/mullion-wt-gone",
+    });
+    expect(resolveRememberedValueFromRunning(session, OPTIONS)).toBeNull();
+  });
+
+  it("returns null when there is no running session", () => {
+    expect(resolveRememberedValueFromRunning(undefined, OPTIONS)).toBeNull();
   });
 });

@@ -39,6 +39,7 @@
 import path from "node:path";
 
 import { getAdapterDelegationHint } from "./hook-adapters/index.js";
+import type { DelegationContext } from "./hook-adapters/delegation.js";
 import {
   FOCUS_NOTE_PREFIX,
   focusNotes,
@@ -259,6 +260,15 @@ export interface WorkerPreambleOptions {
    * delegate to) and for any agent with no subagent primitive.
    */
   agentCommand?: string | null;
+  /**
+   * The worker's model and the install's configured Delegate model for its
+   * CLI (task-delegation.ts's resolveWorkerDelegation). With no delegate
+   * model — or one that is not cheaper than the worker's own — no delegation
+   * clause is emitted: telling a Sonnet worker to delegate to Sonnet only
+   * adds a second context's cost. Claim, retry, and follow-up worker
+   * rounds all pass it so fresh sessions receive the same guidance.
+   */
+  delegation?: DelegationContext | null;
 }
 
 /**
@@ -296,7 +306,15 @@ export interface WorkerPreambleOptions {
  * false` was flatly wrong on this point. The bullet is unconditional now.
  */
 export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
-  const { task, branchName, worktreePath, budgetMinutes, commitTitlePath, agentCommand } = opts;
+  const {
+    task,
+    branchName,
+    worktreePath,
+    budgetMinutes,
+    commitTitlePath,
+    agentCommand,
+    delegation,
+  } = opts;
 
   const lines = [
     `You are working ${taskLabel(task)} as a Mullion Task Master worker.`,
@@ -307,7 +325,11 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "else is invisible to it.",
   ];
 
-  // The delegation clause — advisory, and CLI-specific: each adapter's own
+  // The delegation clause — advisory, CLI-specific, and now model-aware: it
+  // appears only when the install configured a Delegate model for this CLI
+  // (Settings → Models) AND that model is cheaper than the one this worker
+  // runs (hook-adapters/delegation.ts — an `opusplan` worker is effectively
+  // Sonnet, so it is not told to delegate to Sonnet). Each adapter's own
   // `delegationHint` names that CLI's delegation primitive AND that CLI's own
   // way of choosing the child's model (Claude Code's Task tool takes a
   // `subagent_type` and an optional per-call `model` that overrides the
@@ -333,7 +355,8 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
   // lands them. Without that, a delegated implementation could satisfy
   // Task Master's "no commits ahead of base" gate while the work itself
   // silently disappeared, and the reviewer would judge an empty diff.
-  const delegationHint = agentCommand ? getAdapterDelegationHint(agentCommand) : null;
+  const delegationHint =
+    agentCommand && delegation ? getAdapterDelegationHint(agentCommand, delegation) : null;
   if (delegationHint) {
     lines.push("", ...wrapPromptText(delegationHint));
   }
@@ -346,7 +369,19 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  CLAUDE.md / AGENTS.md / README document (lint, typecheck, tests, formatting),",
     "  not just the test suite. Mullion opens the pull request AFTER your turn ends,",
     "  so you never see CI's result: do not claim CI is green. Report only what you",
-    "  actually ran, and say so plainly if you skipped something.",
+    "  actually ran, and say so plainly if you skipped something. A fresh worktree",
+    "  has no installed dependencies: if the checks need them, install them with the",
+    "  repo's own package manager and lockfile (for example `npm ci`), never with",
+    "  sudo or the system package manager. A syntax-only check, or a check command",
+    "  that failed to start, does not count as a check. If a check truly cannot run",
+    "  here, record it on a `Not run locally:` line instead of reporting the work",
+    "  as verified.",
+    "- Do only what the issue's Scope (and, in a follow-up round, the instructions",
+    "  given for that round) asks for. Do not add features, files, docs or refactors",
+    "  it does not mention; whatever the repo's own rules and gate require for this",
+    "  change (tests, a generated migration, a docs update) is part of the change.",
+    "  If you think an extra would help, record it on a `Decision:` line (or file a",
+    "  follow-up issue) instead of doing it.",
     "- Look over your own diff with fresh eyes before committing. A separate",
     "  reviewer sees this diff afterwards but cannot edit anything in it — so a",
     "  defect you catch now is free, and the same defect caught downstream costs",
@@ -366,6 +401,18 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  permission prompt — a question you ask instead of answering yourself ends",
     "  your turn with no commits, which fails the task outright. Decide, and record",
     "  the decision and why in your commit message.",
+    "- Ending your turn is final, so do not end it while work you were asked for is",
+    "  still owed: no summary that announces the next",
+    "  step instead of taking it, no offer to continue, no list of open decisions",
+    "  when none of them blocks the rest of the work, and no stopping because a",
+    "  milestone feels like a good place to report. If you notice yourself inviting",
+    "  the user to redirect you or offering to wait, take the next step instead.",
+    "  Ordinary obstacles — an error, a timeout, an empty result, a failing tool —",
+    "  are yours to diagnose and work through (retry, fix the request, use another",
+    "  route). Stop only when nothing can move without a human, or when what blocks",
+    "  you was deliberately put there (a protected file, access that was withheld):",
+    "  leave it alone and finish what you can. Record the blocker on a `Decision:`",
+    "  line, or in your final message if you have nothing to commit.",
     "- Record each departure from the issue, each item you skipped and each check",
     "  you could not run as its own line in a commit body, starting `Decision:`,",
     "  `Skipped:`, `Deferred:` or `Not run locally:`. Mullion shows those lines to",
@@ -487,6 +534,23 @@ export function taskReviewFindingsPath(sessionsDir: string, taskId: number, roun
  */
 export function taskRereviewRequestPath(sessionsDir: string, taskId: number, key: number): string {
   return path.join(sessionsDir, `task-${taskId}.rereview.${key}`);
+}
+
+/**
+ * Where a worker returned for a red CI check writes "this cannot be fixed from
+ * this PR" — a `sessionsDir`-relative path outside the worktree, the same
+ * convention `taskRereviewRequestPath` documents. The file's existence is the
+ * declaration; its content is the worker's reason (the check, and why).
+ *
+ * Keyed by the head the worker was returned for (`ciReturnHeadSha`, which is
+ * also `ci.headSha` in `buildCiFailurePrompt`): a declaration about one head
+ * can never be mistaken for one about the next push, and there is no delete to
+ * carry across hosts. `headSha` must be a full lowercase hex SHA — the
+ * reconciler passes the PR's own head and the internal route re-validates it,
+ * so a caller can never smuggle a path segment in.
+ */
+export function taskCiUnfixablePath(sessionsDir: string, taskId: number, headSha: string): string {
+  return path.join(sessionsDir, `task-${taskId}.ci-unfixable.${headSha}`);
 }
 
 /**
@@ -1227,6 +1291,25 @@ export function renderCiSummary(ci: ReviewCiInfo): string {
   return lines.join("\n");
 }
 
+/**
+ * The tool-turn limit of the external (Hermes) review bot. It must match
+ * `hermes_review_bot_max_turns` in the ansible-playbooks repo, which Mullion
+ * cannot read — change both together. A run that exhausts it ends `failed`.
+ */
+export const HERMES_REVIEW_TURN_BUDGET = 150;
+
+/** The budget paragraph a `reply` review's prompt carries (see
+ * `HERMES_REVIEW_TURN_BUDGET`). */
+export function renderHermesTurnBudget(hasCi: boolean): string {
+  return [
+    `You have a limited budget of about ${HERMES_REVIEW_TURN_BUDGET} tool turns for this review.`,
+    ...(hasCi ? ["Rely on the PR's CI result above instead of re-running full test suites."] : []),
+    "Review the diff in priority order (correctness and invariants first, style last). Emit the",
+    "findings JSON before the budget runs out, even if the review is incomplete, and mark",
+    'any area you did not get to as "not-checked" rather than leaving it out.',
+  ].join("\n");
+}
+
 /** Renders `buildReviewPrompt`'s `roundsRemaining` option into the paragraph
  * that follows the findings-shape instructions. Two deliberate wording
  * choices, both load-bearing:
@@ -1537,6 +1620,7 @@ export function buildReviewPrompt(opts: {
     ...(opts.roundsRemaining !== undefined && Number.isFinite(opts.roundsRemaining)
       ? [renderRoundsRemaining(opts.roundsRemaining), ""]
       : []),
+    ...(reply ? [renderHermesTurnBudget(!!opts.ci), ""] : []),
     ...(reply
       ? []
       : [
@@ -1572,6 +1656,9 @@ export function buildCiFailurePrompt(
     /** Set when the task's approval is carried through this fix (no
      * re-review): where the worker writes a line to ask for one anyway. */
     rereviewRequestPath?: string;
+    /** Where the worker declares that a red check cannot be fixed from this PR
+     * (`taskCiUnfixablePath`, keyed by this head). */
+    ciUnfixablePath?: string;
   },
 ): string {
   const preamble = buildTaskMasterPreamble(opts);
@@ -1581,7 +1668,7 @@ export function buildCiFailurePrompt(
           .map((c) => `- ${c.name}${c.detail ? ` — ${c.detail}` : ""}${c.url ? ` — ${c.url}` : ""}`)
           .join(
             "\n",
-          )}\n\nA check that is not required for merging still counts: Mullion holds the merge while it is red, so fix it too (for a coverage check, add tests for the uncovered lines).\n\n`
+          )}\n\nA check that is not required for merging still counts: Mullion holds the merge while it is red, so fix every one your diff can fix (for a coverage check, add tests for the uncovered lines).\n\n`
       : "";
   // When the Actions runs are all green the red check is not one of them (it
   // was reached through GitHub's `unstable` merge state): printing "CI ... is
@@ -1601,6 +1688,15 @@ export function buildCiFailurePrompt(
     `A CI check failed on this task's PR after it reached review.\n\n${actionsSummary}\n\n${checks}` +
     "Pull the latest changes, read the failing check's log, and fix it — then commit and finish " +
     "again. Mullion pushes the branch itself when you do; do not `git push`." +
+    (opts.ciUnfixablePath
+      ? "\n\nSome failures cannot be fixed from this PR: an upstream advisory with no patched " +
+        "release, an outside service that is down, a check that is red on the base branch too. " +
+        "For those, do not push a workaround and do not disable, skip or loosen the check. " +
+        `Write one short paragraph naming the check and saying why to ${opts.ciUnfixablePath} ` +
+        "(outside the worktree, so it does not dirty it), then finish your turn. Mullion will " +
+        "stop re-running it and tell a human exactly what you wrote. Use this only when no " +
+        "change to this PR could fix the check."
+      : "") +
     (opts.rereviewRequestPath
       ? "\n\nThis work was already reviewed and approved, and a fix for CI is not " +
         "reviewed again. If your fix grew past a small change and genuinely needs " +
@@ -1766,4 +1862,29 @@ export function buildPrReviewCommentsPrompt(
     "Address each one, then finish your turn as usual. You don't need to reply on GitHub or " +
     "resolve the thread yourself — Mullion picks up your commits and re-checks automatically.";
   return `${preamble}${SECTION_BREAK}${feedback}${SECTION_BREAK}${taskSpec(opts.task)}`;
+}
+
+/**
+ * The merge-conflict auto-return's prompt (`returnConflictingPrToWorker`,
+ * task-reconciler.ts) — the PR conflicts with its base and auto-rebase could
+ * not (or may not) resolve it, so the worker does it, as a human did by hand
+ * for #3277. It asks for a MERGE of the base, not a rebase: Mullion pushes at
+ * the end of the turn like any other auto-return round, and a merge commit
+ * lands as a plain fast-forward where a rebase would need a force push.
+ */
+export function buildMergeConflictPrompt(
+  opts: WorkerPreambleOptions & { baseRef: string; reason: string },
+): string {
+  const preamble = buildTaskMasterPreamble(opts);
+  const instructions =
+    `Your pull request for ${opts.branchName} conflicts with ${opts.baseRef}, so GitHub cannot ` +
+    `merge it and runs no checks on it. ${opts.reason}\n\n` +
+    `Run \`git fetch origin\`, then merge \`origin/${opts.baseRef}\` into ${opts.branchName} ` +
+    "(`git merge`, or rebase if you prefer) and resolve every conflict. A generated file (a lockfile, " +
+    "a baseline, a snapshot) is not merged by hand: take the base's copy and regenerate it with the " +
+    "command the repo's AGENTS.md or CONTRIBUTING.md names. Confirm no conflict markers remain " +
+    "(`git grep -nE '^(<<<<<<<|>>>>>>>)'`), re-run the repo's own verification gate, and commit " +
+    "everything. Then finish your turn as usual: Mullion pushes your commits and the review runs " +
+    "on the result. Do not switch to or create another branch.";
+  return `${preamble}${SECTION_BREAK}${instructions}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }

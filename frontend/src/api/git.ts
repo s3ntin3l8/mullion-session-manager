@@ -146,10 +146,16 @@ export const gitApi = {
     }),
 
   // Issue #745 — Manual fast-forward git pull trigger (`git merge --ff-only @{u}`).
-  postProjectGitPull: (projectId: number, sessionId?: number) =>
-    request<GitPullResult>(`/api/projects/${projectId}/git-pull${sessionQuery(sessionId)}`, {
+  postProjectGitPull: (projectId: number, sessionId?: number, hostId?: string) => {
+    if (sessionId !== undefined && hostId !== undefined) {
+      throw new Error("Choose either a session checkout or a host checkout.");
+    }
+    const query =
+      hostId === undefined ? sessionQuery(sessionId) : `?hostId=${encodeURIComponent(hostId)}`;
+    return request<GitPullResult>(`/api/projects/${projectId}/git-pull${query}`, {
       method: "POST",
-    }),
+    });
+  },
 
   // Issue #1672 — the guarded checkout / create / rebase of the project's own
   // checkout. A refusal (dirty tree, active session, conflicting rebase —

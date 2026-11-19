@@ -10,6 +10,7 @@
 // library is needed here; the frontend sanitizes before inserting it.
 
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
+import { parseParentIssueUrl } from "./github.js";
 
 const PAGE_SIZE = 50;
 /** Most raw list pages a title search reads (1000 issues) before giving up and flagging `truncated`. */
@@ -53,10 +54,25 @@ export interface IssueComment {
   htmlUrl: string;
 }
 
+/** A sub-issue or parent, as the detail view's relationship card lists it. */
+export interface IssueRef {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  /** `owner/repo`, set only when the issue lives in another repository than the one on screen. */
+  repo?: string;
+}
+
 export interface IssueDetail extends IssueListItem {
   state: "open" | "closed";
   bodyHtml: string;
   comments: IssueComment[];
+  /** Direct children (first 100); empty when the issue has none. */
+  subIssues: IssueRef[];
+  /** GitHub's cumulative `sub_issues_summary` (total children, completed ones). */
+  subIssuesSummary: { total: number; completed: number } | null;
+  /** The parent issue when this one is a sub-issue. */
+  parent: IssueRef | null;
 }
 
 export type IssueSort = "updated" | "created" | "comments";
@@ -91,6 +107,9 @@ interface RawIssue {
   state?: string;
   body_html?: string | null;
   pull_request?: unknown;
+  repository_url?: string | null;
+  parent_issue_url?: string | null;
+  sub_issues_summary?: { total?: number; completed?: number } | null;
 }
 
 interface RawComment {
@@ -133,6 +152,56 @@ async function getJson<T>(path: string, token: string, accept?: string): Promise
     throw new GitHubApiError(`GitHub API error for ${path} (HTTP ${res.status})`, res.status);
   }
   return (await res.json()) as T;
+}
+
+/** `owner/repo` from a GitHub API repository or issue URL. */
+function repoOfUrl(url: string | null | undefined): string | null {
+  const m = /\/repos\/([^/]+\/[^/]+)/.exec(url ?? "");
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function toRef(
+  raw: Pick<RawIssue, "number" | "title" | "state" | "repository_url">,
+  currentRepo: string,
+  repo = repoOfUrl(raw.repository_url),
+): IssueRef {
+  return {
+    number: raw.number,
+    title: raw.title,
+    state: raw.state === "closed" ? "closed" : "open",
+    // A sibling repo's issue must not be opened as this project's issue of the same number.
+    ...(repo && repo.toLowerCase() !== currentRepo.toLowerCase() ? { repo } : {}),
+  };
+}
+
+/** The issue's children and parent. Best effort: a failed lookup only hides the card. */
+async function getRelations(
+  token: string,
+  base: string,
+  issue: RawIssue,
+): Promise<Pick<IssueDetail, "subIssues" | "subIssuesSummary" | "parent">> {
+  const total = issue.sub_issues_summary?.total ?? 0;
+  const currentRepo = repoOfUrl(base) ?? "";
+  // The parent may live in another repo of the same owner: fetch it from the
+  // repo its URL names, not from this one.
+  const parentRef = parseParentIssueUrl(issue.parent_issue_url);
+  const [children, parent] = await Promise.all([
+    total > 0
+      ? getJson<RawIssue[]>(`${base}/sub_issues?per_page=100`, token).catch(() => [])
+      : Promise.resolve([] as RawIssue[]),
+    parentRef
+      ? getJson<RawIssue>(`/repos/${parentRef.repo}/issues/${parentRef.number}`, token).catch(
+          () => null,
+        )
+      : Promise.resolve(null),
+  ]);
+  return {
+    subIssues: children.map((c) => toRef(c, currentRepo)),
+    subIssuesSummary: issue.sub_issues_summary
+      ? { total, completed: issue.sub_issues_summary.completed ?? 0 }
+      : null,
+    parent: parent && parentRef ? toRef(parent, currentRepo, parentRef.repo) : null,
+  };
 }
 
 /** One issue by number, or null when it is missing, closed or a pull request. */
@@ -279,8 +348,10 @@ export async function getIssueDetail(
   if (issue.pull_request) {
     throw new GitHubApiError(`#${number} is a pull request, not an issue`, 404);
   }
+  const relations = await getRelations(token, base, issue);
   return {
     ...toItem(issue),
+    ...relations,
     state: issue.state === "closed" ? "closed" : "open",
     bodyHtml: issue.body_html ?? "",
     comments: comments.map((c) => ({

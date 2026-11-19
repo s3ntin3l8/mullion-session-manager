@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { Task } from "./api/types.js";
 import {
   TASK_STEPS,
+  isQuotaExhausted,
+  isRateLimitParked,
+  quotaExhaustedText,
+  rateLimitResumeText,
   reviewRunState,
   blockerIsTask,
   findTaskForIssue,
@@ -186,4 +190,61 @@ describe("reviewRunState", () => {
     expect(run({ reviewRunId: "a", reviewRunIngestedId: "a" })).toBe("finished"));
   it("is unsent when dispatch gave up, even if ids differ", () =>
     expect(run({ reviewRunId: "a", reviewRunUnsent: true })).toBe("unsent"));
+});
+
+describe("rate-limit park (#2940)", () => {
+  const soon = () => new Date(Date.now() + 90 * 60_000).toISOString();
+  const parked = (over: Partial<Task> = {}) =>
+    task({
+      status: "ready",
+      failureReason: "rate limited; held until the provider reset",
+      rateLimitUntil: soon(),
+      ...over,
+    });
+
+  it("reads as parked only while the reset is ahead", () => {
+    expect(isRateLimitParked(parked())).toBe(true);
+    expect(
+      isRateLimitParked(parked({ rateLimitUntil: new Date(Date.now() - 1000).toISOString() })),
+    ).toBe(false);
+    expect(isRateLimitParked(parked({ failureReason: null }))).toBe(false);
+    expect(isRateLimitParked(parked({ rateLimitUntil: null }))).toBe(false);
+    expect(isRateLimitParked(parked({ status: "failed" }))).toBe(false);
+  });
+
+  it("badges and explains a parked task instead of calling it plain READY", () => {
+    const t = parked();
+    expect(taskStatusBadge(t)).toEqual({ label: "RATE LIMITED", tone: "warn" });
+    expect(taskNextStep(t).lead).toMatch(/usage limit\. Resumes automatically in /);
+    // After the reset it falls back to the ordinary ready copy.
+    const stale = parked({ rateLimitUntil: new Date(Date.now() - 1000).toISOString() });
+    expect(taskStatusBadge(stale).label).toBe("READY");
+    expect(taskNextStep(stale).lead).toMatch(/^Queued\./);
+  });
+
+  it("words the resume time relative to now", () => {
+    expect(rateLimitResumeText(new Date(Date.now() + 125 * 60_000).toISOString())).toBe("in 2h");
+    expect(rateLimitResumeText(new Date(Date.now() - 1000).toISOString())).toBe("any moment");
+  });
+});
+
+describe("#3234 quota exhausted", () => {
+  const failed = {
+    status: "failed",
+    needsHumanReason: "rate-limited",
+    rateLimitUntil: new Date(Date.now() + 100 * 3600_000).toISOString(),
+    rateLimitMessage: "Individual quota reached.",
+  } as Pick<Task, "status" | "needsHumanReason" | "rateLimitUntil" | "rateLimitMessage">;
+
+  it("is a failed task with the rate-limited reason and a reset", () => {
+    expect(isQuotaExhausted(failed)).toBe(true);
+    expect(isQuotaExhausted({ ...failed, status: "ready" })).toBe(false);
+    expect(isQuotaExhausted({ ...failed, needsHumanReason: "cap" })).toBe(false);
+    expect(isQuotaExhausted({ ...failed, rateLimitUntil: null })).toBe(false);
+  });
+
+  it("says when the quota resets", () => {
+    expect(quotaExhaustedText(failed)).toBe("Quota exhausted · resets in 4d");
+    expect(quotaExhaustedText({ ...failed, rateLimitUntil: null })).toBe("Quota exhausted");
+  });
 });

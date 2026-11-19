@@ -2,13 +2,16 @@ import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
 import { useCanPopOutTask } from "../hooks/useOpenTask.js";
+import { DeleteTaskAction } from "../DeleteTaskAction.js";
+import { canDeleteTask } from "../lib/canDeleteTask.js";
+import { WorkflowChangeApproval } from "../WorkflowChangeApproval.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
 import type { Session, Task, TaskBlocker } from "../api/types.js";
 import { matchSessionPr } from "../github/matchSessionPr.js";
 import { prStatuses, prTriadItems, type PrStatusInput } from "../github/prPhase.js";
 import { parseReviewRounds } from "../lib/reviewRounds.js";
-import { reviewPhaseText } from "../needsHuman.js";
+import { needsHumanText, reviewPhaseText } from "../needsHuman.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "../sessionStatus.js";
 import { useDashboardStore } from "../store/index.js";
 import {
@@ -275,6 +278,12 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         }}
       />
 
+      {task.status === "in_progress" && task.needsHumanReason === "worker-not-started" && (
+        <div className="sc-callout sc-callout--warn" role="status">
+          {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
+        </div>
+      )}
+
       {showReview && (
         <SidebarSection title="Review" persistKey="task-detail-review" variant="card">
           <dl className="sb-kv">
@@ -364,8 +373,22 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         </SidebarSection>
       )}
 
+      <WorkflowChangeApproval task={task} />
+
       <div className="sb-actions-block">
         <TaskActions task={task} confirmApprove />
+        {/* Same server-side restrictions and two-stage confirm as the retired
+            TaskDetail view; a successful delete leaves the (now gone) task. */}
+        {canDeleteTask(task) && (
+          <DeleteTaskAction
+            taskId={task.id}
+            isDone={task.status === "done"}
+            isGithubLinked={task.issueNumber !== null}
+            branchName={task.branchName}
+            worktreePath={task.worktreePath}
+            onDeleted={() => goSidebarBack({ kind: "task", taskId: task.id }, onBack)}
+          />
+        )}
       </div>
 
       <SidebarSection title="Details" persistKey="task-detail-details" variant="card">

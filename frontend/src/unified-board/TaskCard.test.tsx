@@ -1082,6 +1082,21 @@ describe("UnifiedBoard task columns", () => {
     expect(document.querySelector(".task-card-failure-reason")).toBeNull();
   });
 
+  it("#2940 — a rate-limit-parked ready task says so and when it resumes", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "ready",
+        failureReason: "rate limited; held until the provider reset",
+        rateLimitUntil: new Date(Date.now() + 60 * 60_000).toISOString(),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".task-card-dispatch-reason")?.textContent).toMatch(
+      /Rate limited · resumes /,
+    );
+  });
+
   it("#1997 — shows no dispatch note for a queued task without a recorded reason", () => {
     tasks = [makeTask({ id: 1, status: "claimed", failureReason: null })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
@@ -1324,5 +1339,25 @@ describe("UnifiedBoard task columns", () => {
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText(/Round 1 · returned to worker/)).toBeInTheDocument();
     expect(screen.queryByText("Review in progress")).toBeNull();
+  });
+  describe("worker nudge note (#3179)", () => {
+    const nudged = { nudgeCount: 1, nudgeLimit: 2, lastNudgedAt: "2026-11-16T12:00:00Z" };
+
+    it("shows 'Nudged the worker to continue (1/2)' on an in_progress card", () => {
+      tasks = [makeTask({ id: 1, status: "in_progress", ...nudged })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      const note = screen.getByText("Nudged the worker to continue (1/2)");
+      expect(note).toHaveAttribute("role", "status");
+      expect(note.getAttribute("title")).toMatch(/^Last nudge /);
+    });
+
+    it.each([
+      ["reviewing", { status: "reviewing" as const, ...nudged }],
+      ["no nudge sent (also what a stale spell serializes to)", { status: "in_progress" as const }],
+    ])("shows nothing for %s", (_name, over) => {
+      tasks = [makeTask({ id: 1, ...over })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByText(/Nudged the worker/)).toBeNull();
+    });
   });
 });

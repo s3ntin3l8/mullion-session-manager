@@ -2,9 +2,11 @@ import { useRef, useState, type ReactNode } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import type { Device } from "./api/index.js";
+import { LOCAL_HOST_ID } from "../../src/shared/constants.js";
 import { deviceDotClass } from "./deviceStatus.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { describeError } from "./lib/describeError.js";
+import { hostDisplayName } from "./lib/hostBadge.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import { DeviceIcon, PlayIcon, StopIcon } from "./ui/icons.js";
 
@@ -24,10 +26,10 @@ import { DeviceIcon, PlayIcon, StopIcon } from "./ui/icons.js";
 export const DEVICES_POLL_MS = 4000;
 
 // The row's label, in the order every other device surface uses it (name →
-// AVD name → serial). One helper, so the row's visible text, its accessible
-// name and the failure message below all name the SAME device.
+// AVD name → serial → UDID). One helper, so the row's visible text, its
+// accessible name and the failure message below all name the SAME device.
 function deviceLabel(device: Device): string | null {
-  return device.name || device.avdName || device.serial;
+  return device.name || device.avdName || device.serial || device.udid || null;
 }
 
 // What to CALL the device when it is spoken — an aria-label, a failure
@@ -74,6 +76,7 @@ export function SidebarDevices({
   // start/stop + open.
   const devices = useDashboardStore(useShallow((s) => s.devices));
   const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
+  const hosts = useDashboardStore(useShallow((s) => s.hosts));
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
   const startDevice = useDashboardStore((s) => s.startDevice);
   const stopDevice = useDashboardStore((s) => s.stopDevice);
@@ -188,10 +191,26 @@ export function SidebarDevices({
       {devices.map((device) => {
         const stopped = device.status === "killed";
         const label = deviceLabel(device);
+        const isIos = device.platform === "ios";
         // This row's own failure, or nothing — never another row's.
         const rowError = lifecycleError?.id === device.id ? lifecycleError.message : null;
+        const unreachable = device.hostUnreachable === true;
+        // The platform (for iOS) and host are spoken as well as shown: two
+        // same-named devices on different platforms or hosts must not read as
+        // identical rows to a screen reader.
+        const platformSuffix = isIos ? " (iOS)" : "";
+        const hostSuffix =
+          device.hostId !== LOCAL_HOST_ID ? ` on ${hostDisplayName(device.hostId, hosts)}` : "";
+        // The visible note is inside a role="button" row, so its text is
+        // presentational to AT: the reason has to be part of the spoken name.
+        const spokenState = unreachable ? " — host unreachable" : "";
         const title =
-          rowError ?? (stopped ? "Stopped — click to start" : (device.live?.error ?? undefined));
+          rowError ??
+          (unreachable
+            ? "Unavailable — host unreachable"
+            : stopped
+              ? "Stopped — click to start"
+              : (device.live?.error ?? undefined));
         return (
           // role/tabIndex/Enter-Space + `e.target !== e.currentTarget`, same
           // P10 pattern Sidebar.tsx's SessionRow/project-row-header had until
@@ -200,11 +219,12 @@ export function SidebarDevices({
           // and open the panel when the user meant to start/stop it.
           <div
             key={device.id}
-            // `sidebar-device-row-wrap` only rides along when this row has
-            // an error line to make room for — a row without one keeps the
-            // exact layout it always had (see styles/sidebar.css).
+            // `sidebar-device-row-wrap` rides along whenever this row has a
+            // second line to show (a lifecycle error or the unreachable
+            // note) — any other row keeps the exact layout it always had
+            // (see styles/sidebar.css).
             className={`sidebar-tasks-entry${stopped ? " stopped" : ""}${
-              rowError ? " sidebar-device-row-wrap" : ""
+              rowError || unreachable ? " sidebar-device-row-wrap" : ""
             }`}
             data-testid={`device-row-${device.id}`}
             role="button"
@@ -215,7 +235,7 @@ export function SidebarDevices({
             // connection" as one string). Same convention as Sidebar.tsx's
             // SessionRow (`Open session …`) and NotificationBell's
             // EventRow — the row names itself, its content does not.
-            aria-label={`Open device ${deviceSpokenName(device)}`}
+            aria-label={`Open device ${deviceSpokenName(device)}${platformSuffix}${hostSuffix}${spokenState}`}
             title={title}
             onClick={() => onOpenDevice(device)}
             onKeyDown={(e) => {
@@ -228,15 +248,25 @@ export function SidebarDevices({
           >
             <DeviceIcon size={14} />
             <span className="sidebar-tasks-entry-label">{label}</span>
+            {isIos && (
+              <span className="device-row-host" data-testid={`device-platform-${device.id}`}>
+                iOS
+              </span>
+            )}
+            {device.hostId !== LOCAL_HOST_ID && (
+              <span className="device-row-host" data-testid={`device-host-${device.id}`}>
+                {hostDisplayName(device.hostId, hosts)}
+              </span>
+            )}
             <span className={`settings-status-dot ${deviceDotClass(device)}`} />
             <span className="device-row-actions">
               {stopped ? (
                 <button
                   type="button"
                   data-testid={`device-start-${device.id}`}
-                  aria-label={`Start ${label}`}
+                  aria-label={`Start ${label}${platformSuffix}${hostSuffix}${spokenState}`}
                   title="Start"
-                  disabled={pendingId !== null}
+                  disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
                     e.stopPropagation();
                     void runLifecycle(device, "start");
@@ -248,9 +278,9 @@ export function SidebarDevices({
                 <button
                   type="button"
                   data-testid={`device-stop-${device.id}`}
-                  aria-label={`Stop ${label}`}
+                  aria-label={`Stop ${label}${platformSuffix}${hostSuffix}${spokenState}`}
                   title="Stop"
-                  disabled={pendingId !== null}
+                  disabled={pendingId !== null || unreachable}
                   onClick={(e) => {
                     e.stopPropagation();
                     void runLifecycle(device, "stop");
@@ -264,6 +294,11 @@ export function SidebarDevices({
                 Settings -> Devices gives its own errors under its table
                 (ErrorText: role="alert", so assistive tech announces it
                 and it does not rely on colour alone). */}
+            {unreachable && !rowError && (
+              <span className="sidebar-device-note" data-testid={`device-unreachable-${device.id}`}>
+                unavailable — host unreachable
+              </span>
+            )}
             {rowError && <ErrorText className="sidebar-device-error">{rowError}</ErrorText>}
           </div>
         );

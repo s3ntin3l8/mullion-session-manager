@@ -67,6 +67,7 @@ export default defineConfig({
     css: {
       include: [
         /styles\/tokens\.css/,
+        /styles\/modals\.css/,
         /styles\/sidebar-kit\.css/,
         /styles\/github-pr\.css/,
         /styles\/task-board\.css/,
@@ -76,6 +77,7 @@ export default defineConfig({
         /styles\/companion-views\.css/,
         /styles\/motion\.css/,
         /styles\/index\.css/,
+        /styles\/terminal\.css/,
       ],
     },
     maxWorkers,

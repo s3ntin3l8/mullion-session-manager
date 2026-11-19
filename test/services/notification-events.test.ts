@@ -9,9 +9,9 @@ import type { NotificationEvent } from "../../src/services/pty-manager.js";
 
 // Phase 1's notification event model (issue #166) — the ring buffer +
 // emit-on-transition logic added to Session/PtyManager in pty-manager.ts.
-// Faked the same way test/services/pty-manager.test.ts fakes node-pty and
+// Faked the same way test/helpers/pty-manager-harness.ts fakes node-pty and
 // the systemd-run/dtach bootstrap child_process, kept in its own file
-// (rather than folded into pty-manager.test.ts) per the PR's own test plan.
+// (rather than folded into the pty-manager suite) per the PR's own test plan.
 const fakePtyChildren: FakePty[] = [];
 
 class FakePty {
@@ -78,7 +78,7 @@ describe("notification events (issue #166)", () => {
 
   afterEach(() => {
     // Stops PtyManager's own attention-evaluator interval (issue #171/#98) —
-    // see pty-manager.test.ts's identical afterEach for why.
+    // see test/helpers/pty-manager-harness.ts's identical afterEach for why.
     manager.killAll();
     fs.rmSync(sessionsDir, { recursive: true, force: true });
   });
@@ -92,8 +92,9 @@ describe("notification events (issue #166)", () => {
   }
 
   // Issue #171/#98: attention confirmation is now debounced through
-  // attention-detect.ts's state machine — see pty-manager.test.ts's own
-  // "activity/attention signals (WS-6)" describe block for the full
+  // attention-detect.ts's state machine — see
+  // pty-manager-activity.test.ts's own "activity/attention signals (WS-6)"
+  // describe block for the full
   // transition-by-transition coverage. These two just confirm the
   // event-emission side (issue #166's model) still fires correctly once a
   // signal actually confirms/clears.
@@ -218,8 +219,9 @@ describe("notification events (issue #166)", () => {
     // Issue #1228 — a hookless, non-alt-screen session's silence event now
     // also carries the session's last real scrollback line as `context`
     // (here, the two chunks emitted above, concatenated — nothing
-    // separates them by a newline). See test/services/pty-manager.test.ts's
-    // own #1228 tests for the alt-screen/hooksActive gates that keep this
+    // separates them by a newline). See
+    // test/services/pty-manager-activity.test.ts's own #1228 tests for the
+    // alt-screen/hooksActive gates that keep this
     // event context-free instead.
     const attentionEvents = session.getEvents().filter((e) => e.kind === "attention");
     expect(attentionEvents.map((e) => e.payload)).toEqual([
@@ -236,8 +238,8 @@ describe("notification events (issue #166)", () => {
 
   it("emits a title_change event only when the title actually changes", async () => {
     // A1: the title_change EVENT (as opposed to raw title-change detection,
-    // which stays synchronous — see pty-manager.test.ts's own "title_change
-    // event coalescing (A1)" describe block) is now debounced at the
+    // which stays synchronous — see pty-manager-title-change.test.ts's own
+    // "title_change event coalescing (A1)" describe block) is now debounced at the
     // source, so this test advances a fake clock past
     // TITLE_CHANGE_EVENT_DEBOUNCE_MS (3s) between distinct titles to
     // observe each as its own settled event, same as it would in

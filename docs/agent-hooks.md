@@ -102,9 +102,49 @@ identifying which session you're speaking for:
 ```
 
 An unknown, forged, or malformed token closes the connection immediately —
-there is no error reply for a failed handshake, only a closed socket. A
+there is no error reply for a failed handshake, only a closed socket (the one
+exception is a _delivery_ handshake, below, which is told it was refused). A
 successful handshake attributes every subsequent line on that connection to
 this session; you don't need to repeat the token.
+
+A token is minted per session and persisted next to the session's socket
+(`<sessionsDir>/<id>.token`), so it survives a restart of the Mullion
+process that created the session. After such a restart the token is
+re-registered at boot on an agent host (issue #3166) whenever the session's
+scope is still alive — so a surviving session's hook connections are
+accepted again instead of being refused with "unknown or invalid token". A
+session whose scope is gone (or whose token file is missing or malformed) is
+not re-registered, and its token stays refused.
+
+### Delivery handshakes (a retried `Stop`)
+
+Most hooks are fire-and-forget: connect, write, close, and the socket says
+nothing back. A `Stop` is the one exception (issue #3174), because a lost
+`Stop` leaves a finished headless Task Master worker looking unfinished until
+its budget expires — and a `Stop` is refused whenever Mullion (or an agent
+host) is restarting, or before the session's token has been registered again.
+
+A client that wants its `Stop` to survive that window names the delivery in
+its handshake:
+
+```json
+{ "token": "<the value of $MULLION_HOOK_TOKEN>", "deliveryId": "<an id, stable across retries>" }
+```
+
+and the socket then answers on that connection:
+
+| Reply                  | Meaning                                                             |
+| ---------------------- | ------------------------------------------------------------------- |
+| `{"ack": "accepted"}`  | the handshake resolved — the delivery's messages may follow         |
+| `{"ack": "delivered"}` | one message of this delivery was dispatched — one reply per message |
+| `{"ack": "refused"}`   | the handshake was refused — NOTHING was dispatched                  |
+
+A delivery is delivered **at most once**: the socket remembers the
+`(deliveryId, message index)` pairs it dispatched for the session (see
+`src/services/hook-deliveries.ts`), so a retry of a delivery that already
+landed is acknowledged again but never dispatched a second time. A client
+that gets no reply at all cannot know whether its first attempt landed, so
+it must not retry against a socket that does not answer in this protocol.
 
 Every message after the handshake is validated JSON, one object per line,
 against a `kind`-discriminated shape. This table (rewritten against the
@@ -319,6 +359,37 @@ the UI never offers a status legend entry an agent can't reach).
 below for why it replaced the old `PreToolUse`/`Bash` gate, and why that
 means it's safe to register unconditionally rather than behind a flag.
 Every other hook above is fire-and-forget (never blocks the tool call).
+
+**Rate-limit `StopFailure` payload (captured live on Claude Code 2.1.326,
+issue #3265):** on an exhausted 5-hour usage limit, `claude -p ... --output-format json`
+emits `terminal_reason: "api_error"`, `is_error: true`, `api_error_status: 429`,
+`api_error_type: "rate_limit_error"`, `api_error: "usage_limit_reached"`, and
+`result: "You've hit your 5-hour limit · resets 6:30pm (Europe/Berlin)"`, and
+fires `StopFailure` with:
+
+```json
+{
+  "session_id": "a0ce1358-876e-4739-8237-ca52f8b02bdf",
+  "transcript_path": "/tmp/claude-spike/config/projects/-tmp-claude-spike-workdir/a0ce1358-876e-4739-8237-ca52f8b02bdf.jsonl",
+  "cwd": "/tmp/claude-spike/workdir",
+  "prompt_id": "d9776663-1538-4f6f-b058-b8e23eca9c64",
+  "effort": { "level": "medium" },
+  "hook_event_name": "StopFailure",
+  "error": "rate_limit",
+  "last_assistant_message": "You've hit your 5-hour limit · resets 6:30pm (Europe/Berlin)"
+}
+```
+
+Notably, the hook payload carries no `error_type`, `error_details`, or
+`retryable` field: the classification (`"rate_limit"`) arrives in `error`, and
+the human-readable reset message arrives in `last_assistant_message` (the
+transcript's synthetic assistant entry also carries
+`apiErrorParams.rate_limit_info.resetsAt` / `quotaLimits.resetsAt` as Unix
+seconds). `mapClaudeCodeStopFailure` maps `error === "rate_limit"` to
+`errorType: "rate_limit"` and forwards `last_assistant_message` as
+`errorDetails` when `errorType === "rate_limit"` (and `error_details` is
+absent); `parseClaudeCodeResetTime` (`src/services/claude-reset-time.ts`)
+parses the prose reset time and IANA timezone into a `Date`.
 
 **The `--bare` caveat:** Claude Code's `--bare` flag ("Minimal mode: skip
 hooks, LSP, plugin credentials") disables every integration described above.
@@ -1093,7 +1164,7 @@ The live mcode processes were unaffected.
 
 **agy** (Antigravity CLI) also reuses the shared forwarder (`agy` as its
 agent argv), registering `Stop` (→ `progress: done`, plus `stop_failure` when
-`terminationReason === "error"`), `PreToolUse`
+`terminationReason` matches `"error"` case-insensitively (agy sends `"ERROR"`)), `PreToolUse`
 on `run_command`
 (observational only — `git_branch`/`cwd_changed` for worktree/branch
 detection; issue #264 removed the `review_gate` it used to also emit, since
@@ -1139,8 +1210,21 @@ back to `null` unconditionally to restore that invariant — a no-op for
 every other adapter, since none of them set it before their own
 `stop_failure`/equivalent fires.
 
+Captured live (2026-11-17, issue #3233): a quota-exhausted turn does fire `Stop`,
+with `terminationReason: "ERROR"` (upper case, which the original exact-match
+check missed, so quota exhaustion looked like a clean finish) and
+`error: "generating and executing: RESOURCE_EXHAUSTED (code 429): Individual
+quota reached. … Resets in 102h16m12s."`. `agy --print` also writes
+`AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","error_code":429,"retryable":true,…}`
+to its output. The reset is a relative duration inside `error`.
+
+That text survives in the persisted `stop_failure` session event.
+`parkRateLimitedTask` reads the latest one, and `parseRelativeResetDuration`
+(`relative-reset-duration.ts`) turns its "Resets in …" into a reset `Date`,
+relative to the event's own timestamp (#3234).
+
 This still only covers the case where agy's Stop hook actually fires with
-`terminationReason === "error"`. Whether a genuinely different agy
+`terminationReason` `"error"` (any case). Whether a genuinely different agy
 termination path can also occur during quota exhaustion is tracked
 separately as issue #1363 — which does **not** claim agy blocks on a
 `NEEDS INPUT`/"continue" prompt during quota exhaustion; an earlier draft

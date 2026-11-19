@@ -5,6 +5,7 @@
 // every existing importer keeps its path. Types plus the `LOG_LEVELS`
 // constant: no defaults, no logic.
 import type { CacheDirId } from "./cache-storage.js";
+import type { OptInId } from "./cleanup-opt-ins.js";
 import type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode } from "../shared/types.js";
 
 export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
@@ -116,6 +117,9 @@ export interface AppSettings {
   // because they're slow to re-download (Playwright browsers, HF models).
   diskCleanup: {
     cacheDirs: CacheDirId[];
+    // Non-directory sources the aggressive cleanup may act on (e.g.
+    // "docker-volumes"); allowlisted by OPT_IN_IDS. Empty = none.
+    optIns: OptInId[];
   };
   launchers: {
     defaultShell: string;
@@ -437,6 +441,8 @@ export interface AppSettings {
   hosts: {
     // HOST_HEARTBEAT_INTERVAL_SECONDS. 0 disables the heartbeat.
     heartbeatSeconds: number;
+    // Days since last successful contact before offering cleanup; 0 disables it.
+    staleAfterDays: number;
   };
   // Non-secret half of the Hermes review relay (services/hermes-review.ts):
   // an agent's `request_review` asks the Mullion server to POST a review
@@ -604,6 +610,10 @@ export interface AppSettings {
     // need the full model. Single setting, not per-role — it's a
     // property of the model itself, not the task.
     defaultSmallModel: string | null;
+    // The model a Task Master worker is told to delegate sizeable,
+    // independent parts to (hook-adapters/delegation.ts). `null` = no
+    // delegation guidance at all.
+    delegateModel: string | null;
   };
   // Install-wide default `--model` per non-opencode CLI (the lowest tier of
   // resolveCliModel's precedence chain). Free-form because each CLI names
@@ -613,12 +623,24 @@ export interface AppSettings {
     defaultModel: string | null;
     reviewerModel: string | null;
     smallModel: string | null;
+    // See `opencode.delegateModel`. A full model id or alias; compared against
+    // the worker's own model so a Sonnet (or `opusplan`) worker is not told
+    // to delegate to Sonnet.
+    delegateModel: string | null;
   };
-  codex: { defaultModel: string | null; reviewerModel: string | null };
-  agy: { defaultModel: string | null; reviewerModel: string | null };
+  codex: {
+    defaultModel: string | null;
+    reviewerModel: string | null;
+    delegateModel: string | null;
+  };
+  agy: { defaultModel: string | null; reviewerModel: string | null; delegateModel: string | null };
   // Issue: mcode support — mcode takes `-m <provider/model>`, the same shape
   // the other CLI-model agents take.
-  mcode: { defaultModel: string | null; reviewerModel: string | null };
+  mcode: {
+    defaultModel: string | null;
+    reviewerModel: string | null;
+    delegateModel: string | null;
+  };
   taskMaster: {
     autoClaimPaused: boolean;
     // GitHub logins trusted in addition to OWNER/MEMBER/COLLABORATOR
@@ -628,8 +650,11 @@ export interface AppSettings {
     enabled: "inherit" | "on" | "off";
     maxConcurrent: number;
     budgetMinutes: number;
+    workerStartTimeoutMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
+    // #3234 — longest park for a provider reset; -1 inherits the env default.
+    rateLimitMaxParkHours: number;
     // #741 — Task Master's own install-wide worker-agent default, split out
     // of settings.launchers.defaultAgent (which only drives the terminal
     // launcher) so terminal and Task Master agent defaults are independent.

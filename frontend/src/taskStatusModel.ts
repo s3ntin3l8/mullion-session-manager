@@ -1,5 +1,6 @@
 import type { Task, TaskBlocker } from "./api/types.js";
 import { reviewPhaseText } from "./needsHuman.js";
+import { formatRelativeUntil } from "./relativeTime.js";
 
 // The status-first view of a task (the Tasks sidebar's detail, epic #2847):
 // the badge, the step tracker and the one "Next:" sentence. Pure functions of
@@ -27,15 +28,62 @@ export function taskStepIndex(task: Pick<Task, "status">): number | null {
   }
 }
 
+/**
+ * #2940 — a worker that hit the provider's usage limit is parked: the task goes
+ * back to `ready` with `rateLimitUntil` set and is claimed again after that
+ * reset. True only while the reset is still ahead, so a stale reason on a task
+ * that is merely waiting for a slot reads as a normal queued task.
+ */
+export function isRateLimitParked(
+  task: Pick<Task, "status" | "rateLimitUntil" | "failureReason">,
+  now: number = Date.now(),
+): boolean {
+  if (task.status !== "ready" || !task.failureReason || !task.rateLimitUntil) return false;
+  return Date.parse(task.rateLimitUntil) > now;
+}
+
+/** "in 2h" until a parked task's provider reset; "any moment" once it is reached. */
+export function rateLimitResumeText(rateLimitUntil: string): string {
+  return formatRelativeUntil(Date.parse(rateLimitUntil));
+}
+
+/**
+ * #3234 — a rate-limited worker whose quota resets beyond the park limit is
+ * failed, not parked: `needsHumanReason: "rate-limited"` with the reset in
+ * `rateLimitUntil`. A Retry clears both.
+ */
+export function isQuotaExhausted(
+  task: Pick<Task, "status" | "needsHumanReason" | "rateLimitUntil">,
+): boolean {
+  return (
+    task.status === "failed" && task.needsHumanReason === "rate-limited" && !!task.rateLimitUntil
+  );
+}
+
+/** "Quota exhausted · resets in 4d", with the provider's own text when it sent one. */
+export function quotaExhaustedText(
+  task: Pick<Task, "rateLimitUntil" | "rateLimitMessage">,
+): string {
+  const resets = task.rateLimitUntil ? `resets ${rateLimitResumeText(task.rateLimitUntil)}` : "";
+  return `Quota exhausted${resets ? ` · ${resets}` : ""}`;
+}
+
 export type StatusBadgeTone = "neutral" | "info" | "success" | "warn" | "danger";
 
 /** The big status badge: what the task is doing right now, in one word or two. */
 export function taskStatusBadge(
   task: Pick<
     Task,
-    "status" | "blockedState" | "failureReason" | "sessionId" | "mergedAt" | "prNumber"
+    | "status"
+    | "blockedState"
+    | "failureReason"
+    | "sessionId"
+    | "mergedAt"
+    | "prNumber"
+    | "rateLimitUntil"
   >,
 ): { label: string; tone: StatusBadgeTone } {
+  if (isRateLimitParked(task)) return { label: "RATE LIMITED", tone: "warn" };
   switch (task.status) {
     case "failed":
       return { label: "FAILED", tone: "danger" };
@@ -91,6 +139,11 @@ export interface NextStep {
 }
 
 export function taskNextStep(task: Task): NextStep {
+  if (isRateLimitParked(task) && task.rateLimitUntil) {
+    return {
+      lead: `Hit the provider's usage limit. Resumes automatically ${rateLimitResumeText(task.rateLimitUntil)}.`,
+    };
+  }
   switch (task.status) {
     case "backlog":
       return { lead: "Parked. Move it to Ready to queue it, or start it now." };

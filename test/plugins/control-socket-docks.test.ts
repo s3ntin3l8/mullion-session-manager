@@ -5,7 +5,8 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildTestApp } from "../helpers/app.js";
-import { dispatch, type ConnectionState } from "../../src/plugins/control-socket.js";
+import { makeConnectionState } from "../helpers/control-socket.js";
+import { dispatch } from "../../src/plugins/control-socket.js";
 import { projects, sessions } from "../../src/db/schema.js";
 
 // #2494 — a session may list/start/stop the dock controls of its OWN project
@@ -16,7 +17,11 @@ interface LaunchParams extends Record<string, unknown> {
   name?: string;
   dockControlId?: string;
 }
-const launch = vi.hoisted(() => ({ calls: [] as Record<string, unknown>[], live: "idle" }));
+const launch = vi.hoisted(() => ({
+  calls: [] as Record<string, unknown>[],
+  live: "idle",
+  fail: false,
+}));
 vi.mock("../../src/services/session-live-info.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -34,6 +39,7 @@ vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
     // Records what the launch asked for and inserts a row, with no real spawn.
     createSessionRecord: vi.fn(async (app: FastifyInstance, params: LaunchParams) => {
       launch.calls.push(params);
+      if (launch.fail) return { ok: false, reason: "invalid-options", detail: "boom" };
       const { sessions: sessionsTable } = await import("../../src/db/schema.js");
       const row = app.db
         .insert(sessionsTable)
@@ -62,20 +68,6 @@ vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
     }),
   };
 });
-
-function sinkConn(scope: "full" | "session", sessionId: string | null) {
-  const frames: Record<string, unknown>[] = [];
-  const conn: ConnectionState = {
-    send: (message) => void frames.push(message),
-    onClose: () => () => {},
-    socket: null,
-    scope,
-    sessionId,
-    openChannels: new Map(),
-    activeWaits: 0,
-  };
-  return { conn, frames };
-}
 
 describe("docks.* ops (#2494)", () => {
   let cwdA: string;
@@ -119,7 +111,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("lists the caller's own project's controls, nothing running", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.list", body: {} });
     expect(frames[0]).toMatchObject({ ok: true, status: 200 });
     const result = frames[0].result as { id: string; running: unknown }[];
@@ -131,7 +123,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("starts a control with its cwd/env, tags the session, and refuses a second start", async () => {
     const { app, projectA, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, {
       id: 1,
       op: "docks.start",
@@ -159,7 +151,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("restarts a control whose row is active but whose process already died", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "logs" } });
     const stale = (frames[0].result as { sessionId: number }).sessionId;
     launch.live = "exited";
@@ -173,7 +165,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("start with a branch runs the control in a branch worktree", async () => {
     const { app, agentSession } = await setup();
-    const { conn } = sinkConn("session", agentSession);
+    const { conn } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, {
       id: 1,
       op: "docks.start",
@@ -185,7 +177,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("stops a running control, and stopping a stopped one is a no-op", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "logs" } });
     const sessionId = (frames[0].result as { sessionId: number }).sessionId;
     await dispatch(app, conn, { id: 2, op: "docks.stop", body: { dockControlId: "logs" } });
@@ -199,7 +191,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("refuses another project at session scope, without launching", async () => {
     const { app, projectB, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     for (const op of ["docks.list", "docks.start", "docks.stop"]) {
       await dispatch(app, conn, {
         id: 1,
@@ -213,7 +205,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("an unknown control is a 404, and the docker-sourced path stays out", async () => {
     const { app, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "nope" } });
     await dispatch(app, conn, { id: 2, op: "docks.stop", body: { dockControlId: "nope" } });
     await dispatch(app, conn, { id: 3, op: "docks.start", body: {} });
@@ -223,7 +215,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("session scope still cannot create a dock session or list/kill dock sessions", async () => {
     const { app, projectA, agentSession } = await setup();
-    const { conn, frames } = sinkConn("session", agentSession);
+    const { conn, frames } = makeConnectionState("session", agentSession);
     await dispatch(app, conn, {
       id: 1,
       op: "sessions.create",
@@ -239,7 +231,7 @@ describe("docks.* ops (#2494)", () => {
 
   it("full scope names the project explicitly", async () => {
     const { app, projectB } = await setup();
-    const { conn, frames } = sinkConn("full", null);
+    const { conn, frames } = makeConnectionState("full", null);
     await dispatch(app, conn, { id: 1, op: "docks.list", body: {} });
     await dispatch(app, conn, { id: 2, op: "docks.list", body: { projectId: String(projectB) } });
     expect(frames.map((f) => f.status)).toEqual([400, 200]);
@@ -260,5 +252,197 @@ describe("docks.* ops (#2494)", () => {
     });
     expect(ok.statusCode).toBe(201);
     expect(launch.calls.at(-1)).toMatchObject({ dockControlId: "dev" });
+  });
+
+  describe("logs, wait and switch (#3049)", () => {
+    async function running(controlId = "dev-server") {
+      const ctx = await setup();
+      const { conn, frames } = makeConnectionState("session", ctx.agentSession);
+      await dispatch(ctx.app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: controlId },
+      });
+      const sessionId = (frames[0].result as { sessionId: number }).sessionId;
+      frames.length = 0;
+      return { ...ctx, conn, frames, sessionId };
+    }
+
+    it("docks.logs reads the running control's screen; not running is a 404", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, { id: 2, op: "docks.logs", body: { dockControlId: "logs" } });
+      await dispatch(app, conn, { id: 3, op: "docks.logs", body: {} });
+      expect(frames.map((f) => f.status)).toEqual([404, 400]);
+      // The running one resolves to its session's scrollback (empty: no live PTY here).
+      await dispatch(app, conn, { id: 4, op: "docks.logs", body: { dockControlId: "dev-server" } });
+      expect(frames[2]).toMatchObject({ ok: true, status: 200, result: { text: "" } });
+    });
+
+    it("docks.logs and docks.wait_for_output refuse another project and a stopped control", async () => {
+      const { app, conn, frames, projectB } = await running();
+      for (const op of ["docks.logs", "docks.wait_for_output"]) {
+        await dispatch(app, conn, {
+          id: 5,
+          op,
+          body: { projectId: String(projectB), dockControlId: "dev-server", match: "x" },
+        });
+      }
+      await dispatch(app, conn, {
+        id: 6,
+        op: "docks.wait_for_output",
+        body: { dockControlId: "logs", match: "x" },
+      });
+      expect(frames.map((f) => f.status)).toEqual([403, 403, 404]);
+    });
+
+    it("docks.wait_for_output validates like sessions.wait_for_output", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 7,
+        op: "docks.wait_for_output",
+        body: { dockControlId: "dev-server" },
+      });
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+    });
+
+    it("docks.switch restarts the control on a branch", async () => {
+      const { app, conn, frames, sessionId } = await running();
+      await dispatch(app, conn, {
+        id: 8,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", branch: "feat/x" },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ worktree: { branch: "feat/x" } });
+      expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
+        "killed",
+      );
+    });
+
+    it("docks.switch refuses a bad target before stopping anything", async () => {
+      const { app, conn, frames, sessionId } = await running();
+      const bodies = [
+        { dockControlId: "dev-server" },
+        { dockControlId: "dev-server", branch: "a", worktreePath: cwdA },
+        { dockControlId: "dev-server", worktreePath: os.tmpdir() },
+      ];
+      for (const body of bodies) await dispatch(app, conn, { id: 9, op: "docks.switch", body });
+      expect(frames.map((f) => f.status)).toEqual([400, 400, 400]);
+      expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
+        "active",
+      );
+    });
+
+    it("docks.switch on a stopped control starts it on the target", async () => {
+      const { app, conn, frames } = await running("logs");
+      await dispatch(app, conn, { id: 11, op: "docks.stop", body: { dockControlId: "logs" } });
+      launch.calls.length = 0;
+      await dispatch(app, conn, {
+        id: 12,
+        op: "docks.switch",
+        body: { dockControlId: "logs", branch: "feat/z" },
+      });
+      expect(frames[1]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls).toHaveLength(1);
+      expect(launch.calls[0]).toMatchObject({ worktree: { branch: "feat/z" } });
+    });
+
+    it("docks.switch launches the resolved path it validated, not the raw input", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 13,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: `${cwdA}/web/../web` },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
+    });
+
+    it("docks.switch anchors a relative worktreePath at the project checkout", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 14,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: "web" },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
+    });
+
+    it("docks.start accepts a worktreePath and refuses one outside the project", async () => {
+      const { app, agentSession } = await setup();
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 15,
+        op: "docks.start",
+        body: { dockControlId: "logs", worktreePath: "web" },
+      });
+      await dispatch(app, conn, {
+        id: 16,
+        op: "docks.start",
+        body: { dockControlId: "dev-server", worktreePath: cwdB },
+      });
+      expect(frames.map((f) => f.status)).toEqual([201, 400]);
+      expect(launch.calls).toHaveLength(1);
+      expect(launch.calls[0]).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
+    });
+
+    it("docks.switch refuses a symlink that escapes the checkout, before stopping anything", async () => {
+      const { app, conn, frames, sessionId } = await running();
+      fs.symlinkSync(cwdB, path.join(cwdA, "escape"));
+      await dispatch(app, conn, {
+        id: 17,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: "escape" },
+      });
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+      expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
+        "active",
+      );
+    });
+
+    it("docks.switch resolves symlinks in the existing part of a not-yet-existing path", async () => {
+      const { app, conn, frames } = await running();
+      fs.mkdirSync(path.join(cwdA, "pkg"));
+      fs.symlinkSync(path.join(cwdA, "pkg"), path.join(cwdA, "alias"));
+      fs.symlinkSync(cwdB, path.join(cwdA, "out"));
+      const sw = (id: number, worktreePath: string) =>
+        dispatch(app, conn, {
+          id,
+          op: "docks.switch",
+          body: { dockControlId: "dev-server", worktreePath },
+        });
+      await sw(18, "out/nope/sub");
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+      await sw(19, "alias/nope/sub");
+      expect(frames[1]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({
+        cwd: path.join(fs.realpathSync(cwdA), "pkg", "nope", "sub"),
+      });
+    });
+
+    it("docks.switch says the control was stopped when the restart fails", async () => {
+      const { app, conn, frames } = await running();
+      launch.fail = true;
+      await dispatch(app, conn, {
+        id: 20,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", branch: "feat/x" },
+      });
+      launch.fail = false;
+      expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+      expect(String(frames[0].error)).toContain("was stopped but could not be restarted");
+    });
+
+    it("docks.switch accepts a path inside the project checkout", async () => {
+      const { app, conn, frames } = await running();
+      await dispatch(app, conn, {
+        id: 10,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", worktreePath: path.join(cwdA, "web") },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
+    });
   });
 });

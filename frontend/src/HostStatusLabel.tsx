@@ -1,4 +1,5 @@
 import type { Host } from "./api/index.js";
+import { legacyAgentLabels, legacyAgentTitle } from "./hostStatus.js";
 import { namedHostStatus, PARKED_WORD } from "./lib/hostStatusWords.js";
 
 /**
@@ -13,7 +14,8 @@ import { namedHostStatus, PARKED_WORD } from "./lib/hostStatusWords.js";
  */
 export function HostStatusLabel({ host }: { host: Host }) {
   const { display, parked } = namedHostStatus(host);
-  if (!display?.label && !parked) return null;
+  const legacy = host.legacyAgent === true;
+  if (!display?.label && !parked && !legacy) return null;
   return (
     <span className="host-derived-status">
       {display?.label && (
@@ -28,9 +30,14 @@ export function HostStatusLabel({ host }: { host: Host }) {
           {display.label}
         </span>
       )}
+      {legacy && (
+        <span className="host-derived-status-legacy" title={legacyAgentTitle(host)}>
+          {legacyAgentLabels(host).short}
+        </span>
+      )}
       {/* Not painted (a flex container), but keeps "unreachable parked" as
           two words in the text content an accessible name is matched to. */}
-      {display?.label && parked && " "}
+      {(display?.label || legacy) && parked && " "}
       {parked && (
         <span
           className="host-derived-status-parked"

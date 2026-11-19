@@ -45,7 +45,7 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { enqueueTask, dispatchClaimedTask } = await import("../../src/services/task-claim.js");
-const { retryTask } = await import("../helpers/retry-task.js");
+const { enqueueRetry } = await import("../../src/services/task-retry.js");
 const { dispatchQueuedTasks, resetDispatchBackoffForTests, resetDispatchStateForTests } =
   await import("../../src/services/task-dispatch.js");
 const { tasks, projects, hosts } = await import("../../src/db/schema.js");
@@ -517,10 +517,9 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
       expect(row.dispatchHeld).toBe(false);
       expect(row.branchName).toBeNull();
       expect(row.worktreePath).toBeNull();
-      await expect(retryTask(app, task.id)).resolves.toMatchObject({
-        ok: false,
-        reason: "no-worktree",
-      });
+      // ...so Retry has no branch to resume and resets it to ready instead.
+      await expect(enqueueRetry(app, task.id)).resolves.toMatchObject({ ok: true });
+      expect(getTask(app, task.id).status).toBe("ready");
 
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();

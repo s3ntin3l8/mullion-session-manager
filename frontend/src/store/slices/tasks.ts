@@ -189,8 +189,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
-    mergeTask: async (id) => {
-      const task = await api.mergeTask(id);
+    mergeTask: async (id, opts) => {
+      const task = await api.mergeTask(id, opts);
       void get().refreshTasks();
       return task;
     },
@@ -213,6 +213,14 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       const task = await api.retryTask(id, opts);
       // The retry is queued (a session spawns when a slot frees), so only the
       // task list changes now; the stream's dispatch event refreshes sessions.
+      void get().refreshTasks();
+      return task;
+    },
+
+    startFreshTask: async (id) => {
+      const task = await api.startFreshTask(id);
+      // The task is re-queued as a new claim (a session spawns when a slot
+      // frees), so only the task list changes now.
       void get().refreshTasks();
       return task;
     },

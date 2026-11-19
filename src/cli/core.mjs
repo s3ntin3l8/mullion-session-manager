@@ -8,6 +8,7 @@
 // real process-level wiring lives in mullion.mjs.
 
 import { createDockCommands } from "./dock-commands.mjs";
+import { createTaskCommands } from "./task-commands.mjs";
 import fs from "node:fs";
 import { buildBrowserCommands } from "./browser-commands.mjs";
 import { execFileSync } from "node:child_process";
@@ -525,7 +526,7 @@ export function formatBrowserResult(action, result) {
 /** Enriches the server's flat "not permitted for this connection's scope"
  * 403 with what actually went wrong and how to fix it — the scope trap a
  * session-scoped connection (every session's own MULLION_HOOK_TOKEN) hits
- * on any full-scope-only op (sessions.list/create, projects.list/dock,
+ * on any full-scope-only op (sessions.create, projects.list/dock,
  * previews.*, agents.list). A bare "403 forbidden" here would send an agent
  * running inside a session down a debugging rabbit hole for something
  * that's actually just "this op needs an operator credential." */
@@ -533,15 +534,37 @@ export function formatError(err, client) {
   if (err instanceof MullionSocketError) {
     if (err.status === 403 && /scope/.test(err.message)) {
       const via = client?.tokenSource ?? "no token";
+      if (
+        via === "MULLION_HOOK_TOKEN" &&
+        !/not permitted for this connection's scope/.test(err.message)
+      ) {
+        // A policy refusal of an op a session may run (wrong target), not an
+        // operator-only op: say what was refused and nothing more.
+        return `${err.message} (connected via ${via}).`;
+      }
+      if (via === "MULLION_HOOK_TOKEN") {
+        // A session cannot hold MULLION_AUTH_TOKEN, so "set it" is not advice it can follow.
+        return (
+          `${err.message} (connected via ${via}). ` +
+          "This operation is operator-only: a session never holds full scope. " +
+          "Of the reads that reach beyond your own session, only `session list`, " +
+          "`task list` and `task get` work; they cover other projects only when this " +
+          "project is a coordinator and the target project accepts it, and a project " +
+          "that is out of reach looks like one that does not exist. Ops that act on " +
+          "your own session (session get/children, your project's dock, device, " +
+          "browser, project actions) are unaffected."
+        );
+      }
       return (
         `${err.message} (connected via ${via}). ` +
         "This command needs full scope — set MULLION_AUTH_TOKEN, or run it " +
         "from outside a session (session env only ever carries MULLION_HOOK_TOKEN)."
       );
     }
-    return `${err.message}${err.status ? ` (status ${err.status})` : ""}`;
+    if (/is not supported on \S+ devices$/.test(err.message)) return err.message;
+    return `${err.message || "request failed"}${err.status ? ` (status ${err.status})` : ""}`;
   }
-  return err.message ?? String(err);
+  return err.message || String(err);
 }
 
 // ---------------------------------------------------------------------------
@@ -718,7 +741,12 @@ const SESSION_SPAWN_CHILD_SPEC = {
 const SESSION_KILL_SPEC = { cascade: "string" };
 const SESSION_CHILDREN_SPEC = { status: "string" };
 const SESSION_WAIT_SPEC = { until: "string", timeout: "string", "after-seq": "string" };
-const SESSION_WAIT_OUTPUT_SPEC = { regex: "boolean", timeout: "string", "after-offset": "string" };
+const SESSION_WAIT_OUTPUT_SPEC = {
+  regex: "boolean",
+  timeout: "string",
+  "after-offset": "string",
+  "after-seq": "string",
+};
 // Issue #2270 — `session message <id> <text...> [--wait] [--ttl <seconds>]`.
 const SESSION_MESSAGE_SPEC = { wait: "boolean", ttl: "number" };
 
@@ -891,6 +919,13 @@ const sessionCommands = {
         throw new CliUsageError("--after-offset must be a non-negative integer");
       }
       body.afterOffset = offset;
+    }
+    if (flags["after-seq"] !== undefined) {
+      const seq = Number(flags["after-seq"]);
+      if (!Number.isInteger(seq) || seq < 0) {
+        throw new CliUsageError("--after-seq must be a non-negative integer");
+      }
+      body.afterSeq = seq;
     }
     const result = await client.request("sessions.wait_for_output", body, {
       timeoutMs: (body.timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
@@ -1256,9 +1291,28 @@ const dockCommands = createDockCommands({ CliUsageError, requireOne });
 // device attached, an implicit default is exactly the kind of silent
 // ambiguity this CLI's own `requireOne`-everywhere convention avoids
 // elsewhere (see sessionCommands' own explicit-id verbs above).
+const DEVICE_BUTTON_VALUES = ["home", "lock", "side", "siri"];
+const formatDeviceRow = (d) =>
+  d && typeof d === "object"
+    ? { ...d, platform: d.platform ?? "android", udid: d.udid ?? null }
+    : d;
+async function runDeviceLogcat(client, args) {
+  const { flags } = extractFlags(args.slice(1), { lines: "number", filter: "string" });
+  const body = { deviceId: requireOne(args, "device id"), action: "logcat" };
+  if (flags.lines !== undefined) body.lines = flags.lines;
+  if (flags.filter !== undefined) body.filter = flags.filter;
+  const result = await client.request("device.action", body);
+  return { json: result, text: result.logcat };
+}
+
 const deviceCommands = {
   async list(client) {
-    return { json: await client.request("device.list", {}) };
+    const result = await client.request("device.list", {});
+    return { json: Array.isArray(result) ? result.map(formatDeviceRow) : result };
+  },
+  async get(client, args) {
+    const res = await client.request("device.get", { deviceId: requireOne(args, "device id") });
+    return { json: formatDeviceRow(res) };
   },
   async create(client, args) {
     const avdName = requireOne(args, "avd name");
@@ -1317,28 +1371,19 @@ const deviceCommands = {
       "pairing-code": "string",
       name: "string",
     });
-    if (flags["pairing-code"] === undefined) {
-      throw new CliUsageError("--pairing-code is required");
-    }
+    if (flags["pairing-code"] === undefined) throw new CliUsageError("--pairing-code is required");
     const hasDiscovery =
       typeof flags["discovery-id"] === "string" && flags["discovery-id"].length > 0;
     const hasManual =
       typeof flags["pairing-address"] === "string" && flags["pairing-address"].length > 0;
-    if (hasDiscovery === hasManual) {
+    if (hasDiscovery === hasManual)
       throw new CliUsageError("exactly one of --discovery-id or --pairing-address is required");
-    }
     const body = { pairingCode: flags["pairing-code"] };
-    if (hasDiscovery) {
-      body.discoveryId = flags["discovery-id"];
-    } else {
-      body.pairingAddress = flags["pairing-address"];
-    }
-    if (typeof flags["connect-address"] === "string" && flags["connect-address"].length > 0) {
+    if (hasDiscovery) body.discoveryId = flags["discovery-id"];
+    else body.pairingAddress = flags["pairing-address"];
+    if (typeof flags["connect-address"] === "string" && flags["connect-address"].length > 0)
       body.connectAddress = flags["connect-address"];
-    }
-    if (typeof flags.name === "string" && flags.name.length > 0) {
-      body.name = flags.name;
-    }
+    if (typeof flags.name === "string" && flags.name.length > 0) body.name = flags.name;
     return { json: await client.request("device.pair-and-connect", body) };
   },
   // Registers a physical device row and connects to it — the `kind:
@@ -1421,15 +1466,17 @@ const deviceCommands = {
       }),
     };
   },
-  async logcat(client, args) {
+  async button(client, args) {
     const deviceId = requireOne(args, "device id");
-    const { flags } = extractFlags(args.slice(1), { lines: "number", filter: "string" });
-    const body = { deviceId, action: "logcat" };
-    if (flags.lines !== undefined) body.lines = flags.lines;
-    if (flags.filter !== undefined) body.filter = flags.filter;
-    const result = await client.request("device.action", body);
-    return { json: result, text: result.logcat };
+    const button = args[1];
+    if (button === undefined)
+      throw new CliUsageError(`button is required (${DEVICE_BUTTON_VALUES.join("|")})`);
+    if (!DEVICE_BUTTON_VALUES.includes(button))
+      throw new CliUsageError(`button must be one of: ${DEVICE_BUTTON_VALUES.join(", ")}`);
+    return { json: await client.request("device.action", { deviceId, action: "button", button }) };
   },
+  logcat: runDeviceLogcat,
+  logs: runDeviceLogcat,
   // Unlike every other verb here, `clipboard` itself takes a sub-verb
   // (`get`/`set`) as its own first positional arg, with the device id
   // second — the REST/socket `action: "clipboard"` body's own `op` field
@@ -1479,18 +1526,11 @@ const bundleCommands = {
   },
 };
 
-// #2102 — a Task Master worker pushes its branch through Mullion (the gated
-// path, bot identity) instead of with its own git credentials.
-const taskCommands = {
-  async push(client, _args, opts) {
-    const body = {};
-    if (opts.session !== undefined) body.sessionId = opts.session;
-    // A push can take as long as the git remote (plus the lease pre-fetch).
-    client.requestTimeoutMs = TASK_PUSH_REQUEST_TIMEOUT_MS;
-    const result = await client.request("tasks.push", body);
-    return { json: result, text: `pushed; pull request: ${result.prUrl}` };
-  },
-};
+const taskCommands = createTaskCommands({
+  extractFlags,
+  requireOne,
+  taskPushTimeoutMs: TASK_PUSH_REQUEST_TIMEOUT_MS,
+});
 
 const eventsCommands = {
   async tail(client, args, _opts, io) {
@@ -1881,7 +1921,7 @@ async function runConfig(client, _args, _opts, io) {
     await client.request("ping", {});
     info.reachable = true;
     try {
-      await client.request("sessions.list", {});
+      await client.request("projects.list", {});
       info.scope = "full";
     } catch (err) {
       info.scope = err instanceof MullionSocketError && err.status === 403 ? "session" : "unknown";
@@ -1944,13 +1984,23 @@ export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
   session list|get|children|wait|prompt|message|message-status|create|spawn-child|kill|rename|logs|transcript|exec
+  session logs <id> [--text]   terminal output only: for a full-screen agent CLI (Claude Code,
+                               Codex) it keeps no history, so use "session transcript <id>"
+                               to read what the agent did or said
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download|unbind
   project list|actions|targets|dock|tooling
   preview create|get|delete|list
   dock start|stop|list
-  device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
+  device list|get|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard
+  task list [--status <s>] [--project <id>]
+  task get <id>
+  task retry <id> [--agent <a>] [--review-agent <r>]
+  task start <id> [--agent <a>] [--review-agent <r>]
+  task close <id> [--reason <text>]
+  task archive <id>
+  task unarchive <id>
   task push        push your Task Master branch through Mullion (gated; never git push)
   bundle status|resync|remove
   events tail [--children]

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, isNotNull, isNull, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or, sql, type SQL } from "drizzle-orm";
 import { TASK_MODEL_COLUMNS } from "./task-model-patch.js";
 import { getProjectById, listProjects } from "./project-store.js";
 import type { MergeRecordedPatch } from "./task-merge-human.js";
@@ -72,6 +72,9 @@ const TASK_ROW_COLUMNS = {
   // three-state distinction (see TaskCard.tsx/TaskDetail.tsx).
   autoReturnCapAnnouncedAt: tasks.autoReturnCapAnnouncedAt,
   needsHumanReason: tasks.needsHumanReason,
+  // The check names (and the worker's reason) behind `ci-unfixable` /
+  // `ci-still-red`; without this entry they are written but never reach the UI.
+  ciHoldNote: tasks.ciHoldNote,
   // Task 258971's investigation: declared on the frontend Task type
   // (api/types.ts) but never selected here — the same TASK_ROW_COLUMNS
   // silent-drop that bit #816/#818 (see that PR's own doc comment above).
@@ -100,6 +103,14 @@ const TASK_ROW_COLUMNS = {
   // would be written but never reach GET /api/tasks or GET /api/tasks/:id —
   // the TASK_ROW_COLUMNS silent-drop this constant's other comments record.
   placementRequirement: tasks.placementRequirement,
+  // Issue #3194 — the host a QUEUED RETRY waits for (its original worker's
+  // host, whose preserved branch the retry resumes). Without this entry it
+  // would be written but never reach GET /api/tasks or GET /api/tasks/:id —
+  // and the frontend's "Start fresh" action (TaskCard.tsx/TaskActions.tsx)
+  // keys off exactly this field, so without it the operator's way out of a
+  // waiting retry would never appear. Same TASK_ROW_COLUMNS silent drop the
+  // comments above record (#816/#818/#957/#1954).
+  retryHostId: tasks.retryHostId,
   // Issue #957/#958 — the resolved opencode model(s) the worker actually ran
   // under, recorded at claim time (task-model-resolve.ts). Was previously
   // missing here, the exact TASK_ROW_COLUMNS silent-drop that bit #816/#818
@@ -148,6 +159,17 @@ const TASK_ROW_COLUMNS = {
   failureDiagnostics: tasks.failureDiagnostics,
   // Issue #1997 — since when a queued task has been failing to dispatch.
   dispatchFailingSince: tasks.dispatchFailingSince,
+  // #2940 — a rate-limit park leaves the task `ready` until this reset; the
+  // board and sidebar read it to say so instead of reading as a plain queued task.
+  rateLimitUntil: tasks.rateLimitUntil,
+  rateLimitMessage: tasks.rateLimitMessage,
+  // The task's latest worker session (comma list, parsed by
+  // withWorkerSessionIds). A park or return clears `sessionId`, so the task
+  // timeline falls back to these. Worker vs. review is the "· worker" name
+  // every spawn path gives its session (no role column exists).
+  workerSessionIdsRaw: sql<
+    string | null
+  >`(select group_concat(id) from (select id from sessions where sessions.task_id = ${tasks.id} and sessions.name like '% · worker' order by id desc limit 1))`,
   githubSyncError: tasks.githubSyncError,
   // Workflow-change approval gate — raw `{ sha, files }` JSON while a push is
   // held for the operator (parsed client-side; the approved sha is
@@ -174,6 +196,9 @@ const TASK_ROW_COLUMNS = {
   // actually started). See task-claim.ts's enqueueTask/dispatchClaimedTask.
   queuedAt: tasks.queuedAt,
   claimedAt: tasks.claimedAt,
+  // #3179 — raw nudge columns; withTaskDerived turns them into the card's fields.
+  nudgeCount: tasks.nudgeCount,
+  lastNudgedAt: tasks.lastNudgedAt,
   startedAt: tasks.startedAt,
   reviewingAt: tasks.reviewingAt,
   completedAt: tasks.completedAt,

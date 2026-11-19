@@ -61,6 +61,7 @@ const READ_ONLY_CALLS: Record<
   resolveSessionsDir: (b) => b.resolveSessionsDir(),
   readTaskCommitTitle: (b) => b.readTaskCommitTitle(1 as never),
   readTaskRereviewRequest: (b) => b.readTaskRereviewRequest(1 as never, 1 as never),
+  readTaskCiUnfixable: (b) => b.readTaskCiUnfixable(1 as never, "a".repeat(40) as never),
 };
 
 describe("RemoteBackend read-only methods are idempotent on the wire (#2703)", () => {

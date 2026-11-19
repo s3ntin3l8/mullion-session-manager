@@ -1,10 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { isMergeNeedsHumanReason, needsHumanText, reviewPhaseText } from "./needsHuman.js";
+import {
+  isCiHoldReason,
+  isMergeNeedsHumanReason,
+  needsHumanText,
+  reviewPhaseText,
+} from "./needsHuman.js";
 
 describe("needsHumanText", () => {
   it("names each reason the automatic loop stopped", () => {
     expect(needsHumanText("cap")).toBe("round cap reached");
     expect(needsHumanText("no-progress")).toBe("worker returned without a change");
+    expect(needsHumanText("review-inconclusive")).toBe(
+      "the review ended without a verdict twice — retry the review or review by hand",
+    );
     expect(needsHumanText("finding-persisted")).toBe("same finding still open after two rounds");
     expect(needsHumanText("review-post-failed")).toBe(
       "approving review could not be posted to GitHub",
@@ -17,6 +25,10 @@ describe("needsHumanText", () => {
     expect(needsHumanText("ci-status-stalled")).toBe(
       "a CI status stayed pending after green CI — a Codecov-side stall; re-run the coverage upload",
     );
+  });
+
+  it("#3234 — names an exhausted provider quota", () => {
+    expect(needsHumanText("rate-limited")).toBe("provider quota exhausted");
   });
 
   it("treats pr-closed as a merge-tied reason, standing on its own", () => {
@@ -80,5 +92,32 @@ describe("merge blocked-thread detail", () => {
     ).toBe("github-advanced-security at a.ts:1: Path injection (code-scanning alert #5)");
     expect(safeGithubUrl("javascript:alert(1)")).toBeNull();
     expect(safeGithubUrl("https://github.com/o/r")).toBe("https://github.com/o/r");
+  });
+});
+
+describe("the red-CI hold reasons", () => {
+  it("names the check and, for an unfixable one, the worker's reason", () => {
+    expect(needsHumanText("ci-unfixable", "dependency-audit — no patched release")).toBe(
+      "a CI check can't be fixed from this PR: dependency-audit — no patched release",
+    );
+    expect(needsHumanText("ci-still-red", "codecov/patch")).toBe(
+      "CI still red after the worker and two reruns: codecov/patch",
+    );
+  });
+
+  it("reads sensibly with no note", () => {
+    expect(needsHumanText("ci-unfixable")).toBe("a CI check can't be fixed from this PR");
+    expect(needsHumanText("ci-still-red", null)).toBe(
+      "CI still red after the worker and two reruns",
+    );
+  });
+
+  it("is a review-loop reason, not a merge-tied one", () => {
+    expect(isCiHoldReason("ci-unfixable")).toBe(true);
+    expect(isCiHoldReason("ci-still-red")).toBe(true);
+    expect(isCiHoldReason("no-progress")).toBe(false);
+    expect(isCiHoldReason(null)).toBe(false);
+    expect(isMergeNeedsHumanReason("ci-unfixable")).toBe(false);
+    expect(isMergeNeedsHumanReason("ci-still-red")).toBe(false);
   });
 });

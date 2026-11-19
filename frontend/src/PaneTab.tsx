@@ -490,7 +490,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
         ) : (
           <span
             className="pane-tab-name"
-            title="Double-click to rename"
+            title={
+              props.api.title
+                ? `${props.api.title} — double-click to rename`
+                : "Double-click to rename"
+            }
             onDoubleClick={beginRename}
           >
             {props.api.title}

@@ -11,6 +11,7 @@ import {
   EmulatorWindowSetting,
   GitHubPollingSettings,
   HostHeartbeatSetting,
+  HostStaleAfterSetting,
   LogLevelSetting,
 } from "./RuntimeSettings.js";
 import { useDashboardStore } from "../store/index.js";
@@ -93,7 +94,7 @@ describe("runtime settings controls", () => {
 
   it("reverts instead of saving 0 when the field is cleared and left", async () => {
     const user = userEvent.setup();
-    setSettings({ hosts: { heartbeatSeconds: 90 } });
+    setSettings({ hosts: { heartbeatSeconds: 90, staleAfterDays: 30 } });
     render(<HostHeartbeatSetting />);
     const input = within(rowFor("Health check interval")).getByRole("spinbutton");
     await user.clear(input);
@@ -104,13 +105,27 @@ describe("runtime settings controls", () => {
 
   it("returns an overridden value to the server default", async () => {
     const user = userEvent.setup();
-    setSettings({ hosts: { heartbeatSeconds: 90 } });
+    setSettings({ hosts: { heartbeatSeconds: 90, staleAfterDays: 30 } });
     render(<HostHeartbeatSetting />);
     const row = rowFor("Health check interval");
     expect(within(row).getByRole("spinbutton")).toHaveValue(90);
 
     await user.click(within(row).getByRole("button", { name: "Use server default" }));
     expect(useDashboardStore.getState().settings.hosts.heartbeatSeconds).toBe(-1);
+  });
+
+  it("edits stale-host days and supports zero to disable flagging", async () => {
+    const user = userEvent.setup();
+    render(<HostStaleAfterSetting />);
+    const input = screen.getByRole("spinbutton", { name: "Flag offline hosts after" });
+    expect(input).toHaveValue(30);
+    await user.clear(input);
+    await user.type(input, "45.9");
+    await user.tab();
+    expect(useDashboardStore.getState().settings.hosts.staleAfterDays).toBe(45);
+    await user.clear(input);
+    await user.tab();
+    expect(useDashboardStore.getState().settings.hosts.staleAfterDays).toBe(0);
   });
 
   it("offers the server default as the first log level and saves a chosen level", async () => {

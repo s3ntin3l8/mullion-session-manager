@@ -1,11 +1,19 @@
 import { TaskActions } from "./TaskActions.js";
+import { DeleteTaskAction } from "./DeleteTaskAction.js";
+import { canDeleteTask } from "./lib/canDeleteTask.js";
 import { BlockingAlertDetail } from "./BlockingAlertDetail.js";
 import { FailureDiagnostics } from "./FailureDiagnostics.js";
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel } from "./tasksBoard.js";
 import { SessionTimeline } from "./SessionTimeline.js";
-import { api, ApiError, normalizeAgentId } from "./api/index.js";
+import {
+  isQuotaExhausted,
+  isRateLimitParked,
+  quotaExhaustedText,
+  rateLimitResumeText,
+} from "./taskStatusModel.js";
+import { api, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
@@ -31,7 +39,9 @@ import { decideSessionAction } from "./ui/sidebar/linkDecisions.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 import {
+  CI_HOLD_HINT,
   approvalStateText,
+  isCiHoldReason,
   isMergeNeedsHumanReason,
   needsHumanText,
   reviewPhaseText,
@@ -44,7 +54,8 @@ import {
   withCurrentReviewAgent,
 } from "./settings/agentOptions.js";
 import { parseReviewRounds } from "./lib/reviewRounds.js";
-import { parseWorkflowChange, visibleTaskSyncError } from "./workflowChange.js";
+import { visibleTaskSyncError } from "./workflowChange.js";
+import { WorkflowChangeApproval } from "./WorkflowChangeApproval.js";
 
 const UNSET_AGENT = "";
 
@@ -200,6 +211,7 @@ export function TaskDetail({
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
   const hosts = useDashboardStore((s) => s.hosts);
+  const sessionsLoaded = useDashboardStore((s) => s.sessionsLoaded);
   const settings = useDashboardStore((s) => s.settings);
   const updateTask = useDashboardStore((s) => s.updateTask);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
@@ -238,6 +250,7 @@ export function TaskDetail({
     task.sessionId !== null ? sessions.find((x) => x.id === task.sessionId) : null,
     projects?.find((p) => p.id === task.projectId)?.hostId,
     hosts ?? [],
+    sessionsLoaded,
   );
   const reviewRounds = parseReviewRounds(task.reviewFindings);
   // Computed once per render: each call re-reads Date.now() for the relative time.
@@ -359,13 +372,6 @@ export function TaskDetail({
           Move to Ready/Claim. */}
       <div className="task-detail-actions-row">
         <TaskActions task={task} />
-        {/* #1015 (archive) — same done/failed restriction as the server
-            (routes/tasks.ts's POST/DELETE /api/tasks/:id/archive): archiving
-            in_progress/reviewing would hide a task whose worker is still
-            running, or from whoever's approval it's waiting on. */}
-        {(task.status === "done" || task.status === "failed") && (
-          <ArchiveTaskAction taskId={task.id} archivedAt={task.archivedAt} />
-        )}
         {/* Independent review, PR #477 — mirrors routes/tasks.ts's own
             DELETE restriction exactly (no linked GitHub issue, status still
             backlog/ready): a locally-created task that turns out to be a
@@ -390,12 +396,7 @@ export function TaskDetail({
             backlog/ready stage" refusal) had no UI path to Abandon past at
             all. The button's own 409 handling (below) offers the force
             re-prompt regardless of which refusal fired. */}
-        {((task.issueNumber === null &&
-          (task.status === "backlog" ||
-            task.status === "ready" ||
-            task.status === "done" ||
-            task.status === "failed")) ||
-          (task.issueNumber !== null && (task.status === "failed" || task.status === "done"))) && (
+        {canDeleteTask(task) && (
           <DeleteTaskAction
             taskId={task.id}
             isDone={task.status === "done"}
@@ -574,6 +575,27 @@ export function TaskDetail({
 
       {task.body && <div className="task-detail-body">{task.body}</div>}
 
+      {/* #2940 — parked until the provider usage limit resets; resumes by itself. */}
+      {isRateLimitParked(task) && task.rateLimitUntil && (
+        <div className="task-detail-dispatch">
+          <ClockIcon size={12} />
+          <span>
+            Rate limited: resumes automatically {rateLimitResumeText(task.rateLimitUntil)}
+            {task.rateLimitMessage && ` (${task.rateLimitMessage})`}
+          </span>
+        </div>
+      )}
+      {/* #3234 — the quota resets beyond the park limit: failed, with the reset. */}
+      {isQuotaExhausted(task) && (
+        <div className="task-detail-dispatch">
+          <ClockIcon size={12} />
+          <span>
+            {quotaExhaustedText(task)}
+            {task.rateLimitMessage && ` (${task.rateLimitMessage})`}
+          </span>
+        </div>
+      )}
+
       {/* #1997 — a queued task's last dispatch error: it is still being
           retried, so this reads as waiting, not as the terminal failure
           below. */}
@@ -727,9 +749,29 @@ export function TaskDetail({
         )}
         <SessionTimeline
           surface="task"
-          params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }}
+          params={{
+            // A park or return clears `sessionId`; the last worker sessions keep the history visible.
+            sessionIds: task.sessionId !== null ? [task.sessionId] : (task.workerSessionIds ?? []),
+          }}
         />
       </div>
+
+      {task.status === "reviewing" && capAnnounced && isCiHoldReason(task.needsHumanReason) && (
+        <div
+          className="task-detail-review-round task-detail-review-round-capped"
+          role="status"
+          data-testid="ci-hold-needs-human"
+        >
+          {`Needs a human: ${needsHumanText(task.needsHumanReason, task.ciHoldNote)}`}
+          <div className="task-detail-review-hint">{CI_HOLD_HINT}</div>
+        </div>
+      )}
+
+      {task.status === "in_progress" && task.needsHumanReason === "worker-not-started" && (
+        <div className="task-detail-review-round task-detail-review-round-capped" role="status">
+          {`Needs a human: ${needsHumanText(task.needsHumanReason)}`}
+        </div>
+      )}
 
       {isMergeNeedsHumanReason(task.needsHumanReason) && !task.mergedAt && (
         <div
@@ -809,21 +851,32 @@ export function TaskDetail({
                 {task.githubSyncError ? ` — ${task.githubSyncError}` : ""}
               </div>
             )}
-          {task.autoReturnRounds > 0 && !task.approvalState && (
+          {task.needsHumanReason === "review-inconclusive" && (
             <div
-              className={
-                capAnnounced
-                  ? "task-detail-review-round task-detail-review-round-capped"
-                  : "task-detail-review-round"
-              }
+              className="task-detail-review-round task-detail-review-round-capped"
+              data-testid="review-inconclusive-needs-human"
             >
-              {capAnnounced
-                ? `Round ${task.autoReturnRounds} — ${needsHumanText(task.needsHumanReason)}, needs a human to take it from here`
-                : task.autoReturnCapped
-                  ? `Round ${task.autoReturnRounds} — review still in flight; nothing needs you yet`
-                  : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
+              {needsHumanText(task.needsHumanReason)}, needs a human to take it from here
             </div>
           )}
+          {task.autoReturnRounds > 0 &&
+            !task.approvalState &&
+            task.needsHumanReason !== "review-inconclusive" &&
+            !isCiHoldReason(task.needsHumanReason) && (
+              <div
+                className={
+                  capAnnounced
+                    ? "task-detail-review-round task-detail-review-round-capped"
+                    : "task-detail-review-round"
+                }
+              >
+                {capAnnounced
+                  ? `Round ${task.autoReturnRounds} — ${needsHumanText(task.needsHumanReason)}, needs a human to take it from here`
+                  : task.autoReturnCapped
+                    ? `Round ${task.autoReturnRounds} — review still in flight; nothing needs you yet`
+                    : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
+              </div>
+            )}
           {task.reviewSeedDelivered === false && (
             <div className="task-detail-review-noseed">
               <WarningTriangleIcon size={12} />
@@ -884,231 +937,6 @@ export function TaskDetail({
         {task.completedAt && (
           <> · Completed {formatRelativeAge(new Date(task.completedAt).getTime())}</>
         )}
-      </div>
-    </div>
-  );
-}
-
-// #1015 (archive) — no confirm step, unlike DeleteTaskAction below: archiving
-// is reversible (Unarchive clears only archivedAt, see api/tasks.ts's own
-// doc comment), so it doesn't need the same "click again to confirm" gate a
-// destructive action does.
-function ArchiveTaskAction({ taskId, archivedAt }: { taskId: number; archivedAt: string | null }) {
-  const archiveTask = useDashboardStore((s) => s.archiveTask);
-  const unarchiveTask = useDashboardStore((s) => s.unarchiveTask);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const run = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      if (archivedAt !== null) await unarchiveTask(taskId);
-      else await archiveTask(taskId);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to update archive state");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="task-detail-actions">
-      <button className="notif-gate-btn" disabled={submitting} onClick={run}>
-        {archivedAt !== null ? "Unarchive" : "Archive"}
-      </button>
-      {error && <span className="task-detail-error">{error}</span>}
-    </div>
-  );
-}
-
-// Independent review, PR #477 — a "click again to confirm" step, same
-// GateActions/notif-gate-* idiom as TaskActions below (not ConfirmButton.tsx,
-// which is styled for its own specific parent contexts, e.g.
-// .ws-group-actions .danger — dropping it in bare here would render
-// unstyled). On success it calls `onDeleted` so the host closes the panel;
-// a host that passes none (or a task that vanishes for any other reason)
-// falls through to TaskDetail's own `if (!task)` guard, which renders
-// "Task not found." — the no-optimistic-state posture the rest of this file
-// follows.
-function DeleteTaskAction({
-  taskId,
-  isDone,
-  isGithubLinked,
-  branchName,
-  worktreePath,
-  onDeleted,
-}: {
-  taskId: number;
-  isDone: boolean;
-  isGithubLinked: boolean;
-  branchName: string | null;
-  worktreePath: string | null;
-  onDeleted?: () => void;
-}) {
-  const deleteTask = useDashboardStore((s) => s.deleteTask);
-  // #1014 (Abandon), review fix — the label name is configurable
-  // (MULLION_TASK_LABEL, env.ts), not always literally "mullion-task". This
-  // is the same value TaskMasterSection.tsx's own Settings display reads.
-  const taskMasterEnv = useDashboardStore((s) => s.taskMasterEnv);
-  const taskLabel = taskMasterEnv?.issueLabel ?? "mullion-task";
-  const [confirming, setConfirming] = useState(false);
-  // #1014 (Abandon) — set once a plain delete 409s, per api/client.ts's own
-  // guidance to branch on statusCode rather than the message text. Once
-  // true, the confirm step below switches to naming exactly what a
-  // force-delete destroys and re-issues with force: true. Mirrors the
-  // Hosts cascade-delete flow (HostsSection.tsx's cascadePrompt state).
-  const [needsForce, setNeedsForce] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Review fix — Cancel must also drop needsForce, or reopening this panel
-  // skips straight to the Abandon/force prompt even if whatever triggered
-  // the earlier 409 (a still-tracked issue, a since-resolved race) no
-  // longer holds. A fresh open should always try the plain delete again
-  // first.
-  function cancel() {
-    setConfirming(false);
-    setNeedsForce(false);
-    setError(null);
-  }
-
-  if (!confirming) {
-    return (
-      <div className="task-detail-actions task-detail-actions-delete">
-        <button className="notif-gate-btn notif-gate-deny" onClick={() => setConfirming(true)}>
-          Delete task
-        </button>
-      </div>
-    );
-  }
-
-  // #746 — a done task's local row is the only thing this removes: the
-  // closed issue and its PR stay on GitHub (whatever state that PR is in —
-  // approveTask sets prNumber/prUrl unconditionally, but only requests a
-  // merge when the project has mergeOnApprove on, default off, and even
-  // then the merge sweep is async/best-effort, so "done" does not imply
-  // "merged"), and cleanupTaskWorktree already removed the worktree
-  // directory at approve time — the branch itself is untouched (see the
-  // DELETE route's own doc comment on why that's true for the
-  // GitHub-linked case).
-  //
-  // #1014 — once a plain delete has 409'd, the hint switches to naming
-  // exactly what a force-delete (Abandon) destroys: the GitHub label (only
-  // for a linked task), the worktree, the branch, and any live sessions.
-  const hint = needsForce
-    ? [
-        "This task can't be deleted normally.",
-        isGithubLinked
-          ? `Abandoning it removes the ${taskLabel} label from the linked issue,`
-          : "Abandoning it",
-        worktreePath ? `deletes its worktree (${worktreePath}),` : null,
-        branchName ? `deletes its branch (${branchName}),` : null,
-        "and kills any of its sessions still running. This can't be undone.",
-      ]
-        .filter(Boolean)
-        .join(" ")
-    : isDone && isGithubLinked
-      ? "Delete this task? The closed issue and its PR stay on GitHub, and the branch is untouched. This can't be undone."
-      : isDone
-        ? "Delete this task? The branch is untouched. This can't be undone."
-        : "Delete this task? This can't be undone.";
-
-  // The buttons keep the right-aligned slot "Delete task" occupied (same
-  // wrapper class), and the hint/error go in a following full-width sibling so
-  // a long hint wraps on its own line instead of pushing the buttons around
-  // the action row.
-  return (
-    <>
-      <div className="task-detail-actions task-detail-actions-delete">
-        <button className="notif-gate-btn" disabled={submitting} onClick={cancel}>
-          Cancel
-        </button>
-        <button
-          className="notif-gate-btn notif-gate-deny-confirm"
-          disabled={submitting}
-          onClick={async () => {
-            setSubmitting(true);
-            setError(null);
-            try {
-              if (needsForce) await deleteTask(taskId, { force: true });
-              else await deleteTask(taskId);
-              onDeleted?.();
-            } catch (err) {
-              if (!needsForce && err instanceof ApiError && err.statusCode === 409) {
-                setNeedsForce(true);
-                setSubmitting(false);
-                return;
-              }
-              setError(err instanceof ApiError ? err.message : "Failed to delete task");
-              setSubmitting(false);
-            }
-          }}
-        >
-          {needsForce ? "Abandon task" : "Confirm delete"}
-        </button>
-      </div>
-      <div className="task-detail-actions-note">
-        <span className="task-detail-hint">{hint}</span>
-        {error && <span className="task-detail-error">{error}</span>}
-      </div>
-    </>
-  );
-}
-
-// A branch that edits `.github/workflows/` is held, not pushed, until the
-// operator approves this exact head commit (backend task-workflow-gate.ts).
-// Shows the files so the approval is informed; the sha rides along so the
-// server can refuse if the branch moved after this was rendered.
-function WorkflowChangeApproval({ task }: { task: Task }) {
-  const { taskMasterEnabled, approveWorkflowChange, refreshTasks } = useDashboardStore();
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const change = parseWorkflowChange(task.workflowChange);
-  if (!change) return null;
-
-  return (
-    <div className="task-detail-workflow-change" role="group" aria-label="Workflow change">
-      <div className="task-detail-workflow-change-title">
-        This branch edits CI workflows — approval needed before it is pushed
-      </div>
-      <ul className="task-detail-workflow-change-files">
-        {change.files.map((f) => (
-          <li key={f}>
-            <code>{f}</code>
-          </li>
-        ))}
-      </ul>
-      <div className="task-detail-actions">
-        <button
-          className="notif-gate-btn notif-gate-approve"
-          disabled={submitting || !taskMasterEnabled || change.sha === ""}
-          onClick={async () => {
-            setSubmitting(true);
-            setError(null);
-            try {
-              await approveWorkflowChange(task.id, change.sha);
-            } catch (err) {
-              // A stale approval can clear a hold that no longer applies or
-              // replace it with a new head. Refresh before showing an error so
-              // an obsolete panel doesn't leave the next action hidden.
-              if (err instanceof ApiError && err.statusCode === 409) await refreshTasks();
-              setError(
-                err instanceof ApiError ? err.message : "Failed to approve the workflow change",
-              );
-            } finally {
-              setSubmitting(false);
-            }
-          }}
-        >
-          Approve workflow change
-        </button>
-        {change.sha === "" && (
-          <span className="task-detail-hint">
-            The head commit could not be read, so this cannot be approved yet.
-          </span>
-        )}
-        {error && <span className="task-detail-error">{error}</span>}
       </div>
     </div>
   );

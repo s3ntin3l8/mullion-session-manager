@@ -46,10 +46,14 @@ gating event is posted only with a token from `resolveReviewerToken` (a
 separate reviewer App, no PAT fallback, `null` when unconfigured or minting
 fails, which means a COMMENT from the primary identity). The reviewer token is
 resolved only when a gating event is wanted. In `postReviewFindingsComment` a
-422 retries once from the primary identity with no event; a 403 scope error does
-not retry. The same local `verdict` feeds the stored column and the post.
+422 steps down one level at a time: an anchored gating attempt first retries as
+the reviewer App with the SAME event and no anchors (a stale anchor must not cost
+the verdict its identity: a COMMENT from the PR author can never supersede the
+App's earlier CHANGES_REQUESTED, PR #3354); only when that also 422s, or there
+were no anchors to blame, does it fall back to a plain COMMENT from the primary
+identity. A 403 scope error does not retry. The same local `verdict` feeds the stored column and the post.
 
-**Breaks.** Lost review rounds when an anchorless APPROVE 422s, a PAT-authored
+**Breaks.** Lost review rounds when an anchorless APPROVE 422s, a stale-anchor 422 that demotes the verdict to a primary-identity COMMENT, a PAT-authored
 "approval" GitHub rejects, drift between the stored verdict and the posted
 state.
 

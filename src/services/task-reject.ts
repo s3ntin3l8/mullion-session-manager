@@ -23,7 +23,9 @@ import type { projects, tasks } from "../db/schema.js";
 import { deriveTaskBranchName } from "./git-worktree.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "./session-backend.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { resolveWorkerDelegation } from "./task-delegation.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
+import { resolveWorkerSpawnModels } from "./task-model-resolve.js";
 import {
   buildRejectFollowUpPrompt,
   buildRejectPrompt,
@@ -31,6 +33,7 @@ import {
 } from "./task-prompt.js";
 import {
   promptLiveTaskWorker,
+  readLiveWorkerState,
   reseedTaskIfSessionExited,
   type LiveWorkerState,
 } from "./task-reseed.js";
@@ -44,6 +47,15 @@ import {
  * task sitting at "in_progress" with a dead session and a stale
  * `sessionId` forever, since nothing ever revisits it. The caller fails the
  * task explicitly instead.
+ *
+ * When the live session's recorded `sessions.model` and the task's current
+ * resolved model (`resolveWorkerSpawnModels`) are both known and differ,
+ * `promptLiveTaskWorker` is skipped so the old-model worker is terminated and
+ * a fresh session starts on the right model with the full reject prompt. A
+ * `null` `sessions.model` is "unknown", not "different" — a session launched
+ * without a model flag, or before #3263, cannot be told apart from one
+ * launched on the CLI's default, so it keeps the live-typing behaviour
+ * (likewise when the resolved model is `null`).
  */
 export async function deliverRejectFeedback(
   app: FastifyInstance,
@@ -56,6 +68,10 @@ export async function deliverRejectFeedback(
   if (!task.sessionId || !task.worktreePath || !task.agentCommand) return true;
   const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
   const wasActive = session?.status === "active";
+  const launchedModel = session?.model ?? null;
+  const wantedModel = resolveWorkerSpawnModels(app, task.agentCommand, task).model ?? null;
+  const modelMismatch =
+    launchedModel !== null && wantedModel !== null && launchedModel !== wantedModel;
   const branchName = task.branchName ?? deriveTaskBranchName(task);
   // #778 — resolved against the OWNING host's own sessionsDir; see
   // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
@@ -69,20 +85,35 @@ export async function deliverRejectFeedback(
       )
     : undefined;
   if (wasActive) {
-    const delivery = await promptLiveTaskWorker(
-      app,
-      task,
-      buildRejectFollowUpPrompt({ branchName, feedback, commitTitlePath }),
-      "task reject",
-      worker,
-    );
-    if (delivery === "typed") return true;
-    // The worker's host is not answering: the session may be healthy, and
-    // terminating it through that host would fail and then fail the task
-    // ("re-seed spawn failed") though no spawn was ever attempted. Leave it
-    // as it was before this existed — the feedback is on the issue and in
-    // `failureReason` — and let the session reconciler take over if it dies.
-    if (delivery === "unreachable") return true;
+    const state = worker ?? (await readLiveWorkerState(app, task));
+    if (state.kind === "unreachable") {
+      app.log.info(
+        { taskId: task.id, sessionId: task.sessionId },
+        "task reject: the worker's host did not answer, leaving the session alone",
+      );
+      return true;
+    }
+    if (!modelMismatch) {
+      const delivery = await promptLiveTaskWorker(
+        app,
+        task,
+        buildRejectFollowUpPrompt({ branchName, feedback, commitTitlePath }),
+        "task reject",
+        state,
+      );
+      if (delivery === "typed") return true;
+      // The worker's host is not answering: the session may be healthy, and
+      // terminating it through that host would fail and then fail the task
+      // ("re-seed spawn failed") though no spawn was ever attempted. Leave it
+      // as it was before this existed — the feedback is on the issue and in
+      // `failureReason` — and let the session reconciler take over if it dies.
+      if (delivery === "unreachable") return true;
+    } else {
+      app.log.info(
+        { taskId: task.id, sessionId: task.sessionId, launchedModel, wantedModel },
+        "task reject: live worker model differs from task's resolved model, re-seeding",
+      );
+    }
   }
   // Includes the task spec, not just the feedback: this reaches a FRESH
   // agent that has no memory of the task — the previous feedback-only
@@ -103,6 +134,7 @@ export async function deliverRejectFeedback(
     budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,
     feedback,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     commitTitlePath,
   });
   return reseedTaskIfSessionExited(app, task, project, prompt, "task reject", {

@@ -23,6 +23,7 @@ const TIMESTAMP_COLUMNS = [
   "mergedAt",
   "archivedAt",
   "lastReviewVerdictAt",
+  "lastNudgedAt",
 ] as const;
 
 const TEXT_COLUMNS = [
@@ -41,6 +42,11 @@ const TEXT_COLUMNS = [
   "reviewFindings",
   "lastReviewVerdict",
   "needsHumanReason",
+  // The note behind the two CI-hold reasons (check names and the worker's reason).
+  "ciHoldNote",
+  // The held workflow change: JSON `{ sha, files }`, as task-workflow-gate.ts
+  // writes it. Lets a scene show the sidebar's approval panel (#3108).
+  "workflowChange",
   // A run id and the id its findings were ingested from: equal means "the
   // current review has landed", which is what makes an approving verdict
   // read as awaiting approval (task-approval-state.ts) without a session.
@@ -48,7 +54,13 @@ const TEXT_COLUMNS = [
   "reviewRunIngestedId",
 ] as const;
 
-const INTEGER_COLUMNS = ["issueNumber", "prNumber", "autoReturnRounds", "boardOrder"] as const;
+const INTEGER_COLUMNS = [
+  "issueNumber",
+  "prNumber",
+  "autoReturnRounds",
+  "boardOrder",
+  "nudgeCount",
+] as const;
 
 const taskFixtureProps = {
   title: { type: "string", minLength: 1 },
@@ -65,6 +77,10 @@ const taskFixtureProps = {
       "review-post-failed",
       "pr-closed",
       "ci-status-stalled",
+      "ci-unfixable",
+      "ci-still-red",
+      "review-inconclusive",
+      "rate-limited",
       null,
     ],
   },

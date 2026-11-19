@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
+import { claudeModelTier, claudeTaskModelAlias } from "./delegation.js";
 import {
   resolveMcpServerPath,
   resolveWorktreeHookPath,
@@ -96,6 +97,22 @@ const CLAUDE_COMMAND_RE = /^(?:\S*\/)?claude(?:\s|$)/;
 const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 const SESSION_END_HOOK_TIMEOUT_SECONDS = 2;
 
+// Issue #3174 — a `Stop` is the one hook the forwarder retries: a Stop the
+// socket refuses (Mullion or an agent host restarting, the session's token
+// not registered again yet) is otherwise dropped on the floor, and the
+// session it belongs to — a headless Task Master worker that has finished —
+// then looks unfinished until its budget expires.
+//
+// The forwarder's own retry sequence takes at most ~97s in the worst case
+// (67s of waiting between its six attempts, plus up to 5s for each attempt
+// itself — see STOP_RETRY_DELAYS_MS in
+// src/hooks/forwarder-delivery.mjs), so the agent's hook timeout has to sit
+// ABOVE that bound: an agent that killed the hook at its own 10s timeout
+// would cut the retry sequence short and the Stop would be lost exactly as
+// before. 120s clears that 97s worst case with room to spare, and stays far
+// below Claude Code's own 600s default for hooks.
+const STOP_HOOK_TIMEOUT_SECONDS = 120;
+
 function hookEntry(
   execPath: string,
   forwarderPath: string,
@@ -160,7 +177,7 @@ export function buildClaudeHookSettings(
           }
         : {}),
       Notification: [hookEntry(execPath, forwarderPath, "Notification")],
-      Stop: [hookEntry(execPath, forwarderPath, "Stop")],
+      Stop: [hookEntry(execPath, forwarderPath, "Stop", STOP_HOOK_TIMEOUT_SECONDS)],
       // Issue #271 — no `matcher`, so this fires on every source
       // (startup/resume/clear/fork): the forwarder's own round trip
       // (runSessionStart) always resolves to a completely ordinary empty
@@ -407,14 +424,29 @@ export function buildClaudeMcpConfig(
   };
 }
 
+/** Per-session Claude Code settings file (`<sessionsDir>/<id>.hooks.json`). */
+export function claudeHooksSettingsPath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.hooks.json`);
+}
+
+/** Per-session composed plugin bundle directory (`<sessionsDir>/<id>.mullion-bundle`). */
+export function claudeSessionBundleDir(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.mullion-bundle`);
+}
+
+/** Per-session Claude Code MCP config file (`<sessionsDir>/<id>.mcp.json`). */
+export function claudeMcpConfigPath(sessionsDir: string, id: string): string {
+  return path.join(sessionsDir, `${id}.mcp.json`);
+}
+
 function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
-  const settingsPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.hooks.json`);
+  const settingsPath = claudeHooksSettingsPath(ctx.sessionsDir, ctx.sessionId);
   const settings = buildClaudeHookSettings(
     ctx.forwarderPath,
     process.execPath,
     ctx.worktreesInDotWt ? resolveWorktreeHookPath() : undefined,
   );
-  const mcpConfigPath = path.join(ctx.sessionsDir, `${ctx.sessionId}.mcp.json`);
+  const mcpConfigPath = claudeMcpConfigPath(ctx.sessionsDir, ctx.sessionId);
   const mcpConfig = buildClaudeMcpConfig(
     resolveMcpServerPath(),
     ctx.hookSocketPath,
@@ -448,7 +480,7 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
   const bundleSettingsFiles: Array<{ path: string; contents: string }> = [];
   if (ctx.injectMullionBundle) {
     if (ctx.projectSkill || ctx.projectReviewerAgent) {
-      const composedDir = path.join(ctx.sessionsDir, `${ctx.sessionId}.mullion-bundle`);
+      const composedDir = claudeSessionBundleDir(ctx.sessionsDir, ctx.sessionId);
       const files = composeClaudeSessionBundle(composedDir, {
         skill: ctx.projectSkill,
         reviewerAgent: ctx.projectReviewerAgent,
@@ -543,17 +575,26 @@ export const claudeCodeAdapter: HookAgentAdapter = {
   },
   prepareLaunch,
   emits: CLAUDE_CODE_EMITS,
-  delegationHint:
-    "If this task has parts that could be done independently, delegate them: " +
-    "the Task tool spawns a subagent and takes an optional `model` for that " +
-    "call (`sonnet`, `opus`, `haiku`, `fable`), which takes precedence over " +
-    "that subagent's own definition — so route the mechanical parts to a " +
-    "cheaper model, unless the child is a fork (a fork always inherits your " +
-    "model) or the tool reports that the model parameter is ignored on this " +
-    "session, and keep the parts that need your own judgement for " +
-    "yourself. A delegated part may run in its own workspace or fork, so " +
-    "whatever you delegate has to land on this branch — you remain " +
-    "responsible for the final commit here.",
+  // `null` (no clause) for a delegate outside the Task tool's four-alias enum:
+  // naming it would make the worker's one subagent call fail.
+  delegationHint: (delegateModel) => {
+    const alias = claudeTaskModelAlias(delegateModel);
+    if (alias === null) return null;
+    return (
+      "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
+      "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
+      "The Task tool spawns a subagent and takes an optional `model` for that call, which takes " +
+      "precedence over that subagent's own definition and is one of `sonnet`, `opus`, `haiku` or " +
+      `\`fable\`: pass \`model: "${alias}"\` for the ` +
+      "parts you delegate, unless the child is a fork (a fork always inherits your model) or the tool " +
+      "reports that the model parameter is ignored on this session. " +
+      "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
+      "parts that need your own judgement for yourself. A delegated part may run in its own workspace or " +
+      "fork, so whatever you delegate has to land on this branch — you remain responsible for the final " +
+      "commit here."
+    );
+  },
+  modelTier: claudeModelTier,
   // `claude [options] [prompt]` — interactive is the default (only `-p`
   // opts into print/non-interactive mode), and the prompt is a plain
   // trailing positional, so this is safe to append after commandTransform's

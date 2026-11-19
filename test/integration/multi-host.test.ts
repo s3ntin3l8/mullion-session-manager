@@ -24,7 +24,7 @@ import {
 // primary's own /ws/terminal and confirm bytes actually flow, then tear the
 // agent down and confirm the reconciler skips it instead of mass-killing
 // its sessions (issue #26 landmine #1). Faked node-pty/child_process the
-// same combined way as test/routes/internal.test.ts, since both roles here
+// same combined way as test/helpers/internal-routes.ts, since both roles here
 // exercise PtyManager.
 const fakePtyChildren: FakePty[] = [];
 
@@ -59,7 +59,7 @@ vi.mock("node-pty", () => ({
 // Perf audit finding B8(2) — PtyManager.isMasterAliveBatch replies with
 // `systemctl --user list-units ... crs-session-*.scope`, one call for the
 // whole batch, instead of one `is-active` spawn per id. Tracked here (same
-// approach as test/routes/internal.test.ts's own mock) by recording every
+// approach as test/helpers/internal-routes.ts's own mock) by recording every
 // unit name a fake `systemd-run -u <unit>` spawn below "activates", so
 // list-units' fake reply matches whichever sessions this file has actually
 // spawned so far — this file's own `reconcileExitedSessions` calls need a
@@ -76,7 +76,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     spawn: vi.fn((file: string, args: string[] = [], options?: unknown) => {
       // `git` (issue #345's dock-preview-worktree describe block below) is
       // passed straight through to the real implementation, same as
-      // test/routes/internal.test.ts's identical carve-out — that suite
+      // test/helpers/internal-routes.ts's identical carve-out — that suite
       // asserts on real git output, and a real temp repo is cheap here too.
       // No other describe block in this file spawns git.
       if (file === "git") {
@@ -1197,7 +1197,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
   // upgrades, where only the `ws` package's client (not the browser
   // WebSocket) can carry a signature header, and the signature can only
   // ever cover the upgrade request itself. This proves the real thing end
-  // to end: RemoteHostClient.openAttach()'s signature is actually accepted
+  // to end: RemoteHostClient.streams.attach()'s signature is actually accepted
   // by internal.ts's real onRequest/preValidation verification, through an
   // actual WS handshake over the primary's own /ws/terminal proxy — not
   // just that each side's logic is independently correct in isolation.
@@ -1252,7 +1252,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
       // A forged/unsigned/wrong signature would have this upgrade rejected
       // (internal.ts's onRequest fires before the upgrade completes) —
       // "open" here specifically proves the agent accepted the signature
-      // RemoteHostClient.openAttach() actually sent.
+      // RemoteHostClient.streams.attach() actually sent.
       expect(outcome).toBe("open");
       ws.close();
     } finally {

@@ -3,9 +3,9 @@
 // test touches so a previous test's DELETE doesn't leak into this one."
 // That comment's own fix only resets the ONE slice that file happens to
 // care about (`useDashboardStore.setState({ hosts: [] })`); every other
-// file that mutates the store (28 setState calls in Dock.test.tsx, 23 in
-// TerminalPane.test.tsx, 17 each in BrowserPanel.test.tsx/
-// CommandPalette.test.tsx, ...) does the same narrow, per-slice thing,
+// file that mutates the store (Dock.test.tsx, BrowserPanel.test.tsx,
+// CommandPalette.test.tsx, the TerminalPane test files, ...) does the same
+// narrow, per-slice thing,
 // which means a slice nobody thought to reset can still leak a previous
 // test's mutation into the next one.
 //

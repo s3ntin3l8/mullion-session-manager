@@ -285,6 +285,84 @@ describe("#2416 — the states that used to be swallowed", () => {
     return row;
   }
 
+  describe("a shell tail with no commits (pocket #1264)", () => {
+    const shellTask = { id: "b1", type: "shell", status: "running", description: "wait" };
+    const MIN = 60_000;
+
+    async function run(hash: string) {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(
+        app,
+        "in_progress",
+        new Date(Date.now() - 30 * MIN),
+      );
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now() - 10 * MIN,
+            outstandingBackgroundTasks: [shellTask],
+          }),
+      } as never);
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus(hash));
+      await reconcileTasks(app);
+      const row = await getTask(app, taskId);
+      await app.close();
+      return row;
+    }
+
+    it("keeps waiting instead of failing a worker that has not committed", async () => {
+      const row = await run(BASE_SHA);
+      expect(row.status).toBe("in_progress");
+      expect(row.failureReason).toBeNull();
+    });
+
+    it("fails open to the gate, so reviewing, when the worktree cannot be read", async () => {
+      mockResolveHostGitStatus.mockResolvedValue(unreachable());
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(
+        app,
+        "in_progress",
+        new Date(Date.now() - 30 * MIN),
+      );
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now() - 10 * MIN,
+            outstandingBackgroundTasks: [shellTask],
+          }),
+      } as never);
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
+    it("fails open to the gate, so reviewing, when the task has no base SHA", async () => {
+      mockResolveHostGitStatus.mockResolvedValue(gitStatus(BASE_SHA));
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTaskWithBase(
+        app,
+        "in_progress",
+        new Date(Date.now() - 30 * MIN),
+      );
+      // No base SHA: checkReviewingGate fails open, so the wait must not apply.
+      getDb().update(tasks).set({ baseSha: null }).where(eq(tasks.id, taskId)).run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () =>
+          fakeInfo({
+            lastTurnEndedAt: Date.now() - 10 * MIN,
+            outstandingBackgroundTasks: [shellTask],
+          }),
+      } as never);
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      await app.close();
+    });
+
+    it("still hands a committed worker off to review", async () => {
+      expect((await run("abcdef1")).status).toBe("reviewing");
+    });
+  });
+
   describe("the three-state verdict (resolveCommitsPastBase)", () => {
     const task = {
       id: 42,
@@ -336,6 +414,60 @@ describe("#2416 — the states that used to be swallowed", () => {
       const verdict = await resolveCommitsPastBase({ log: { warn } } as never, task, "h1");
       expect(verdict.state).toBe("unknown");
       expect(warn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("the budget gate — a shell tail with no commits (#3111)", () => {
+    const shellTask = { id: "b1", type: "shell", status: "running", description: "wait" };
+    const MIN = 60_000;
+
+    async function overBudget(info: Record<string, unknown>, taskMaster = "true") {
+      const priorTaskMaster = process.env.MULLION_TASK_MASTER_ENABLED;
+      process.env.MULLION_TASK_BUDGET_MINUTES = "60";
+      process.env.MULLION_TASK_MASTER_ENABLED = taskMaster;
+      const app = await buildApp();
+      try {
+        const { taskId } = await createSessionAndTaskWithBase(
+          app,
+          "in_progress",
+          new Date(Date.now() - 120 * MIN),
+        );
+        vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+        vi.spyOn(app.pty, "get").mockReturnValue({ toInfo: () => fakeInfo(info) } as never);
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus(BASE_SHA));
+        await reconcileTasks(app);
+        return await getTask(app, taskId);
+      } finally {
+        process.env.MULLION_TASK_BUDGET_MINUTES = "120";
+        if (priorTaskMaster === undefined) delete process.env.MULLION_TASK_MASTER_ENABLED;
+        else process.env.MULLION_TASK_MASTER_ENABLED = priorTaskMaster;
+        await app.close();
+      }
+    }
+
+    it("says the worker was held on a shell job with no commits", async () => {
+      const row = await overBudget({
+        lastTurnEndedAt: Date.now() - 10 * MIN,
+        outstandingBackgroundTasks: [shellTask],
+      });
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("budget exceeded after 60 minutes");
+      expect(row.failureReason).toContain("no commits and was waiting on a background shell job");
+    });
+
+    it("says so with Task Master disabled too", async () => {
+      const row = await overBudget(
+        { lastTurnEndedAt: Date.now() - 10 * MIN, outstandingBackgroundTasks: [shellTask] },
+        "false",
+      );
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("no commits and was waiting on a background shell job");
+    });
+
+    it("keeps the plain reason when there is no shell tail", async () => {
+      const row = await overBudget({ lastTurnEndedAt: Date.now() });
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe("budget exceeded after 60 minutes");
     });
   });
 

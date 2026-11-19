@@ -147,6 +147,11 @@ describe("POST /api/tasks/:id/blocking-alerts/:alertNumber/dismiss", () => {
         const headers = init?.headers as Record<string, string> | undefined;
         const body = typeof init?.body === "string" ? init.body : "";
         const method = init?.method ?? "GET";
+        const m = /\/code-scanning\/alerts\/(\d+)$/.exec(url);
+        if (!url.endsWith("/graphql") && !m) {
+          // Background pollers (github-pr-poller, task-watcher) share global fetch.
+          return res(404, {});
+        }
         calls.push({ url, method, auth: headers?.Authorization ?? "", body });
         if (url.endsWith("/graphql")) {
           if (body.includes("addPullRequestReviewThreadReply")) {
@@ -174,7 +179,6 @@ describe("POST /api/tasks/:id/blocking-alerts/:alertNumber/dismiss", () => {
             },
           });
         }
-        const m = /\/code-scanning\/alerts\/(\d+)$/.exec(url);
         if (m && method === "GET") return res(200, alertJson(Number(m[1]), alertState));
         if (m && method === "PATCH") return res(patchStatus, {});
         return res(404, {});

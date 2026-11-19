@@ -31,8 +31,13 @@ describe("Settings -> Hosts", () => {
   // text in the row. Individual #647 tests below override an entry before
   // rendering.
   let updateInfoDb: Record<string, HostUpdateStatus>;
+  let updateBlockedTasksDb: Record<
+    string,
+    Array<{ id: number; issueNumber: number | null; projectName: string; status: string }>
+  >;
 
   beforeEach(() => {
+    updateBlockedTasksDb = {};
     hostsDb = [
       {
         id: "remote-1",
@@ -42,6 +47,7 @@ describe("Settings -> Hosts", () => {
         hasToken: true,
         createdAt: "2026-01-01T00:00:00.000Z",
         health: "pending",
+        stale: false,
         lastSeenAt: null,
         lastCheckedAt: null,
         // Issue #1725 — the drain flag: every host carries it.
@@ -117,7 +123,13 @@ describe("Settings -> Hosts", () => {
           browserEnabled: false,
         }),
       "GET /api/hosts/:id/update": ({ params }) => jsonResponse(200, updateInfoDb[params.id]),
-      "POST /api/hosts/:id/update/apply": ({ params }) => {
+      "POST /api/hosts/:id/update/apply": ({ params, query }) => {
+        if (updateBlockedTasksDb[params.id]?.length && query.get("force") !== "true") {
+          return jsonResponse(409, {
+            error: "Cannot update host while 1 Task Master task is running on it",
+            tasks: updateBlockedTasksDb[params.id],
+          });
+        }
         updateInfoDb[params.id] = {
           ...updateInfoDb[params.id],
           status: { phase: "downloading", version: "0.2.20" },
@@ -286,6 +298,103 @@ describe("Settings -> Hosts", () => {
     expect(screen.queryByText(/pass \?cascade=true/)).not.toBeInTheDocument();
   });
 
+  describe("stale hosts", () => {
+    function markStale() {
+      hostsDb[0].stale = true;
+      hostsDb[0].health = "offline";
+      hostsDb[0].lastSeenAt = new Date(Date.now() - 45 * 86_400_000).toISOString();
+    }
+
+    it("shows the elapsed-days badge only for a stale host", async () => {
+      markStale();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      const row = await screen.findByTestId("host-row-remote-1");
+      expect(within(row).getByText("Not seen for 45 days")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Remove selected hosts" })).toBeDisabled();
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+    });
+
+    it("does not offer cleanup or a badge for a host not marked stale", async () => {
+      hostsDb[0].lastSeenAt = new Date(Date.now() - 45 * 86_400_000).toISOString();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await screen.findByTestId("host-row-remote-1");
+      expect(screen.queryByText(/Not seen for/)).not.toBeInTheDocument();
+      expect(screen.queryByText("Remove stale hosts")).not.toBeInTheDocument();
+    });
+
+    it("removes only selected hosts, leaving another stale host untouched", async () => {
+      markStale();
+      hostsDb[0].hasProjects = false;
+      hostsDb.push({ ...hostsDb[0], id: "remote-2", name: "other-server" });
+      updateInfoDb["remote-2"] = updateInfoDb["remote-1"];
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      await waitFor(() => expect(hostsDb.map((host) => host.id)).toEqual(["remote-2"]));
+      const deletes = fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE");
+      expect(deletes).toEqual([
+        ["/api/hosts/remote-1", expect.objectContaining({ method: "DELETE" })],
+      ]);
+    });
+
+    it("uses the existing cascade prompt and resumes the selected queue after confirmation", async () => {
+      markStale();
+      hostsDb.push({ ...hostsDb[0], id: "remote-2", name: "other-server", hasProjects: false });
+      updateInfoDb["remote-2"] = updateInfoDb["remote-1"];
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("checkbox", { name: "other-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      expect(await screen.findByText(/host still has 2 project\(s\)/)).toBeInTheDocument();
+      expect(hostsDb).toHaveLength(2);
+      await user.click(screen.getByRole("button", { name: "Delete host and its projects" }));
+      await waitFor(() => expect(hostsDb).toHaveLength(0));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/hosts/remote-1?cascade=true",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+
+    it("stops the removal queue and surfaces an ordinary delete failure", async () => {
+      markStale();
+      hostsDb.push({ ...hostsDb[0], id: "remote-2", name: "other-server" });
+      updateInfoDb["remote-2"] = updateInfoDb["remote-1"];
+      ({ fetchMock, unexpectedCalls } = mockFetch({
+        ...baseRoutes(),
+        "DELETE /api/hosts/:id": () => jsonResponse(500, { message: "Could not remove host" }),
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("checkbox", { name: "other-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      expect(await screen.findByText("Could not remove host")).toBeInTheDocument();
+      expect(hostsDb).toHaveLength(2);
+      expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+      expect(
+        screen.queryByRole("button", { name: "Delete host and its projects" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("cancelling a cascade prompt leaves all selected hosts in place", async () => {
+      markStale();
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+      await user.click(await screen.findByRole("checkbox", { name: "home-server" }));
+      await user.click(screen.getByRole("button", { name: "Remove selected hosts" }));
+      await screen.findByText(/host still has 2 project\(s\)/);
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(hostsDb).toHaveLength(1);
+      expect(fetchMock).not.toHaveBeenCalledWith(
+        "/api/hosts/remote-1?cascade=true",
+        expect.anything(),
+      );
+    });
+  });
+
   // Issue #247 / roadmap 7.4.
   it("shows this machine's own config when its Config button is clicked", async () => {
     const user = userEvent.setup();
@@ -377,6 +486,43 @@ describe("Settings -> Hosts", () => {
       const row = await screen.findByTestId("host-row-remote-1");
       expect(await within(row).findByText("update unavailable")).toBeInTheDocument();
       expect(within(row).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+    });
+
+    it("shows blocking tasks on 409 and retries with ?force=true on 'Update anyway'", async () => {
+      updateInfoDb["remote-1"] = {
+        hostVersion: "0.2.18",
+        primaryVersion: "0.2.20",
+        upToDate: false,
+        updatable: true,
+        unavailableReason: null,
+        assetUrl: "https://github.com/x/y/a.tgz",
+        checksumUrl: "https://github.com/x/y/a.tgz.sha256",
+        status: { phase: "idle" },
+      };
+      updateBlockedTasksDb["remote-1"] = [
+        { id: 1, issueNumber: 274, projectName: "branchdam-mobile", status: "in_progress" },
+      ];
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await user.click(within(row).getByRole("button", { name: "Update" }));
+
+      const prompt = await screen.findByTestId("update-force-prompt");
+      expect(
+        within(prompt).getByText(/#274 · branchdam-mobile \(in_progress\)/),
+      ).toBeInTheDocument();
+
+      await user.click(within(prompt).getByRole("button", { name: "Update anyway" }));
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/hosts/remote-1/update/apply?force=true",
+        expect.objectContaining({ method: "POST" }),
+      );
+      await waitFor(() =>
+        expect(within(row).getByRole("button", { name: /downloading/ })).toBeDisabled(),
+      );
+      expect(screen.queryByTestId("update-force-prompt")).not.toBeInTheDocument();
     });
   });
 });

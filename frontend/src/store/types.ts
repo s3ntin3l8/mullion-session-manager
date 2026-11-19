@@ -317,6 +317,11 @@ export interface GitSlice {
   // a git repo" — this feature only ever treats both as "nothing to show,"
   // so unlike gitStatuses there's no need for a separate `null` state here.
   gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
+  // Project ids whose git-refs batch entry has been answered (including
+  // `null` for non-repos), distinguishing "not fetched yet" from
+  // "fetched, durably nothing to show" since `gitBranchesByProject` maps
+  // `null` to `undefined`.
+  gitRefsLoadedIds: Record<number, true>;
   // Per-project open-PR list (issue #102/#202), same refreshGitRefs cadence
   // as gitBranchesByProject above. SessionRow matches a session's own
   // branch (from its GitStatus) against this array's `headBranch` fields
@@ -337,7 +342,11 @@ export interface GitSlice {
   // action's own implementation in slices/git.ts for why.
   refreshGitRefs: (projectIds?: number[]) => Promise<void>;
   fetchProjectGit: (projectId: number, sessionId?: number) => Promise<void>;
-  pullProjectGit: (projectId: number, sessionId?: number) => Promise<GitPullResult>;
+  pullProjectGit: (
+    projectId: number,
+    sessionId?: number,
+    hostId?: string,
+  ) => Promise<GitPullResult>;
   // Issue #1851 — the read-only clone health check.
   checkProjectGitHealth: (projectId: number) => Promise<CloneHealth>;
   // Issue #1896 — the read-only PLAN of what the repair would do, and the
@@ -367,6 +376,8 @@ export interface GithubSlice {
   // Keyed stale-while-revalidate cache for the GitHub views (status, PRs, PR
   // detail, CI jobs, issues), see store/slices/github.ts and githubResources.ts.
   githubCache: Record<string, GithubCacheEntry>;
+  /** The project's GitHub requests currently in flight (settle when each finishes). */
+  githubInFlight: (projectId: number) => Promise<unknown>[];
   // Resolves the cached value when fresh, else fetches (deduped per key).
   // `force` skips the freshness check; a failure keeps the previous data.
   githubFetch: <T>(key: string, fetcher: () => Promise<T>, force?: boolean) => Promise<T>;
@@ -473,7 +484,7 @@ export interface TasksSlice {
   approveTask: (id: number, opts?: { force?: boolean }) => Promise<Task>;
   // "Merge now" / "Retry merge" — re-arms the merge sweep for a `done` task
   // with a linked PR.
-  mergeTask: (id: number) => Promise<Task>;
+  mergeTask: (id: number, opts?: { overrideNonRequiredChecks?: boolean }) => Promise<Task>;
   approveWorkflowChange: (id: number, sha: string) => Promise<void>;
   // reviewing -> in_progress: optional feedback, re-seeds the worker if its
   // session already exited.
@@ -484,6 +495,10 @@ export interface TasksSlice {
     id: number,
     opts?: { agent?: string | null; reviewAgent?: string | null },
   ) => Promise<Task>;
+  // #3194 — abandons a retry that is waiting for its original host (the
+  // preserved branch is there and not on origin) and re-queues the task as a
+  // new claim. The branch stays on that host, with its commits.
+  startFreshTask: (id: number) => Promise<Task>;
   // #483 — reviewing -> failed: the other resolver of a reviewing task.
   giveUpTask: (id: number, reason?: string) => Promise<Task>;
   // Issue #1345 — reviewing -> reviewing: re-arms a task stuck on
@@ -651,7 +666,7 @@ export interface HostsSlice {
     // terminated.
     patch: Partial<{
       name: string;
-      baseUrl: string;
+      baseUrl: string | null;
       token: string;
       drained: boolean;
       role: HostEditableRole;
@@ -679,7 +694,7 @@ export interface DevicesSlice {
   // mass-closing every device panel while the list is still loading.
   devicesLoaded: boolean;
   refreshDevices: () => Promise<void>;
-  createDevice: (avdName: string, name?: string) => Promise<Device>;
+  createDevice: (avdName: string, name?: string, hostId?: string) => Promise<Device>;
   // GET /api/devices/discovered (issue #1378) — not stored in the slice,
   // PairDeviceDialog keeps the scan results in its own local state.
   listDiscovered: () => Promise<DiscoveredDevice[]>;
@@ -798,6 +813,11 @@ export interface UiSlice {
   // project's last-focused session" from this when it switches to Agent's
   // browser after focus already moved to the pane itself. Client state only.
   recentSessionIds: number[];
+  /** Issue #3230 — per-project, per-control selected worktree/branch value
+   *  for Dock monitors, persisted in localStorage so stopping a control,
+   *  remounting the Dock, or reloading the page keeps the selection. */
+  dockControlWorktrees: Record<string, Record<string, string>>;
+  setDockControlWorktree: (projectId: number, controlId: string, value: string) => void;
   // May reference a workspace that no longer exists (deleted in another
   // tab, or a stale localStorage value) — App.tsx is responsible for
   // falling back to first-available/create-default when that happens. Kept

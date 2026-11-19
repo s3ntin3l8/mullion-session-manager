@@ -1321,7 +1321,8 @@ export function CreateProjectModal({
           <span className="create-modal-field-hint">
             Off by default. A child runs in the target project's repo (on that project's host) and
             inherits this session's unattended posture, so only turn it on for a project whose
-            sessions you trust to drive your other projects.
+            sessions you trust to drive your other projects. It also grants read-only access to the
+            sessions and tasks of the projects it reaches that accept it.
           </span>
           {allowCrossProjectSpawn && (
             <>

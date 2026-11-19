@@ -12,6 +12,7 @@ import { sessions, tasks } from "../db/schema.js";
 import type { projects } from "../db/schema.js";
 import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { resolveWorkerSpawnModels } from "./task-model-resolve.js";
 import { resolveBackend } from "./session-backend.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
@@ -27,6 +28,7 @@ import {
   readSessionLiveInfo,
   resolveSessionHostId,
   resolveTaskWorkerHost,
+  taskWorkerSessionName,
   withLiveInfo,
 } from "./session-live-info.js";
 import { getStoredSettings } from "./settings.js";
@@ -117,7 +119,7 @@ export async function readLiveWorkerState(
  */
 export async function promptLiveTaskWorker(
   app: FastifyInstance,
-  task: TaskRow,
+  task: Pick<TaskRow, "id" | "sessionId">,
   prompt: string,
   logContext: string,
   // The caller's own read of the worker, when it just made one (the reject
@@ -284,7 +286,7 @@ export async function reseedTaskIfSessionExited(
     skipPermissions: taskMasterConfig.skipPermissions,
     // Named like every other worker spawn site (task-claim.ts), so the re-seeded
     // worker reads as task #N's worker in the UI.
-    name: `Task #${task.id} · worker`,
+    name: taskWorkerSessionName(task.id),
     nameLocked: true,
     // Mark this session as an unattended Task Master worker so the
     // opencode and codex adapters deny brainstorming / writing-plans /
@@ -300,6 +302,9 @@ export async function reseedTaskIfSessionExited(
     // placed on, so the re-seed joins that host.
     unattended: true,
     hostId: workerHostId,
+    // The re-seed is the same worker, so it keeps the model the claim chose;
+    // without this the CLI falls back to its own default (agy: Argon).
+    ...resolveWorkerSpawnModels(app, task.agentCommand, task),
   });
   if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
     // #2637 — the spawn may have landed: createSessionRecord kept the row. Bind

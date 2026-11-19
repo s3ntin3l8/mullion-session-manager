@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, sql } from "drizzle-orm";
-import { projects, sessions } from "../db/schema.js";
+import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { projects, sessions, tasks } from "../db/schema.js";
 import { bindingBrowserTarget } from "./browser-binding-target.js";
 import { listSessionBrowserBindings } from "./session-browsers.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -13,6 +13,7 @@ import { HostRequestError } from "./remote-host-client.js";
 import { isHostBusyError } from "./remote-host-errors.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
 import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
+import { ACTIVE_TASK_STATUSES } from "./task-state.js";
 
 // Throttled per (host, message) — see host-warn-throttle.ts.
 const LIVE_INFO_BUSY_MESSAGE = "host busy, reporting default live status";
@@ -242,33 +243,106 @@ export function withLiveInfo(
 // re-exported so every importer keeps this path.
 export { resolveProjectHostId, resolveSessionHostId };
 
+export const TASK_WORKER_NAME_SUFFIX = "· worker";
+
+/**
+ * Returns the canonical session name for a Task Master worker session.
+ * Shared by every worker spawn site and by `resolveTaskWorkerHost` so the
+ * `· worker` suffix cannot drift.
+ */
+export function taskWorkerSessionName(taskId: number): string {
+  return `Task #${taskId} ${TASK_WORKER_NAME_SUFFIX}`;
+}
+
 /**
  * The host a task's WORKER session runs on — and therefore the host its
  * worktree is on.
  *
  * Issue #1724 / roadmap 8.10: the reviewer and the rebase worker READ the
- * task's worktree, so they must run where that worktree is. The worker's own
- * session row records the host it was placed on (sessions.hostId, issue
- * #1722); the project's host is the fallback for a task whose worker never
- * started (or whose row predates placement).
+ * task's worktree, so they must run where that worktree is. Resolution order:
+ * 1. `task.sessionId` when non-null and the session row exists (`resolveSessionHostId`).
+ * 2. When `task.sessionId` is null (e.g. cleared by `enqueueRetry` before
+ *    `dispatchQueuedRetry` runs) and `task.id` is provided, the newest session
+ *    row with `taskId = task.id` whose name ends in `· worker`
+ *    (`resolveSessionHostId`). Callers that omit `id` skip this lookup and
+ *    fall through to the project's host.
+ * 3. The project's host (`project?.hostId ?? resolveProjectHostId`) for a task
+ *    whose worker never started (or whose row predates placement).
  *
  * A task's sessions therefore share ONE host — the worker decides it, and
  * the rest join it.
  */
 export function resolveTaskWorkerHost(
   app: FastifyInstance,
-  task: { sessionId: number | null; projectId: number },
+  task: { id?: number; sessionId: number | null; projectId: number },
   // The project row, when the caller already has it. It is AUTHORITATIVE
-  // for the fallback: re-reading the project from the db would answer for
-  // whatever row carries that id — not necessarily the one the caller is
-  // working with, and in a test not even a row at all.
+  // for step 3 (the project's own host fallback): re-reading the project
+  // from the db would answer for whatever row carries that id — not
+  // necessarily the one the caller is working with, and in a test not even
+  // a row at all. Steps 1 and 2 go through `resolveSessionHostId`, so a
+  // session row with a null `sessions.hostId` still resolves against the
+  // `projects` row in the db.
   project?: { hostId: string },
 ): string {
   if (task.sessionId !== null) {
     const [row] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
     if (row !== undefined) return resolveSessionHostId(app, row);
   }
+  // When `task.sessionId` was cleared (e.g. `enqueueRetry` resets it before
+  // `dispatchQueuedRetry` runs), resolve from the task's most recent worker
+  // session so retry still targets the host that holds the preserved branch.
+  if (task.id !== undefined) {
+    const [workerRow] = app.db
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.taskId, task.id), like(sessions.name, `%${TASK_WORKER_NAME_SUFFIX}`)))
+      .orderBy(desc(sessions.id))
+      .limit(1)
+      .all();
+    if (workerRow !== undefined) return resolveSessionHostId(app, workerRow);
+  }
   return project?.hostId ?? resolveProjectHostId(app, task.projectId);
+}
+
+/**
+ * Lists active Task Master tasks (`claimed`, `in_progress`, `reviewing`)
+ * whose worker or reviewer session runs on `hostId`.
+ */
+export function listActiveTasksOnHost(
+  app: FastifyInstance,
+  hostId: string,
+): Array<{
+  id: number;
+  issueNumber: number | null;
+  projectName: string;
+  status: string;
+}> {
+  const activeTasks = app.db
+    .select({
+      id: tasks.id,
+      issueNumber: tasks.issueNumber,
+      status: tasks.status,
+      sessionId: tasks.sessionId,
+      projectId: tasks.projectId,
+      projectName: projects.name,
+      projectHostId: projects.hostId,
+    })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(inArray(tasks.status, [...ACTIVE_TASK_STATUSES]))
+    .all();
+
+  // `resolveTaskWorkerHost` checks `tasks.sessionId` (the worker), which also
+  // covers the reviewer today because `task-review-spawn.ts` places the
+  // reviewer on `resolveTaskWorkerHost(task)`.
+  return activeTasks
+    .filter((row) => resolveTaskWorkerHost(app, row, { hostId: row.projectHostId }) === hostId)
+    .map((row) => ({
+      id: row.id,
+      issueNumber: row.issueNumber,
+      projectName: row.projectName,
+      status: row.status,
+    }));
 }
 
 // Batch size for the inArray lookup below — same value and same reasoning as

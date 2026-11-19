@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // a discriminated HostGitResult. Every collaborator is mocked so this file
 // tests exactly that dispatch/mapping logic, not git itself (covered by
 // git-status.test.ts/git-refs.test.ts/git-push.test.ts) or the wire format
-// (covered by test/routes/internal.test.ts).
+// (covered by test/routes/internal-git-ops.test.ts and test/routes/internal-git-status.test.ts).
 
 const mockGetGitStatus = vi.fn();
 const mockIsGitRepo = vi.fn();
@@ -23,7 +23,7 @@ vi.mock("../../src/services/git-status.js", () => ({
   isGitRepo: mockIsGitRepo,
 }));
 vi.mock("../../src/services/git-refs.js", () => ({
-  resolveDefaultBaseRef: mockResolveDefaultBaseRef,
+  resolveDefaultBaseRefWithFetch: mockResolveDefaultBaseRef,
   resolveCommitSha: mockResolveCommitSha,
 }));
 vi.mock("../../src/services/git-push.js", () => ({
@@ -199,14 +199,17 @@ describe("host-git.ts", () => {
 
   describe("resolveHostBaseRef", () => {
     it("local: resolves the default base ref then pins it to a commit SHA", async () => {
-      mockResolveDefaultBaseRef.mockResolvedValue("origin/main");
+      mockResolveDefaultBaseRef.mockResolvedValue({ ref: "origin/main", fetched: false });
       mockResolveCommitSha.mockResolvedValue("deadbeef");
 
       const result = await resolveHostBaseRef(fakeApp, "local", "/project");
 
       expect(mockResolveDefaultBaseRef).toHaveBeenCalledWith("/project");
       expect(mockResolveCommitSha).toHaveBeenCalledWith("/project", "origin/main");
-      expect(result).toEqual({ ok: true, value: { baseRef: "origin/main", sha: "deadbeef" } });
+      expect(result).toEqual({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeef", fetched: false },
+      });
     });
 
     it("remote: proxies to the remote client's own base-ref route", async () => {

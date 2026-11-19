@@ -187,3 +187,45 @@ describe("fake GitHub API", () => {
     expect(first).toContainEqual([12, "2026-10-01T08:40:00.000Z"]);
   });
 });
+
+describe("fake GitHub API: sub-issues", () => {
+  const base = "/repos/acme/aurora-web/issues";
+
+  it("reports the epic's sub_issues_summary and lists its children", async () => {
+    const epic = (await get(`${base}/20`)).body;
+    expect(epic.sub_issues_summary).toEqual({ total: 4, completed: 2 });
+    const kids = (await get(`${base}/20/sub_issues`)).body;
+    expect(kids.map((k: Row) => [k.number, k.state])).toEqual([
+      [21, "closed"],
+      [22, "closed"],
+      [23, "open"],
+      [24, "open"],
+    ]);
+    expect(
+      kids.every((k: Row) => String(k.repository_url).endsWith("/repos/acme/aurora-web")),
+    ).toBe(true);
+  });
+
+  it("gives a child a parent_issue_url the backend accepts", async () => {
+    const { githubApiBase, setGitHubApiBase } = await import("../../src/services/github-fetch.js");
+    const { parseParentIssueUrl } = await import("../../src/services/github.js");
+    const before = githubApiBase();
+    setGitHubApiBase(fake.url);
+    try {
+      const child = (await get(`${base}/23`)).body;
+      expect(parseParentIssueUrl(child.parent_issue_url as string)).toEqual({
+        repo: "acme/aurora-web",
+        number: 20,
+      });
+    } finally {
+      setGitHubApiBase(before);
+    }
+  });
+
+  it("keeps closed children out of the open issue list", async () => {
+    const open = (await get(`${base}?state=open&per_page=100`)).body.map((i: Row) => i.number);
+    expect(open).toEqual(expect.arrayContaining([20, 23, 24]));
+    expect(open).not.toContain(21);
+    expect(open).not.toContain(22);
+  });
+});

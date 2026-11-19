@@ -198,6 +198,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   // revoked identity with its bootstrap token.
   let identityRejected = false;
   let loggedNoIdentity = false;
+  let loggedBootstrapRejected = false;
 
   async function persistIdentity(session: AgentSession): Promise<void> {
     if (!session.machineCredential) return;
@@ -382,6 +383,15 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
             );
             attempt++;
             continue;
+          }
+          if (!identity && isUnauthorized(err) && !loggedBootstrapRejected) {
+            // No stored identity, the primary rejected the bootstrap token and
+            // the env file held nothing newer: the usual cause is a rotated (or
+            // wrong) token. Logged once per process; never includes the token.
+            loggedBootstrapRejected = true;
+            app.log.warn(
+              "[agent-enrollment] the primary rejected the bootstrap token (401) and the env file has no newer one: it was most likely rotated, or is wrong. Rotate the host's token in Settings -> Hosts and put the new value in MULLION_ENROLLMENT_TOKEN; no restart is needed, the agent re-reads the env file on a 401",
+            );
           }
           enrollment.failedAttempts++;
           const delay =

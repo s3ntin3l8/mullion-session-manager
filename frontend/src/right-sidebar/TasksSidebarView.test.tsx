@@ -252,6 +252,23 @@ describe("TasksSidebarView", () => {
     expect(refresh).toHaveBeenCalled();
   });
 
+  it("shows the header Refresh as busy until refreshTasks settles", async () => {
+    let release!: () => void;
+    const refresh = vi.fn(() => new Promise<void>((r) => (release = r)));
+    useDashboardStore.setState({ refreshTasks: refresh });
+    renderView();
+    const btn = screen.getByRole("button", { name: "Refresh" });
+    await userEvent.click(btn);
+    expect(btn).toHaveAttribute("aria-busy", "true");
+    await userEvent.click(btn);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    await act(async () => release());
+    expect(btn).not.toHaveAttribute("aria-busy");
+    await userEvent.click(btn);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
   it("explains an empty list and a disabled Task Master", () => {
     useDashboardStore.setState({ tasks: [] });
     const { unmount } = renderView();

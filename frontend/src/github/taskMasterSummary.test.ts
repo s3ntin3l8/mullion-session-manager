@@ -48,3 +48,40 @@ describe("needsYouTasks", () => {
     expect(taskBucket(tasks[3])).toBeNull();
   });
 });
+
+describe("needsYouReason: a parked red CI check", () => {
+  const parked = {
+    status: "reviewing" as const,
+    autoReturnCapAnnouncedAt: "2026-01-01T00:00:00.000Z",
+    ciHoldNote: "dependency-audit — no patched release",
+  };
+
+  it("names the check even while an approval is held, before the approval line", () => {
+    expect(
+      needsYouReason(
+        t({ ...parked, needsHumanReason: "ci-unfixable", approvalState: "awaiting-human" }),
+      ),
+    ).toBe("a CI check can't be fixed from this PR: dependency-audit — no patched release");
+  });
+
+  it("names it when no round was spent either (so the round cap is not what parked it)", () => {
+    expect(
+      needsYouReason(t({ ...parked, needsHumanReason: "ci-still-red", autoReturnCapped: false })),
+    ).toBe("CI still red after the worker and two reruns: dependency-audit — no patched release");
+  });
+
+  it("says nothing once the stop stamp is gone (the task was re-armed)", () => {
+    expect(
+      needsYouReason(
+        t({ ...parked, autoReturnCapAnnouncedAt: null, needsHumanReason: "ci-unfixable" }),
+      ),
+    ).toBeNull();
+  });
+});
+
+it("includes an unstarted worker in needs-you tasks only while in progress", () => {
+  const task = t({ status: "in_progress", needsHumanReason: "worker-not-started" });
+  expect(needsYouTasks([task])).toHaveLength(1);
+  expect(needsYouReason(task)).toMatch(/worker has not started a turn/);
+  expect(needsYouReason({ ...task, status: "done" })).toBeNull();
+});

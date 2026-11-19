@@ -1,15 +1,18 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
-import { AndroidKeyEventAction } from "@yume-chan/scrcpy";
-import { AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
+import { getDeviceRow, type DeviceRow } from "../services/device-store.js";
+import { getDeviceHost } from "../services/device-host.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { iosSimulatorAvailable } from "../services/device-kinds.js";
+import { getRemoteHostClient } from "../services/remote-host-client.js";
+import type { DeviceKind } from "../services/device-manager.js";
+import { parseDeviceInput } from "../services/device-drivers/input.js";
 import type {
-  AndroidKeyCode,
-  AndroidKeyEventMeta,
-  ScrcpyMediaStreamPacket,
-} from "@yume-chan/scrcpy";
-import { getDeviceRow } from "../services/device-store.js";
-import type { Device, DeviceKind } from "../services/device-manager.js";
-import { CLIPBOARD_MAX_BYTES } from "../services/device-defaults.js";
+  DeviceDriver,
+  DevicePlatform,
+  DeviceVideoPacket,
+  TouchInput,
+} from "../services/device-drivers/types.js";
 
 // Streams a device's screen to the frontend DevicePane as binary H.264
 // packets over WebSocket, and proxies touch/key/scroll input back —
@@ -53,14 +56,14 @@ const KEYFRAME_STALL_MS = 5000;
 // Cached per PACKET OBJECT (WeakMap, not a plain Map — no explicit eviction
 // needed, and no cross-device corruption risk: Device.pumpVideo emits a
 // fresh object per read, so a cache key is never reused across devices or
-// packets). Device.onVideoPacket fans the SAME packet out to every attached
+// packets). The driver's onVideoPacket fans the SAME packet out to every attached
 // socket's own listener (multiple panels/CLI viewers of one device is an
 // explicitly supported case — see docs/device-panel.md), so without this,
 // N listeners would each independently allocate-and-copy an identical
 // frame on the hottest path in the whole feature (every video frame).
-const encodedFrameCache = new WeakMap<ScrcpyMediaStreamPacket, Uint8Array>();
+const encodedFrameCache = new WeakMap<DeviceVideoPacket, Uint8Array>();
 
-function encodeVideoFrame(packet: ScrcpyMediaStreamPacket): Uint8Array {
+function encodeVideoFrame(packet: DeviceVideoPacket): Uint8Array {
   const cached = encodedFrameCache.get(packet);
   if (cached) return cached;
   const typeByte = packet.type === "configuration" ? 0 : 1;
@@ -73,298 +76,6 @@ function encodeVideoFrame(packet: ScrcpyMediaStreamPacket): Uint8Array {
   return out;
 }
 
-interface TapMessage {
-  type: "tap";
-  x: number;
-  y: number;
-  videoWidth: number;
-  videoHeight: number;
-}
-
-interface TouchMessage {
-  type: "touchDown" | "touchMove" | "touchUp";
-  x: number;
-  y: number;
-  videoWidth: number;
-  videoHeight: number;
-  pointerId: number;
-}
-
-interface ScrollMessage {
-  type: "scroll";
-  x: number;
-  y: number;
-  videoWidth: number;
-  videoHeight: number;
-  scrollX: number;
-  scrollY: number;
-}
-
-interface TextMessage {
-  type: "text";
-  text: string;
-}
-
-/** `androidKeyCode` is an AOSP `KEYCODE_*` numeric value — the frontend owns
- * mapping a browser KeyboardEvent to this, same division of labor as
- * `injectKeyCode`'s own doc comment implies (this route is a thin proxy,
- * not a keymap). `metaState` is the same scrcpy `AndroidKeyEventMeta` bitmask
- * `injectKeyCode` takes (Ctrl/Shift/Alt/Meta bits OR'd together) — optional
- * and defaulting to 0 (no modifiers) so older frontend builds and every
- * pre-existing message on the wire keep working unchanged. */
-interface KeyEventMessage {
-  type: "keyEvent";
-  androidKeyCode: number;
-  action: "down" | "up";
-  metaState?: number;
-}
-
-/** Host clipboard text to place on the device and paste (scrcpy
- * SET_CLIPBOARD with paste=true — handles Unicode, unlike `injectText`). */
-interface ClipboardMessage {
-  type: "clipboard";
-  text: string;
-}
-
-interface BackMessage {
-  type: "back";
-}
-
-interface RotateMessage {
-  type: "rotate";
-}
-
-type DeviceInputMessage =
-  | TapMessage
-  | TouchMessage
-  | ScrollMessage
-  | TextMessage
-  | KeyEventMessage
-  | ClipboardMessage
-  | BackMessage
-  | RotateMessage;
-
-function isFiniteNumber(v: unknown): v is number {
-  return typeof v === "number" && Number.isFinite(v);
-}
-
-// scrcpy's InjectKeyCode control message packs metaState into a u32 on the
-// wire — reject anything that couldn't round-trip through that (negative,
-// fractional, or too large), rather than silently truncating or wrapping it.
-const MAX_META_STATE = 0xffffffff;
-function isValidMetaState(v: unknown): v is number {
-  return isFiniteNumber(v) && Number.isInteger(v) && v >= 0 && v <= MAX_META_STATE;
-}
-
-function parseInputMessage(value: unknown): DeviceInputMessage | null {
-  const v = value as Partial<DeviceInputMessage> | null;
-  if (typeof v !== "object" || v === null || typeof v.type !== "string") return null;
-  switch (v.type) {
-    case "tap": {
-      const m = v as Partial<TapMessage>;
-      if (
-        isFiniteNumber(m.x) &&
-        isFiniteNumber(m.y) &&
-        isFiniteNumber(m.videoWidth) &&
-        isFiniteNumber(m.videoHeight)
-      ) {
-        return {
-          type: "tap",
-          x: m.x,
-          y: m.y,
-          videoWidth: m.videoWidth,
-          videoHeight: m.videoHeight,
-        };
-      }
-      return null;
-    }
-    case "touchDown":
-    case "touchMove":
-    case "touchUp": {
-      const m = v as Partial<TouchMessage>;
-      if (
-        isFiniteNumber(m.x) &&
-        isFiniteNumber(m.y) &&
-        isFiniteNumber(m.videoWidth) &&
-        isFiniteNumber(m.videoHeight) &&
-        isFiniteNumber(m.pointerId)
-      ) {
-        return {
-          type: v.type,
-          x: m.x,
-          y: m.y,
-          videoWidth: m.videoWidth,
-          videoHeight: m.videoHeight,
-          pointerId: m.pointerId,
-        };
-      }
-      return null;
-    }
-    case "scroll": {
-      const m = v as Partial<ScrollMessage>;
-      if (
-        isFiniteNumber(m.x) &&
-        isFiniteNumber(m.y) &&
-        isFiniteNumber(m.videoWidth) &&
-        isFiniteNumber(m.videoHeight) &&
-        isFiniteNumber(m.scrollX) &&
-        isFiniteNumber(m.scrollY)
-      ) {
-        return {
-          type: "scroll",
-          x: m.x,
-          y: m.y,
-          videoWidth: m.videoWidth,
-          videoHeight: m.videoHeight,
-          scrollX: m.scrollX,
-          scrollY: m.scrollY,
-        };
-      }
-      return null;
-    }
-    case "text": {
-      const m = v as Partial<TextMessage>;
-      return typeof m.text === "string" ? { type: "text", text: m.text } : null;
-    }
-    case "keyEvent": {
-      const m = v as Partial<KeyEventMessage>;
-      if (!isFiniteNumber(m.androidKeyCode) || (m.action !== "down" && m.action !== "up")) {
-        return null;
-      }
-      if (m.metaState !== undefined && !isValidMetaState(m.metaState)) return null;
-      return {
-        type: "keyEvent",
-        androidKeyCode: m.androidKeyCode,
-        action: m.action,
-        metaState: m.metaState ?? 0,
-      };
-    }
-    case "clipboard": {
-      const m = v as Partial<ClipboardMessage>;
-      if (
-        typeof m.text === "string" &&
-        m.text.length > 0 &&
-        Buffer.byteLength(m.text, "utf8") <= CLIPBOARD_MAX_BYTES
-      ) {
-        return { type: "clipboard", text: m.text };
-      }
-      return null;
-    }
-    case "back":
-      return { type: "back" };
-    case "rotate":
-      return { type: "rotate" };
-    default:
-      return null;
-  }
-}
-
-async function dispatchInput(device: Device, message: DeviceInputMessage): Promise<void> {
-  const controller = device.controller;
-  if (!controller) return;
-  switch (message.type) {
-    case "tap":
-      await controller.injectTouch({
-        action: AndroidMotionEventAction.Down,
-        pointerId: 0n,
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        pressure: 1,
-        actionButton: AndroidMotionEventButton.Primary,
-        buttons: AndroidMotionEventButton.Primary,
-      });
-      await controller.injectTouch({
-        action: AndroidMotionEventAction.Up,
-        pointerId: 0n,
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        pressure: 0,
-        actionButton: AndroidMotionEventButton.Primary,
-        buttons: AndroidMotionEventButton.None,
-      });
-      break;
-    case "touchDown":
-    case "touchMove":
-    case "touchUp": {
-      const action =
-        message.type === "touchDown"
-          ? AndroidMotionEventAction.Down
-          : message.type === "touchMove"
-            ? AndroidMotionEventAction.Move
-            : AndroidMotionEventAction.Up;
-      const down = message.type !== "touchUp";
-      await controller.injectTouch({
-        action,
-        pointerId: BigInt(message.pointerId),
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        pressure: down ? 1 : 0,
-        actionButton: down ? AndroidMotionEventButton.Primary : AndroidMotionEventButton.None,
-        buttons: down ? AndroidMotionEventButton.Primary : AndroidMotionEventButton.None,
-      });
-      break;
-    }
-    case "scroll":
-      await controller.injectScroll({
-        pointerX: message.x,
-        pointerY: message.y,
-        videoWidth: message.videoWidth,
-        videoHeight: message.videoHeight,
-        scrollX: message.scrollX,
-        scrollY: message.scrollY,
-        buttons: AndroidMotionEventButton.None,
-      });
-      break;
-    case "text":
-      await controller.injectText(message.text);
-      break;
-    case "keyEvent":
-      await controller.injectKeyCode({
-        action: message.action === "down" ? AndroidKeyEventAction.Down : AndroidKeyEventAction.Up,
-        // The frontend owns mapping a browser key to an AOSP KEYCODE_* value
-        // — this route just proxies whatever numeric value it's given, so
-        // there's no closed set to validate against here.
-        keyCode: message.androidKeyCode as AndroidKeyCode,
-        repeat: 0,
-        // Same proxy posture as keyCode above: parseInputMessage already
-        // validated this is a safe u32 and normalized a missing metaState to
-        // 0, so it's just forwarded — the frontend owns which
-        // AndroidKeyEventMeta bits to set. `?? 0` is belt-and-suspenders for
-        // metaState's `?` in the KeyEventMessage type (any caller of
-        // dispatchInput that skips parseInputMessage would otherwise see
-        // `undefined` reach the wire as NaN).
-        metaState: (message.metaState ?? 0) as AndroidKeyEventMeta,
-      });
-      break;
-    case "clipboard":
-      // Routed through Device.setClipboard (device-manager.ts) rather than
-      // calling controller.setClipboard directly, so a host-initiated paste
-      // from this panel updates the SAME last-known-clipboard cache the
-      // one-shot REST `clipboard get` action verb reads
-      // (routes/devices.ts) — scrcpy does NOT echo a host-initiated
-      // SET_CLIPBOARD back through the autosync clipboard stream
-      // (Device.pumpClipboard only ever sees DEVICE-initiated copies), so
-      // without this an agent's `clipboard get` right after a panel paste
-      // would return stale data. See Device.setClipboard's own comment for
-      // the sequence-0n/fire-and-forget reasoning.
-      await device.setClipboard(message.text, true);
-      break;
-    case "back":
-      await controller.backOrScreenOn(AndroidKeyEventAction.Down);
-      await controller.backOrScreenOn(AndroidKeyEventAction.Up);
-      break;
-    case "rotate":
-      await controller.rotateDevice();
-      break;
-  }
-}
-
 export interface AttachDeviceParams {
   deviceId: number;
   kind: DeviceKind;
@@ -372,6 +83,10 @@ export interface AttachDeviceParams {
   serial: string | null;
   label: string | null;
   port: number | null;
+  /** Absent means "android". */
+  platform?: DevicePlatform;
+  /** An iOS Simulator's UDID; with `platform: "ios"`. */
+  udid?: string | null;
 }
 
 /** Attaches a device WS socket to the live Device: gets-or-creates it via
@@ -380,17 +95,18 @@ export interface AttachDeviceParams {
 export async function attachSocketToDevice(
   app: FastifyInstance,
   socket: WebSocket,
-  { deviceId, kind, avdName, serial, label, port }: AttachDeviceParams,
+  { deviceId, kind, avdName, serial, label, port, platform, udid }: AttachDeviceParams,
 ): Promise<void> {
   let device;
   try {
-    device = await app.device.getOrCreate({
+    device = await app.device.getOrCreateDriver({
       id: String(deviceId),
       kind,
       avdName,
       serial,
       label,
       port,
+      ...(platform === "ios" ? { platform, udid } : {}),
     });
   } catch (err) {
     // Same shape as routes/browser.ts's attachSocketToBrowser on a
@@ -411,13 +127,13 @@ export async function attachSocketToDevice(
 
   // `device` is a `let` (assigned in the try above), so closures below would
   // otherwise see it as implicitly `any`.
-  const liveDevice: Device = device;
+  const liveDevice: DeviceDriver = device;
   let closed = false;
   let droppedSincePacket = false;
   // A socket can disappear while the frontend is holding a touch. Keep the
   // most recent point for each pointer so its close handler can release the
   // controller state even when the client cannot send touchUp itself.
-  const activeTouches = new Map<number, TouchMessage>();
+  const activeTouches = new Map<number, TouchInput>();
   // A brand-new socket is a late joiner: Device.onVideoPacket replays only
   // the SPS/PPS config, so the next packet is normally a delta frame — and
   // the frontend's WebCodecs decoder throws on a delta before its first
@@ -448,7 +164,7 @@ export async function attachSocketToDevice(
   });
 
   function requestKeyframe(reason: string): void {
-    liveDevice.controller?.resetVideo().catch((err) => {
+    liveDevice.requestKeyframe().catch((err) => {
       app.log.warn({ err, deviceId }, `device resetVideo ${reason} failed`);
     });
   }
@@ -458,7 +174,7 @@ export async function attachSocketToDevice(
   const stallTimer = setTimeout(() => {
     if (closed || !awaitingKeyframe) return;
     app.log.warn(
-      { deviceId, hasController: Boolean(liveDevice.controller) },
+      { deviceId, hasController: liveDevice.hasLiveControl },
       "device socket still waiting for a keyframe; requesting another",
     );
     requestKeyframe("after keyframe stall");
@@ -496,13 +212,20 @@ export async function attachSocketToDevice(
       app.log.warn({ deviceId }, "dropped malformed device control message");
       return;
     }
-    const message = parseInputMessage(parsed);
+    // The primary's proxy (proxyToRemoteDevice) asks for a fresh keyframe after
+    // IT dropped frames on the way to a slow browser: the agent's own gating
+    // cannot see that backlog. Not a DeviceInput — it never reaches a driver.
+    if ((parsed as { type?: unknown } | null)?.type === "requestKeyframe") {
+      requestKeyframe("on the proxy's request");
+      return;
+    }
+    const message = parseDeviceInput(parsed);
     if (!message) return;
     if (message.type === "touchDown") activeTouches.set(message.pointerId, message);
     else if (message.type === "touchMove" && activeTouches.has(message.pointerId)) {
       activeTouches.set(message.pointerId, message);
     } else if (message.type === "touchUp") activeTouches.delete(message.pointerId);
-    dispatchInput(device, message).catch((err) => {
+    liveDevice.input(message).catch((err) => {
       app.log.warn({ err, deviceId }, "device input dispatch failed");
     });
   });
@@ -514,11 +237,180 @@ export async function attachSocketToDevice(
     unsubscribeExit();
     unsubscribeClipboard();
     for (const touch of activeTouches.values()) {
-      dispatchInput(liveDevice, { ...touch, type: "touchUp" }).catch((err) => {
+      liveDevice.input({ ...touch, type: "touchUp" }).catch((err) => {
         app.log.warn({ err, deviceId }, "device touch release on socket close failed");
       });
     }
     activeTouches.clear();
+  });
+}
+
+/** How long the primary waits for an agent's device socket to open. */
+export const REMOTE_DEVICE_OPEN_TIMEOUT_MS = 15_000;
+
+/**
+ * Relays the device panel's socket to the agent that runs the device (#3200),
+ * modelled on routes/browser.ts's proxyToRemoteBrowser: control messages go
+ * up, frames come down, and either side closing closes the other.
+ *
+ * It differs from the browser proxy where video differs from screenshots. A
+ * dropped JPEG is repainted by the next one; a dropped H.264 delta corrupts
+ * decoding until the next keyframe. So when the BROWSER side is backed up this
+ * drops the frame, holds every delta until a keyframe has gone out, and asks
+ * the agent for one — the same gate attachSocketToDevice applies on the
+ * agent's own socket, which cannot see this hop's backlog. Everything else
+ * (the agent's own keyframe gating on attach, the codec configuration
+ * replay) stays agent-side, and binary frames pass through byte for byte.
+ */
+export async function proxyToRemoteDevice(
+  app: FastifyInstance,
+  deviceSocket: WebSocket,
+  row: DeviceRow,
+): Promise<void> {
+  const { hostId } = row;
+  const deviceId = row.id;
+  const fail = (message: string): void => {
+    if (deviceSocket.readyState === deviceSocket.OPEN) {
+      deviceSocket.send(JSON.stringify({ type: "error", message }));
+      deviceSocket.close();
+    }
+  };
+
+  // Same get-or-create the local socket does, over REST first: it reattaches a
+  // device that survived an agent restart and persists the port the agent
+  // holds, which the socket's own attach cannot report back.
+  let current: DeviceRow;
+  try {
+    await getDeviceHost(app, hostId).getOrCreate(row);
+    current = getDeviceRow(app, deviceId) ?? row;
+  } catch (err) {
+    app.log.error({ err, hostId, deviceId }, "failed to start remote device for its socket");
+    fail(err instanceof Error ? err.message : `Host ${hostId} is unreachable`);
+    return;
+  }
+  if (deviceSocket.readyState !== deviceSocket.OPEN) return;
+
+  let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["devices"]["openSocket"]>;
+  try {
+    upstream = getRemoteHostClient(app, hostId).devices.openSocket(String(deviceId), {
+      kind: current.kind,
+      ...(current.avdName !== null ? { avdName: current.avdName } : {}),
+      ...(current.serial !== null ? { serial: current.serial } : {}),
+      ...(current.name !== null ? { label: current.name } : {}),
+      ...(current.port !== null ? { port: String(current.port) } : {}),
+      ...(current.platform === "ios" && current.udid !== null
+        ? { platform: "ios" as const, udid: current.udid }
+        : {}),
+    });
+  } catch (err) {
+    app.log.error({ err, hostId, deviceId }, "failed to open remote device WS upgrade");
+    fail(`Host ${hostId} is unreachable`);
+    return;
+  }
+
+  const closeUpstream = () => {
+    if (upstream.readyState === upstream.OPEN || upstream.readyState === upstream.CONNECTING) {
+      upstream.close();
+    }
+  };
+  const closeDevice = () => {
+    if (deviceSocket.readyState === deviceSocket.OPEN) deviceSocket.close();
+  };
+
+  deviceSocket.on("message", (data, isBinary) => {
+    if (upstream.readyState !== upstream.OPEN) return;
+    if (upstream.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) return;
+    upstream.send(data, { binary: isBinary });
+  });
+  deviceSocket.on("close", () => {
+    stopStallTimer();
+    closeUpstream();
+  });
+  // A socket error must not escape as an uncaught exception; the close that
+  // follows tears everything down.
+  deviceSocket.on("error", (err) => {
+    app.log.warn({ err, hostId, deviceId }, "device socket error");
+  });
+
+  // An upstream that neither opens nor fails would hold this socket open for
+  // nothing.
+  const openTimer = setTimeout(() => {
+    app.log.warn({ hostId, deviceId }, "remote device ws upstream did not open in time");
+    closeUpstream();
+    fail(`Host ${hostId} did not answer in time`);
+  }, REMOTE_DEVICE_OPEN_TIMEOUT_MS);
+  openTimer.unref();
+
+  let awaitingKeyframe = false;
+  let droppedSinceFrame = false;
+  // A gated socket shows nothing until a keyframe arrives, and the one request
+  // sent when the backlog clears can be lost (the agent had no controller yet,
+  // or ignored it). The agent's own stall timer cannot help: its socket is not
+  // gated. So re-ask until one comes, like attachSocketToDevice does.
+  let stallTimer: ReturnType<typeof setInterval> | null = null;
+  const stopStallTimer = () => {
+    if (stallTimer) clearInterval(stallTimer);
+    stallTimer = null;
+  };
+  const startStallTimer = () => {
+    if (stallTimer) return;
+    stallTimer = setInterval(() => {
+      if (upstream.readyState !== upstream.OPEN) return;
+      app.log.warn({ hostId, deviceId }, "device proxy still waiting for a keyframe; asking again");
+      upstream.send(JSON.stringify({ type: "requestKeyframe" }));
+    }, KEYFRAME_STALL_MS);
+    stallTimer.unref();
+  };
+
+  upstream.on("open", () => {
+    clearTimeout(openTimer);
+    if (deviceSocket.readyState !== deviceSocket.OPEN) closeUpstream();
+  });
+  upstream.on("close", () => {
+    clearTimeout(openTimer);
+    stopStallTimer();
+    closeDevice();
+  });
+  upstream.on("error", (err) => {
+    clearTimeout(openTimer);
+    stopStallTimer();
+    app.log.error({ err, hostId, deviceId }, "remote device ws upstream error");
+    // Say why, instead of a bare disconnect (a refused upgrade lands here).
+    fail(`Host ${hostId} did not accept the device socket`);
+  });
+  upstream.on("message", (data, isBinary) => {
+    if (deviceSocket.readyState !== deviceSocket.OPEN) return;
+    if (!isBinary) {
+      // Control frames (`exited`, `clipboard`, `error`) are small and never
+      // dropped.
+      deviceSocket.send(data, { binary: false });
+      return;
+    }
+    // [1 byte type][1 byte flags][payload]; see encodeVideoFrame.
+    const head = data as Buffer;
+    const isData = head[0] === 1;
+    if (isData) {
+      if (deviceSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
+        droppedSinceFrame = true;
+        awaitingKeyframe = true;
+        startStallTimer();
+        return;
+      }
+      if (droppedSinceFrame) {
+        // The backlog just cleared: get a fresh keyframe rather than wait out
+        // the encoder's own interval. Once per drop-then-recover episode.
+        droppedSinceFrame = false;
+        if (upstream.readyState === upstream.OPEN) {
+          upstream.send(JSON.stringify({ type: "requestKeyframe" }));
+        }
+      }
+      if (awaitingKeyframe) {
+        if ((head[1] & 1) === 0) return;
+        awaitingKeyframe = false;
+        stopStallTimer();
+      }
+    }
+    deviceSocket.send(data, { binary: true });
   });
 }
 
@@ -528,17 +420,28 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
     {
       websocket: true,
       preValidation: async (request, reply) => {
-        if (!app.devicePanelEnabled) {
+        const deviceId = Number(request.params.deviceId);
+        const row = Number.isInteger(deviceId) ? getDeviceRow(app, deviceId) : undefined;
+        // The local gates are this host's own config; a device on an agent host
+        // is gated by that agent when its socket reaches it (#3200).
+        if (!app.devicePanelEnabled && (!row || row.hostId === LOCAL_HOST_ID)) {
           return reply.badRequest(app.devicePanelUnavailableMessage);
         }
-        const deviceId = Number(request.params.deviceId);
         if (!Number.isInteger(deviceId)) {
           return reply.badRequest("deviceId path param is required");
         }
-        const row = getDeviceRow(app, deviceId);
         if (!row) return reply.notFound(`No device ${deviceId}`);
         if (row.status === "killed") return reply.badRequest(`Device ${deviceId} was killed`);
-        if (row.kind !== "physical" && !app.deviceEmulatorEnabled) {
+        // An iOS row is gated by iOS availability, never by the Android emulator gate.
+        if (row.hostId === LOCAL_HOST_ID && row.platform === "ios") {
+          if (!(await iosSimulatorAvailable(app))) {
+            return reply.badRequest("iOS Simulator is not available on this host.");
+          }
+        } else if (
+          row.hostId === LOCAL_HOST_ID &&
+          row.kind !== "physical" &&
+          !app.deviceEmulatorEnabled
+        ) {
           return reply.badRequest(app.deviceEmulatorUnavailableMessage);
         }
       },
@@ -558,6 +461,10 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
         socket.close();
         return;
       }
+      if (row.hostId !== LOCAL_HOST_ID) {
+        void proxyToRemoteDevice(app, socket, row);
+        return;
+      }
       void attachSocketToDevice(app, socket, {
         deviceId,
         kind: row.kind,
@@ -565,6 +472,7 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
         serial: row.serial,
         label: row.name,
         port: row.port,
+        ...(row.platform === "ios" ? { platform: row.platform, udid: row.udid } : {}),
       });
     },
   );

@@ -151,8 +151,8 @@ export function parsePort(value: string): number | null {
  * literally-constructed loopback base. The `hostname`/`port` assertion
  * below is redundant with that construction by design; it's still worth
  * asserting outright rather than trusting reasoning about which forms of
- * `pathAndQuery` are safe (see internal.test.ts's adversarial cases for
- * both).
+ * `pathAndQuery` are safe (see internal-ws-and-preview.test.ts's adversarial
+ * cases for both).
  */
 export function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | null {
   // Both `new URL()` calls below can throw outright for a sufficiently

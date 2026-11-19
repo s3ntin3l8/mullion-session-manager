@@ -10,23 +10,29 @@ interface BaseProps {
   /** Small status dot on the corner (e.g. clone health). */
   dot?: "success" | "warn" | "danger";
   className?: string;
+  /** A request is in flight: `aria-busy`, clicks are ignored (focus stays) and the icon spins. */
+  busy?: boolean;
 }
 
 type ButtonProps = BaseProps &
   Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children" | "className" | "aria-label"> & {
     href?: undefined;
   };
-type LinkProps = BaseProps & { href: string; onClick?: undefined; disabled?: undefined };
+type LinkProps = BaseProps & {
+  href: string;
+  onClick?: undefined;
+  disabled?: undefined;
+};
 
 export type IconButtonProps = ButtonProps | LinkProps;
 
 export function IconButton(props: IconButtonProps) {
-  const { label, children, external, dot, className } = props;
+  const { label, children, external, dot, className, busy } = props;
   // Instant-on-focus, 200ms-on-hover tooltip instead of the native `title`
   // (browser-controlled ~1s delay, no keyboard-focus display). The name for
   // assistive tech stays `aria-label`.
   const { setAnchor, triggerProps, tooltip, tooltipId, open } = useTooltip<HTMLElement>(label);
-  const cls = ["sb-ibtn", external ? "sb-ibtn--ext" : "", className ?? ""]
+  const cls = ["sb-ibtn", external ? "sb-ibtn--ext" : "", busy ? "is-busy" : "", className ?? ""]
     .filter(Boolean)
     .join(" ");
   const dotEl = dot ? (
@@ -56,6 +62,7 @@ export function IconButton(props: IconButtonProps) {
     external: _e,
     dot: _d,
     className: _cn,
+    busy: _b,
     href: _h,
     ...rest
   } = props;
@@ -65,8 +72,11 @@ export function IconButton(props: IconButtonProps) {
       {...rest}
       className={cls}
       aria-label={label}
+      aria-busy={busy || undefined}
+      aria-disabled={busy || undefined}
       aria-describedby={open ? tooltipId : undefined}
       ref={setAnchor}
+      onClick={busy ? undefined : rest.onClick}
       onPointerEnter={(e) => {
         rest.onPointerEnter?.(e);
         triggerProps.onPointerEnter(e);

@@ -7,6 +7,7 @@ import { useDashboardStore } from "../store/index.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 import { RightSidebar } from "./RightSidebar.js";
 import { TaskDetailView } from "./TaskDetailView.js";
+import kitCss from "../styles/sidebar-kit.css?raw";
 
 vi.mock("../SessionTimeline.js", () => ({ SessionTimeline: () => <div data-testid="timeline" /> }));
 
@@ -84,6 +85,12 @@ const renderDetail = (id: number, onBack = vi.fn()) =>
 beforeEach(() => vi.restoreAllMocks());
 
 describe("TaskDetailView layout", () => {
+  it("shows the startup warning for a worker that never started", () => {
+    const t = task({ status: "in_progress", needsHumanReason: "worker-not-started" });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.getByText(/Needs a human: worker has not started a turn/)).toBeInTheDocument();
+  });
   it("shares the detail inset and boxes the state sections as cards", () => {
     const t = task({ status: "reviewing" });
     setTasks([t]);
@@ -557,5 +564,118 @@ describe("TaskDetailView in the right sidebar from 700px (#3011)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("TaskDetailView workflow-change approval", () => {
+  const SHA = "f4f7354f4c66b4cd2da3a3bb02564f909f509da4"; // pragma: allowlist secret
+  const held = JSON.stringify({ sha: SHA, files: [".github/workflows/ci-cd.yml"] });
+
+  it("shows the held files and approves that exact sha", async () => {
+    const user = userEvent.setup();
+    const approveWorkflowChange = vi.fn().mockResolvedValue(undefined);
+    const t = task({ status: "reviewing", workflowChange: held } as Partial<Task>);
+    setTasks([t], { approveWorkflowChange });
+    renderDetail(t.id);
+    const group = screen.getByRole("group", { name: "Workflow change" });
+    expect(within(group).getByText(".github/workflows/ci-cd.yml")).toBeTruthy();
+    await user.click(within(group).getByRole("button", { name: "Approve workflow change" }));
+    expect(approveWorkflowChange).toHaveBeenCalledWith(t.id, SHA);
+  });
+
+  it("renders nothing when no workflow change is held", () => {
+    const t = task({ status: "reviewing", workflowChange: null } as Partial<Task>);
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+  });
+});
+
+describe("TaskDetailView workflow-change inset", () => {
+  it("insets the shared panel like the sibling blocks (it is edge-to-edge in the docked view)", () => {
+    expect(kitCss).toMatch(
+      /\.sb-detail \.task-detail-workflow-change\s*\{[^}]*margin:\s*0 var\(--sb-inset\)/,
+    );
+  });
+});
+
+describe("TaskDetailView archive action", () => {
+  it("shows Archive beside Retry on a failed task and archives it", async () => {
+    const user = userEvent.setup();
+    const archiveTask = vi.fn().mockResolvedValue(undefined);
+    const t = task({ status: "failed", archivedAt: null } as Partial<Task>);
+    setTasks([t], { archiveTask });
+    renderDetail(t.id);
+    const view = screen.getByTestId("task-detail-view");
+    expect(within(view).getByRole("button", { name: "Retry" })).toBeTruthy();
+    await user.click(within(view).getByRole("button", { name: "Archive" }));
+    expect(archiveTask).toHaveBeenCalledWith(t.id);
+  });
+
+  it("offers Unarchive for an archived task and hides Archive while it is still running", async () => {
+    const user = userEvent.setup();
+    const unarchiveTask = vi.fn().mockResolvedValue(undefined);
+    const done = task({
+      status: "failed",
+      archivedAt: "2026-11-16T10:00:00.000Z",
+    } as Partial<Task>);
+    setTasks([done], { unarchiveTask });
+    const first = renderDetail(done.id);
+    await user.click(screen.getByRole("button", { name: "Unarchive" }));
+    expect(unarchiveTask).toHaveBeenCalledWith(done.id);
+    first.unmount();
+
+    const running = task({ status: "reviewing", archivedAt: null } as Partial<Task>);
+    setTasks([running]);
+    renderDetail(running.id);
+    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
+  });
+});
+
+describe("TaskDetailView delete / abandon", () => {
+  const local = (o: Partial<Task> = {}) =>
+    task({ issueNumber: null, htmlUrl: null, status: "backlog", ...o });
+
+  it("offers Delete task for a local backlog task and closes the detail once deleted", async () => {
+    const t = local();
+    const deleteTask = vi.fn().mockResolvedValue(undefined);
+    setTasks([t], { deleteTask });
+    const onBack = vi.fn();
+    renderDetail(t.id, onBack);
+    await userEvent.click(screen.getByRole("button", { name: "Delete task" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(deleteTask).toHaveBeenCalledWith(t.id);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-prompts with Abandon on a 409 and force-deletes", async () => {
+    const { ApiError } = await import("../api/index.js");
+    const t = local({ status: "failed", branchName: "mullion/task-x" });
+    const deleteTask = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError("nope", 409))
+      .mockResolvedValueOnce(undefined);
+    setTasks([t], { deleteTask });
+    const onBack = vi.fn();
+    renderDetail(t.id, onBack);
+    await userEvent.click(screen.getByRole("button", { name: "Delete task" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByText(/mullion\/task-x/)).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Abandon task" }));
+    expect(deleteTask).toHaveBeenLastCalledWith(t.id, { force: true });
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer delete for a GitHub-linked ready task or an in-progress one", () => {
+    const linked = task({ status: "ready" });
+    setTasks([linked]);
+    const { unmount } = renderDetail(linked.id);
+    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
+    unmount();
+    const running = local({ status: "in_progress" });
+    setTasks([running]);
+    renderDetail(running.id);
+    expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
   });
 });

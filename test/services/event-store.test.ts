@@ -23,6 +23,9 @@ vi.mock("../../src/services/event-history.js", () => ({
   sweepSessionEventCap: mockSweepSessionEventCap,
 }));
 
+const mockGetSqlite = vi.hoisted(() => vi.fn());
+vi.mock("../../src/db/client.js", () => ({ getSqlite: mockGetSqlite }));
+
 const {
   startEventWriter,
   startEventRetentionSweep,
@@ -388,6 +391,58 @@ describe("startEventRetentionSweep", () => {
     const sweep = startEventRetentionSweep(app);
     await expect(sweep.runNow()).resolves.toBeUndefined();
     expect(app.log.error).toHaveBeenCalled();
+    sweep.stop();
+  });
+});
+
+describe("startEventRetentionSweep compaction", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSweepOldSessionEvents.mockReset();
+    mockSweepSessionEventCap.mockReset();
+    mockGetSqlite.mockReset();
+    mockGetSqlite.mockReturnValue({ fake: "sqlite" });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("compacts after a tick that deleted rows", async () => {
+    mockSweepOldSessionEvents.mockReturnValue(5);
+    const compact = vi.fn().mockReturnValue({ checkpointBusy: false, vacuumBusy: false });
+    const { app } = fakeApp({ eventPersistence: false, eventRetentionDays: 30 });
+    const sweep = startEventRetentionSweep(app, { compactor: { compact } });
+    await sweep.runNow();
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(compact).toHaveBeenCalledWith({ fake: "sqlite" });
+    sweep.stop();
+  });
+
+  it("does not compact when nothing was deleted", async () => {
+    mockSweepOldSessionEvents.mockReturnValue(0);
+    const compact = vi.fn();
+    const { app } = fakeApp({ eventPersistence: false, eventRetentionDays: 30 });
+    const sweep = startEventRetentionSweep(app, { compactor: { compact } });
+    await sweep.runNow();
+    expect(compact).not.toHaveBeenCalled();
+    sweep.stop();
+  });
+
+  it("logs a compaction failure without failing the tick", async () => {
+    mockSweepSessionEventCap.mockReturnValue(2);
+    const compact = vi.fn(() => {
+      throw new Error("vacuum boom");
+    });
+    const onTick = vi.fn();
+    const { app } = fakeApp({
+      eventPersistence: false,
+      eventRetentionDays: 0,
+      eventRetentionPerSession: 10,
+    });
+    const sweep = startEventRetentionSweep(app, { compactor: { compact }, onTick });
+    await sweep.runNow();
+    expect(app.log.error).toHaveBeenCalled();
+    expect(onTick).toHaveBeenCalled();
     sweep.stop();
   });
 });

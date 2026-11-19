@@ -366,8 +366,10 @@ describe("browser endpoints (#2688)", () => {
     const sessionId = addSession(projectId, "/work/down", hostId);
     await spawnRemote(projectId, sessionId, hostId);
     addPreview(projectId, sessionId, "prev-down");
-    const { RemoteHostClient } = await import("../../src/services/remote-host-client.js");
-    vi.spyOn(RemoteHostClient.prototype, "postBrowser").mockRejectedValue(new Error("down"));
+    const { getRemoteHostClient } = await import("../../src/services/remote-host-client.js");
+    vi.spyOn(getRemoteHostClient(primary, hostId).browser, "post").mockRejectedValue(
+      new Error("down"),
+    );
     const resolved = await resolveSessionBrowserTarget(primary, projectId, sessionId);
     expect(resolved.ok && resolved.target.endpoint).toBeUndefined();
     expect(bindingOf(sessionId).targetEndpoint).toBeNull();

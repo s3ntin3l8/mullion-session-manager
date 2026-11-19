@@ -4,6 +4,8 @@ import { eq, and, isNotNull, isNull, ne, or } from "drizzle-orm";
 import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
+import { parseHostCwds, serializeHostCwds } from "./host-cwds.js";
+import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 // Used only inside listHosts (call time). The constant lives in its own
 // module because the pairing flow needs it too, and importing host-pairing.ts
 // from here was an import cycle between two services with nothing else to do
@@ -30,6 +32,7 @@ export interface HostSummary {
   isLocal: boolean;
   hasToken: boolean;
   createdAt: Date;
+  lastSeenAt: Date | null;
   // Issue #245 / roadmap 7.1 — "manual" (created via Settings -> Add host,
   // including every pre-#245 row, which has origin === null in the DB) vs
   // "enrolled" (auto-created by an agent's own registration call against
@@ -58,7 +61,18 @@ export interface HostSummary {
   // persistent identity), and whether an operator revoked it. Never the
   // credential itself.
   hasMachineIdentity: boolean;
+  // Issue #3091 — the identity is also unrevoked and unexpired, so the agent
+  // connects out and the host's address may be cleared.
+  hasLiveMachineIdentity: boolean;
   machineIdentityRevoked: boolean;
+  // Issue #2969 — an agent the primary has to dial at its stored baseUrl: it
+  // has an address but no machine identity (a release before the outbound
+  // channel, or a manually added host that never registered one). Off the
+  // primary's network that address is unreachable, and nothing says why — so
+  // the UI says it. Derived, never stored: it clears the moment the agent
+  // registers with an identity. A revoked identity is a deliberate operator
+  // act, not a stale agent, so it is excluded.
+  legacyAgent: boolean;
   // Issue #2449 — created by redeeming a one-time pairing code (vs headless
   // enrollment or a manual add). Set by listHosts; pairing success is separate
   // from transport reachability, which the heartbeat reports.
@@ -85,7 +99,12 @@ export interface CreateHostInput {
 
 export interface UpdateHostInput {
   name?: string;
-  baseUrl?: string;
+  /**
+   * Issue #3091 — a string replaces the address; `null` clears it (an
+   * outbound-only host needs none); omit to leave it alone. The route refuses
+   * the clear for a host that has no machine identity.
+   */
+  baseUrl?: string | null;
   /** Omit to leave the stored token untouched; pass a new value to rotate it. */
   token?: string;
   /**
@@ -117,6 +136,27 @@ export class HostHasProjectsError extends Error {
 
 type HostRow = typeof hosts.$inferSelect;
 
+/**
+ * Issue #3091 — whether a host holds a machine identity that is still usable:
+ * a credential is present, was not revoked, and has not expired (an identity
+ * with no recorded expiry counts as expired, as renewal treats it). One rule
+ * for renewal, the grace-slot check and the "may its address be cleared"
+ * guard, so they cannot drift apart.
+ */
+export function hasLiveMachineIdentity(
+  row: Pick<
+    HostRow,
+    "machineCredentialEnc" | "machineCredentialRevokedAt" | "machineCredentialExpiresAt"
+  >,
+): boolean {
+  return (
+    row.machineCredentialEnc !== null &&
+    row.machineCredentialRevokedAt === null &&
+    row.machineCredentialExpiresAt !== null &&
+    row.machineCredentialExpiresAt.getTime() > Date.now()
+  );
+}
+
 function toSummary(row: HostRow): HostSummary {
   return {
     id: row.id,
@@ -125,12 +165,19 @@ function toSummary(row: HostRow): HostSummary {
     isLocal: row.id === LOCAL_HOST_ID,
     hasToken: row.authTokenEnc !== null && row.authTokenEnc !== "",
     createdAt: row.createdAt,
+    lastSeenAt: row.lastSeenAt,
     origin: row.origin === "enrolled" ? "enrolled" : "manual",
     platform: row.platform,
     drained: row.drained,
     role: row.role,
     hasMachineIdentity: row.machineCredentialEnc !== null,
+    hasLiveMachineIdentity: hasLiveMachineIdentity(row),
     machineIdentityRevoked: row.machineCredentialRevokedAt !== null,
+    legacyAgent:
+      row.id !== LOCAL_HOST_ID &&
+      row.baseUrl !== null &&
+      row.machineCredentialEnc === null &&
+      row.machineCredentialRevokedAt === null,
     paired: false,
     unclaimed: false,
   };
@@ -185,6 +232,24 @@ function reportedHostname(row: HostRow): string | null {
   }
 }
 
+/** Hosts with an active session, including sessions inheriting their project's host. */
+export function activeSessionHostIds(app: FastifyInstance): Set<string> {
+  // A session runs on its own host when it has one, else its project's.
+  const busy = new Set<string>();
+  const active = app.db
+    .select({ sessionHost: sessions.hostId, projectHost: projects.hostId })
+    .from(sessions)
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
+    .where(eq(sessions.status, "active"))
+    .all();
+  for (const a of active) {
+    const id = a.sessionHost ?? a.projectHost;
+    if (id) busy.add(id);
+  }
+
+  return busy;
+}
+
 /**
  * Issue #2582 — flags probable duplicate rows left by an agent that lost its
  * identity (its state file did not survive a restart) and so re-enrolled as a
@@ -198,6 +263,7 @@ function reportedHostname(row: HostRow): string | null {
 export function findPossibleDuplicates(
   app: FastifyInstance,
   healthOf: (hostId: string) => string,
+  busy: ReadonlySet<string> = activeSessionHostIds(app),
 ): Map<string, string[]> {
   const enrolled = app.db
     .select()
@@ -207,19 +273,6 @@ export function findPossibleDuplicates(
     .filter((r) => r.id !== LOCAL_HOST_ID);
   const result = new Map<string, string[]>();
   if (enrolled.length < 2) return result;
-
-  // A session runs on its own host when it has one, else its project's.
-  const busy = new Set<string>();
-  const active = app.db
-    .select({ sessionHost: sessions.hostId, projectHost: projects.hostId })
-    .from(sessions)
-    .leftJoin(projects, eq(sessions.projectId, projects.id))
-    .where(eq(sessions.status, "active"))
-    .all();
-  for (const a of active) {
-    const id = a.sessionHost ?? a.projectHost;
-    if (id) busy.add(id);
-  }
 
   const stale = enrolled.filter((r) => healthOf(r.id) === "offline" && !busy.has(r.id));
   for (const newer of enrolled) {
@@ -352,8 +405,48 @@ export function deleteHost(app: FastifyInstance, id: string, opts: { cascade?: b
   if (projectCount > 0 && !opts.cascade) {
     throw new HostHasProjectsError(id, projectCount);
   }
-  const deleted = app.db.delete(hosts).where(eq(hosts.id, id)).returning().all();
-  if (deleted.length === 0) throw new UnknownHostError(id);
+  app.db.transaction((tx) => {
+    const deleted = tx.delete(hosts).where(eq(hosts.id, id)).returning().all();
+    if (deleted.length === 0) throw new UnknownHostError(id);
+
+    // Mappings are JSON rather than foreign keys, including declined hosts
+    // that have no cwd entry. Remove those references atomically with the host.
+    const mappedProjects = tx
+      .select({ id: projects.id, hostCwds: projects.hostCwds, hostCwdsMeta: projects.hostCwdsMeta })
+      .from(projects)
+      .where(or(isNotNull(projects.hostCwds), isNotNull(projects.hostCwdsMeta)))
+      .all();
+    for (const project of mappedProjects) {
+      const map = parseHostCwds(project.hostCwds);
+      const meta = parseHostCwdsMeta(project.hostCwdsMeta);
+      const hasMapping = Object.hasOwn(map, id);
+      const hasMeta =
+        meta.auto.includes(id) || meta.declined.includes(id) || meta.managed.includes(id);
+      if (!hasMapping && !hasMeta) continue;
+
+      tx.update(projects)
+        .set({
+          ...(hasMapping
+            ? {
+                hostCwds: serializeHostCwds(
+                  Object.fromEntries(Object.entries(map).filter(([hostId]) => hostId !== id)),
+                ),
+              }
+            : {}),
+          ...(hasMeta
+            ? {
+                hostCwdsMeta: serializeHostCwdsMeta({
+                  auto: meta.auto.filter((hostId) => hostId !== id),
+                  declined: meta.declined.filter((hostId) => hostId !== id),
+                  managed: meta.managed.filter((hostId) => hostId !== id),
+                }),
+              }
+            : {}),
+        })
+        .where(eq(projects.id, project.id))
+        .run();
+    }
+  });
   // The unreachable-host log throttle keys by host id; a removed host never
   // recovers, so nothing else would ever clear its entries.
   forgetHostWarnings(id);
@@ -417,6 +510,19 @@ const LEGACY_AGENT_NOTICE =
   "[host-registry] a legacy agent registered without a machine identity " +
   "(no state file / old release); it keeps working, but upgrade the agent to get a " +
   "persistent identity and renewable credential";
+
+// Issue #2969 — a legacy agent re-registers every renewal, so the notice used
+// to repeat for the life of the process. The host row itself now carries the
+// state (HostSummary.legacyAgent), so the log only needs to say it once per
+// host per process. Cleared when the host gets an identity, so a later
+// downgrade is reported again.
+const legacyAgentNoticed = new Set<string>();
+
+function noteLegacyAgent(app: FastifyInstance, hostId: string): void {
+  if (legacyAgentNoticed.has(hostId)) return;
+  legacyAgentNoticed.add(hostId);
+  app.log.warn({ hostId }, LEGACY_AGENT_NOTICE);
+}
 
 // Both halves of a session credential are generated with real entropy and
 // stored encrypted, same rigor as authTokenEnc — see schema.ts's own
@@ -619,11 +725,12 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
       })
       .where(eq(hosts.id, existing.id))
       .run();
-    app.log.warn({ hostId: existing.id }, LEGACY_AGENT_NOTICE);
+    noteLegacyAgent(app, existing.id);
     return issueSession(app, existing.id);
   }
-  app.log.warn(LEGACY_AGENT_NOTICE);
-  return insertEnrolledHost(app, input);
+  const inserted = insertEnrolledHost(app, input);
+  noteLegacyAgent(app, inserted.hostId);
+  return inserted;
 }
 
 function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): HostRegistration {
@@ -717,22 +824,12 @@ function issueMachineCredential(app: FastifyInstance, hostId: string): string {
   // same per-host token. Keep a still-live credential in the grace slot so a
   // displaced agent converges onto the new one at its next renewal instead of
   // being 401-ed permanently.
-  const existing = app.db
-    .select({
-      enc: hosts.machineCredentialEnc,
-      revokedAt: hosts.machineCredentialRevokedAt,
-      expiresAt: hosts.machineCredentialExpiresAt,
-    })
-    .from(hosts)
-    .where(eq(hosts.id, hostId))
-    .get();
+  const existing = getHostRow(app, hostId);
+  const prevEnc =
+    existing && hasLiveMachineIdentity(existing) ? existing.machineCredentialEnc : null;
   // An expired credential is already dead (renewMachineCredential rejects the
   // row), so it must not be revived into the grace slot.
-  const replacesLive =
-    !!existing?.enc &&
-    !existing.revokedAt &&
-    !!existing.expiresAt &&
-    existing.expiresAt.getTime() > Date.now();
+  const replacesLive = prevEnc !== null;
   if (replacesLive) {
     app.log.warn(
       { hostId },
@@ -744,7 +841,7 @@ function issueMachineCredential(app: FastifyInstance, hostId: string): string {
     .update(hosts)
     .set({
       machineCredentialEnc: app.encryption.encryptString(credential),
-      machineCredentialPrevEnc: replacesLive ? existing.enc : null,
+      machineCredentialPrevEnc: prevEnc,
       machineCredentialRotatedAt: replacesLive ? new Date() : null,
       machineCredentialExpiresAt: new Date(Date.now() + MACHINE_CREDENTIAL_TTL_MS),
       machineCredentialRevokedAt: null,
@@ -760,9 +857,10 @@ function withMachineCredential(
   input: RegisterAgentInput,
 ): HostRegistration {
   if (!input.wantsMachineCredential) {
-    app.log.warn({ hostId: registration.hostId }, LEGACY_AGENT_NOTICE);
+    noteLegacyAgent(app, registration.hostId);
     return registration;
   }
+  legacyAgentNoticed.delete(registration.hostId);
   return { ...registration, machineCredential: issueMachineCredential(app, registration.hostId) };
 }
 
@@ -796,11 +894,9 @@ export function renewMachineCredential(
   input: Pick<RegisterAgentInput, "baseUrl" | "hostname" | "name" | "platform" | "capabilities">,
 ): HostRegistration | null {
   const row = getHostRow(app, hostId);
-  if (!row || row.id === LOCAL_HOST_ID || !row.machineCredentialEnc) return null;
-  if (row.machineCredentialRevokedAt) return null;
-  if (!row.machineCredentialExpiresAt || row.machineCredentialExpiresAt.getTime() <= Date.now()) {
-    return null;
-  }
+  if (!row || row.id === LOCAL_HOST_ID || !hasLiveMachineIdentity(row)) return null;
+  // hasLiveMachineIdentity proved the credential is present.
+  if (!row.machineCredentialEnc) return null;
   // Evaluate both so timing does not reveal which slot matched.
   const isCurrent = safeMatch(app, presented, row.machineCredentialEnc);
   const prevLive =

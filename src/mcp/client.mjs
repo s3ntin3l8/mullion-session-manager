@@ -28,7 +28,7 @@ import {
 // long-lived connection open for the MCP server's whole lifetime.
 //
 // Scope note (see docs/socket-api.md's per-scope op allowlist): most of the
-// tools built on controlRequest below (list_sessions, start_dock_session,
+// tools built on controlRequest below (start_dock_session,
 // stop_dock_session, list_projects, create_preview, delete_preview,
 // list_previews) call full-scope-only ops. A Claude Code session's
 // auto-injected MCP config (buildClaudeMcpConfig, claude-code.ts) only ever
@@ -430,6 +430,56 @@ export class MullionClient {
     return this.controlRequest("sessions.kill", { sessionId });
   }
 
+  /** Terminal screen of a running dock control, as plain text (#3049). */
+  dockLogs(projectId, dockControlId) {
+    return this.controlRequest("docks.logs", {
+      ...(projectId !== undefined ? { projectId } : {}),
+      dockControlId,
+    });
+  }
+
+  /** Server-side wait for a running dock control to print `match` (#3049). */
+  waitForDockOutput({ projectId, dockControlId, match, regex, timeoutMs, afterOffset }) {
+    const body = { dockControlId, match };
+    if (projectId !== undefined) body.projectId = projectId;
+    if (regex !== undefined) body.regex = regex;
+    if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+    if (afterOffset !== undefined) body.afterOffset = afterOffset;
+    return this.controlRequest(
+      "docks.wait_for_output",
+      body,
+      (timeoutMs ?? WAIT_DEFAULT_TIMEOUT_MS) + WAIT_SOCKET_SLACK_MS,
+    );
+  }
+
+  /** Restart a dock control on another branch or worktree (#3049). */
+  switchDockControl(projectId, dockControlId, { branch, worktreePath } = {}) {
+    return this.controlRequest("docks.switch", {
+      ...(projectId !== undefined ? { projectId } : {}),
+      dockControlId,
+      ...(branch !== undefined ? { branch } : {}),
+      ...(worktreePath !== undefined ? { worktreePath } : {}),
+    });
+  }
+
+  /** The project's raw `.crs/dock.json` document (#3050). */
+  getDockConfig(projectId) {
+    return this.controlRequest(
+      "projects.get_dock_config",
+      projectId !== undefined ? { projectId } : {},
+    );
+  }
+
+  /** Replace (`controls`), upsert one (`upsert`) or remove one (`remove`) control (#3050). */
+  setDockConfig(projectId, { controls, upsert, remove } = {}) {
+    return this.controlRequest("projects.set_dock_config", {
+      ...(projectId !== undefined ? { projectId } : {}),
+      ...(controls !== undefined ? { controls } : {}),
+      ...(upsert !== undefined ? { upsert } : {}),
+      ...(remove !== undefined ? { remove } : {}),
+    });
+  }
+
   /** The caller's own project's dock controls and what is running (#2494). */
   listDockControls(projectId) {
     return this.controlRequest("docks.list", projectId !== undefined ? { projectId } : {});
@@ -564,11 +614,12 @@ export class MullionClient {
 
   /** Server-side wait for a child to print `match` (sessions.wait_for_output).
    * The socket timeout outlasts the wait, as in waitForSession. */
-  async waitForOutput({ sessionId, match, regex, timeoutMs, afterOffset }) {
+  async waitForOutput({ sessionId, match, regex, timeoutMs, afterOffset, afterSeq }) {
     const body = { sessionId, match };
     if (regex !== undefined) body.regex = regex;
     if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
     if (afterOffset !== undefined) body.afterOffset = afterOffset;
+    if (afterSeq !== undefined) body.afterSeq = afterSeq;
     return this.controlRequest(
       "sessions.wait_for_output",
       body,
@@ -673,6 +724,47 @@ export class MullionClient {
    * identity) instead of with the session's own git credentials (#2102). */
   async pushTaskBranch() {
     return this.reviewOp("tasks.push", {}, TASK_PUSH_REQUEST_TIMEOUT_MS);
+  }
+
+  /** Lists Task Master tasks, optionally filtered by status or projectId (#3165). */
+  listTasks({ status, projectId } = {}) {
+    const body = {};
+    if (status !== undefined) body.status = status;
+    if (projectId !== undefined) body.projectId = projectId;
+    return this.controlRequest("tasks.list", body);
+  }
+
+  /** Gets a single Task Master task by id (#3165). */
+  getTask(taskId) {
+    return this.controlRequest("tasks.get", { taskId });
+  }
+
+  /** Retries a failed Task Master task (#3173). */
+  retryTask(taskId, { agent, reviewAgent } = {}) {
+    const body = { taskId };
+    if (agent !== undefined) body.agent = agent;
+    if (reviewAgent !== undefined) body.reviewAgent = reviewAgent;
+    return this.controlRequest("tasks.retry", body);
+  }
+
+  /** Claims/starts a ready Task Master task (#3173). */
+  startTask(taskId, { agent, reviewAgent } = {}) {
+    const body = { taskId };
+    if (agent !== undefined) body.agent = agent;
+    if (reviewAgent !== undefined) body.reviewAgent = reviewAgent;
+    return this.controlRequest("tasks.start", body);
+  }
+
+  /** Closes/gives up on a reviewing Task Master task (#3173). */
+  closeTask(taskId, { reason } = {}) {
+    const body = { taskId };
+    if (reason !== undefined) body.reason = reason;
+    return this.controlRequest("tasks.close", body);
+  }
+
+  /** Archives or unarchives a finished Task Master task (#3173). */
+  archiveTask(taskId, { unarchive } = {}) {
+    return this.controlRequest(unarchive ? "tasks.unarchive" : "tasks.archive", { taskId });
   }
 
   /** Asks the Mullion server to relay a Hermes review request for this

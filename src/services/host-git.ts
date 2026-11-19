@@ -15,7 +15,7 @@
 import type { GitIdentity } from "./git-env.js";
 import type { FastifyInstance } from "fastify";
 import { getGitStatus, isGitRepo, type GitStatus } from "./git-status.js";
-import { listBranches, resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
+import { listBranches, resolveDefaultBaseRefWithFetch, resolveCommitSha } from "./git-refs.js";
 import type { GitBranchInfo } from "../shared/types.js";
 import { pushBranch, type PushResult } from "./git-push.js";
 import { parseGitRemote, parseRemoteUrl, type GitHubRepoRef } from "./git-remote.js";
@@ -105,7 +105,7 @@ export type HostGitResult<T> =
  * but nothing enforces it at the DB layer). Independent review, PR #590 —
  * this module's every caller (task-promote.ts's preparePromotion/
  * resolveBaseBranch/pushForPromotion) has no try/catch of its own around
- * these calls, unlike task-claim.ts's dispatchClaimedTask/retryTask, which each wrap
+ * these calls, unlike task-claim.ts's dispatchClaimedTask/dispatchQueuedRetry, which each wrap
  * an equivalent `resolveBackend`-can-throw-synchronously risk in their own
  * outer try/catch specifically for this. Rather than require every current
  * and future caller of this module to duplicate that defense, any
@@ -240,7 +240,7 @@ export async function resolveHostBranches(
 }
 
 /**
- * `{ baseRef, sha }` for `cwd` on whichever host owns it — wraps
+ * `{ baseRef, sha, fetched }` for `cwd` on whichever host owns it — wraps
  * `resolveDefaultBaseRef` + `resolveCommitSha` locally, `/internal/git-base-ref`
  * remotely. Never fails locally (both wrapped functions have their own
  * never-throws, worst-case-"HEAD"/null contract); only ever returns
@@ -250,11 +250,11 @@ export async function resolveHostBaseRef(
   app: FastifyInstance,
   hostId: string,
   cwd: string,
-): Promise<HostGitResult<{ baseRef: string; sha: string | null }>> {
+): Promise<HostGitResult<{ baseRef: string; sha: string | null; fetched?: boolean }>> {
   if (hostId === LOCAL_HOST_ID) {
-    const baseRef = await resolveDefaultBaseRef(cwd);
+    const { ref: baseRef, fetched } = await resolveDefaultBaseRefWithFetch(cwd);
     const sha = await resolveCommitSha(cwd, baseRef);
-    return { ok: true, value: { baseRef, sha } };
+    return { ok: true, value: { baseRef, sha, fetched } };
   }
   return viaGit(app, hostId, (client) => client.resolveHostBaseRef(cwd));
 }

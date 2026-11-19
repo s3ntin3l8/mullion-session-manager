@@ -1,4 +1,6 @@
 import type { FastifyInstance } from "fastify";
+import { eq } from "drizzle-orm";
+import { hosts } from "../db/schema.js";
 import { CHANNEL_SATURATED_REASON } from "../shared/constants.js";
 import { LOCAL_HOST_ID, fillHostPlatformIfUnset, listHosts } from "./host-registry.js";
 import { HostCapacityTracker } from "./host-capacity.js";
@@ -41,15 +43,19 @@ export const DEGRADED_AFTER_BUSY = 3;
 /**
  * Live-state health tracker for remote hosts — the same DB-row-records-
  * intent / in-memory-map-records-liveness split PtyManager uses for
- * sessions (see AGENTS.md's "non-obvious session model" invariant). A host's `hosts` row is
- * never touched by heartbeat results; this tracker is the only place "is it
- * actually up right now" lives. One instance per app, decorated onto it —
+ * sessions (see AGENTS.md's "non-obvious session model" invariant). Only the
+ * historical last-seen time is persisted, at most hourly; this tracker is
+ * the only place "is it actually up right now" lives. One instance per app, decorated onto it —
  * mirrors github-activity-tracker.ts's ActivityTracker, not git-fetcher.ts's
  * module-level Map, so state never leaks across the many buildApp()
  * instances a single test run creates.
  */
 export class HostHeartbeatTracker {
   private state = new Map<string, HeartbeatEntry>();
+  private lastWrittenAt = new Map<string, number>();
+
+  constructor(private readonly db?: FastifyInstance["db"]) {}
+
   private onOnline?: (hostId: string) => void;
 
   setOnOnline(fn?: (hostId: string) => void): void {
@@ -110,13 +116,27 @@ export class HostHeartbeatTracker {
    * predates this tracker entry.
    */
   recordSuccess(hostId: string): boolean {
+    const now = Date.now();
+    const lastWritten = this.lastWrittenAt.get(hostId);
+    if (
+      this.db &&
+      hostId !== LOCAL_HOST_ID &&
+      (lastWritten === undefined || now - lastWritten >= 60 * 60_000)
+    ) {
+      this.db
+        .update(hosts)
+        .set({ lastSeenAt: new Date(now) })
+        .where(eq(hosts.id, hostId))
+        .run();
+      this.lastWrittenAt.set(hostId, now);
+    }
     const prev = this.state.get(hostId);
     const wasUnreachable = (prev?.missed ?? 0) >= 2;
     this.state.set(hostId, {
       status: "online",
       missed: 0,
-      lastSeenAt: Date.now(),
-      lastCheckedAt: Date.now(),
+      lastSeenAt: now,
+      lastCheckedAt: now,
     });
     this.onOnline?.(hostId);
     return wasUnreachable;
@@ -180,6 +200,9 @@ export class HostHeartbeatTracker {
     for (const id of this.state.keys()) {
       if (!currentIds.has(id)) this.state.delete(id);
     }
+    for (const id of this.lastWrittenAt.keys()) {
+      if (!currentIds.has(id)) this.lastWrittenAt.delete(id);
+    }
   }
 
   /** Drops one host's tracked entry — call when its baseUrl/token changes
@@ -194,6 +217,7 @@ export class HostHeartbeatTracker {
   /** Test-only introspection/reset. */
   clearForTests(): void {
     this.state.clear();
+    this.lastWrittenAt.clear();
   }
 }
 
@@ -327,12 +351,15 @@ async function sweep(
   // Issue #2572 — an outbound-only agent has no baseUrl at all and is probed
   // over its channel: swept while that channel is up, and for as long as it has
   // a verdict to keep current (so a dropped channel reads offline, not stale).
-  // Before its first connection it stays "pending".
+  // A persisted contact keeps those probes running after a primary restart,
+  // when the in-memory verdict has been lost. Before its first connection a
+  // newly paired host (no saved contact) still stays "pending".
   const remoteHosts = allHosts.filter(
     (h) =>
       h.baseUrl !== null ||
       app.agentChannels?.has(h.id) === true ||
-      (h.hasMachineIdentity && tracker.getHealth(h.id).status !== "pending"),
+      (h.hasMachineIdentity &&
+        (h.lastSeenAt !== null || tracker.getHealth(h.id).status !== "pending")),
   );
   const recovered: string[] = [];
   const cameOnline: string[] = [];
@@ -391,7 +418,7 @@ export function startHostHeartbeat(
   onHostRecovered?: (hostId: string) => void,
   onHostOnline?: (hostId: string) => void,
 ): () => void {
-  const hostHeartbeatTracker = tracker ?? new HostHeartbeatTracker();
+  const hostHeartbeatTracker = tracker ?? new HostHeartbeatTracker(app.db);
   hostHeartbeatTracker.setOnOnline((hostId) => {
     app.hostAgentTracker?.clearProtocolReadFailure(hostId);
   });

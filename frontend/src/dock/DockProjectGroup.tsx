@@ -310,7 +310,7 @@ export function DockProjectGroup({
   }, [projectId, selectedKey, hasSeenRows]);
 
   // A single monitor row's render — closes over this render's own
-  // worktreePaths/toggleGenRef/allOptions/runningFor/etc.
+  // dockControlWorktrees/toggleGenRef/allOptions/runningFor/etc.
   const renderMonitor = (control: DockControl) => {
     const view = controlView(control);
     const running = view.running;

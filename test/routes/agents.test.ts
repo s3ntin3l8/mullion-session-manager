@@ -10,7 +10,7 @@ const tmpDb = path.join(os.tmpdir(), `agents-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
 
 // Fake at the true I/O boundary (child_process), same convention as
-// test/services/agent-detect.test.ts and test/services/pty-manager.test.ts
+// test/services/agent-detect.test.ts and test/helpers/pty-manager-harness.ts
 // — mocking a sibling export within agent-detect.ts itself wouldn't work
 // here since getCachedAgents() calls detectAgents() as a same-module local
 // binding, which ESM mocking can't intercept.
@@ -27,7 +27,10 @@ vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
 vi.mock("../../src/services/user-shell-env.js", () => ({
   resolveUserShellEnv: () => Promise.resolve(),
   invalidateUserShellEnv: () => {},
+  getUserShellEnvStatus: () => ({ shell: "/usr/bin/zsh", interactiveResolve: "ok", reason: null }),
   getUserShellPath: () => null,
+  getUserShellEnv: () => ({}),
+  getUserShellRecoverKeys: () => [],
   mergePaths: (base: string | undefined) => base ?? "",
 }));
 

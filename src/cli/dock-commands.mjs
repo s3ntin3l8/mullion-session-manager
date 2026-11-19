@@ -68,6 +68,71 @@ export function createDockCommands({ CliUsageError, requireOne }) {
       const result = await client.request("sessions.create", body);
       return { json: result };
     },
+    // `logs <controlId>` (own project) / `logs <projectId> <controlId>`.
+    async logs(client, args) {
+      const hasProject = args[1] !== undefined;
+      const dockControlId = hasProject ? args[1] : requireOne(args, "dock control id");
+      return {
+        json: await client.request("docks.logs", {
+          ...(hasProject ? { projectId: args[0] } : {}),
+          dockControlId,
+        }),
+      };
+    },
+    // `switch [<projectId>] <controlId> <branch>` or `... --worktree <path>`.
+    async switch(client, args) {
+      const wt = args.indexOf("--worktree");
+      const rest = wt === -1 ? [...args] : args.filter((_, i) => i !== wt && i !== wt + 1);
+      const target = wt === -1 ? rest.pop() : args[wt + 1];
+      if (rest.length === 0 || target === undefined) {
+        throw new CliUsageError(
+          "usage: dock switch [<projectId>] <controlId> <branch|--worktree <path>>",
+        );
+      }
+      return {
+        json: await client.request("docks.switch", {
+          ...(rest.length > 1 ? { projectId: rest[0] } : {}),
+          dockControlId: rest[rest.length - 1],
+          ...(wt === -1 ? { branch: target } : { worktreePath: target }),
+        }),
+      };
+    },
+    // `config get [<projectId>]` / `config set [<projectId>] --upsert <json> | --remove <id> | --controls <json>`.
+    async config(client, args) {
+      const usage =
+        "usage: dock config get [<projectId>] | set [<projectId>] --upsert <json> | --remove <id> | --controls <json>";
+      const [action, ...rest] = args;
+      // One optional projectId and (for set) exactly one flag with a value; anything else is refused.
+      const positional = [];
+      const flags = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (!rest[i].startsWith("--")) {
+          positional.push(rest[i]);
+          continue;
+        }
+        if (rest[i + 1] === undefined || rest[i + 1].startsWith("--")) {
+          throw new CliUsageError(`${rest[i]} needs a value`);
+        }
+        flags.push([rest[i], rest[++i]]);
+      }
+      if (positional.length > 1) throw new CliUsageError(usage);
+      const body = positional[0] !== undefined ? { projectId: positional[0] } : {};
+      if (action === "get") {
+        if (flags.length > 0) throw new CliUsageError(usage);
+        return { json: await client.request("projects.get_dock_config", body) };
+      }
+      if (action !== "set" || flags.length !== 1) throw new CliUsageError(usage);
+      const [flag, value] = flags[0];
+      if (flag === "--remove") body.remove = value;
+      else if (flag === "--upsert" || flag === "--controls") {
+        try {
+          body[flag.slice(2)] = JSON.parse(value);
+        } catch {
+          throw new CliUsageError(`${flag} must be valid JSON`);
+        }
+      } else throw new CliUsageError(`unknown flag ${flag}`);
+      return { json: await client.request("projects.set_dock_config", body) };
+    },
     async stop(client, args) {
       // `stop <controlId> --control` (own project) / `stop <projectId> <controlId>`,
       // else a raw session id (full scope).

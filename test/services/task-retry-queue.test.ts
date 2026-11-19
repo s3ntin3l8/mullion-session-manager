@@ -177,15 +177,14 @@ describe("a retry is queued, then started by the dispatch sweep", () => {
     await app.close();
   });
 
-  it("refuses to queue a task that is not failed or has no branch to resume", async () => {
+  it("resets a branchless task to ready, and refuses one that is not failed", async () => {
     const { app, cwd, id, load } = await setup(95);
     (app.config as { MULLION_TASK_MAX_CONCURRENT: number }).MULLION_TASK_MAX_CONCURRENT = 0;
 
     app.db.update(tasks).set({ branchName: null }).where(eq(tasks.id, id)).run();
-    expect(await enqueueRetry(app, id)).toMatchObject({ ok: false, reason: "no-worktree" });
-    expect(load().status).toBe("failed");
+    expect(await enqueueRetry(app, id)).toMatchObject({ ok: true });
+    expect(load()).toMatchObject({ status: "ready", resumeQueued: false });
 
-    app.db.update(tasks).set({ status: "ready" }).where(eq(tasks.id, id)).run();
     expect(await enqueueRetry(app, id)).toMatchObject({ ok: false, reason: "not-failed" });
     expect(await enqueueRetry(app, 999999)).toMatchObject({ ok: false, reason: "not-found" });
 

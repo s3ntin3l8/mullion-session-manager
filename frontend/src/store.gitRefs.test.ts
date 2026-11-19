@@ -93,6 +93,7 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
     useDashboardStore.setState({
       projects: [PROJECT_1, PROJECT_2],
       gitBranchesByProject: {},
+      gitRefsLoadedIds: {},
       prsByProject: {},
       defaultBranchCiByProject: {},
     });
@@ -236,5 +237,22 @@ describe("store.refreshGitRefs (scoped vs. full refresh)", () => {
       expect(useDashboardStore.getState().gitBranchesByProject[99]).toBeUndefined(),
     );
     expect(useDashboardStore.getState().gitBranchesByProject[1]).toEqual(branchesFor("branch-1"));
+  });
+
+  it("records gitRefsLoadedIds when a project answers null, and omits transiently absent ids", async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse(200, {
+        // Project 1 durably has nothing to show (`null`); project 2 is absent (transient).
+        branches: { "1": null },
+        prs: {},
+        defaultBranchCi: {},
+      }),
+    );
+
+    await useDashboardStore.getState().refreshGitRefs();
+
+    expect(useDashboardStore.getState().gitBranchesByProject[1]).toBeUndefined();
+    expect(useDashboardStore.getState().gitRefsLoadedIds[1]).toBe(true);
+    expect(useDashboardStore.getState().gitRefsLoadedIds[2]).toBeUndefined();
   });
 });

@@ -1,4 +1,5 @@
 import { sanitizeCacheDirIds } from "./cache-storage.js";
+import { sanitizeOptInIds } from "./cleanup-opt-ins.js";
 import { clampGitIdentityField } from "./git-identity.js";
 import { DEVICE_EMULATOR_GPU_PATTERN } from "./device-defaults.js";
 import { eq } from "drizzle-orm";
@@ -89,7 +90,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   projectRoots: [],
   autoDetectHostCheckouts: false,
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
-  diskCleanup: { cacheDirs: [] },
+  diskCleanup: { cacheDirs: [], optIns: [] },
   launchers: {
     defaultShell: "zsh",
     defaultAgent: "claude",
@@ -103,6 +104,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   hosts: {
     heartbeatSeconds: -1,
+    staleAfterDays: 30,
   },
   reviewRelay: {
     provider: "none",
@@ -189,11 +191,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
     implementerModel: null,
     reviewerModel: null,
     defaultSmallModel: null,
+    delegateModel: null,
   },
-  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
-  codex: { defaultModel: null, reviewerModel: null },
-  agy: { defaultModel: null, reviewerModel: null },
-  mcode: { defaultModel: null, reviewerModel: null },
+  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null, delegateModel: null },
+  codex: { defaultModel: null, reviewerModel: null, delegateModel: null },
+  agy: { defaultModel: null, reviewerModel: null, delegateModel: null },
+  mcode: { defaultModel: null, reviewerModel: null, delegateModel: null },
   notifications: {
     channels: {
       browser: true,
@@ -304,8 +307,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     enabled: "inherit",
     maxConcurrent: -1,
     budgetMinutes: -1,
+    workerStartTimeoutMinutes: 10,
     progressCommentMinutes: -1,
     rateLimitGraceMinutes: -1,
+    rateLimitMaxParkHours: -1,
     skipPermissions: "inherit",
     trustedLogins: [],
     reviewCiWaitMinutes: 15,
@@ -514,7 +519,10 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
     externalReadRoots: sanitizeExternalReadRoots(settings.externalReadRoots),
     // A patch can only ever replace the array wholesale; drop anything that
     // isn't an allowlisted cache id so it can't be persisted, let alone acted on.
-    diskCleanup: { cacheDirs: sanitizeCacheDirIds(settings.diskCleanup.cacheDirs) },
+    diskCleanup: {
+      cacheDirs: sanitizeCacheDirIds(settings.diskCleanup.cacheDirs),
+      optIns: sanitizeOptInIds(settings.diskCleanup.optIns),
+    },
     terminal: {
       ...settings.terminal,
       fontSize: safeNumber(settings.terminal.fontSize, {
@@ -643,6 +651,13 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
     },
     // -1 = inherit; 0 is a real "heartbeat off" value, matching the env var.
     hosts: {
+      staleAfterDays: Number.isInteger(settings.hosts.staleAfterDays)
+        ? safeNumber(settings.hosts.staleAfterDays, {
+            min: 0,
+            max: 36500,
+            fallback: DEFAULT_SETTINGS.hosts.staleAfterDays,
+          })
+        : DEFAULT_SETTINGS.hosts.staleAfterDays,
       heartbeatSeconds: safeSentinelNumber(settings.hosts.heartbeatSeconds, {
         sentinel: -1,
         min: 0,
@@ -707,8 +722,12 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         max: 20,
         dangerousBelow: 1,
       }),
-      // -1 = inherit; 0 is a legitimate "unlimited" value here (no dangerous
-      // floor to guard, unlike maxConcurrent) and must survive untouched.
+      workerStartTimeoutMinutes: safeNumber(settings.taskMaster.workerStartTimeoutMinutes, {
+        min: 0,
+        max: 10080,
+        fallback: DEFAULT_SETTINGS.taskMaster.workerStartTimeoutMinutes,
+      }),
+      // -1 inherits the budget; 0 is a real unlimited override.
       budgetMinutes: safeSentinelNumber(settings.taskMaster.budgetMinutes, {
         sentinel: -1,
         min: 0,
@@ -730,6 +749,12 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         sentinel: -1,
         min: 0,
         max: 1440,
+      }),
+      // -1 = inherit; 0 is a real value (never park).
+      rateLimitMaxParkHours: safeSentinelNumber(settings.taskMaster.rateLimitMaxParkHours, {
+        sentinel: -1,
+        min: 0,
+        max: 168,
       }),
       skipPermissions:
         settings.taskMaster.skipPermissions === "inherit" ||

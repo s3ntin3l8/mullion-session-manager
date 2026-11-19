@@ -12,6 +12,7 @@ import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from
 import { formatRelativeAge } from "../relativeTime.js";
 import {
   approvalStateText,
+  isCiHoldReason,
   isMergeNeedsHumanReason,
   needsHumanText,
   reviewPhaseText,
@@ -24,7 +25,13 @@ import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { epicColourVar, epicUrl } from "./taskLanes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
-import { reviewRunState } from "../taskStatusModel.js";
+import {
+  isQuotaExhausted,
+  isRateLimitParked,
+  quotaExhaustedText,
+  rateLimitResumeText,
+  reviewRunState,
+} from "../taskStatusModel.js";
 
 // #667 — the synthetic "N blocker(s) not visible to this token" entry
 // (task-dependencies.ts's refreshTaskBlockers, the defensive-count-shortfall
@@ -38,6 +45,11 @@ function blockerLabel(b: TaskBlocker): string {
 // .claude/plans/can-we-do-a-warm-cocke.md) — a single task card in the
 // board's kanban columns (TaskColumn.tsx). Owns its own drag-to-reorder
 // wiring and nested worker/review session strips (TaskSessionSlot.tsx).
+/** The card's worker-nudge note: nudges sent this spell over the cap. */
+function nudgeNoteText(task: Pick<Task, "nudgeCount" | "nudgeLimit">): string {
+  return `Nudged the worker to continue (${task.nudgeCount}/${task.nudgeLimit})`;
+}
+
 export function TaskCard({
   task,
   project,
@@ -77,9 +89,22 @@ export function TaskCard({
   inStack?: boolean;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
+  // #3194 — a "Start fresh" that the server refused (409: the task is not
+  // waiting for a host any more) has to say so on the card; the promise is
+  // not dropped silently.
+  const [startFreshError, setStartFreshError] = useState<string | null>(null);
   const epicColour = epicColourVar(task);
   const hosts = useDashboardStore((s) => s.hosts);
-  const hostChip = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []);
+  const sessionsLoaded = useDashboardStore((s) => s.sessionsLoaded);
+  // #3194 — "Start fresh" on a card whose retry waits for its original host.
+  const startFreshTask = useDashboardStore((s) => s.startFreshTask);
+  const hostChip = describeTaskHost(
+    task,
+    workerSession,
+    project?.hostId,
+    hosts ?? [],
+    sessionsLoaded,
+  );
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
 
   // Matched client-side against the project's unfiltered PR list, same
@@ -522,6 +547,25 @@ export function TaskCard({
           host, a worktree git cannot cut, a required host that is not
           eligible yet) is still retried, so this is a waiting notice, not the
           terminal failure above. Cleared when the task dispatches. */}
+      {/* #2940 — parked until the provider's usage limit resets; resumes by itself. */}
+      {isRateLimitParked(task) && task.rateLimitUntil && (
+        <div
+          className="task-card-dispatch-reason"
+          title={task.rateLimitMessage ?? task.failureReason ?? undefined}
+        >
+          <ClockIcon size={11} />
+          Rate limited · resumes {rateLimitResumeText(task.rateLimitUntil)}
+          {task.rateLimitMessage && `: ${task.rateLimitMessage}`}
+        </div>
+      )}
+      {/* #3234 — the quota resets beyond the park limit: failed, with the reset. */}
+      {isQuotaExhausted(task) && (
+        <div className="task-card-dispatch-reason" title={task.failureReason ?? undefined}>
+          <ClockIcon size={11} />
+          {quotaExhaustedText(task)}
+          {task.rateLimitMessage && `: ${task.rateLimitMessage}`}
+        </div>
+      )}
       {task.status === "claimed" && task.failureReason && (
         <div className="task-card-dispatch-reason" title={task.failureReason}>
           <ClockIcon size={11} />
@@ -561,21 +605,58 @@ export function TaskCard({
           )}
         </div>
       )}
-      {task.status === "reviewing" && task.autoReturnRounds > 0 && !task.approvalState && (
+      {/* #3179 — a nudged worker sits still for up to 10 min per nudge; say why.
+          nudgeCount is this spell's only (the serializer applies that rule). */}
+      {task.status === "in_progress" && task.nudgeCount > 0 && (
         <div
-          className={
-            capAnnounced
-              ? "task-card-review-round task-card-review-round-capped"
-              : "task-card-review-round"
+          className="task-card-review-round"
+          role="status"
+          title={
+            task.lastNudgedAt
+              ? `Last nudge ${formatRelativeAge(Date.parse(task.lastNudgedAt))}`
+              : undefined
           }
         >
-          {capAnnounced
-            ? `Round ${task.autoReturnRounds} · ${needsHumanText(task.needsHumanReason)}, needs a human`
-            : task.autoReturnCapped
-              ? `Round ${task.autoReturnRounds} · review in flight`
-              : `Round ${task.autoReturnRounds} · returned to worker`}
+          {nudgeNoteText(task)}
         </div>
       )}
+      {task.status === "reviewing" && capAnnounced && isCiHoldReason(task.needsHumanReason) && (
+        <div
+          className="task-card-review-round task-card-review-round-capped"
+          role="status"
+          data-testid="ci-hold-needs-human"
+        >
+          {needsHumanText(task.needsHumanReason, task.ciHoldNote)}, needs a human
+        </div>
+      )}
+      {task.status === "reviewing" && task.needsHumanReason === "review-inconclusive" && (
+        <div
+          className="task-card-review-round task-card-review-round-capped"
+          role="status"
+          data-testid="review-inconclusive-needs-human"
+        >
+          {needsHumanText(task.needsHumanReason)}, needs a human
+        </div>
+      )}
+      {task.status === "reviewing" &&
+        task.autoReturnRounds > 0 &&
+        !task.approvalState &&
+        task.needsHumanReason !== "review-inconclusive" &&
+        !isCiHoldReason(task.needsHumanReason) && (
+          <div
+            className={
+              capAnnounced
+                ? "task-card-review-round task-card-review-round-capped"
+                : "task-card-review-round"
+            }
+          >
+            {capAnnounced
+              ? `Round ${task.autoReturnRounds} · ${needsHumanText(task.needsHumanReason)}, needs a human`
+              : task.autoReturnCapped
+                ? `Round ${task.autoReturnRounds} · review in flight`
+                : `Round ${task.autoReturnRounds} · returned to worker`}
+          </div>
+        )}
       {(task.needsHumanReason === "review-post-failed" || task.reviewPostFailed) &&
         task.mergedAt === null && (
           <div className="task-card-review-round task-card-review-round-capped" role="status">
@@ -621,9 +702,58 @@ export function TaskCard({
           with no session strip above (sessionId is null until dispatch),
           which otherwise looks identical to a genuinely stuck claimed task
           whose session was reaped. This is the "waiting for a slot" tell,
-          following the same hint pattern as the ready/disabled case above. */}
-      {task.status === "claimed" && task.sessionId === null && (
-        <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
+          following the same hint pattern as the ready/disabled case above.
+
+          Issue #3194 — the hint is for a task that is genuinely QUEUED, so
+          it is suppressed as soon as the card has something more to say:
+          a retry waiting for its original host (which shows the "Start
+          fresh" action instead, below) and any task with a dispatch reason
+          (whose "Not dispatched yet: …" notice above already says why it
+          has not started — the two together read as two contradictory
+          statements about the same card). */}
+      {task.status === "claimed" &&
+        task.sessionId === null &&
+        !task.retryHostId &&
+        !task.failureReason && (
+          <div className="task-card-hint task-card-queued">Queued — waiting for a free slot</div>
+        )}
+      {/* #3194 — a retry waiting for its ORIGINAL host: the card offers
+          "Start fresh" for ANY wait for that host, because the operator is
+          the only one who can abandon the preserved branch (it stays on that
+          host, with its commits) and start over. Only a wait whose branch is
+          CONFIRMED stranded on that host — not on origin — is never failed
+          for waiting; every other wait keeps the dispatch give-up. The reason
+          is on the card above (the dispatch notice). */}
+      {task.status === "claimed" && Boolean(task.retryHostId) && (
+        <button
+          type="button"
+          className="task-card-hint task-card-start-fresh"
+          disabled={!taskMasterEnabled}
+          title={`Abandon the branch on ${task.retryHostId} (its commits stay there) and run the task from scratch`}
+          onClick={(e) => {
+            e.stopPropagation();
+            setStartFreshError(null);
+            // The store action rethrows the API's error (api/client.ts throws
+            // ApiError on any non-2xx), and the app has no unhandledrejection
+            // handler: a dropped promise would put a 409 in the console and
+            // NOTHING on screen — a stale card (two quick clicks, or the
+            // original host coming back between the poll and the click) would
+            // fail silently. Report it on the card instead, the way the
+            // sidebar's own "Start fresh" does.
+            void startFreshTask(task.id).catch((err: unknown) => {
+              setStartFreshError(
+                err instanceof Error ? err.message : "Could not start the task fresh",
+              );
+            });
+          }}
+        >
+          Start fresh
+        </button>
+      )}
+      {startFreshError !== null && (
+        <div className="task-card-hint task-card-start-fresh-error" role="status">
+          {startFreshError}
+        </div>
       )}
       {/* Issue #1038 — once a round badge is showing above (autoReturnRounds
           > 0), it already covers "still working" (capped-but-not-announced)

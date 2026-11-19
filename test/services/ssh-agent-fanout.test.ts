@@ -55,7 +55,7 @@ class MockSocket extends EventEmitter {
 }
 
 const openSshAgentStreamMock = vi.fn();
-const getRemoteHostClientMock = vi.fn(() => ({ openSshAgentStream: openSshAgentStreamMock }));
+const getRemoteHostClientMock = vi.fn(() => ({ streams: { sshAgent: openSshAgentStreamMock } }));
 vi.mock("../../src/services/remote-host-client.js", () => ({
   getRemoteHostClient: (...args: unknown[]) => getRemoteHostClientMock(...(args as [])),
 }));

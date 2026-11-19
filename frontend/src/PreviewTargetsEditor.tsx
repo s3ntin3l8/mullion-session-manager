@@ -1,3 +1,4 @@
+import { useBusyAction } from "./hooks/useBusyAction.js";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api/index.js";
 import type { ProjectPreviewConfig } from "./api/index.js";
@@ -15,7 +16,16 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
     draftRef.current = draft;
   }, [draft]);
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === projectId));
-  const load = () => api.getProjectPreviewTargets(projectId);
+  const { run: retryLoad, busy: retrying } = useBusyAction(() =>
+    api
+      .getProjectPreviewTargets(projectId)
+      .then((config) => {
+        setDraft(config);
+        setSaved(JSON.stringify(config));
+        setError(null);
+      })
+      .catch((err: unknown) => setError(String(err))),
+  );
   useEffect(() => {
     let cancelled = false;
     void api
@@ -81,18 +91,8 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
       <p>Named destinations for this project. Changes apply when you open or reload a preview.</p>
       {error && <ErrorText>{error}</ErrorText>}
       {!draft ? (
-        <button
-          onClick={() =>
-            void load()
-              .then((config) => {
-                setDraft(config);
-                setSaved(JSON.stringify(config));
-                setError(null);
-              })
-              .catch((err: unknown) => setError(String(err)))
-          }
-        >
-          Retry loading previews
+        <button disabled={retrying} aria-busy={retrying || undefined} onClick={retryLoad}>
+          {retrying ? "Retrying…" : "Retry loading previews"}
         </button>
       ) : (
         <>

@@ -11,7 +11,7 @@ import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
 // genuinely "unified" rather than primary-local-only (see event-store.ts's
 // and event-history.ts's own doc comments). Maintains one long-lived
 // `/internal/ws/events` subscription per enrolled, non-local host
-// (RemoteHostClient.openEventsStream(), remote-host-client.ts) and feeds
+// (RemoteHostClient.streams.events(), remote-host-client.ts) and feeds
 // every event it receives into the caller-supplied `onEvent` — in practice
 // startEventWriter's own `pushEvent` (plugins/event-store.ts wires the
 // two together), so a remote host's events are captured the moment they're
@@ -35,10 +35,10 @@ import { noteHostReachable, warnHostThrottled } from "./host-warn-throttle.js";
 // indefinitely.
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
-// openEventsStream() has no connect timeout of its own (documented gap,
-// remote-host-client.ts's openPreviewWs comment notes the same gap for a
-// sibling method) — bounded here so a half-open handshake can't stall this
-// host's history capture indefinitely.
+// streams.events() has no connect timeout of its own (documented gap, the
+// previews facet's ws() comment in remote-host-previews.ts notes the same gap
+// for a sibling method) — bounded here so a half-open handshake can't stall
+// this host's history capture indefinitely.
 const CONNECT_TIMEOUT_MESSAGE =
   "[remote-event-subscriber] connect timed out, terminating and retrying";
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -140,7 +140,7 @@ export function startRemoteEventSubscriber(
   }
 
   // Plain, synchronous function — deliberately not `async`. Every step here
-  // (openEventsStream, the socket.on registrations) is synchronous with no
+  // (streams.events, the socket.on registrations) is synchronous with no
   // await point, so `sub`/`stopped` can't change mid-call; an `async`
   // signature would invite an unreachable "did we get stopped while this
   // was in flight?" re-check that nothing could ever actually trigger.
@@ -163,7 +163,7 @@ export function startRemoteEventSubscriber(
       // `hosts` row (remote-host-client.ts), which is what picks up a
       // rotated session credential after a stale-token failure; holding a
       // client/socket across reconnects would defeat that (hazard 4).
-      socket = getRemoteHostClient(app, sub.hostId).openEventsStream();
+      socket = getRemoteHostClient(app, sub.hostId).streams.events();
     } catch (err) {
       // Throws synchronously for a deleted/baseUrl-less host row
       // (host-heartbeat.ts's sweep() and relayRemoteEventsHost both already

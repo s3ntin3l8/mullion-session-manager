@@ -774,7 +774,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     // The real two-hop-through-a-live-agent path is covered end-to-end in
     // test/integration/multi-host-preview.test.ts (two real buildApp()
     // instances) — this just proves the primary attempts the two-hop
-    // forward (via RemoteHostClient.openPreviewHttp) rather than the old
+    // forward (via RemoteHostClient's previews.http) rather than the old
     // phase-5-and-earlier "not supported yet" 503, and fails gracefully
     // (502, not a 500/hang) when the agent can't actually be reached.
     const app = await buildApp();

@@ -24,6 +24,9 @@ const DETAIL = {
   writeIdentity: { kind: "user", login: "octocat" },
   state: "open",
   bodyHtml: "<p>body</p>",
+  subIssues: [],
+  subIssuesSummary: null,
+  parent: null,
   comments: [],
 };
 

@@ -44,7 +44,8 @@ export const hostsApi = {
     id: string,
     patch: Partial<{
       name: string;
-      baseUrl: string;
+      // Issue #3091 — `null` clears the address (a host with a machine identity only).
+      baseUrl: string | null;
       token: string;
       drained: boolean;
       role: HostEditableRole;
@@ -90,8 +91,11 @@ export const hostsApi = {
   getHostUpdateStatus: (id: string) =>
     request<HostUpdateStatus>(`/api/hosts/${encodeURIComponent(id)}/update`),
 
-  applyHostUpdate: (id: string) =>
-    request<UpdateStatus>(`/api/hosts/${encodeURIComponent(id)}/update/apply`, {
-      method: "POST",
-    }),
+  applyHostUpdate: (id: string, opts?: { force?: boolean }) =>
+    request<UpdateStatus>(
+      `/api/hosts/${encodeURIComponent(id)}/update/apply${opts?.force ? "?force=true" : ""}`,
+      {
+        method: "POST",
+      },
+    ),
 };

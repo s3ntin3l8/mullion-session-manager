@@ -364,7 +364,7 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
 
   // Finding AS4 — the remote-hosted-project hop (primary -> owning agent ->
   // agent's own loopback dev server). Authorization is already scrubbed by
-  // a different, pre-existing mechanism (RemoteHostClient.openPreviewHttp,
+  // a different, pre-existing mechanism (RemoteHostClient's previews.http,
   // issue #249, deletes and replaces it with the primary's own agent-session
   // bearer token before the first hop) — asserted here anyway as an
   // end-to-end pin. The `mullion_preview` auth cookie had no equivalent

@@ -6,6 +6,11 @@ import { claudeSessionsDirsFor } from "../services/claude-scratch.js";
 import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
 import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-storage.js";
+import {
+  ANDROID_PRUNE_IN_PROGRESS,
+  inspectAndroidImages,
+  pruneAndroidImages,
+} from "../services/android-storage.js";
 import { inspectTempStorage, npmCachePath, pruneTempStorage } from "../services/temp-storage.js";
 import {
   cacheDirPaths,
@@ -189,10 +194,16 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       else app.log.debug(fields, "storage measurement");
     };
 
-  const docker = createMeasuredProbe(() => inspectDockerStorage(), {
-    ttlMs: DOCKER_INSPECT_CACHE_MS,
-    onRun: logRun("docker"),
-  });
+  const docker = createMeasuredProbe(
+    () =>
+      inspectDockerStorage(undefined, {
+        countVolumes: getStoredSettings(app.db).diskCleanup.optIns.includes("docker-volumes"),
+      }),
+    {
+      ttlMs: DOCKER_INSPECT_CACHE_MS,
+      onRun: logRun("docker"),
+    },
+  );
   const temp = createMeasuredProbe(
     () => inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) }),
     { ttlMs: SLOW_INSPECT_CACHE_MS, onRun: logRun("temp") },
@@ -210,12 +221,31 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     onRun: logRun("caches"),
   });
 
+  const androidOptions = () => ({
+    sdkRoot: app.config.DEVICE_ANDROID_SDK_ROOT,
+    sdkmanagerPath: app.config.DEVICE_SDKMANAGER_PATH,
+  });
+  const androidImages = createMeasuredProbe(() => inspectAndroidImages(androidOptions()), {
+    ttlMs: SLOW_INSPECT_CACHE_MS,
+    onRun: logRun("android-images"),
+  });
+
   // What the "where the space is" report marks as something cleanup can handle.
   const spaceCovered = () => [
     ...cacheDirPaths().map(({ path: dir, label }) => ({ path: dir, label })),
     // The directory the temp tier actually empties, not all of ~/.npm.
     { path: npmCachePath(), label: "npm cache" },
     { path: path.dirname(defaultOpencodeDbPath()), label: "opencode database" },
+    // Per-session files, swept on terminate and by the orphan sweep.
+    { path: path.resolve(app.config.SESSIONS_DIR), label: "session cleanup" },
+    ...(app.config.DEVICE_ANDROID_SDK_ROOT
+      ? [
+          {
+            path: path.join(path.resolve(app.config.DEVICE_ANDROID_SDK_ROOT), "system-images"),
+            label: "Android system images",
+          },
+        ]
+      : []),
     ...devWorktreeOptions().projects.flatMap((project) =>
       DEV_WORKTREE_DIRS.map((dir) => ({
         path: path.join(project.cwd, dir),
@@ -243,6 +273,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     ["opencode", opencode],
     ["worktrees", worktrees],
     ["caches", caches],
+    ["android-images", androidImages],
     ["space", space],
   ] as const;
   for (const [name, probe] of probeRoutes) {
@@ -349,6 +380,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     CACHE_PRUNE_IN_PROGRESS: "Cache cleanup is already running",
     OPENCODE_PRUNE_IN_PROGRESS: "opencode database cleanup is already running",
     DEV_WORKTREE_PRUNE_IN_PROGRESS: "Developer worktree cleanup is already running",
+    [ANDROID_PRUNE_IN_PROGRESS]: "Android system image cleanup is already running",
   };
 
   // Runs one source's prune and drops its measurement afterwards, success or
@@ -375,9 +407,20 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   // server has already measured (never from the client, and never by starting a
   // new measurement). A source nobody has measured yet still runs: each prune
   // re-checks its own safety.
-  function cleanupPlans(mode: CleanupMode, requestedCacheDirs?: string[]): CleanupStepPlan[] {
+  function cleanupPlans(
+    mode: CleanupMode,
+    requestedCacheDirs?: string[],
+    requestedOptIns?: string[],
+  ): CleanupStepPlan[] {
     const plans: CleanupStepPlan[] = [];
     const dockerSeen = docker.peek(SKIP_DECISION_MAX_AGE_MS);
+    // Same two-sided rule as the caches, but stricter: with no request list at
+    // all nothing runs, so a stored opt-in alone can never delete a volume.
+    // Safe mode never prunes volumes, whatever is stored.
+    const pruneVolumes =
+      mode === "aggressive" &&
+      requestedOptIns?.includes("docker-volumes") === true &&
+      getStoredSettings(app.db).diskCleanup.optIns.includes("docker-volumes");
     plans.push({
       source: "docker",
       label: "Docker",
@@ -385,7 +428,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         dockerSeen && !dockerSeen.available
           ? `Docker unavailable: ${dockerSeen.error ?? "not installed, or permission denied"}`
           : null,
-      run: step(docker, () => pruneDockerStorage(mode)),
+      run: step(docker, () => pruneDockerStorage(mode, undefined, { pruneVolumes })),
     });
     const tempSeen = temp.peek(SKIP_DECISION_MAX_AGE_MS);
     plans.push({
@@ -416,6 +459,23 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         label: "Caches",
         skip: null,
         run: step(caches, () => pruneCacheStorage(cacheIds)),
+      });
+    }
+    // Same two-sided rule as volumes: nothing without a request list, and
+    // an id only the request or only the stored settings carries does nothing.
+    if (
+      requestedOptIns?.includes("android-system-images") === true &&
+      getStoredSettings(app.db).diskCleanup.optIns.includes("android-system-images")
+    ) {
+      const androidSeen = androidImages.peek(SKIP_DECISION_MAX_AGE_MS);
+      plans.push({
+        source: "android-images",
+        label: "Android system images",
+        skip:
+          androidSeen && !androidSeen.available
+            ? `Android system images unavailable: ${androidSeen.error}`
+            : null,
+        run: step(androidImages, () => pruneAndroidImages(androidOptions())),
       });
     }
     // The VACUUM is skipped whenever opencode has the database open; the prune
@@ -465,7 +525,9 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
   });
 
-  app.post<{ Body?: { mode?: CleanupMode; cacheDirs?: string[] } | null }>(
+  app.post<{
+    Body?: { mode?: CleanupMode; cacheDirs?: string[]; optIns?: string[] } | null;
+  }>(
     "/api/storage/cleanup",
     {
       config: { rateLimit: PRUNE_RATE_LIMIT },
@@ -475,6 +537,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
           properties: {
             mode: { type: "string", enum: ["safe", "aggressive"] },
             cacheDirs: { type: "array", items: { type: "string" }, maxItems: 20 },
+            optIns: { type: "array", items: { type: "string" }, maxItems: 20 },
           },
           additionalProperties: false,
         },
@@ -488,7 +551,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       try {
         const job = cleanup.start(
           request.body?.mode ?? "safe",
-          cleanupPlans(request.body?.mode ?? "safe", request.body?.cacheDirs),
+          cleanupPlans(request.body?.mode ?? "safe", request.body?.cacheDirs, request.body?.optIns),
         );
         return reply.code(202).send(job);
       } catch (error) {

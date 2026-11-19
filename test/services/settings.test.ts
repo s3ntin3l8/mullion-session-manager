@@ -6,6 +6,7 @@ import {
   mergeSettings,
   DEFAULT_SETTINGS,
 } from "../../src/services/settings.js";
+import { sanitizeOptInIds } from "../../src/services/cleanup-opt-ins.js";
 import { SESSION_STATUSES } from "../../src/services/session-status.js";
 
 describe("deepMerge", () => {
@@ -251,6 +252,16 @@ describe("sanitizeSettings", () => {
     });
     expect(sanitizeSettings(dirty).diskCleanup.cacheDirs).toEqual(["pip", "go-build"]);
     expect(sanitizeSettings(mergeSettings({})).diskCleanup.cacheDirs).toEqual([]);
+  });
+
+  it("keeps only allowlisted ids in diskCleanup.optIns", () => {
+    const dirty = mergeSettings({
+      diskCleanup: { optIns: ["docker-volumes", "rm -rf", "docker-volumes", 7] },
+    });
+    expect(sanitizeSettings(dirty).diskCleanup.optIns).toEqual(["docker-volumes"]);
+    expect(sanitizeSettings(mergeSettings({})).diskCleanup.optIns).toEqual([]);
+    expect(sanitizeOptInIds("docker-volumes")).toEqual([]);
+    expect(sanitizeOptInIds(undefined)).toEqual([]);
   });
 
   it("clamps out-of-range and non-finite numeric fields to their defaults", () => {
@@ -798,6 +809,16 @@ describe("sanitizeSettings: runtime env overrides", () => {
     expect(s.github.pollActiveSeconds).toBe(5);
     expect(s.github.pollQuietSeconds).toBe(3600);
     expect(s.github.pollStaleThresholdSeconds).toBe(-1);
+  });
+
+  it("accepts whole stale-host days including disabled, and repairs invalid thresholds", () => {
+    expect(mergeSettings({}).hosts.staleAfterDays).toBe(30);
+    for (const days of [0, 1, 90, 36500]) {
+      expect(mergeSettings({ hosts: { staleAfterDays: days } }).hosts.staleAfterDays).toBe(days);
+    }
+    for (const value of [-1, 1.5, 36501, NaN, Infinity, "30", null]) {
+      expect(mergeSettings({ hosts: { staleAfterDays: value } }).hosts.staleAfterDays).toBe(30);
+    }
   });
 
   it("keeps 0 as a real 'heartbeat off' value and clamps the frame rate", () => {

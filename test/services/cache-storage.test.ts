@@ -35,6 +35,10 @@ afterEach(async () => {
   await fs.rm(base, { recursive: true, force: true });
 });
 
+// The npx guard keeps anything touched in the last 10 minutes; tests that
+// exercise the process check run an hour ahead of the files they just wrote.
+const PAST_GRACE = () => Date.now() + 60 * 60 * 1000;
+
 describe("cache-storage", () => {
   it("sanitizes ids to the allowlist, once each", () => {
     expect(sanitizeCacheDirIds(["pip", "../etc", "pip", "huggingface", 7])).toEqual([
@@ -204,5 +208,219 @@ describe("cache-storage", () => {
       "CACHE_PRUNE_IN_PROGRESS",
     );
     await first;
+  });
+
+  describe("npx cache and Trash", () => {
+    it("keeps npx entries a running process references and removes the rest", async () => {
+      const npx = path.join(base, ".npm", "_npx");
+      for (const hash of ["inuse", "idle"]) {
+        await fs.mkdir(path.join(npx, hash, "node_modules"), { recursive: true });
+        await fs.writeFile(path.join(npx, hash, "node_modules", "x.js"), "x".repeat(2000));
+      }
+      // A fake /proc: one process runs a script from the "inuse" entry, one has
+      // an unreadable cmdline, and a non-pid entry is ignored.
+      const proc = path.join(base, "proc");
+      await fs.mkdir(path.join(proc, "100"), { recursive: true });
+      await fs.writeFile(
+        path.join(proc, "100", "cmdline"),
+        `node\0${path.join(npx, "inuse", "node_modules", "x.js")}\0`,
+      );
+      await fs.mkdir(path.join(proc, "101"));
+      await fs.mkdir(path.join(proc, "self-ish"));
+
+      const result = await pruneCacheStorage(["npm-npx"], {
+        cacheRoot: root,
+        homeDir: base,
+        procDir: proc,
+        now: PAST_GRACE(),
+      });
+
+      expect(await exists(path.join(npx, "inuse"))).toBe(true);
+      expect(await exists(path.join(npx, "idle"))).toBe(false);
+      expect(result.reclaimedBytes).toBeGreaterThan(0);
+    });
+
+    it("keeps an entry a process runs inside (cwd), including through a symlinked home", async () => {
+      // The real home, and a symlink to it that the server is configured with.
+      const realHome = path.join(base, "real-home");
+      const linkHome = path.join(base, "link-home");
+      await fs.mkdir(path.join(realHome, ".npm", "_npx", "cwdkeep", "node_modules"), {
+        recursive: true,
+      });
+      await fs.mkdir(path.join(realHome, ".npm", "_npx", "argvkeep"), { recursive: true });
+      await fs.mkdir(path.join(realHome, ".npm", "_npx", "idle"), { recursive: true });
+      await fs.symlink(realHome, linkHome);
+      const proc = path.join(base, "proc2");
+      // The kernel reports a cwd with symlinks resolved...
+      await fs.mkdir(path.join(proc, "200"), { recursive: true });
+      await fs.symlink(
+        path.join(realHome, ".npm", "_npx", "cwdkeep", "node_modules"),
+        path.join(proc, "200", "cwd"),
+      );
+      // ...and a self-resolving shim puts the real path in argv.
+      await fs.mkdir(path.join(proc, "201"), { recursive: true });
+      await fs.writeFile(
+        path.join(proc, "201", "cmdline"),
+        `node\0${path.join(realHome, ".npm", "_npx", "argvkeep", "bin.js")}\0`,
+      );
+
+      await pruneCacheStorage(["npm-npx"], {
+        cacheRoot: path.join(linkHome, ".cache"),
+        homeDir: linkHome,
+        procDir: proc,
+        now: PAST_GRACE(),
+      });
+
+      const npx = path.join(realHome, ".npm", "_npx");
+      expect(await exists(path.join(npx, "cwdkeep"))).toBe(true);
+      expect(await exists(path.join(npx, "argvkeep"))).toBe(true);
+      expect(await exists(path.join(npx, "idle"))).toBe(false);
+    });
+
+    it("keeps a freshly created npx entry even though no process names it yet", async () => {
+      const npx = path.join(base, ".npm", "_npx");
+      const fresh = path.join(npx, "fresh");
+      const old = path.join(npx, "old");
+      await fs.mkdir(fresh, { recursive: true });
+      await fs.mkdir(old, { recursive: true });
+      const longAgo = new Date(Date.now() - 60 * 60 * 1000);
+      await fs.utimes(old, longAgo, longAgo);
+      const proc = path.join(base, "proc3");
+      await fs.mkdir(proc);
+
+      await pruneCacheStorage(["npm-npx"], { cacheRoot: root, homeDir: base, procDir: proc });
+
+      expect(await exists(fresh)).toBe(true);
+      expect(await exists(old)).toBe(false);
+    });
+
+    it("keeps everything when /proc can't be read", async () => {
+      const entry = path.join(base, ".npm", "_npx", "abc");
+      await fs.mkdir(entry, { recursive: true });
+      await pruneCacheStorage(["npm-npx"], {
+        cacheRoot: root,
+        homeDir: base,
+        procDir: path.join(base, "no-such-proc"),
+        now: PAST_GRACE(),
+      });
+      expect(await exists(entry)).toBe(true);
+    });
+
+    it("empties the Trash but leaves usable files/ and info/ dirs", async () => {
+      const trash = path.join(base, ".local", "share", "Trash");
+      await fs.mkdir(path.join(trash, "files", "old-dir"), { recursive: true });
+      await fs.writeFile(path.join(trash, "files", "old-dir", "f"), "x".repeat(4000));
+      await fs.mkdir(path.join(trash, "info"), { recursive: true });
+      await fs.writeFile(path.join(trash, "info", "old-dir.trashinfo"), "[Trash Info]");
+      await fs.writeFile(path.join(trash, "directorysizes"), "1 2 old-dir");
+
+      const result = await pruneCacheStorage(["trash"], { cacheRoot: root, homeDir: base });
+
+      expect(await fs.readdir(path.join(trash, "files"))).toEqual([]);
+      expect(await fs.readdir(path.join(trash, "info"))).toEqual([]);
+      expect(await exists(path.join(trash, "directorysizes"))).toBe(false);
+      expect(result.reclaimedBytes).toBeGreaterThan(0);
+    });
+
+    it("flags only the Trash as permanent in the status", async () => {
+      const status = await inspectCacheStorage({ cacheRoot: root, homeDir: base });
+      expect(status.caches.filter((c) => c.permanent).map((c) => c.id)).toEqual(["trash"]);
+    });
+
+    it("offers the new ids on the allowlist", () => {
+      expect(CACHE_DIR_IDS).toEqual(
+        expect.arrayContaining(["gh", "claude-cli-nodejs", "npm-npx", "trash"]),
+      );
+    });
+  });
+
+  describe("keepNewest version caches", () => {
+    const VERSIONS = ".local/share/claude/versions";
+    let proc: string;
+
+    const fakeProc = async (pid: string, exeTarget: string) => {
+      await fs.mkdir(path.join(proc, pid), { recursive: true });
+      await fs.symlink(exeTarget, path.join(proc, pid, "exe"));
+    };
+    const opts = () => ({ cacheRoot: root, homeDir: base, procDir: proc, now: PAST_GRACE() });
+    const at = (name: string) => path.join(base, VERSIONS, name);
+    const seed = async (names: string[]) => {
+      await fs.mkdir(path.join(base, VERSIONS), { recursive: true });
+      for (const n of names) await fs.writeFile(at(n), "x".repeat(8192));
+    };
+
+    beforeEach(async () => {
+      proc = path.join(base, "proc");
+      await fs.mkdir(proc);
+    });
+
+    it("keeps the newest by number (2.1.322 > 2.1.99) and removes the rest", async () => {
+      await seed(["2.1.99", "2.1.322", "2.1.100"]);
+      await pruneCacheStorage(["claude-versions"], opts());
+      expect(await exists(at("2.1.322"))).toBe(true);
+      expect(await exists(at("2.1.99"))).toBe(false);
+      expect(await exists(at("2.1.100"))).toBe(false);
+    });
+
+    it("keeps an older version a live process executes", async () => {
+      await seed(["2.1.302", "2.1.310", "2.1.322"]);
+      await fakeProc("4242", at("2.1.302"));
+      await pruneCacheStorage(["claude-versions"], opts());
+      expect(await exists(at("2.1.302"))).toBe(true);
+      expect(await exists(at("2.1.322"))).toBe(true);
+      expect(await exists(at("2.1.310"))).toBe(false);
+    });
+
+    it("keeps a directory release a process runs from inside, and the `current` target", async () => {
+      const rel = path.join(base, ".minimax-code", "releases");
+      for (const v of ["0.7.4", "0.7.5", "0.7.6", "0.7.7"]) {
+        await fs.mkdir(path.join(rel, v, "bin"), { recursive: true });
+        await fs.writeFile(path.join(rel, v, "bin", "mm"), "x");
+      }
+      await fs.symlink(path.join(rel, "0.7.5"), path.join(base, ".minimax-code", "current"));
+      await fakeProc("77", path.join(rel, "0.7.4", "bin", "mm"));
+      await pruneCacheStorage(["minimax-releases"], opts());
+      expect(await fs.readdir(rel)).toEqual(["0.7.4", "0.7.5", "0.7.7"]);
+    });
+
+    it("keeps a fresh child and a child with no numeric prefix", async () => {
+      await seed(["1.0.0", "2.0.0", "latest", "1.5.0"]);
+      const old = new Date(Date.now() - 3_600_000);
+      for (const n of ["1.0.0", "2.0.0", "latest"]) await fs.utimes(at(n), old, old);
+      await pruneCacheStorage(["claude-versions"], {
+        cacheRoot: root,
+        homeDir: base,
+        procDir: proc,
+        now: Date.now(),
+      });
+      expect((await fs.readdir(path.join(base, VERSIONS))).sort()).toEqual([
+        "1.5.0",
+        "2.0.0",
+        "latest",
+      ]);
+    });
+
+    it("removes nothing when /proc can't be read", async () => {
+      await seed(["1.0.0", "2.0.0"]);
+      await pruneCacheStorage(["claude-versions"], {
+        ...opts(),
+        procDir: path.join(base, "no-such-proc"),
+      });
+      expect(await fs.readdir(path.join(base, VERSIONS))).toHaveLength(2);
+    });
+
+    it("reports only the removable bytes", async () => {
+      await seed(["1.0.0", "1.1.0", "2.0.0"]);
+      const status = await inspectCacheStorage(opts());
+      const cache = status.caches.find((c) => c.id === "claude-versions");
+      const one = (await fs.lstat(at("1.0.0"))).blocks * 512;
+      expect(cache?.bytes).toBe(2 * one);
+      await pruneCacheStorage(["claude-versions"], opts());
+      expect(
+        (await inspectCacheStorage(opts())).caches.find((c) => c.id === "claude-versions"),
+      ).toMatchObject({
+        bytes: 0,
+      });
+    });
   });
 });

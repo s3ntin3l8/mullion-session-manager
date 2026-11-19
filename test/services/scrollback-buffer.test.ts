@@ -253,3 +253,14 @@ describe("ScrollbackBuffer slab coalescing equivalence (issue #1523)", () => {
     expect(buf.totalBytesEverPushed()).toBe(1);
   });
 });
+
+describe("ScrollbackBuffer.contains", () => {
+  it("reports exact byte runs already buffered, and misses novel bytes", () => {
+    const buf = new ScrollbackBuffer();
+    buf.push(Buffer.from("alpha beta"));
+    buf.push(Buffer.from(" gamma"));
+    expect(buf.contains(Buffer.from("beta gamma"))).toBe(true);
+    expect(buf.contains(Buffer.from("delta"))).toBe(false);
+    expect(buf.contains(Buffer.alloc(0))).toBe(true);
+  });
+});

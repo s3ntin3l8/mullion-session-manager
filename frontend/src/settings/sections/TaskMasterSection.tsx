@@ -37,9 +37,11 @@ export function TaskMasterSection() {
   // fires from `onCommit` (blur/Enter) instead, so a momentarily-cleared
   // field never reaches the debounced patch as a persisted "0".
   const [maxConcurrentDraft, setMaxConcurrentDraft] = useState<number | null>(null);
+  const [startDraft, setStartDraft] = useState<number | null>(null);
   const [budgetDraft, setBudgetDraft] = useState<number | null>(null);
   const [throttleDraft, setThrottleDraft] = useState<number | null>(null);
   const [graceDraft, setGraceDraft] = useState<number | null>(null);
+  const [maxParkDraft, setMaxParkDraft] = useState<number | null>(null);
   const [ciWaitDraft, setCiWaitDraft] = useState<number | null>(null);
   const [roundsDraft, setRoundsDraft] = useState<number | null>(null);
   const [trustedDraft, setTrustedDraft] = useState<string | null>(null);
@@ -125,6 +127,25 @@ export function TaskMasterSection() {
         />
       </Row>
       <Row
+        label="Worker startup timeout"
+        desc="Ask for human attention if a worker has not started a turn. 0 disables this check."
+      >
+        <NumberField
+          value={startDraft ?? resolved.workerStartTimeoutMinutes}
+          min={0}
+          max={10080}
+          width={54}
+          suffix="minutes"
+          onChange={setStartDraft}
+          onCommit={(v) => {
+            setStartDraft(null);
+            updateSettings({
+              taskMaster: { workerStartTimeoutMinutes: clampNumberFieldOnCommit(v, 0, 10080) },
+            });
+          }}
+        />
+      </Row>
+      <Row
         label="Progress-comment throttle"
         desc={`Minimum time between progress comments on the same GitHub issue. 0 posts every update. Server default: ${env.progressCommentMinutes} min.`}
       >
@@ -158,6 +179,25 @@ export function TaskMasterSection() {
             setGraceDraft(null);
             updateSettings({
               taskMaster: { rateLimitGraceMinutes: clampNumberFieldOnCommit(v, 0, 1440) },
+            });
+          }}
+        />
+      </Row>
+      <Row
+        label="Longest rate-limit park"
+        desc={`When a rate-limited agent's quota resets within this many hours, the task waits and resumes by itself. A later reset fails the task with the quota and reset time on the card; Retry it once the quota is back. 0 never waits. Server default: ${env.rateLimitMaxParkHours ?? 24} h.`}
+      >
+        <NumberField
+          value={maxParkDraft ?? resolved.rateLimitMaxParkHours}
+          min={0}
+          max={168}
+          width={46}
+          suffix="hours"
+          onChange={setMaxParkDraft}
+          onCommit={(v) => {
+            setMaxParkDraft(null);
+            updateSettings({
+              taskMaster: { rateLimitMaxParkHours: clampNumberFieldOnCommit(v, 0, 168) },
             });
           }}
         />
@@ -268,6 +308,7 @@ export function TaskMasterSection() {
             setBudgetDraft(null);
             setThrottleDraft(null);
             setGraceDraft(null);
+            setMaxParkDraft(null);
             updateSettings({
               taskMaster: {
                 enabled: "inherit",
@@ -275,6 +316,7 @@ export function TaskMasterSection() {
                 budgetMinutes: -1,
                 progressCommentMinutes: -1,
                 rateLimitGraceMinutes: -1,
+                rateLimitMaxParkHours: -1,
                 skipPermissions: "inherit",
               },
             });

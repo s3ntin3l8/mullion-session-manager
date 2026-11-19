@@ -5,8 +5,8 @@ import type {
 } from "../../../src/shared/constants.js";
 import type { HostProtocolStatus } from "../../../src/shared/agent-protocol.js";
 
-// #246) — health/lastSeenAt are never persisted, just the primary's
-// in-memory view of "is it actually up right now" as of the last sweep.
+// Health is the primary's in-memory view as of the last sweep; lastSeenAt
+// falls back to the persisted time when no successful sweep is in memory.
 // Never carries a token, just whether one is set (hasToken), same
 // "no secrets over the API" rule AppSettings/ServerInfo above already follow.
 export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
@@ -17,6 +17,14 @@ export interface HostChannelStatus {
   status: "connected" | "bound to the outbound channel, not connected" | "not connected";
   connectedAt: string | null;
   carriedOperations: string[];
+}
+
+export interface HostSessionEnv {
+  shell: string | null;
+  interactiveResolve: "ok" | "fallback";
+  reason: string | null;
+  path: string[];
+  recoveredKeys: string[];
 }
 
 export interface Host {
@@ -32,7 +40,14 @@ export interface Host {
   // Issue #2568 — the agent has a persistent machine identity / an operator
   // revoked it. Never the credential. Absent from an older primary.
   hasMachineIdentity?: boolean;
+  // Issue #3091 — that identity is also unrevoked and unexpired, so the agent connects
+  // out and the host's address may be cleared. Absent from an older primary.
+  hasLiveMachineIdentity?: boolean;
   machineIdentityRevoked?: boolean;
+  // Issue #2969 — an address-dialled agent with no machine identity: it cannot
+  // open the outbound channel, so it is unreachable off the primary's network.
+  // Absent from an older primary.
+  legacyAgent?: boolean;
   // Issue #2449 — created by redeeming a one-time pairing code. Absent from an
   // older primary.
   paired?: boolean;
@@ -45,10 +60,10 @@ export interface Host {
   health: HostHealthStatus;
   // Why the host is degraded when the primary knows ("channel saturated"). Absent from an older primary.
   healthReason?: string | null;
-  // Not currently rendered anywhere — kept for a future "last seen Nm ago"
-  // affordance (would make a "degraded" host more actionable than a bare
-  // color). Deliberate forward-plumbing, not dead code: it's the one field
-  // in this merge the backend computes but the UI doesn't consume yet.
+  // Offline beyond the configured threshold, with no active session.
+  // Absent from an older primary.
+  stale?: boolean;
+  // Last successful contact, preserved across primary restarts.
   lastSeenAt: string | null;
   // Distinct from lastSeenAt (last successful contact): advances on every
   // sweep result, success or failure. Settings.tsx uses this to tell "a
@@ -67,6 +82,9 @@ export interface Host {
   agents?: string[] | null;
   // Issue #2306 — "xcode" / "android-emulator"; null while unknown (an old agent).
   capabilities?: PlacementCapability[] | null;
+  // Issue #3156 — the environment this host gives its sessions. Null = not
+  // reported (an older agent); absent from an older primary.
+  sessionEnv?: HostSessionEnv | null;
   mullionVersion?: string | null;
   // Issue #2248 — the negotiated agent protocol; null while not read yet.
   protocol?: HostProtocolStatus | null;
@@ -140,4 +158,9 @@ export interface PlacementPreview {
    * would refuse the launch (409) rather than use `hostId`.
    */
   refusal?: { detail: string; transient: boolean; unreadable?: boolean };
+}
+
+export interface HostSettings {
+  heartbeatSeconds: number;
+  staleAfterDays: number;
 }

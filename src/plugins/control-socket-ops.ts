@@ -7,10 +7,6 @@ import { crossProjectAllowed } from "../services/cross-project.js";
 import { DEFAULT_MESSAGE_TTL_MS, provenanceLabel } from "../services/session-message-queue.js";
 import { compileOutputMatcher } from "../services/output-wait.js";
 import { parseWaitTimeout } from "../services/session-wait.js";
-import {
-  CONTROL_SOCKET_VIA_HEADER,
-  CONTROL_SOCKET_VIA_TOKEN,
-} from "../services/internal-request.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { deliverPrompt } from "../services/session-prompt.js";
@@ -27,7 +23,17 @@ import {
   resolveParentSessionId,
   resolveTargetProjectId,
 } from "../services/control-session-authority.js";
-import type { OpContext, OpSpec, ReplyPayload, Route, Scope } from "./control-socket-core.js";
+import type {
+  DeclaredResolver,
+  OpContext,
+  OpSpec,
+  ReplyPayload,
+  Route,
+} from "./control-socket-core.js";
+import { findRunningDockSession } from "../services/dock-control.js";
+import { dockConfigOps } from "./control-socket-dock-config.js";
+import { taskOps } from "./control-socket-tasks.js";
+import { readOps } from "./control-socket-reads.js";
 import {
   STREAM_UNAVAILABLE,
   bad,
@@ -37,8 +43,12 @@ import {
   injectRoute,
   json,
   jsonHeaders,
+  owned,
+  pinned,
   requireChannel,
+  routeOp,
   streamSlotError,
+  unscoped,
   MAX_WAITS_PER_CONNECTION,
 } from "./control-socket-core.js";
 import type { WaitBodyOpts } from "./control-socket-support.js";
@@ -66,79 +76,109 @@ import {
   runWait,
 } from "./control-socket-support.js";
 
-type ResolveFn = (ctx: OpContext) => Route | ReplyPayload | Promise<Route | ReplyPayload>;
+export { routeOp, pinned, unscoped, owned, type DeclaredResolver };
 
-/**
- * A resolver that has DECLARED how it relates to session scope — the tagged
- * union `routeOp` requires for any op listing "session" in its scopes:
- *  - `pinned`: the resolver verifies the request's target against the
- *    connection's own session/project pin (resolveTargetSessionId & co).
- *  - `unscoped`: the target is deliberately NOT pinned to the connection
- *    (a host-global read, or an explicit resource id by design) — a
- *    reviewed, greppable opt-out rather than an accident.
- *  - `owned`: the target may be the connection's own session OR a child it
- *    spawned (resolveOwnedSessionId) — wider than `pinned`, but still
- *    bounded by the parent_session_id relationship, never an arbitrary id.
- * `routeOp`'s full-only overload also takes a bare function, because
- * `injectRoute` already structurally enforces full scope there; the
- * session-reachable overload does not, so an op can't list "session" with a
- * resolver that silently pins nothing (#1546).
- */
-export interface DeclaredResolver {
-  readonly target: "pinned" | "unscoped" | "owned";
-  readonly run: ResolveFn;
+/** The shared body of `sessions.wait_for_output` / `docks.wait_for_output`:
+ * the caller has already pinned `id` to a session it may wait on. */
+async function waitOutputFor({ app, conn, body, reply }: OpContext, id: string): Promise<void> {
+  const matcher = compileOutputMatcher(body?.match, body?.regex);
+  if (!matcher.ok) {
+    reply(bad(400, matcher.error));
+    return;
+  }
+  const timeout = parseWaitTimeout(body?.timeoutMs);
+  if (!timeout.ok) {
+    reply(bad(400, timeout.error));
+    return;
+  }
+  const afterOffset = body?.afterOffset;
+  if (
+    afterOffset !== undefined &&
+    (typeof afterOffset !== "number" || !Number.isInteger(afterOffset) || afterOffset < 0)
+  ) {
+    reply(bad(400, "'afterOffset' must be a non-negative integer"));
+    return;
+  }
+  const afterSeq = body?.afterSeq;
+  if (
+    afterSeq !== undefined &&
+    (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0)
+  ) {
+    reply(bad(400, "'afterSeq' must be a non-negative integer"));
+    return;
+  }
+  if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
+    reply(bad(429, "too many pending waits on this connection"));
+    return;
+  }
+  const unverifiable = await adoptLocalChild(app, id);
+  if (unverifiable) {
+    reply(unverifiable);
+    return;
+  }
+  const controller = new AbortController();
+  const onClose = () => controller.abort();
+  const offClose = conn.onClose(onClose);
+  conn.activeWaits = (conn.activeWaits ?? 0) + 1;
+  try {
+    const callerActive = () => conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!);
+    // The wait runs on the child's own host (issue #1951): the PTY lives
+    // there. A local child is one in-process wait; a remote one is a loop
+    // of bounded waits (SessionBackend.waitOutput).
+    const outcome = await resolveBackend(app, childHostId(app, id)).waitOutput(id, {
+      match: body?.match as string,
+      regex: body?.regex === true,
+      timeoutMs: timeout.timeoutMs,
+      ...(afterOffset !== undefined ? { afterOffset } : {}),
+      ...(afterSeq !== undefined ? { afterSeq } : {}),
+      signal: controller.signal,
+      // The caller must stay active for the whole wait, same as sessions.wait.
+      alive: callerActive,
+    });
+    if ("aborted" in outcome) return;
+    if ("notRunning" in outcome) {
+      reply(bad(409, NOT_LOCAL_MESSAGE));
+      return;
+    }
+    if ("failed" in outcome) {
+      reply(bad(outcome.status, outcome.error));
+      return;
+    }
+    if ("gone" in outcome && !callerActive()) {
+      reply(bad(403, "this session is no longer active"));
+      return;
+    }
+    reply({ ok: true, status: 200, result: outcome });
+  } finally {
+    conn.activeWaits -= 1;
+    offClose();
+  }
 }
 
-/** Declares that `run` pins its target to the connection's own session/project. */
-export const pinned = (run: ResolveFn): DeclaredResolver => ({ target: "pinned", run });
+/** #3049 — the running session of a dock control of the caller's own project,
+ * from `body.dockControlId`. The project is pinned like every `docks.*` op
+ * (resolveTargetProjectId); no running session is a 404, same as an unknown one. */
+function resolveDockSessionId(
+  ctx: OpContext,
+): { ok: true; id: string } | { ok: false; reply: ReplyPayload } {
+  const project = resolveTargetProjectId(ctx.app, ctx.conn, ctx.body);
+  if (!project.ok) return project;
+  const controlId = extractIdField(ctx.body, "dockControlId");
+  if (controlId === null) return { ok: false, reply: bad(400, "'dockControlId' is required") };
+  const row = findRunningDockSession(ctx.app, Number(project.id), controlId);
+  return row
+    ? { ok: true, id: String(row.id) }
+    : { ok: false, reply: bad(404, "Dock control is not running") };
+}
 
-/** Declares that `run` deliberately does not pin its target. */
-export const unscoped = (run: ResolveFn): DeclaredResolver => ({ target: "unscoped", run });
-
-/** Declares that `run` limits its target to the connection's own session or
- * one of that session's children (resolveOwnedSessionId). */
-export const owned = (run: ResolveFn): DeclaredResolver => ({ target: "owned", run });
-
-type FullOnlyScopes = readonly ["full"];
-type SessionReachableScopes =
-  readonly ["full", "session"] | readonly ["session", "full"] | readonly ["session"];
-
-/**
- * Declarative request/response op: `resolve` turns the request into either a
- * `Route` to forward or an early `ReplyPayload` (validation / pin failure).
- * The runner picks `injectRoute` for full-scope-only ops (structural
- * enforcement) and `injectAndShape` for ops that list "session" — whose
- * resolver the type system forces to be declared `pinned`/`unscoped`.
- */
-export function routeOp(scopes: FullOnlyScopes, resolve: ResolveFn | DeclaredResolver): OpSpec;
-export function routeOp(scopes: SessionReachableScopes, resolve: DeclaredResolver): OpSpec;
-export function routeOp(scopes: readonly Scope[], resolve: ResolveFn | DeclaredResolver): OpSpec {
-  const fullOnly = scopes.length === 1 && scopes[0] === "full";
-  const run = typeof resolve === "function" ? resolve : resolve.run;
-  return {
-    scopes,
-    handler: async (ctx) => {
-      const resolved = await run(ctx);
-      if (!("method" in resolved)) {
-        ctx.reply(resolved);
-        return;
-      }
-      const opts = {
-        method: resolved.method,
-        url: resolved.url,
-        headers: {
-          ...(resolved.payload !== undefined ? jsonHeaders(ctx.app) : buildAuthHeaders(ctx.app)),
-          // Marks a CLI/agent-originated request so routes that audit their
-          // caller (DELETE /api/sessions/:id) can tell it from a browser one.
-          [CONTROL_SOCKET_VIA_HEADER]: CONTROL_SOCKET_VIA_TOKEN,
-        },
-        ...(resolved.payload !== undefined ? { payload: resolved.payload } : {}),
-      };
-      ctx.reply(
-        await (fullOnly ? injectRoute(ctx.app, ctx.conn, opts) : injectAndShape(ctx.app, opts)),
-      );
-    },
-  };
+/** The `branch` / `worktreePath` a dock start or switch may carry. */
+function dockTargetFields(body: Record<string, unknown> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of ["branch", "worktreePath"]) {
+    const value = body?.[key];
+    if (typeof value === "string") out[key] = value;
+  }
+  return out;
 }
 
 type Resolver = DeclaredResolver;
@@ -175,16 +215,15 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
   });
 
 export const OPS: Record<string, OpSpec> = {
+  ...dockConfigOps,
+  ...taskOps,
+  ...readOps,
   ping: {
     scopes: ["full", "session"],
     handler: ({ reply }) => {
       reply({ ok: true, status: 200, result: { pong: true } });
     },
   },
-  "sessions.list": routeOp(["full"], ({ body }) => ({
-    method: "GET",
-    url: buildQueryUrl("/api/sessions", body),
-  })),
   // Phase 4 (#187) — single-session inspect. Reachable at session scope
   // with no `sessionId` at all (defaults to the connection's own pinned
   // session — see resolveTargetSessionId), which is the shape an agent
@@ -296,79 +335,26 @@ export const OPS: Record<string, OpSpec> = {
   // A raw OpSpec like sessions.wait, so it does its own pinning FIRST.
   "sessions.wait_for_output": {
     scopes: ["full", "session"],
-    handler: async ({ app, conn, body, reply }) => {
-      const target = resolveOwnedSessionId(app, conn, body, { childOnly: true });
+    handler: async (ctx) => {
+      const target = resolveOwnedSessionId(ctx.app, ctx.conn, ctx.body, { childOnly: true });
       if (!target.ok) {
-        reply(target.reply);
+        ctx.reply(target.reply);
         return;
       }
-      const matcher = compileOutputMatcher(body?.match, body?.regex);
-      if (!matcher.ok) {
-        reply(bad(400, matcher.error));
+      await waitOutputFor(ctx, target.id);
+    },
+  },
+  // #3049 — the same wait, on the running session of one of the caller's OWN
+  // project's dock controls (a dock session is never the caller's child).
+  "docks.wait_for_output": {
+    scopes: ["full", "session"],
+    handler: async (ctx) => {
+      const target = resolveDockSessionId(ctx);
+      if (!target.ok) {
+        ctx.reply(target.reply);
         return;
       }
-      const timeout = parseWaitTimeout(body?.timeoutMs);
-      if (!timeout.ok) {
-        reply(bad(400, timeout.error));
-        return;
-      }
-      const afterOffset = body?.afterOffset;
-      if (
-        afterOffset !== undefined &&
-        (typeof afterOffset !== "number" || !Number.isInteger(afterOffset) || afterOffset < 0)
-      ) {
-        reply(bad(400, "'afterOffset' must be a non-negative integer"));
-        return;
-      }
-      if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
-        reply(bad(429, "too many pending waits on this connection"));
-        return;
-      }
-      const unverifiable = await adoptLocalChild(app, target.id);
-      if (unverifiable) {
-        reply(unverifiable);
-        return;
-      }
-      const controller = new AbortController();
-      const onClose = () => controller.abort();
-      const offClose = conn.onClose(onClose);
-      conn.activeWaits = (conn.activeWaits ?? 0) + 1;
-      try {
-        const callerActive = () =>
-          conn.scope !== "session" || sessionRowIsActive(app, conn.sessionId!);
-        // The wait runs on the child's own host (issue #1951): the PTY lives
-        // there. A local child is one in-process wait; a remote one is a loop
-        // of bounded waits (SessionBackend.waitOutput).
-        const outcome = await resolveBackend(app, childHostId(app, target.id)).waitOutput(
-          target.id,
-          {
-            match: body?.match as string,
-            regex: body?.regex === true,
-            timeoutMs: timeout.timeoutMs,
-            ...(afterOffset !== undefined ? { afterOffset } : {}),
-            signal: controller.signal,
-            // The caller must stay active for the whole wait, same as sessions.wait.
-            alive: callerActive,
-          },
-        );
-        if ("aborted" in outcome) return;
-        if ("notRunning" in outcome) {
-          reply(bad(409, NOT_LOCAL_MESSAGE));
-          return;
-        }
-        if ("failed" in outcome) {
-          reply(bad(outcome.status, outcome.error));
-          return;
-        }
-        if ("gone" in outcome && !callerActive()) {
-          reply(bad(403, "this session is no longer active"));
-          return;
-        }
-        reply({ ok: true, status: 200, result: outcome });
-      } finally {
-        conn.activeWaits -= 1;
-        offClose();
-      }
+      await waitOutputFor(ctx, target.id);
     },
   },
   // Types a prompt into a running CHILD agent and (optionally) waits for its
@@ -633,7 +619,14 @@ export const OPS: Record<string, OpSpec> = {
         ({ afterSeq, outputOffset } = delivery);
       }
 
-      const delivered = { delivered: true, submitted: shouldSubmit, outputOffset };
+      // `afterSeq` is also handed back so wait_for_output can start its window
+      // where the child begins answering (#3159); absent from an old agent.
+      const delivered = {
+        delivered: true,
+        submitted: shouldSubmit,
+        outputOffset,
+        ...(afterSeq !== undefined ? { afterSeq } : {}),
+      };
       if (waitOpts === null) {
         reply({ ok: true, status: 200, result: delivered });
         return;
@@ -1480,11 +1473,32 @@ export const OPS: Record<string, OpSpec> = {
     onProject((id, ctx) => {
       const controlId = extractIdField(ctx.body, "dockControlId");
       if (controlId === null) return bad(400, "'dockControlId' is required");
-      const branch = typeof ctx.body?.branch === "string" ? ctx.body.branch : undefined;
       return {
         method: "POST",
         url: `/api/projects/${enc(id)}/dock/controls/${enc(controlId)}/start`,
-        payload: json(branch !== undefined ? { branch } : {}),
+        payload: json(dockTargetFields(ctx.body)),
+      };
+    }),
+  ),
+  // #3049 — the running control's terminal screen as plain text.
+  "docks.logs": routeOp(
+    ["full", "session"],
+    pinned((ctx) => {
+      const target = resolveDockSessionId(ctx);
+      return target.ok
+        ? { method: "GET", url: `/api/sessions/${enc(target.id)}/scrollback?mode=rendered` }
+        : target.reply;
+    }),
+  ),
+  "docks.switch": routeOp(
+    ["full", "session"],
+    onProject((id, ctx) => {
+      const controlId = extractIdField(ctx.body, "dockControlId");
+      if (controlId === null) return bad(400, "'dockControlId' is required");
+      return {
+        method: "POST",
+        url: `/api/projects/${enc(id)}/dock/controls/${enc(controlId)}/switch`,
+        payload: json(dockTargetFields(ctx.body)),
       };
     }),
   ),

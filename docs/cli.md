@@ -67,6 +67,14 @@ mullion review [--pr <n>] [--repo <owner/name>] [--branch <b>] [--force]
 mullion review status [--pr <n>] [--repo <owner/name>] [--branch <b>]
 mullion review stop <runId>
 mullion preview create|get|delete|list
+mullion task list [--status <s>] [--project <id>]
+mullion task get <id>
+mullion task retry <id> [--agent <a>] [--review-agent <r>]
+mullion task start <id> [--agent <a>] [--review-agent <r>]
+mullion task close <id> [--reason <text>]
+mullion task archive <id>
+mullion task unarchive <id>
+mullion task push
 mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
                stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
@@ -85,20 +93,20 @@ Aliases: `ps` → `session list`, `kill` → `session kill`, `logs` → `session
 
 ### session
 
-- `session list [--project <id>] [--kind terminal|dock]`
+- `session list [--project <id>] [--kind terminal|dock]` — read-only; at session scope shows your own project's sessions, plus other projects' only when yours is a coordinator they accept (`command`/`env` omitted).
 - `session get [<id>]` — omit `<id>` to inspect the session you're running
   inside (or pass `--session <id>`).
 - `session create --project <id> --command <cmd> [--name <n>] [--cwd <path>] [--kind terminal|dock] [--skip-permissions]`
 - `session spawn-child --command <cmd> [--parent <id>] [--project <id|name>] [--name <n>] [--cwd <path>] [--host <hostId> | --platform darwin|linux|win32] [--isolate] [--kind terminal|dock] [--skip-permissions] [--initial-prompt <text>] [--open right|below]` (Phase 5, issue #193 5.3b) — spawns a real child session (own PTY) of `--parent`, or of the session you're running inside when `--parent` is omitted (falls back to `--session`). The project is derived from the parent unless `--project <id|name>` names another one (issue #2110): that needs the parent's project to be a **coordinator** ("This project coordinates" in Edit project, off by default) and is otherwise a 403 naming the setting; an unknown name is a 404 and a name shared by several projects a 409 (pass the id). `cwd`, `--isolate` and `--host`/`--platform` then refer to the target project. `mullion project targets [<sessionId>]` lists the projects a coordinator session may name. Reachable at session scope (`sessions.spawn_child`), unlike `session create` above — see [`socket-api.md`](socket-api.md) for the full validation rules (same project, one level of nesting, cwd containment — including the sibling-git-worktree exception on a local host — a per-parent live-child cap). `--kind` only takes effect for a full-scope caller (`MULLION_AUTH_TOKEN` set); silently ignored at session scope. `--skip-permissions` IS honoured at session scope, but a child is never more permissive than the session that spawns it: it is capped by the parent's own posture, so a child of an unattended session is unattended and a child of a prompting one still prompts (issue #1733 — see [`socket-api.md`](socket-api.md)). `--initial-prompt` is sent as the underlying `seedPrompt` field (matching the MCP `spawn_child_session` tool's `initialPrompt` param name, the clearer name from a caller's point of view) and is honored at both scopes. `--host`/`--platform` (issue #1951, mutually exclusive) run the child on a chosen agent host or on any eligible host of that platform — refused with a 409 when none matches, never silently placed elsewhere; the project needs a checkout on that host (`hostCwds`). `--isolate` gives the child its own fresh worktree on the host it runs on, and cannot be combined with `--cwd` — see [`multi-host.md`](multi-host.md#dispatching-a-child-session-to-another-host). `--open right|below` (issue #1624) asks the dashboard to open the child's panel beside its parent's — even when the user's auto-open-child-panels setting is off; it is only a hint, dropped if the parent's panel isn't in the user's current workspace within about a minute of the spawn. **No `--model`/`--small-model` flag exists on this command** — only the MCP `spawn_child_session` tool or a raw control-socket client can set the child's model/smallModel; when set there and `--parent`/`parentSessionId` is given, `model` inherits the parent session's own model **for opencode only** (ignored for any other command), and `smallModel` inherits the same way whenever the resolved command is an opencode adapter.
 - `session children [<id>] [--status active|killed|exited]` — lists the children (live and exited) of `<id>`, or of the session you're running inside when omitted, with their derived `sessionStatus`. Reachable at session scope for your own children only.
 - `session wait <id> [--until <a,b,...>] [--timeout <seconds>] [--after-seq <n>]` — blocks server-side until the child's derived status matches `--until` (statuses and/or severities; default: anything needing attention — `done`, `blocked`, `waiting`, `failed`, `gone`) or the timeout (default 600 s, max 3600 s) passes. Prints `{status, severity, detail, timedOut, eventSeq}`; on a timeout `timedOut` is `true` (exit code still 0 — check the field). `--after-seq` ignores a status reached before that event seq (use a previous result's `eventSeq`). At session scope `<id>` must be a child of your own session. See [`socket-api.md`](socket-api.md) for the full semantics.
-- `session wait-output <id> <text...> [--regex] [--timeout <seconds>] [--after-offset <n>]` — blocks server-side until a **child** prints `<text>` (a literal substring, or with `--regex` a guarded regular expression: no backreferences/lookarounds/nested quantifiers) and prints `{matched, text, line, outputOffset}`, `{timedOut:true}` or `{gone:true}`. Only output printed from now on counts, unless `--after-offset` is the `outputOffset` a `session prompt` printed. `--timeout` is in SECONDS (default 600, max 3600). With `--session <id>`, every positional is the text. At session scope `<id>` must be a child of your own session. A child on another host is waited for on that host, in bounded chunks (issue #1951); see [`multi-host.md`](multi-host.md#dispatching-a-child-session-to-another-host).
+- `session wait-output <id> <text...> [--regex] [--timeout <seconds>] [--after-offset <n>] [--after-seq <n>]` — blocks server-side until a **child** prints `<text>` (a literal substring, or with `--regex` a guarded regular expression: no backreferences/lookarounds/nested quantifiers) and prints `{matched, text, line, outputOffset}` (`text`/`line` come from a rendered view: the recent output replayed through a terminal emulator at the session's size, so a full-screen TUI's in-place repaints resolve to what a person would read, not repaint noise), `{timedOut:true}` or `{gone:true}`. Only output printed from now on counts, unless `--after-offset` is the `outputOffset` a `session prompt` printed. Add `--after-seq` (that reply's `afterSeq`) and, for a CLI that emits hook events (Claude Code), the window starts where the child began answering (its first `turn_start`/`progress` hook after that seq), so a marker the prompt itself contains no longer matches the TUI's redrawn echo; for a CLI with no hook events, or before its first one arrived, the post-submit offset applies and the marker must not be text the prompt contains. `--timeout` is in SECONDS (default 600, max 3600). With `--session <id>`, every positional is the text. At session scope `<id>` must be a child of your own session. A child on another host is waited for on that host, in bounded chunks (issue #1951); see [`multi-host.md`](multi-host.md#dispatching-a-child-session-to-another-host).
 - `session message <id> <text...> [--wait] [--ttl <seconds>]` / `session message-status <messageId>` — hand a note to an already-running **top-level** session in **another project** (not your own child: that is `session prompt`). Allowed only when your project is a coordinator that reaches that project and that project has opted in under **Accepts messages from other projects** (off by default); every other case is one `403` that does not say which. The text is queued and typed into the target once it is idle and not on a dialog, prefixed `Message from session <id> (project "<name>"):`, or it expires after `--ttl` seconds (default 600, max 3600). Prints `message <id>: queued` at once, or with `--wait` holds until it is `delivered`, `refused` or `expired`; `message-status` asks again later. `<text>` is the remaining words, or `-` for stdin. Limits: 8 KiB, 10 per minute per session, 8 waiting per target. Session scope only. See [`socket-api.md`](socket-api.md#sessionsmessage-issue-2270).
 - `session prompt <id> <text...> [--wait [--until <a,b,...>] [--timeout <seconds>]] [--no-submit]` — types a prompt into a running **child** agent (Claude Code, Codex or opencode) and submits it as a new turn; `<text>` is the remaining words joined by spaces, or `-` to read it from stdin (with `--session <id>`, every positional is the text). With `--wait` it then blocks (as `session wait`) until the child's turn ends and prints `{delivered, submitted, outputOffset, wait: {...}}`; `--until`/`--timeout` only apply with `--wait`, and `--wait` cannot be combined with `--no-submit` (which only pastes). Refused with `409 agent_blocked` while the child is waiting on a permission/plan/question dialog, `409 agent_busy` for `--wait` while it is mid-turn (prompt without `--wait` to queue the message), and `501` for a shell or unsupported agent. At session scope `<id>` must be a child of your own session. See [`socket-api.md`](socket-api.md) for the framing, sanitization and error semantics. For a child on another host the prompt is typed on that host (issue #1951) and `--wait` works there too (issue #1962): the child's host reports its own turn state, so `agent_busy` and the "has a new turn started" check behave as for a local child; the wait polls that host once a second.
 - `session kill <id> [--cascade detach|kill]` — `detach` (default) leaves any live children of `<id>` running as independent top-level sessions; `kill` cascades to them too. At session scope `<id>` must be a child of your own session (killing yourself or an unrelated session is `403`). `session get <child>` and `session logs <child>` work for your children too.
 - `session rename <id> <name>` — or `session rename <name>` with `--session <id>` supplying the target.
-- `session transcript <id> [--after <seq>] [--limit <n>] [--tools]` — what the session said, as plain text: the ordered conversation (user turns, assistant replies, and one summary line per tool call and result), read from the agent CLI's own transcript file rather than the terminal. Use it instead of `logs` to read a child's reply. Each page ends with the cursor to resume from; pass it as `--after` to read only what came after (the natural companion to `prompt` + `wait`). `--limit` (default 50, max 500) bounds the entries, `--tools` keeps tool calls and results in full (otherwise cut to a line), and a page is capped at 256 KiB with a long entry truncated and marked. `--json` returns `{ entries: [{ seq, role, text, ts }], nextSeq, more }`; `seq` is an opaque increasing cursor. Works for Claude Code and Codex sessions, on any host, for yourself and your own children at session scope; other CLIs answer `501 not-supported`, and a session that has not yet reported its transcript path (it arrives with the agent's first hook) answers `409`. Not a live tail: for streaming, see `events tail`.
-- `session logs <id> [--text]` (alias: `logs <id>`) — dumps the session's scrollback buffer (raw bytes, including ANSI escapes) to stdout. One-shot, not a live tail. `--text` replays the buffer through a headless terminal emulator at the session's own size and prints the result as plain text — the scrolled-off lines, then the visible screen — which is what you want for a full-screen agent CLI (Claude Code, Codex, opencode), whose raw stream is cursor-movement escapes and spinner frames. If the program ended on the alternate screen, the normal buffer is printed first, then the alternate screen under an `--- alternate screen ---` line. Output is capped at the last 2000 lines.
+- `session transcript <id> [--after <seq>] [--limit <n>] [--tools]` — what the session said, as plain text: the ordered conversation (user turns, assistant replies, and one summary line per tool call and result), read from the agent CLI's own transcript file rather than the terminal. Use it instead of `logs` to read a child's reply. Each page ends with the cursor to resume from; pass it as `--after` to read only what came after (the natural companion to `prompt` + `wait`). `--limit` (default 50, max 500) bounds the entries, `--tools` keeps tool calls and results in full (otherwise cut to a line), and a page is capped at 256 KiB with a long entry truncated and marked. `--json` returns `{ entries: [{ seq, role, text, ts }], nextSeq, more }`; `seq` is an opaque increasing cursor. Works for Claude Code and Codex sessions, on any host, for yourself and your own children at session scope; other CLIs answer `501 not-supported`, and a session that has not yet reported its transcript path (it arrives with the agent's first hook) answers `409`. Limits: the session must still be tracked on its host, it needs the `transcript_path` the agent reported through its hooks (`409` until the first hook arrives), and only Claude Code and Codex are supported (`501` for other CLIs; `404` for an unknown session or one that is no longer tracked). Not a live tail: for streaming, see `events tail`.
+- `session logs <id> [--text]` (alias: `logs <id>`) — dumps the session's scrollback buffer (raw bytes, including ANSI escapes) to stdout. One-shot, not a live tail. `--text` replays the buffer through a headless terminal emulator at the session's own size and prints the result as plain text — the scrolled-off lines, then the visible screen — which is what you want for a full-screen agent CLI (Claude Code, Codex, opencode), whose raw stream is cursor-movement escapes and spinner frames. If the program ended on the alternate screen, the normal buffer is printed first, then the alternate screen under an `--- alternate screen ---` line. Output is capped at the last 2000 lines. A full-screen program keeps no scrollback on the alternate screen, so the `--text` result is its last screen plus whatever the normal buffer held before it started, and the marker line is followed by a hint line saying so; raw output of such a program shows partial repaints as dropped or merged characters. To read what an agent CLI (Claude Code, Codex) did or said, use `session transcript` instead (below); keep `logs` for plain shells and for what is on screen now.
 - `session exec <command...> --project <id> [--kill-on-exit]` (alias: `exec`) — creates a session, attaches to it, and forwards your terminal's stdin/resize until the remote program exits or you interrupt (Ctrl-C). **Detaches, never kills, on interrupt** — the session keeps running in the background exactly like any other Mullion session; pass `--kill-on-exit` to kill it instead.
 
 ### browser
@@ -237,6 +245,29 @@ $M browser screenshot $S --out /tmp/shot.png
 - `preview list` — lists every registered preview on the host (previews are
   host-global, not scoped to a session or project).
 
+### task
+
+- `task list [--status <s>] [--project <id>]` — lists Task Master tasks, one
+  line per task (`id`, `status`, `title`). Read-only; works from a session for your own project, and for other projects only when yours is a coordinator they accept (`agentCommand` omitted).
+- `task get <id>` — fetches one task by id; default rendering is the task
+  JSON (identical with or without `--json`). Same visibility as `task list`; an unreachable task answers like a missing one.
+- `task retry <id> [--agent <a>] [--review-agent <r>]` — retries a `failed`
+  task (re-queues a resume, which syncs the GitHub label, or resets a
+  branchless task to `ready`). Prints `<id>\t<status>`, or the full task with
+  `--json`. Full-scope only.
+- `task start <id> [--agent <a>] [--review-agent <r>]` — claims/enqueues a
+  `ready` task (`POST /api/tasks/:id/claim`). Prints `<id>\t<status>`, or the
+  full task with `--json`. Full-scope only.
+- `task close <id> [--reason <text>]` — gives up on a `reviewing` task
+  (`POST /api/tasks/:id/give-up`), marking it `failed`. Prints `<id>\t<status>`,
+  or the full task with `--json`. Full-scope only.
+- `task archive <id>` / `task unarchive <id>` — archives or unarchives a
+  finished (`done`/`failed`) task. Prints `<id>\t<status>\tarchived|unarchived`,
+  or the full task with `--json`. Full-scope only.
+- `task push` — pushes the current Task Master task's branch and opens its
+  pull request (`tasks.push`; reachable at full or session scope for the
+  caller's own task).
+
 ### dock
 
 Sessions spawned from a project's dock controls (persistent monitors — dev
@@ -248,6 +279,12 @@ servers, log tails — distinct from one-shot launchers).
   control (`docks.start`); a lone id is your own project's control. `--branch`
   runs it in a preview worktree of that branch. A Docker-discovered control
   needs full scope.
+- `dock logs [<projectId>] <dockControlId>` — the running control's screen as text.
+- `dock switch [<projectId>] <dockControlId> <branch>` / `--worktree <path>` (the project checkout, a directory inside it, or a git worktree; a relative path is anchored at the checkout) —
+  restart the control on a branch (preview worktree) or an existing worktree.
+- `dock config get [<projectId>]` — the raw `.crs/dock.json` (`{controls, invalid, reason}`).
+- `dock config set [<projectId>] --upsert '<json>' | --remove <id> | --controls '<json>'` —
+  add/replace one control, drop one, or replace the list; validated like Settings → Dock.
 - `dock stop <dockControlId> --control` (your own project) /
   `dock stop <projectId> <dockControlId>` / `dock stop <sessionId>` (full scope
   only: kills any session by id).
@@ -614,7 +651,7 @@ which field rejected (the per-field `ok`/`status`/`error`).
 per [Authentication and scope](#authentication-and-scope) below: writing the
 full-scope `MULLION_AUTH_TOKEN` into a per-session config file would let any
 agent read its own operator credential straight off disk. So from inside a
-normal agent session **when authentication is enabled**, `list_sessions`/
+normal agent session **when authentication is enabled**,
 `start_dock_session`/`stop_dock_session`/`list_projects`/`create_preview`/
 `delete_preview`/`list_previews`/`set_project_tooling` reply with a scope
 error (same message as the CLI's own, above) rather than succeeding —
@@ -653,11 +690,13 @@ one session, sufficient for everything a session-scoped agent needs to do to
 itself (`session get/rename/logs`, the full `browser` subcommand,
 `project actions`, `events tail`, `history` — restricted to its own
 session's events). It is never sufficient for **full-scope**
-ops — `session list/create`, `session kill` of anything but your own child, `project dock`, `preview *`, and
-`mcp`-adjacent listing — because `MULLION_AUTH_TOKEN` is deliberately
-stripped from every spawned session's environment
-(`src/services/session-env.ts`) so a session can never mint itself operator
-credentials.
+ops — `session create`, `session kill` of anything but your own child,
+`project list/dock`, `preview *` and `mcp`-adjacent listing — because
+`MULLION_AUTH_TOKEN` is deliberately stripped from every spawned session's
+environment (`src/services/session-env.ts`) so a session can never mint itself
+operator credentials. (`session list`, `task list` and `task get` are the one
+exception: they work at session scope, read-only, for your own project and, for
+a coordinator, for targets that accept it.)
 
 Running a full-scope-only command from inside a session fails with a message
 naming which token was used and what to do about it:

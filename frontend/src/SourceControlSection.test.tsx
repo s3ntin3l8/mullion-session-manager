@@ -8,6 +8,7 @@ import { api, LOCAL_HOST_ID } from "./api/index.js";
 import type { GitStatus, Project, Session } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
 import { pickDropdownOption } from "./test/dropdown.js";
+import { makeHost } from "./test/fixtures.js";
 
 // Uses the real zustand store (seeded via setState), same pattern as
 // SavedUrlModal.test.tsx — the component itself writes to the store
@@ -155,6 +156,19 @@ afterEach(() => {
 });
 
 describe("SourceControlSection — embedded / controlled (right sidebar)", () => {
+  it("pulls an extra checkout even when the primary checkout has no status", async () => {
+    const project = { ...PROJECT_A, hostCwds: { box: "/remote/checkout" } };
+    useDashboardStore.setState({
+      projects: [project],
+      hosts: [makeHost({ id: "box", name: "Build box", health: "online" })],
+      gitStatuses: { [project.id]: null },
+    });
+    render(<SourceControlSection embedded projectId={project.id} onOpenGit={vi.fn()} />);
+    await userEvent.setup().click(screen.getByRole("button", { name: "Pull on Build box" }));
+    expect(api.postProjectGitPull).toHaveBeenCalledWith(project.id, undefined, "box");
+    expect(await screen.findByRole("status")).toHaveTextContent("Pulled successfully.");
+  });
+
   function seed() {
     useDashboardStore.setState({
       projects: [PROJECT_A, PROJECT_B],

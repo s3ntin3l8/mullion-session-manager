@@ -1,0 +1,45 @@
+import type { FastifyInstance } from "fastify";
+import { access, constants as fsConstants, stat } from "node:fs/promises";
+import type { DeviceKind, DevicePlatform } from "./device-drivers/types.js";
+import { isDeviceKindSupported } from "./device-manager.js";
+import { getCachedCapabilities } from "./host-capabilities.js";
+
+/** The device kinds this host can run right now: what `features.deviceKinds`
+ * reports for the primary's own host, and what a primary reads before it places
+ * a device here. Empty when the panel is off. */
+export function localDeviceKinds(app: FastifyInstance): DeviceKind[] {
+  if (!app.devicePanelEnabled) return [];
+  return app.deviceKinds.filter((kind) => kind !== "emulator" || app.deviceEmulatorEnabled);
+}
+
+/**
+ * Whether this host can run an iOS Simulator device right now (#1943). All four
+ * must hold: the platform supports `ios-simulator` (macOS), the operator turned
+ * it on (`DEVICE_IOS_ENABLED`), Xcode's simulator toolchain works here (the
+ * `xcode` placement capability, reused rather than a new capability) and
+ * `DEVICE_IDB_COMPANION_PATH` is an executable file.
+ */
+export async function iosSimulatorAvailable(app: FastifyInstance): Promise<boolean> {
+  if (!isDeviceKindSupported("ios-simulator")) return false;
+  if (!app.config.DEVICE_IOS_ENABLED) return false;
+  if (!(await getCachedCapabilities(app)).includes("xcode")) return false;
+  const companion = app.config.DEVICE_IDB_COMPANION_PATH;
+  if (!companion) return false;
+  try {
+    if (!(await stat(companion)).isFile()) return false;
+    await access(companion, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The device platforms this host can run right now: Android when any Android
+ * kind is available, iOS when the simulator is. Empty when the panel is off. */
+export async function localDevicePlatforms(app: FastifyInstance): Promise<DevicePlatform[]> {
+  if (!app.devicePanelEnabled) return [];
+  const platforms: DevicePlatform[] = [];
+  if (localDeviceKinds(app).length > 0) platforms.push("android");
+  if (await iosSimulatorAvailable(app)) platforms.push("ios");
+  return platforms;
+}

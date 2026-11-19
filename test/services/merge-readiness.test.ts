@@ -56,4 +56,34 @@ describe("classifyMergeReadiness", () => {
   it("classifies any unrecognized future mergeableState as computing, not an error", () => {
     expect(classifyMergeReadiness(pr({ mergeableState: "some-future-state" }))).toBe("computing");
   });
+  describe("overrideHeadSha (Merge anyway)", () => {
+    const HEAD = "a".repeat(40);
+
+    it("reads unstable as clean only while the override matches the PR's head", () => {
+      expect(classifyMergeReadiness(pr({ mergeableState: "unstable", headSha: HEAD }), HEAD)).toBe(
+        "clean",
+      );
+      expect(
+        classifyMergeReadiness(pr({ mergeableState: "unstable", headSha: "b".repeat(40) }), HEAD),
+      ).toBe("unstable");
+    });
+
+    it("keeps unstable with no override, a null override, or a PR head that is unknown", () => {
+      expect(classifyMergeReadiness(pr({ mergeableState: "unstable", headSha: HEAD }))).toBe(
+        "unstable",
+      );
+      expect(classifyMergeReadiness(pr({ mergeableState: "unstable", headSha: HEAD }), null)).toBe(
+        "unstable",
+      );
+      expect(classifyMergeReadiness(pr({ mergeableState: "unstable" }), HEAD)).toBe("unstable");
+    });
+
+    it("never overrides a required check (blocked), a conflict or an out-of-date branch", () => {
+      for (const state of ["blocked", "dirty", "behind"]) {
+        expect(classifyMergeReadiness(pr({ mergeableState: state, headSha: HEAD }), HEAD)).toBe(
+          state,
+        );
+      }
+    });
+  });
 });

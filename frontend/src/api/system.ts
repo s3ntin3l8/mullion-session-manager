@@ -27,6 +27,7 @@ import type {
   CleanupStatus,
 } from "./types.js";
 import type { Launcher } from "../../../src/shared/types.js";
+import type { AndroidImagesStatus } from "./storage-types.js";
 
 export function normalizeAgentId(id: string): string {
   return id.startsWith("agent:") ? id.slice(6) : id;
@@ -98,6 +99,11 @@ export const systemApi = {
   getCacheStorage: (refresh?: boolean) =>
     request<Measured<CacheStorageStatus>>(`/api/storage/caches${refresh ? "?refresh=1" : ""}`),
 
+  getAndroidImages: (refresh?: boolean) =>
+    request<Measured<AndroidImagesStatus>>(
+      `/api/storage/android-images${refresh ? "?refresh=1" : ""}`,
+    ),
+
   getOpencodeStorage: (refresh?: boolean) =>
     request<Measured<OpencodeStorageStatus>>(`/api/storage/opencode${refresh ? "?refresh=1" : ""}`),
 
@@ -119,10 +125,14 @@ export const systemApi = {
   // which sources take part. Only the ticked cache ids that are ALSO in the
   // saved settings are emptied (settings are saved on a short debounce, so the
   // stored set can briefly lag an untick). 409 means one is already running.
-  startCleanup: (mode: DockerPruneMode, cacheDirs?: string[]) =>
+  startCleanup: (mode: DockerPruneMode, cacheDirs?: string[], optIns?: string[]) =>
     request<CleanupJob>("/api/storage/cleanup", {
       method: "POST",
-      body: JSON.stringify({ mode, ...(cacheDirs ? { cacheDirs } : {}) }),
+      body: JSON.stringify({
+        mode,
+        ...(cacheDirs ? { cacheDirs } : {}),
+        ...(optIns ? { optIns } : {}),
+      }),
     }),
   getCleanupStatus: () => request<CleanupStatus>("/api/storage/cleanup"),
 

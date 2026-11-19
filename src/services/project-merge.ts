@@ -577,7 +577,7 @@ export function mergeProjects(
             issueNumber: null,
             archivedAt: t.archivedAt ?? now,
             // #2292 — record that a merge superseded this copy, so a Retry
-            // refuses it (retryTask would otherwise resume the copy's branch
+            // refuses it (enqueueRetry would otherwise resume the copy's branch
             // and spawn a duplicate worker for work the survivor's copy owns).
             // A durable marker, not a reading of the failure reason below: the
             // reason is only a default (`??`) and says nothing about a copy

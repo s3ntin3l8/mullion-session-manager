@@ -15,6 +15,7 @@ import {
 import { taskReReviewEligible } from "./github/prNextStep.js";
 import { parseWorkflowChange } from "./workflowChange.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
+import { ArchiveTaskAction } from "./ArchiveTaskAction.js";
 
 // What each review action does, said once for the buttons' tooltips and the
 // confirm step's hint — the three of them are easy to confuse.
@@ -25,6 +26,13 @@ const REVIEW_HINT =
   "Run the review again on the current branch, without sending anything to the agent.";
 const GIVE_UP_HINT =
   "Stop the task. It is marked Failed, its sessions stop and any draft pull request closes. You can Retry it later from the branch.";
+
+// #3194 — what "Start fresh" does, said where the button is: the preserved
+// branch stays on the host that holds it (with its commits), and the task
+// runs again from scratch somewhere else.
+function startFreshHint(hostId: string): string {
+  return `Start fresh: abandon the branch on ${hostId} (its commits stay there) and run the task from scratch.`;
+}
 
 // Shared by the task drawer (TaskDetail.tsx) and the GitHub PR sidebar
 // (github/PrDetailView.tsx) so both offer the same per-status task actions.
@@ -67,6 +75,7 @@ export function TaskActions({
     approveTask,
     rejectTask,
     retryTask,
+    startFreshTask,
     giveUpTask,
     reReviewTask,
     updateTask,
@@ -92,15 +101,19 @@ export function TaskActions({
 
   // The non-primary actions: inline by default, behind the `⋯` menu when
   // `overflow` is set. Picking an item closes the menu.
-  const secondary = (items: ReactNode) =>
+  // `items` may be a function of the menu's `close`, for an item that must
+  // outlive the click and close the menu itself once its request settles.
+  const secondary = (items: ReactNode | ((close: () => void) => ReactNode)) =>
     overflow ? (
       <IconPopover label="More task actions" icon={<OverflowIcon size={14} />}>
         {(close) => (
           <div className="sb-menu-list" onClick={close}>
-            {items}
+            {typeof items === "function" ? items(close) : items}
           </div>
         )}
       </IconPopover>
+    ) : typeof items === "function" ? (
+      items(() => {})
     ) : (
       items
     );
@@ -208,6 +221,15 @@ export function TaskActions({
     );
   }
 
+  // #1015 — Archive/Unarchive for a finished task, beside its primary action
+  // (same done/failed restriction as the server).
+  const archive =
+    task.status === "done" || task.status === "failed"
+      ? secondary((close) => (
+          <ArchiveTaskAction taskId={task.id} archivedAt={task.archivedAt} onDone={close} />
+        ))
+      : null;
+
   // #483 — resumes on the preserved mullion/task-<id> branch rather than
   // starting over. Gated like Claim, since it also spawns a session.
   if (task.status === "failed") {
@@ -230,6 +252,40 @@ export function TaskActions({
         >
           Retry
         </button>
+        {archive}
+        {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
+        {error && <span className="task-detail-error">{error}</span>}
+      </div>
+    );
+  }
+
+  // #3194 — a retry that is WAITING for its original host. "Start fresh" is
+  // offered for ANY such wait, because the operator is the only one who can
+  // abandon the preserved branch (it stays on that host, with its commits)
+  // and run the task from scratch. Only a wait whose branch is CONFIRMED
+  // stranded on that host — not on origin — is deliberately never failed for
+  // waiting; every other wait keeps the dispatch give-up.
+  if (task.status === "claimed" && Boolean(task.retryHostId)) {
+    return (
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn notif-gate-deny"
+          disabled={submitting || !taskMasterEnabled}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await startFreshTask(task.id);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to start the task fresh");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          Start fresh
+        </button>
+        <span className="task-detail-hint">{startFreshHint(task.retryHostId ?? "its host")}</span>
         {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
         {error && <span className="task-detail-error">{error}</span>}
       </div>
@@ -245,9 +301,10 @@ export function TaskActions({
   // this comment wrongly claimed the Reject/Give-up "ungated escape hatch"
   // posture applied here; it doesn't, that route has no such carve-out).
   if (task.status === "done" && task.prNumber !== null) {
-    return <TaskMergeStatus task={task} />;
+    return <TaskMergeStatus task={task} trailing={archive} />;
   }
 
+  if (task.status === "done") return <div className="task-detail-actions">{archive}</div>;
   if (task.status !== "reviewing") return null;
 
   if (pendingAction !== null) {
@@ -498,7 +555,10 @@ function TrackingEpicApprovalConfirm({
 // or outstanding with a recorded error (unstable/blocked/dirty — needs a
 // human to actually go fix something, "Retry merge" just re-arms the
 // sweep's backoff, it doesn't retry the SAME failed state any faster).
-function TaskMergeStatus({ task }: { task: Task }) {
+// `trailing` is the only seam for adding a button to this block: render it
+// inside the single `.task-detail-actions` below, never as a sibling block
+// (the GitHub strip gives every actions block `flex: 1`).
+function TaskMergeStatus({ task, trailing }: { task: Task; trailing?: ReactNode }) {
   const { taskMasterEnabled, mergeTask } = useDashboardStore();
   const mergeOnApprove = useDashboardStore(
     (s) => s.projects?.find((p) => p.id === task.projectId)?.mergeOnApprove,
@@ -576,6 +636,26 @@ function TaskMergeStatus({ task }: { task: Task }) {
           {pending ? "Retry merge" : "Merge now"}
         </button>
       )}
+      {!merged && task.mergeOverridable && (
+        <button
+          className="notif-gate-btn"
+          disabled={submitting || !taskMasterEnabled}
+          title="Merge even though the named non-required checks are red, and past any other non-required check still running. Applies to this commit only: a new push voids it."
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await mergeTask(task.id, { overrideNonRequiredChecks: true });
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to override the checks");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          Merge anyway
+        </button>
+      )}
       {pending && !task.mergeError && !merged && (
         <span className="task-detail-hint">
           Merge pending — landing once the branch is up to date and checks are green.
@@ -598,6 +678,7 @@ function TaskMergeStatus({ task }: { task: Task }) {
       {task.releaseError && <span className="task-detail-error">{task.releaseError}</span>}
       {disabledHint && <span className="task-detail-hint">{disabledHint}</span>}
       {error && <span className="task-detail-error">{error}</span>}
+      {trailing}
     </div>
   );
 }

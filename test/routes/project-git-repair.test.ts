@@ -28,7 +28,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
-// test/services/pty-manager.test.ts and test/routes/sessions.test.ts, so
+// test/helpers/pty-manager-harness.ts and test/routes/sessions.test.ts, so
 // this file exercises the route/DB layer without depending on a real
 // `systemd --user` session existing in CI. This file is the one place
 // `POST /api/sessions` was still hitting a real spawn: CI's runner can't

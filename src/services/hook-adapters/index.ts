@@ -7,6 +7,7 @@ import { openCodeAdapter } from "./opencode.js";
 import { codexAdapter } from "./codex.js";
 import { agyAdapter } from "./agy.js";
 import { mcodeAdapter } from "./mcode.js";
+import { delegationApplies, type DelegationContext } from "./delegation.js";
 
 export type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 export { resolveForwarderPath, resolveOpenCodePluginPath } from "./shared.js";
@@ -137,10 +138,13 @@ export function getAdapterResumeSessionArgs(
 }
 
 /**
- * The CLI-specific sentence telling a Task Master worker that it may
- * decompose this task and delegate the mechanical parts to a cheaper
- * subagent, or `null` when no adapter matches (a plain shell) or the
- * matched adapter has no `delegationHint`.
+ * The CLI-specific paragraph telling a Task Master worker how to delegate
+ * part of its task to the install's configured Delegate model, or `null`
+ * when no adapter matches (a plain shell), the matched adapter has no
+ * `delegationHint`, no delegate model is configured, or the delegate would
+ * not be cheaper than the model the worker already runs (see
+ * delegation.ts's delegationApplies — an `opusplan` worker is effectively
+ * Sonnet, so delegating to Sonnet saves nothing).
  *
  * Same pure lookup shape as getAdapterPromptFraming above, and the
  * SANCTIONED way for callers to branch on the agent family without parsing
@@ -148,7 +152,7 @@ export function getAdapterResumeSessionArgs(
  * invariant (see AGENTS.md) lists this file's helpers as the only place
  * that inspection is allowed outside the adapters themselves.
  *
- * Why a per-CLI sentence rather than one generic one: the four CLIs expose
+ * Why a per-CLI paragraph rather than one generic one: the CLIs expose
  * delegation differently, and a sentence that named the wrong tool (or the
  * wrong way of choosing the child's model) would be actively misleading.
  * Claude Code's Task tool takes a `subagent_type` and an optional per-call
@@ -159,9 +163,11 @@ export function getAdapterResumeSessionArgs(
  * "providerID/modelID#variant"); agy's `invoke_subagent` takes a spec with
  * a model and a modelTier.
  */
-export function getAdapterDelegationHint(command: string): string | null {
+export function getAdapterDelegationHint(command: string, ctx: DelegationContext): string | null {
   const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
-  return adapter?.delegationHint ?? null;
+  if (!adapter?.delegationHint) return null;
+  if (!delegationApplies(ctx, adapter.modelTier)) return null;
+  return adapter.delegationHint(ctx.delegateModel as string);
 }
 
 /**
@@ -225,6 +231,17 @@ export function commandModelCli(command: string): ModelInjectingCli | null {
   // Issue: mcode support — mcode takes `-m <provider/model>` too.
   if (adapter === mcodeAdapter) return "mcode";
   return null;
+}
+
+/**
+ * The short alias (`-m`) a model-injecting CLI accepts for `--model`, or
+ * `undefined` for one with only the long flag. Codex and mcode take `-m`; this
+ * is the single place that says so for code that reads a command's own model
+ * flag (the same `shortFlag` codex.ts and mcode.ts hand to `buildModelFlag`).
+ */
+export function commandModelShortFlag(command: string): string | undefined {
+  const cli = commandModelCli(command);
+  return cli === "codex" || cli === "mcode" ? "-m" : undefined;
 }
 
 /**

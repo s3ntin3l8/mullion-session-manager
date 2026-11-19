@@ -19,6 +19,7 @@ import {
 import * as mergeHuman from "../services/task-merge-human.js";
 import { enqueueTask } from "../services/task-claim.js";
 import { enqueueRetry } from "../services/task-retry.js";
+import { startFreshTask } from "../services/task-start-fresh.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
@@ -41,7 +42,7 @@ import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
   resetAutoApproveBackoff,
-  resetMergeBackoff,
+  resetDraftPrRetryBackoff,
   resolveMaxAutoReturnRounds,
 } from "../services/task-reconciler.js";
 import { approveWorkflowChange } from "../services/task-workflow-gate.js";
@@ -50,6 +51,7 @@ import { deliverRejectFeedback } from "../services/task-reject.js";
 import { readLiveWorkerState } from "../services/task-reseed.js";
 import { deleteTaskBranch, type TaskBranchDelete } from "../services/task-branch-delete.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
+import { resolveCleanupTarget } from "../services/task-cleanup.js";
 import { isOutcomeUnknown, unknownOutcomeText } from "../services/remote-host-errors.js";
 import { resolveGitHubToken, getToken, getIntegration } from "../services/github-integration.js";
 import {
@@ -60,6 +62,7 @@ import {
 } from "../services/code-scanning.js";
 import { listTaskDismissals, recordedPriorDismissals } from "../services/code-scanning-audit.js";
 import { resolveRepoRef } from "../services/host-git.js";
+import { isMergeOverridable } from "../services/task-merge-override.js";
 import { removeLabel } from "../services/github-write.js";
 import { isPullRequestMerged } from "../services/github-merged-prs.js";
 import { isGitHubRateLimited } from "../services/github-fetch.js";
@@ -247,17 +250,22 @@ function withAutoReturnCapped<
     autoReturnRounds: number;
     projectMaxAutoReturnRounds: number | null;
     reviewPostPending: string | null;
+    status: string;
+    mergeError: string | null;
   },
 >(
   row: T,
   installCap: number,
 ): Omit<T, "projectMaxAutoReturnRounds" | "reviewPostPending"> & {
   autoReturnCapped: boolean;
+  /** "Merge anyway" is offered: only named non-required checks hold the merge. */
+  mergeOverridable: boolean;
 } & ReturnType<typeof mergeHuman.reviewPostFlags> {
   const { projectMaxAutoReturnRounds, reviewPostPending, ...rest } = row;
   return {
     ...rest,
     ...mergeHuman.reviewPostFlags(reviewPostPending),
+    mergeOverridable: isMergeOverridable(row),
     autoReturnCapped:
       row.autoReturnRounds >=
       resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }, installCap),
@@ -566,18 +574,20 @@ export async function tasksRoute(app: FastifyInstance) {
   // #729 — a `failed` GitHub-linked task that was NEVER claimed is the
   // first exception: auto-failed by `syncUnlabeledIssueToLocal` (issue lost
   // the `mullion-task` label, or closed, while still backlog/ready), it has
-  // no `branchName`, so Retry can't recover it (`no-worktree`,
-  // task-claim.ts's retryTask) and it was otherwise permanently orphaned —
+  // no `branchName`, so there is nothing for Retry to resume (it only resets
+  // such a row to `ready`, where it would be claimed afresh against an issue
+  // that is no longer tracked) and it was otherwise permanently orphaned —
   // neither refusal above has an escape hatch for it. Gated on
   // `branchName === null`, not just `status === "failed"`: a task that WAS
   // claimed carries a real worktree/branch Retry CAN resume from, and its
   // issue can independently end up closed/unlabeled later (at promote time,
   // a maintainer tidying labels, ...) — deleting that row would silently
   // discard recoverable work with no cascade to clean up the worktree it
-  // points at. That branch check alone also closes off any race with a
-  // concurrent Retry: retryTask requires a non-null `branchName` too, so
-  // nothing can move a `branchName === null`, `failed` row forward while
-  // this handler's own GitHub round-trip is in flight.
+  // points at. The branch check does NOT close off a race with a concurrent
+  // Retry: Retry moves a branchless `failed` row to `ready` while this
+  // handler's own GitHub round-trip is in flight. What keeps that safe is the
+  // status compare-and-swap below (`deleteTaskWhenStatus`, and its 409), which
+  // is load-bearing — do not remove it.
   //
   // #746 — `done` is the second exception, for both local and GitHub-linked
   // tasks. Deliberately does NOT extend the `branchName === null` guard to
@@ -684,11 +694,11 @@ export async function tasksRoute(app: FastifyInstance) {
   //      whatever's there, and `removeWorktreeIfClean` would just report
   //      "dirty" and leave it.
   //   3. branch delete, forced, last — once nothing has it checked out.
-  // Routed through the project's SessionBackend (not the local git-worktree/
-  // git-branch-delete functions directly) so a remote-hosted project's
-  // worktree and branch — which live on that host's own filesystem — are
-  // actually cleaned up too, matching attemptBranchDeleteForClearDone's own
-  // reasoning above. Every step here is best-effort and reported, never
+  // Both halves resolve the WORKER host and that host's project path together
+  // (`resolveCleanupTarget`), not the project's own host: a remote-placed
+  // task's worktree and branch live in the worker's clone. When that host has
+  // no mapped path, both are skipped — never force-removed against a guessed
+  // `project.cwd`. Every step here is best-effort and reported, never
   // fatal — by the time this runs the task's row (and, for a GitHub-linked
   // task, its label) are already gone, so a leftover worktree/branch/session
   // is a cleanup gap, not a correctness problem.
@@ -709,14 +719,20 @@ export async function tasksRoute(app: FastifyInstance) {
       }
     }
 
+    // Issue #3193 — resolve once and use the same target for both halves. A
+    // task can have a branch with no worktree (or the reverse); either one is
+    // enough to need the worker host's path.
+    const target =
+      task.worktreePath || task.branchName ? resolveCleanupTarget(app, task, project) : null;
+
     let worktreeRemoved = false;
-    if (task.worktreePath) {
+    if (task.worktreePath && target) {
       try {
         worktreeRemoved = await removeCheckoutForced(app, {
           projectId: project.id,
-          hostId: project.hostId,
+          hostId: target.hostId,
           worktreePath: task.worktreePath,
-          parentCwd: project.cwd,
+          parentCwd: target.cwdOnHost,
         });
       } catch (err) {
         app.log.warn(
@@ -729,14 +745,28 @@ export async function tasksRoute(app: FastifyInstance) {
 
     let branchDeleted = false;
     if (task.branchName) {
-      const result = await deleteTaskBranch(app, project, task.branchName);
-      branchDeleted = result.deleted;
-      if (!result.deleted) {
+      if (!target) {
+        // resolveCleanupTarget already warned. Do not fall back to project.cwd:
+        // that clone does not hold this branch, and a force-delete there would
+        // be a guess.
         app.log.warn(
-          { taskId: task.id, branch: task.branchName, reason: result.reason },
-          "abandon: deleteBranch did not delete",
+          { taskId: task.id, branch: task.branchName },
+          "abandon: branch left in place — no path for this project on the worker host",
         );
-        if (result.reason === "outcome-unknown") unknown.push("the branch delete");
+      } else {
+        const result = await deleteTaskBranch(
+          app,
+          { hostId: target.hostId, cwd: target.cwdOnHost },
+          task.branchName,
+        );
+        branchDeleted = result.deleted;
+        if (!result.deleted) {
+          app.log.warn(
+            { taskId: task.id, branch: task.branchName, reason: result.reason },
+            "abandon: deleteBranch did not delete",
+          );
+          if (result.reason === "outcome-unknown") unknown.push("the branch delete");
+        }
       }
     }
 
@@ -885,7 +915,17 @@ export async function tasksRoute(app: FastifyInstance) {
     if (!merged) {
       return { id: task.id, branch, deleted: false, reason: "not-merged" };
     }
-    return { id: task.id, branch, ...(await deleteTaskBranch(app, project, branch)) };
+    // Same target Abandon uses: a placed task's branch is in the worker's
+    // clone. No mapped path means skip, not a force-delete against project.cwd.
+    const target = resolveCleanupTarget(app, task, project);
+    if (!target) {
+      return { id: task.id, branch, deleted: false, reason: "no-host-path" };
+    }
+    return {
+      id: task.id,
+      branch,
+      ...(await deleteTaskBranch(app, { hostId: target.hostId, cwd: target.cwdOnHost }, branch)),
+    };
   }
 
   // #746 — bulk companion to DELETE /api/tasks/:id above, scoped to `done`
@@ -1182,11 +1222,38 @@ export async function tasksRoute(app: FastifyInstance) {
       }
 
       // Queued, not started: the dispatch sweep resumes the branch once a
-      // concurrency slot is free (same 202 as claim).
+      // concurrency slot is free (same 202 as claim). A branchless task is
+      // reset to ready instead and waits for a claim (auto-claim, unless the
+      // project's auto-claim is paused — then claim it by hand).
       reply.code(202);
       return selectTaskRow(taskId);
     },
   );
+
+  // Issue #3194 — "Start fresh" for a retry that is waiting for its original
+  // host (the branch is there and not on origin, so the retry cannot start
+  // anywhere else). It abandons the preserved branch — it stays on that
+  // host, with its commits — and re-queues the task as a new claim.
+  //
+  // Gated like the other Task Master actions: it starts a session, so the
+  // Task Master flag has to cover it.
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/start-fresh", async (request, reply) => {
+    if (!resolveTaskMasterConfig(app).enabled) {
+      return reply.forbidden(
+        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+      );
+    }
+    const taskId = Number(request.params.id);
+    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+
+    const outcome = await startFreshTask(app, taskId);
+    if (!outcome.ok) {
+      if (outcome.reason === "not-found") return reply.notFound();
+      return reply.conflict(outcome.detail ?? "Task is not waiting for a host");
+    }
+    reply.code(202);
+    return selectTaskRow(taskId);
+  });
 
   // Phase 6 (6.2/#215, promotion added in 6.7/#220) — approve acts on a
   // task in "reviewing" (task-state.ts's canTransition table is the single
@@ -1244,6 +1311,7 @@ export async function tasksRoute(app: FastifyInstance) {
       // Let the reconciler's retry push right away instead of waiting out its
       // backoff — the operator is watching for this to go through.
       resetAutoApproveBackoff(taskId);
+      resetDraftPrRetryBackoff(taskId);
       return { ok: true, sha: result.sha };
     },
   );
@@ -1345,38 +1413,6 @@ export async function tasksRoute(app: FastifyInstance) {
     return outcome.task;
   });
 
-  // Merge-on-approve — "Merge now" / "Retry merge". Re-arms the merge sweep
-  // (task-reconciler.ts's processMergeRequests) rather than merging inline:
-  // the same branch-protection reasoning as approve above applies here too
-  // (an up-to-date branch + green required checks a fresh click can't
-  // guarantee synchronously), so this only sets intent and resets the
-  // sweep's own backoff so the next tick attempts it immediately instead of
-  // waiting out whatever interval it was already on.
-  app.post<{ Params: { id: string } }>("/api/tasks/:id/merge", async (request, reply) => {
-    if (!resolveTaskMasterConfig(app).enabled) {
-      return reply.forbidden(
-        "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
-      );
-    }
-    const taskId = Number(request.params.id);
-    if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
-    const existing = getLocalTaskOr404(taskId);
-    if (!existing) return reply.notFound();
-    if (existing.status !== "done") {
-      return reply.conflict(`Cannot request a merge for a task in status "${existing.status}"`);
-    }
-    if (existing.prNumber === null) {
-      return reply.conflict("Task has no linked pull request to merge");
-    }
-
-    const updated = updateTask(app, taskId, {
-      mergeRequestedAt: new Date(),
-      ...mergeHuman.clearedFor(existing.needsHumanReason),
-    });
-    resetMergeBackoff(taskId);
-    return updated;
-  });
-
   interface RejectBody {
     feedback?: string;
   }
@@ -1440,7 +1476,7 @@ export async function tasksRoute(app: FastifyInstance) {
         {
           status: "in_progress",
           failureReason: request.body.feedback ?? null,
-          // Same reasoning as retryTask's own reservation (task-claim.ts):
+          // Same reasoning as dispatchQueuedRetry's own reservation (task-claim.ts):
           // this is a bounded continuation of already-approved scope, not a
           // new claim, but it re-enters the reconciler's budget-enforced
           // "claimed"/"in_progress" pool (task-reconciler.ts) all the same.
@@ -1510,8 +1546,8 @@ export async function tasksRoute(app: FastifyInstance) {
           // task-reconciler.ts's failReviewingGate/budget-exceeded paths
           // use. Deliberately NOT calling removeWorktreeIfClean, unlike
           // those two — a human just wrote real reject feedback onto a
-          // branch that may carry committed work worth a retryTask picking
-          // back up, so the worktree is left in place for that.
+          // branch that may carry committed work worth a Retry (enqueueRetry,
+          // then dispatchQueuedRetry) picking back up, so the worktree is left in place for that.
           const failedAt = new Date();
           const failed = updateTask(
             app,
@@ -1638,6 +1674,10 @@ export async function tasksRoute(app: FastifyInstance) {
         reviewSpawnClaimedAt: null,
         ...CLEARED_REVIEW_RUN,
         inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + spendsRearm,
+        // The retry answers a "review ended without a verdict" flag.
+        ...(existing.needsHumanReason === "review-inconclusive"
+          ? { needsHumanReason: null, autoReturnCapAnnouncedAt: null }
+          : {}),
         // Part of a Hermes dispatch's idempotency key: a human re-review at the same head
         // keeps round, rearms and head, so without a fresh entry time the second click
         // would replay the first run.

@@ -5,10 +5,13 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   DOCKER_PRUNE_AGGRESSIVE_ARGS,
   DOCKER_SAFE_PRUNE_STEPS,
+  DOCKER_VOLUME_PRUNE_ARGS,
   estimateAggressivePrune,
   estimateSafePrune,
   inspectDockerStorage,
+  parseDockerMajorVersion,
   parseDockerUsage,
+  parseDockerVolumes,
   parseReclaimed,
   pruneDockerStorage,
   type SpawnDocker,
@@ -307,5 +310,187 @@ describe("Docker storage", () => {
     });
     expect(fake.child.kill).toHaveBeenCalledWith("SIGKILL");
     vi.useRealTimers();
+  });
+
+  describe("volumes", () => {
+    const anon = (c: string) => c.repeat(64);
+    const verbose = JSON.stringify({
+      Images: [],
+      Containers: [],
+      BuildCache: [],
+      Volumes: [
+        { Name: anon("a"), Links: "0", Size: "68MB" },
+        { Name: anon("b"), Links: 0, Size: "32MB" },
+        { Name: anon("c"), Links: "2", Size: "10MB" },
+        { Name: "pgdata", Links: "0", Size: "1GB" },
+        { Name: "uploads", Links: "1", Size: "500MB" },
+        { Name: anon("D"), Links: "0", Size: "1MB" },
+        { Name: "a".repeat(63), Links: "0", Size: "1MB" },
+        { Name: anon("e"), Links: "N/A", Size: "5MB" },
+        { Name: anon("f"), Size: "5MB" },
+        { Name: anon("1"), Links: null, Size: "5MB" },
+        { Name: anon("2"), Links: false, Size: "5MB" },
+        { Size: "5MB", Links: "0" },
+        "junk",
+        null,
+      ],
+    });
+
+    it("splits anonymous unused, anonymous in use and named, skipping malformed rows", () => {
+      expect(parseDockerVolumes(verbose)).toEqual({
+        anonymousUnused: { count: 2, bytes: 100 * 1000 ** 2 },
+        inUse: { count: 1, bytes: 10 * 1000 ** 2 },
+        // Uppercase and 63-character hex names are named volumes by the rule.
+        named: { count: 4, bytes: 1000 ** 3 + 500 * 1000 ** 2 + 2 * 1000 ** 2 },
+      });
+    });
+
+    it("is empty when there are no volumes", () => {
+      expect(parseDockerVolumes("{}").named).toEqual({ count: 0, bytes: 0 });
+      expect(parseDockerVolumes('{"Volumes":null}').anonymousUnused.count).toBe(0);
+    });
+
+    it("reports volumes from the verbose call and omits them when it fails", async () => {
+      const df =
+        '{"Type":"Images","TotalCount":"1","Active":"0","Size":"1GB","Reclaimable":"1GB"}\n';
+      const ok: SpawnDocker = (command, args) =>
+        fakeSpawn({
+          stdout: args.includes("-v") ? verbose : args[0] === "images" ? "" : df,
+        }).spawn(command, args);
+      const status = await inspectDockerStorage(ok);
+      expect(status.volumes?.anonymousUnused.count).toBe(2);
+      const failing: SpawnDocker = (command, args) =>
+        args.includes("-v")
+          ? fakeSpawn({ stderr: "nope", code: 1 }).spawn(command, args)
+          : fakeSpawn({ stdout: args[0] === "images" ? "" : df }).spawn(command, args);
+      const failed = await inspectDockerStorage(failing);
+      expect(failed.available).toBe(true);
+      expect("volumes" in failed).toBe(false);
+    });
+  });
+});
+
+// A spawn that answers `docker version` with the given text (or a failure) and
+// everything else with a canned prune output, recording every argv.
+function versionedSpawn(version: { stdout?: string; code?: number }) {
+  const calls: string[][] = [];
+  const spawn: SpawnDocker = (command, args) => {
+    calls.push([...args]);
+    const isVersion = args[0] === "version";
+    return fakeSpawn(
+      isVersion
+        ? {
+            stdout: version.stdout ?? "",
+            code: version.code ?? 0,
+            stderr: version.code ? "boom" : "",
+          }
+        : { stdout: "Total reclaimed space: 1GB\n" },
+    ).spawn(command, args);
+  };
+  return { spawn, calls };
+}
+
+describe("Docker volume prune (opt-in)", () => {
+  const volumeCalls = (calls: string[][]) => calls.filter((args) => args[0] === "volume");
+
+  it("runs exactly `volume prune --force` after the system prune and adds its reclaimed space", async () => {
+    const fake = versionedSpawn({ stdout: "27.3.1\n" });
+    const result = await pruneDockerStorage("aggressive", fake.spawn, { pruneVolumes: true });
+    expect(fake.calls.map((args) => args[0])).toEqual(["system", "version", "volume"]);
+    expect(volumeCalls(fake.calls)).toEqual([["volume", "prune", "--force"]]);
+    expect(DOCKER_VOLUME_PRUNE_ARGS).toEqual(["volume", "prune", "--force"]);
+    for (const args of volumeCalls(fake.calls)) {
+      expect(args).not.toContain("--all");
+      expect(args).not.toContain("--filter");
+    }
+    expect(result.reclaimedBytes).toBe(2 * 1000 ** 3);
+    expect(result.note).toBeUndefined();
+  });
+
+  it("never runs in safe mode or without the option, and never even reads the version", async () => {
+    const safe = versionedSpawn({ stdout: "27.3.1" });
+    await pruneDockerStorage("safe", safe.spawn, { pruneVolumes: true });
+    expect(safe.calls.map((args) => args[0])).not.toContain("volume");
+    expect(safe.calls.map((args) => args[0])).not.toContain("version");
+    const off = versionedSpawn({ stdout: "27.3.1" });
+    await pruneDockerStorage("aggressive", off.spawn);
+    await pruneDockerStorage("aggressive", off.spawn, { pruneVolumes: false });
+    expect(off.calls.map((args) => args[0])).toEqual(["system", "system"]);
+  });
+
+  it.each(["23.0.0", "23.0", "27.3.1", "v28.0.0-rc1"])("runs on Docker Engine %s", async (v) => {
+    const fake = versionedSpawn({ stdout: `${v}\n` });
+    await pruneDockerStorage("aggressive", fake.spawn, { pruneVolumes: true });
+    expect(volumeCalls(fake.calls)).toHaveLength(1);
+  });
+
+  it.each([
+    ["22.06.3", "22.06.3"],
+    ["20.10.24", "20.10.24"],
+    ["latest", "unknown"],
+    ["", "unknown"],
+  ])("skips with a note on version %j", async (stdout, found) => {
+    const fake = versionedSpawn({ stdout });
+    const result = await pruneDockerStorage("aggressive", fake.spawn, { pruneVolumes: true });
+    expect(volumeCalls(fake.calls)).toEqual([]);
+    expect(result.note).toBe(
+      `Docker volume cleanup skipped: needs Docker Engine 23+ (found ${found})`,
+    );
+    expect(result.error).toBeUndefined();
+    // The rest of the Docker step still counted.
+    expect(result.reclaimedBytes).toBe(1000 ** 3);
+  });
+
+  it("skips with 'unknown' when `docker version` fails", async () => {
+    const fake = versionedSpawn({ code: 1 });
+    const result = await pruneDockerStorage("aggressive", fake.spawn, { pruneVolumes: true });
+    expect(volumeCalls(fake.calls)).toEqual([]);
+    expect(result.note).toBe(
+      "Docker volume cleanup skipped: needs Docker Engine 23+ (found unknown)",
+    );
+  });
+
+  it("keeps the system prune's progress and reports an error when the volume prune fails", async () => {
+    const calls: string[][] = [];
+    const spawn: SpawnDocker = (command, args) => {
+      calls.push([...args]);
+      if (args[0] === "volume")
+        return fakeSpawn({ code: 1, stderr: "volume busy" }).spawn(command, args);
+      return fakeSpawn({
+        stdout: args[0] === "version" ? "27.0.0" : "Total reclaimed space: 1GB",
+      }).spawn(command, args);
+    };
+    const result = await pruneDockerStorage("aggressive", spawn, { pruneVolumes: true });
+    expect(result).toMatchObject({ reclaimedBytes: 1000 ** 3, error: "volume busy" });
+  });
+
+  it("parses the engine's major version strictly", () => {
+    expect(parseDockerMajorVersion("27.3.1\n")).toBe(27);
+    expect(parseDockerMajorVersion("23.0")).toBe(23);
+    expect(parseDockerMajorVersion("")).toBeNull();
+    expect(parseDockerMajorVersion("<no value>")).toBeNull();
+    expect(parseDockerMajorVersion("x23.0.1")).toBeNull();
+  });
+});
+
+describe("Docker aggressive estimate with the volumes opt-in", () => {
+  const verbose = JSON.stringify({
+    Volumes: [{ Name: "a".repeat(64), Links: 0, Size: "1GB" }],
+  });
+  const usage = '{"Type":"Images","TotalCount":"0","Active":"0","Size":"0B","Reclaimable":"0B"}\n';
+  const spawnFor =
+    (version: string): SpawnDocker =>
+    (command, args) =>
+      fakeSpawn({
+        stdout: args[0] === "version" ? version : args.includes("-v") ? verbose : usage,
+      }).spawn(command, args);
+
+  it("adds the unused anonymous volumes only when opted in and the engine is 23+", async () => {
+    const base = await inspectDockerStorage(spawnFor("27.0.0"));
+    expect(base.estimates.aggressiveBytes).toBe(0);
+    const on = await inspectDockerStorage(spawnFor("27.0.0"), { countVolumes: true });
+    expect(on.estimates.aggressiveBytes).toBe(1000 ** 3);
+    const old = await inspectDockerStorage(spawnFor("22.06.3"), { countVolumes: true });
+    expect(old.estimates.aggressiveBytes).toBe(0);
   });
 });

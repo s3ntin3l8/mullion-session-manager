@@ -10,8 +10,8 @@ import {
   verify,
 } from "../../src/services/request-signature.js";
 
-// Issue #249 / roadmap 7.5 — the 5 non-request() sites (openAttach,
-// openBrowserWs, openEventsStream, openPreviewWs, openSshAgentStream)
+// Issue #249 / roadmap 7.5 — the 5 non-request() sites (streams.attach,
+// browser.openSocket, streams.events, previews.ws, streams.sshAgent)
 // construct a real `ws` package WebSocket; mocked here the same way
 // `fetch` is stubbed above, so
 // the exact constructor args (in particular the headers option, which is
@@ -1000,7 +1000,7 @@ describe("RemoteHostClient", () => {
       );
     });
 
-    it("resolveResumeTaskWorktree POSTs {cwd, branchName} to /internal/git-worktree/resume", async () => {
+    it("resolveResumeTaskWorktree POSTs {cwd, branchName, fromOrigin} to /internal/git-worktree/resume", async () => {
       fetchMock.mockResolvedValue(
         jsonResponse(200, {
           path: "/x/y/.mullion-worktrees/mullion-task-1",
@@ -1015,7 +1015,11 @@ describe("RemoteHostClient", () => {
         "http://example.invalid:1234/internal/git-worktree/resume",
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ cwd: "/x/y", branchName: "mullion/task-1" }),
+          // Issue #3194 — `fromOrigin` is always on the wire: `false` for the
+          // ordinary resume (the branch is on the host already) and `true`
+          // for a retry that was re-placed onto this host. The `true` half
+          // lives in remote-host-client-from-origin.test.ts.
+          body: JSON.stringify({ cwd: "/x/y", branchName: "mullion/task-1", fromOrigin: false }),
         }),
       );
     });
@@ -1539,13 +1543,13 @@ describe("RemoteHostClient", () => {
     );
 
     // ...and a WS upgrade takes an http(s).Agent, which no dispatcher covers.
-    client().openAttach({ id: "s1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
+    client().streams.attach({ id: "s1", cwd: "/tmp", command: "bash", cols: 80, rows: 24 });
     const [, wsOptions] = wsConstructorCalls[0] as [string, { agent?: unknown }];
     expect(wsOptions.agent).toBeDefined();
   });
 
-  it("openAttach's request target stays well under Node's 16 KB header limit at max-legal env (issue #822)", () => {
-    // openAttach() has nowhere to put `env` but the WS upgrade's query
+  it("streams.attach's request target stays well under Node's 16 KB header limit at max-legal env (issue #822)", () => {
+    // streams.attach() has nowhere to put `env` but the WS upgrade's query
     // string — a GET has no body, and `ws` exposes no custom-body-on-upgrade
     // option — so it shares Node's default --max-http-header-size (16 KB)
     // with the request line, the Bearer token, and the three HMAC signature
@@ -1558,7 +1562,7 @@ describe("RemoteHostClient", () => {
     for (let i = 0; i < 16; i++) {
       worstCaseEnv[`VAR_${i}`] = "x".repeat(256);
     }
-    client().openAttach({
+    client().streams.attach({
       id: "s1",
       cwd: "/home/bjoern/projects/some-reasonably-long-project-path",
       command: "claude --dangerously-skip-permissions",
@@ -2146,8 +2150,8 @@ describe("RemoteHostClient", () => {
     });
 
     describe("the 5 non-request() sites", () => {
-      it("openAttach signs the WS upgrade for a session-credentialed host", () => {
-        sessionClient("the-secret").openAttach({
+      it("streams.attach signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").streams.attach({
           id: "s1",
           cwd: "/x",
           command: "bash",
@@ -2171,14 +2175,14 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
-      it("openAttach sends no signature headers for a static-token host", () => {
-        client().openAttach({ id: "s1", cwd: "/x", command: "bash", cols: 80, rows: 24 });
+      it("streams.attach sends no signature headers for a static-token host", () => {
+        client().streams.attach({ id: "s1", cwd: "/x", command: "bash", cols: 80, rows: 24 });
         const [, options] = wsConstructorCalls[0] as [string, { headers: Record<string, string> }];
         expect(options.headers[SIGNATURE_HEADER]).toBeUndefined();
       });
 
-      it("openBrowserWs signs the WS upgrade for a session-credentialed host", () => {
-        sessionClient("the-secret").openBrowserWs(1, { projectId: 2 } as never); // only the signed upgrade is under test
+      it("browser.openSocket signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").browser.openSocket(1, { projectId: 2 } as never); // only the signed upgrade is under test
         const [url, options] = wsConstructorCalls[0] as [
           string,
           { headers: Record<string, string> },
@@ -2195,8 +2199,8 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
-      it("openEventsStream signs the WS upgrade for a session-credentialed host", () => {
-        sessionClient("the-secret").openEventsStream();
+      it("streams.events signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").streams.events();
         const [url, options] = wsConstructorCalls[0] as [
           string,
           { headers: Record<string, string> },
@@ -2219,8 +2223,8 @@ describe("RemoteHostClient", () => {
       // the agent's own preValidation signature check (request.url, which
       // includes the query string verbatim) would reject a perfectly
       // legitimate request.
-      it("openEventsStream({cursors:true}) signs and dials /internal/ws/events?cursors=1 — the identical requestTarget in both the URL and the signature", () => {
-        sessionClient("the-secret").openEventsStream({ cursors: true });
+      it("streams.events({cursors:true}) signs and dials /internal/ws/events?cursors=1 — the identical requestTarget in both the URL and the signature", () => {
+        sessionClient("the-secret").streams.events({ cursors: true });
         const [url, options] = wsConstructorCalls[0] as [
           string,
           { headers: Record<string, string> },
@@ -2237,8 +2241,8 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
-      it("openEventsStream() with no options omits the cursors query param — unchanged from before issue #1459", () => {
-        sessionClient("the-secret").openEventsStream();
+      it("streams.events() with no options omits the cursors query param — unchanged from before issue #1459", () => {
+        sessionClient("the-secret").streams.events();
         const [url] = wsConstructorCalls[0] as [string, unknown];
         expect(url).toBe("ws://example.invalid:1234/internal/ws/events");
       });
@@ -2247,14 +2251,14 @@ describe("RemoteHostClient", () => {
       // `ws`'s 100 MiB default leaves both callers (relayRemoteEventsHost,
       // remote-event-subscriber.ts) exposed to an oversized frame from a
       // buggy or compromised agent.
-      it("openEventsStream bounds inbound frames at 1 MiB, matching plugins/websocket.ts's own server-side cap", () => {
-        sessionClient("the-secret").openEventsStream();
+      it("streams.events bounds inbound frames at 1 MiB, matching plugins/websocket.ts's own server-side cap", () => {
+        sessionClient("the-secret").streams.events();
         const [, options] = wsConstructorCalls[0] as [string, { maxPayload: number }];
         expect(options.maxPayload).toBe(1024 * 1024);
       });
 
-      it("openSshAgentStream signs the WS upgrade for a session-credentialed host", () => {
-        sessionClient("the-secret").openSshAgentStream();
+      it("streams.sshAgent signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").streams.sshAgent();
         const [url, options] = wsConstructorCalls[0] as [
           string,
           { headers: Record<string, string> },
@@ -2271,14 +2275,14 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
-      it("openSshAgentStream bounds inbound frames at 1 MiB, matching plugins/websocket.ts's own server-side cap", () => {
-        sessionClient("the-secret").openSshAgentStream();
+      it("streams.sshAgent bounds inbound frames at 1 MiB, matching plugins/websocket.ts's own server-side cap", () => {
+        sessionClient("the-secret").streams.sshAgent();
         const [, options] = wsConstructorCalls[0] as [string, { maxPayload: number }];
         expect(options.maxPayload).toBe(1024 * 1024);
       });
 
-      it("openPreviewWs signs the WS upgrade for a session-credentialed host", () => {
-        sessionClient("the-secret").openPreviewWs(5173, "/hmr");
+      it("previews.ws signs the WS upgrade for a session-credentialed host", () => {
+        sessionClient("the-secret").previews.ws(5173, "/hmr");
         const [url, options] = wsConstructorCalls[0] as [
           string,
           { headers: Record<string, string> },
@@ -2295,9 +2299,9 @@ describe("RemoteHostClient", () => {
         expect(verify("the-secret", canonicalString, options.headers[SIGNATURE_HEADER])).toBe(true);
       });
 
-      it("openPreviewHttp signs the request and does not hash the (streamed) body", async () => {
+      it("previews.http signs the request and does not hash the (streamed) body", async () => {
         fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
-        await sessionClient("the-secret").openPreviewHttp(5173, "/index.html", {
+        await sessionClient("the-secret").previews.http(5173, "/index.html", {
           method: "GET",
           headers: new Headers(),
         });
@@ -2319,7 +2323,7 @@ describe("RemoteHostClient", () => {
       // BROWSER-controlled request forwarded through the preview proxy — a
       // browser must not be able to inject its own signature/auth headers
       // and have them survive to the outbound request.
-      it("openPreviewHttp strips caller-supplied authorization/signature headers before setting its own", async () => {
+      it("previews.http strips caller-supplied authorization/signature headers before setting its own", async () => {
         fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
         const maliciousHeaders = new Headers({
           authorization: "Bearer attacker-controlled",
@@ -2327,7 +2331,7 @@ describe("RemoteHostClient", () => {
           [TIMESTAMP_HEADER]: "attacker-controlled-timestamp",
           [NONCE_HEADER]: "attacker-controlled-nonce",
         });
-        await sessionClient("the-secret").openPreviewHttp(5173, "/index.html", {
+        await sessionClient("the-secret").previews.http(5173, "/index.html", {
           method: "GET",
           headers: maliciousHeaders,
         });
@@ -2339,14 +2343,14 @@ describe("RemoteHostClient", () => {
         expect(init.headers.get(NONCE_HEADER)).not.toBe("attacker-controlled-nonce");
       });
 
-      it("openPreviewHttp for a static-token host strips a browser-injected signature header entirely, rather than passing it through unsigned", async () => {
+      it("previews.http for a static-token host strips a browser-injected signature header entirely, rather than passing it through unsigned", async () => {
         fetchMock.mockResolvedValue(new Response("upstream body", { status: 200 }));
         const maliciousHeaders = new Headers({
           [SIGNATURE_HEADER]: "attacker-controlled-signature",
           [TIMESTAMP_HEADER]: "attacker-controlled-timestamp",
           [NONCE_HEADER]: "attacker-controlled-nonce",
         });
-        await client().openPreviewHttp(5173, "/index.html", {
+        await client().previews.http(5173, "/index.html", {
           method: "GET",
           headers: maliciousHeaders,
         });

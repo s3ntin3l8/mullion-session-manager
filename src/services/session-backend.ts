@@ -30,6 +30,7 @@ import {
   taskCommitTitlePath,
   taskRereviewRequestPath,
 } from "./task-prompt.js";
+import { readCiUnfixableFile } from "./task-ci-unfixable-file.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
@@ -64,6 +65,7 @@ import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
   deliverPrompt,
   REMOTE_WAIT_CHUNK_MS,
+  resolveWaitStartOffset,
   type PromptOutcome,
   type WaitOutputOutcome,
   type WaitOutputRequest,
@@ -218,7 +220,7 @@ export interface SpawnOpts {
 // agent over HTTP — see the plan's "same intent-vs-live-state seam, now
 // host-aware" framing. WS attach is deliberately NOT part of this
 // interface: piping bytes needs the raw upstream socket
-// (remote-host-client.ts's openAttach), not a request/response call, so
+// (remote-host-client.ts's `streams.attach()`), not a request/response call, so
 // routes/terminal.ts branches on local-vs-remote directly instead.
 export interface SessionBackend {
   spawn(opts: SpawnOpts): Promise<SpawnResult>;
@@ -341,7 +343,15 @@ export interface SessionBackend {
   // git-worktree.ts's resumeTaskWorktree doc comment). #484 — proxied to a
   // remote host via /internal/git-worktree/resume, the same way every
   // other worktree-lifecycle op on this interface already is.
-  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null>;
+  //
+  // Issue #3194 — `opts.fromOrigin` fetches the branch from origin when this
+  // host does not have it: a retry re-placed onto a new host resumes the
+  // branch FROM origin there (it was confirmed to be on origin first).
+  resumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null>;
   // #484 — lists this host's own on-disk task-worktree directories, for the
   // primary's boot-time orphan sweep (plugins/task-watcher.ts). See
   // git-worktree.ts's listTaskWorktreeDirs doc comment for what "task
@@ -465,6 +475,21 @@ export interface SessionBackend {
   // version skew — a peer build with no route included), same contract as
   // `readTaskCommitTitle`. Keyed, never deleted — see the path helper.
   readTaskRereviewRequest(taskId: number, key: number): Promise<string | null>;
+  // A worker's "this red CI check cannot be fixed from this PR" declaration
+  // (`taskCiUnfixablePath`, task-prompt.ts), keyed by the PR head it was
+  // returned for. Same contract as `readTaskRereviewRequest`: `null` ONLY for
+  // a genuinely absent file, throws for everything else (host unreachable, a
+  // peer 5xx, version skew — a peer build with no route included). `headSha`
+  // must be a 40-char lowercase hex SHA; anything else throws before any path
+  // is built. Keyed, never deleted.
+  readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null>;
+}
+
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/** The head keys a file path and a query string, so it is checked at every entry. */
+export function assertFullSha(headSha: string): void {
+  if (!FULL_SHA.test(headSha)) throw new Error("headSha must be a 40-char lowercase hex SHA");
 }
 
 class LocalBackend implements SessionBackend {
@@ -614,13 +639,16 @@ class LocalBackend implements SessionBackend {
     if (!matcher.ok) return { failed: true, status: 400, error: matcher.error };
     const session = this.app.pty.get(id);
     if (!session || !session.isAlive) return { notRunning: true };
+    const start = resolveWaitStartOffset(session, req.afterOffset, req.afterSeq);
     const result = await waitForOutput(matcher, req.timeoutMs, {
       signal: req.signal,
       onData: (listener) => session.onData((chunk) => listener(Buffer.from(chunk))),
       // A cursor from before a restart can be AHEAD of the counter; treat
       // that as "no gap output" rather than an error (like afterSeq).
-      ...(req.afterOffset !== undefined ? { seed: session.getOutputSince(req.afterOffset) } : {}),
+      ...(start !== undefined ? { seed: session.getOutputSince(start) } : {}),
       alive: () => session.isAlive && req.alive(),
+      size: session.size,
+      warn: (msg, err) => this.app.log.warn({ err }, msg),
     });
     if ("aborted" in result) return { aborted: true };
     return { ...result, outputOffset: session.outputOffset };
@@ -647,8 +675,19 @@ class LocalBackend implements SessionBackend {
     return syncWorktree(worktreePath, branch);
   }
 
-  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
-    return resumeTaskWorktree(cwd, branchName);
+  resumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null> {
+    // Issue #3194 — the options are forwarded ONLY when there are any. The
+    // ordinary resume keeps its exact two-argument call shape into
+    // git-worktree.ts, so a caller (or a test) that watches that function
+    // sees no third argument on the path that never asks for a
+    // from-origin resume.
+    return opts === undefined
+      ? resumeTaskWorktree(cwd, branchName)
+      : resumeTaskWorktree(cwd, branchName, opts);
   }
 
   listTaskWorktreeDirs(cwd: string): Promise<string[]> {
@@ -752,6 +791,11 @@ class LocalBackend implements SessionBackend {
     if (!existsSync(requestPath)) return null;
     // The file's existence is the request, so an empty file still counts.
     return readFileSync(requestPath, "utf8").trim() || "(no reason given)";
+  }
+
+  async readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
+    assertFullSha(headSha);
+    return readCiUnfixableFile(this.app.pty.sessionsDir, taskId, headSha);
   }
 }
 
@@ -983,6 +1027,8 @@ class RemoteBackend implements SessionBackend {
           regex: req.regex,
           timeoutMs: Math.min(remaining, REMOTE_WAIT_CHUNK_MS),
           ...(cursor !== undefined ? { afterOffset: cursor } : {}),
+          // Resolved on the owning host; an agent that predates it drops it.
+          ...(req.afterSeq !== undefined ? { afterSeq: req.afterSeq } : {}),
         });
       } catch (err) {
         return { failed: true, ...this.remoteRefusal(err, "session-control", false) };
@@ -1070,10 +1116,14 @@ class RemoteBackend implements SessionBackend {
     return this.mutating("worktree sync", this.client.resolveSyncWorktree(worktreePath, branch));
   }
 
-  resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
+  resumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null> {
     return this.changedWorktrees(
       "worktree resume",
-      this.client.resolveResumeTaskWorktree(cwd, branchName),
+      this.client.resolveResumeTaskWorktree(cwd, branchName, opts),
     );
   }
 
@@ -1194,6 +1244,11 @@ class RemoteBackend implements SessionBackend {
 
   readTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
     return this.client.resolveReadTaskRereviewRequest(taskId, key);
+  }
+
+  readTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
+    assertFullSha(headSha);
+    return this.client.resolveReadTaskCiUnfixable(taskId, headSha);
   }
 }
 

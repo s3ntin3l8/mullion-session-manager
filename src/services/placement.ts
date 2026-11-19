@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   LOCAL_HOST_ID,
   PLACEMENT_CAPABILITIES,
+  type PlacementCapability,
   PLACEMENT_PLATFORMS,
   type HostRole,
   type PlacementMode,
@@ -12,6 +13,9 @@ import { hostProtocol, isOlderVersion, refreshLocalAgents } from "./host-agents.
 import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protocol.js";
 import { appVersion } from "./app-version.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
+import { parseHostCwds, serializeHostCwds } from "./host-cwds.js";
+
+export { parseHostCwds, serializeHostCwds };
 
 /**
  * The PLACEMENT policy — which host should a new session run on (issue
@@ -253,60 +257,6 @@ export interface PlacementDecision {
 function loadPerCore(capacity: HostCapacity): number {
   if (capacity.logicalCores <= 0) return capacity.loadAverage1m;
   return capacity.loadAverage1m / capacity.logicalCores;
-}
-
-/**
- * The per-host cwd map, parsed.
- *
- * `projects.hostCwds` is a JSON object `{ "<hostId>": "<absolute path>" }`.
- *
- * Parsed into a NULL-PROTOTYPE object and written with
- * `Object.defineProperty`, so a key of `__proto__` stays an ordinary own
- * property: the map's KEYS are operator-supplied and become property names,
- * and `__proto__`'s setter must never see one. A malformed or non-object
- * value yields an EMPTY map — no host is a candidate, which is the same
- * answer as "the project lives on its own host and nowhere else".
- */
-export function parseHostCwds(raw: string | null | undefined): Record<string, string> {
-  const out = Object.create(null) as Record<string, string>;
-  if (raw === null || raw === undefined || raw.trim() === "") return out;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return out;
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return out;
-  for (const [hostId, cwd] of Object.entries(parsed)) {
-    if (typeof cwd !== "string" || cwd.trim() === "") continue;
-    Object.defineProperty(out, hostId, {
-      value: cwd,
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-  }
-  return out;
-}
-
-/**
- * The per-host cwd map, serialized for the column.
- *
- * The map's KEYS are operator-supplied and become property names when the
- * map is parsed back, so it is written as JSON and read back into a
- * null-prototype object (see parseHostCwds). Empty paths are dropped, and
- * an empty map serializes to null — "this project lives on its own host and
- * nowhere else", which is what an absent map means.
- */
-export function serializeHostCwds(map: Record<string, string> | null | undefined): string | null {
-  if (map === null || map === undefined) return null;
-  const entries = Object.entries(map).filter(
-    ([, cwd]) => typeof cwd === "string" && cwd.trim() !== "",
-  );
-  if (entries.length === 0) return null;
-  // Object.fromEntries defines own properties, so a key of "__proto__" stays
-  // an ordinary property — it is never handed to a prototype setter.
-  return JSON.stringify(Object.fromEntries(entries));
 }
 
 /**
@@ -1102,7 +1052,21 @@ export function resolvePlacement(
 export type PlacementTarget =
   // `platform` on a host target is an additional requirement ("this host, and
   // it must be a Mac") — a Task Master issue can carry both directives (#1954).
-  { hostId: string; platform?: string } | { platform: string };
+  (
+    | { hostId: string; platform?: string }
+    | { platform: string; hostId?: undefined }
+    // A `Capability:` directive on its own: any host that has the capability.
+    | { platform?: undefined; hostId?: undefined }
+  ) & {
+    /**
+     * Host capabilities (`PLACEMENT_CAPABILITIES`) this target needs, ON TOP OF
+     * the project's own `placementConstraints.capabilities` (the union applies).
+     */
+    capabilities?: PlacementCapability[];
+    /** Names a `Capability:` line asked for that are not a known capability:
+     * the target is refused naming them, never silently narrowed. */
+    unknownCapabilities?: string[];
+  };
 
 export type TargetPlacementResult =
   | { ok: true; decision: PlacementDecision }
@@ -1127,10 +1091,21 @@ export type TargetPlacementResult =
 /** `host <id>`, `platform <p>`, or `host <id> (platform <p>)` for a target that
  * names both. Used in refusals and the recorded placement reason. */
 export function describeTarget(target: PlacementTarget): string {
-  if (!("hostId" in target)) return `platform ${target.platform}`;
-  return target.platform === undefined
-    ? `host ${target.hostId}`
-    : `host ${target.hostId} (platform ${target.platform})`;
+  const caps = [...(target.capabilities ?? []), ...(target.unknownCapabilities ?? [])];
+  const withCaps = (base: string) =>
+    caps.length === 0
+      ? base
+      : base === ""
+        ? `capability ${caps.join(", ")}`
+        : `${base} with capability ${caps.join(", ")}`;
+  if (target.hostId === undefined) {
+    return withCaps(target.platform === undefined ? "" : `platform ${target.platform}`);
+  }
+  return withCaps(
+    target.platform === undefined
+      ? `host ${target.hostId}`
+      : `host ${target.hostId} (platform ${target.platform})`,
+  );
 }
 
 /**
@@ -1236,7 +1211,19 @@ export function resolveTargetHost(
   // Issue #2306 — a capability is a requirement: always applied, even to a
   // Task Master directive (which overrides only the platform flag).
   const constraints = parsePlacementConstraints(opts.project.placementConstraints);
-  const requiredCapabilities = constraints.capabilities;
+  // The target's own `Capability:` names add to the project's (union).
+  const requiredCapabilities = [
+    ...new Set([...constraints.capabilities, ...(opts.target.capabilities ?? [])]),
+  ];
+
+  // A capability name nothing knows is refused outright (like a `Platform:`
+  // typo that matches no host): waiting never helps.
+  const unknown = opts.target.unknownCapabilities ?? [];
+  if (unknown.length > 0) {
+    return refusal(false, false, [
+      `unknown capability ${unknown.join(", ")} (known: ${PLACEMENT_CAPABILITIES.join(", ")})`,
+    ]);
+  }
 
   let collected: CollectedCandidates;
   try {
@@ -1252,7 +1239,7 @@ export function resolveTargetHost(
   }
 
   const wantedPlatform = opts.target.platform?.toLowerCase();
-  const wantedHost = "hostId" in opts.target ? opts.target.hostId : null;
+  const wantedHost = opts.target.hostId ?? null;
   const flagPlatforms = opts.checkProjectFlags ? constraints.platform : [];
   const targeted = collected.candidates.filter(
     (candidate) =>

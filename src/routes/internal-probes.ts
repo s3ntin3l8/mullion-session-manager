@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { localProtocolInfo } from "../shared/agent-protocol.js";
+import { getSessionEnvInfo } from "../services/user-shell-env.js";
 import { getCachedCapabilities } from "../services/host-capabilities.js";
 
 /**
@@ -17,4 +18,9 @@ export function registerProbeRoutes(app: FastifyInstance, rateLimit: object): vo
   // (src/shared/agent-protocol.ts) the primary also reads, so the two cannot
   // disagree about what exists.
   app.get("/internal/protocol", rateLimit, async () => localProtocolInfo());
+
+  // Issue #3156 — the environment a new session on this host gets, for the
+  // Hosts settings page and a failed task's diagnostics. Names and PATH
+  // entries only, never a variable's value. Reads the resolver's cached state.
+  app.get("/internal/session-env", rateLimit, async () => getSessionEnvInfo());
 }

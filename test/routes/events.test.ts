@@ -124,7 +124,7 @@ describe("events route (/ws/events)", () => {
   // no longer lands in a session's event buffer (or over this route's WS)
   // synchronously. This is a real integration test against a real listening
   // server and real WS client (see this file's header comment), so — unlike
-  // pty-manager.test.ts's fake-timer coverage of the debounce mechanism
+  // pty-manager-title-change.test.ts's fake-timer coverage of the debounce mechanism
   // itself — the tests below wait out the real debounce window rather than
   // faking it, to also exercise the real setTimeout scheduling end to end.
   const TITLE_CHANGE_EVENT_DEBOUNCE_MS = 3_000;

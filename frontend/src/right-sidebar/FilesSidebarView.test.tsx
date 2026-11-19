@@ -127,6 +127,29 @@ describe("FilesSidebarView", () => {
     expect(actions.onOpenFileEditor).toHaveBeenCalledWith(4);
   });
 
+  it("shows Refresh as busy until the open folders are re-listed", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByText("src"));
+    await screen.findByText("index.ts");
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = vi.mocked(api.listProjectFiles).getMockImplementation();
+    vi.mocked(api.listProjectFiles).mockImplementation(async (...args) => {
+      await gate;
+      return real!(...args);
+    });
+    const btn = screen.getByRole("button", { name: "Refresh" });
+    await user.click(btn);
+    expect(btn).toHaveAttribute("aria-busy", "true");
+    vi.mocked(api.listProjectFiles).mockClear();
+    await user.click(btn);
+    expect(api.listProjectFiles).not.toHaveBeenCalled();
+
+    release();
+    await waitFor(() => expect(btn).not.toHaveAttribute("aria-busy"));
+  });
+
   it("New file creates in the selected folder, reloads it and opens the file", async () => {
     vi.mocked(api.writeProjectFile).mockResolvedValue({ size: 0, mtimeMs: 1 });
     const user = userEvent.setup();

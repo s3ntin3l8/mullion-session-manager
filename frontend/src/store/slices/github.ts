@@ -105,6 +105,11 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
       return request;
     },
 
+    githubInFlight: (projectId: number) => {
+      const prefix = `${projectId}:`;
+      return [...inFlight].filter(([key]) => key.startsWith(prefix)).map(([, request]) => request);
+    },
+
     prefetchGithubProject: (projectId: number) => {
       const { githubFetch, githubCache, githubIssueUiByProject } = get();
       const quiet = () => undefined;

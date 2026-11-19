@@ -37,15 +37,23 @@ import { runShellCapture } from "./shell-spawn.js";
 const PROBE_TIMEOUT_MS = 5_000;
 const PROBE_KILL_ESCALATION_MS = 2_000;
 
+/** Why a login-shell run produced no output: the deadline fired, or the shell
+ * failed (spawn error / broke after starting). `null` means it ran to
+ * completion — an empty stdout is then a genuine "nothing printed". */
+export type LoginShellFailure = "timeout" | "error";
+
+export interface LoginShellResult {
+  /** Trimmed stdout; null when empty, failed or timed out. */
+  stdout: string | null;
+  failure: LoginShellFailure | null;
+}
+
 /**
- * Runs one script in a login shell and resolves its trimmed stdout (null when
- * empty, failed or timed out). Never rejects — agent-detect.ts's probe()
- * relies on that, awaiting every probe in one Promise.all.
- *
- * The spawn/timeout/kill machinery lives in `shell-spawn.ts`, shared with the
- * interactive-shell resolver (issue #1833).
+ * Like {@link runLoginShell}, but says WHY there was no output. A probe that
+ * timed out (a loaded host) must not be read as "the CLI is not installed".
+ * Never rejects.
  */
-export function runLoginShell(script: string): Promise<string | null> {
+export function runLoginShellDetailed(script: string): Promise<LoginShellResult> {
   // The SESSION's shell (session-shell.ts) — Git Bash on Windows. A host with
   // none cannot run a session either, so the probe finds nothing. Any OTHER
   // failure resolving it is unexpected: logged, so it is not mistaken for
@@ -55,9 +63,10 @@ export function runLoginShell(script: string): Promise<string | null> {
     shell = sessionShellOrNull();
   } catch (err) {
     console.warn("[login-shell] could not resolve the session shell:", err);
-    return Promise.resolve(null);
+    return Promise.resolve({ stdout: null, failure: "error" });
   }
-  if (shell === null) return Promise.resolve(null);
+  if (shell === null) return Promise.resolve({ stdout: null, failure: null });
+  let failure: LoginShellFailure | null = null;
   return runShellCapture({
     shell,
     args: ["-lc", script],
@@ -67,5 +76,23 @@ export function runLoginShell(script: string): Promise<string | null> {
     // The probe wants the command's output, and nothing at all when the
     // command printed nothing.
     trim: true,
-  });
+    onTimeout: () => {
+      failure = "timeout";
+      console.warn(`[login-shell] probe timed out after ${PROBE_TIMEOUT_MS}ms: ${script}`);
+    },
+    onError: (err) => {
+      failure = "error";
+      console.warn(`[login-shell] probe failed: ${script}:`, err);
+    },
+  }).then((stdout) => ({ stdout, failure }));
+}
+
+/**
+ * Runs one script in a login shell and resolves its trimmed stdout (null when
+ * empty, failed or timed out). Never rejects — callers rely on that, awaiting
+ * several probes in one Promise.all. Use {@link runLoginShellDetailed} when a
+ * failure must be told apart from an empty result.
+ */
+export function runLoginShell(script: string): Promise<string | null> {
+  return runLoginShellDetailed(script).then((r) => r.stdout);
 }

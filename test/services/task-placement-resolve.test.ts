@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parsePlacementRequirement,
   serializePlacementRequirement,
+  describeRequirementSource,
 } from "../../src/services/task-placement-resolve.js";
 
 // Issue #1954 — `Platform:` / `Host:` in an issue body, with the same matching
@@ -26,6 +27,58 @@ describe("parsePlacementRequirement", () => {
     expect(parsePlacementRequirement("Host: h1\nPlatform: darwin")).toEqual({
       hostId: "h1",
       platform: "darwin",
+    });
+  });
+
+  describe("Capability:", () => {
+    it("reads one or several names, lower-cased, in canonical order", () => {
+      expect(parsePlacementRequirement("Capability: xcode")).toEqual({ capabilities: ["xcode"] });
+      expect(parsePlacementRequirement("capability: Android-Emulator,XCODE")).toEqual({
+        capabilities: ["xcode", "android-emulator"],
+      });
+    });
+
+    it("rides along with Platform: and Host:", () => {
+      expect(parsePlacementRequirement("Platform: darwin\nCapability: xcode")).toEqual({
+        platform: "darwin",
+        capabilities: ["xcode"],
+      });
+      expect(parsePlacementRequirement("Host: h1\nCapability: xcode")).toEqual({
+        hostId: "h1",
+        capabilities: ["xcode"],
+      });
+    });
+
+    it("keeps an unknown name apart, so the claim can refuse it", () => {
+      expect(parsePlacementRequirement("Capability: xcode,nope")).toEqual({
+        capabilities: ["xcode"],
+        unknownCapabilities: ["nope"],
+      });
+      expect(parsePlacementRequirement("Capability: nope")).toEqual({
+        unknownCapabilities: ["nope"],
+      });
+    });
+
+    it("ignores a fenced block, whitespace in the value, prose, and takes the first match", () => {
+      expect(parsePlacementRequirement("```\nCapability: xcode\n```")).toBeNull();
+      expect(parsePlacementRequirement("Capability: xcode, android-emulator")).toBeNull();
+      expect(parsePlacementRequirement("needs Capability: xcode")).toBeNull();
+      expect(parsePlacementRequirement("Capability: xcode\nCapability: android-emulator")).toEqual({
+        capabilities: ["xcode"],
+      });
+    });
+
+    it("round-trips through serialize, and names its source line", () => {
+      const target = parsePlacementRequirement("Platform: darwin\nCapability: xcode");
+      expect(serializePlacementRequirement(target)).toBe(
+        '{"platform":"darwin","capabilities":["xcode"]}',
+      );
+      expect(describeRequirementSource(target!)).toBe(
+        "the `Platform:` and `Capability:` lines in its issue body",
+      );
+      expect(describeRequirementSource({ platform: "darwin" })).toBe(
+        "the `Platform:` line in its issue body",
+      );
     });
   });
 

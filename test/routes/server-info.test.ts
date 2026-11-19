@@ -48,6 +48,7 @@ describe("server-info route", () => {
         budgetMinutes: expect.any(Number),
         progressCommentMinutes: expect.any(Number),
         rateLimitGraceMinutes: expect.any(Number),
+        rateLimitMaxParkHours: expect.any(Number),
         issueLabel: expect.any(String),
         pollIntervalSeconds: expect.any(Number),
       },

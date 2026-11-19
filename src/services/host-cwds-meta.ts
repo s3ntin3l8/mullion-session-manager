@@ -1,4 +1,4 @@
-import { parseHostCwds } from "./placement.js";
+import { parseHostCwds } from "./host-cwds.js";
 
 // Issue #2090 — `projects.hostCwdsMeta`: which `hostCwds` entries were filled
 // in by the opt-in auto-detect sweep, and which hosts an operator declined.

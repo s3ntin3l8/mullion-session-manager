@@ -10,6 +10,7 @@ import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { syncTaskTransition } from "./task-github-sync.js";
+import { resolveCleanupTarget } from "./task-cleanup.js";
 import { recordTaskTransition } from "./task-state.js";
 
 const MSG_REJECTED =
@@ -339,18 +340,26 @@ async function reconcileRow(
       // 6.8/#283 — same best-effort, leave-dirty-trees-in-place
       // posture as task-reconciler.ts's budget-exceeded path.
       if (updatedTask.worktreePath) {
-        try {
-          await removeCheckoutIfClean(app, {
-            projectId: project.id,
-            hostId: project.hostId,
-            worktreePath: updatedTask.worktreePath,
-            parentCwd: project.cwd,
-          });
-        } catch (err) {
-          app.log.warn(
-            { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },
-            "session reconcile: removeWorktreeIfClean threw after task failure",
-          );
+        // Issue #3193 — the task's worktree is on its worker's host, not
+        // necessarily the project's. Resolve that host and the project's
+        // path ON IT together; skip (with a warning from the helper) when the
+        // project has no path there, rather than send the primary's cwd to a
+        // worker that does not have it.
+        const target = resolveCleanupTarget(app, updatedTask, project);
+        if (target) {
+          try {
+            await removeCheckoutIfClean(app, {
+              projectId: project.id,
+              hostId: target.hostId,
+              worktreePath: updatedTask.worktreePath,
+              parentCwd: target.cwdOnHost,
+            });
+          } catch (err) {
+            app.log.warn(
+              { err, taskId: updatedTask.id, worktreePath: updatedTask.worktreePath },
+              "session reconcile: removeWorktreeIfClean threw after task failure",
+            );
+          }
         }
       }
     }

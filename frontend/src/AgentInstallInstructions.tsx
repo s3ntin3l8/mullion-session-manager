@@ -21,6 +21,11 @@ interface AgentInstallInstructionsProps {
    * installed and must have its .env updated.
    */
   kind: "install" | "rotate";
+  /**
+   * "rotate" only: the agent holds a live machine identity, so the rotation
+   * did not lock it out and the new token is only needed to register again.
+   */
+  agentUnaffected?: boolean;
   primaryUrl: string;
   baseUrl?: string;
 }
@@ -62,6 +67,7 @@ export function AgentInstallInstructions({
   token,
   hostName,
   kind,
+  agentUnaffected = false,
   primaryUrl,
   baseUrl,
 }: AgentInstallInstructionsProps) {
@@ -90,6 +96,17 @@ export function AgentInstallInstructions({
         </>
       ) : (
         <>
+          {agentUnaffected && (
+            <span className="create-modal-field-hint" data-testid="rotate-unaffected">
+              The running agent keeps working: it holds a machine identity and renews on it. If this
+              token leaked or was exposed, rotating it now was the right call (use “Rotate token and
+              discard it”): the old value can no longer be used to take over this host. To re-pair
+              the agent later (state file lost, identity revoked or expired after 90 days unused)
+              you need another rotation and a paste into the .env below, because the token the agent
+              still holds will no longer be accepted; then delete agent-identity.json and restart
+              it.
+            </span>
+          )}
           <CopyBlock
             label="Agent's .env (installed with the Add host command)"
             text={envUpdateSnippet(token)}
@@ -100,7 +117,10 @@ export function AgentInstallInstructions({
           />
           <span className="create-modal-field-hint">
             Use the one that matches how this host was added (keep the primary URL the agent's .env
-            already has), then restart the agent. Until you do, it can no longer reach this primary.
+            already has), then restart the agent.{" "}
+            {agentUnaffected
+              ? "Until then the agent keeps running on its identity."
+              : "Until you do, it can no longer reach this primary."}{" "}
             Re-running the installer would not apply it: the installer never rewrites an existing
             .env.
           </span>

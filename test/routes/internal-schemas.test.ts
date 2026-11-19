@@ -386,6 +386,10 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         properties: {
           cwd: { type: "string", minLength: 1 },
           branchName: { type: "string", minLength: 1 },
+          // Issue #3194 — the optional "this host does not have the branch,
+          // fetch it from origin" flag. Optional, so an older primary that
+          // never sends it still resumes the branch the ordinary way.
+          fromOrigin: { type: "boolean" },
         },
       },
     });

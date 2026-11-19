@@ -3,6 +3,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { vi, afterEach } from "vitest";
+import * as shellEnv from "../../src/services/user-shell-env.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import { schema } from "../../src/plugins/env.js";
 import { isReservedSessionEnvKey } from "../../src/services/session-env-keys.js";
@@ -460,5 +462,28 @@ describe("buildGitConfigEnv", () => {
       "!helper",
     ]);
     expect(Object.keys(all)).toHaveLength(1 + 2 * GIT_CONFIG_MAX_ENTRIES);
+  });
+});
+
+describe("buildSessionEnv recovered SDK variables", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const recovered = (r: Record<string, string>) => {
+    vi.spyOn(shellEnv, "getUserShellRecoverKeys").mockReturnValue(Object.keys(r));
+    vi.spyOn(shellEnv, "getUserShellEnv").mockReturnValue(r);
+  };
+
+  it("adds recovered keys", () => {
+    recovered({ ANDROID_HOME: "/sdk" });
+    expect(buildSessionEnv({}).ANDROID_HOME).toBe("/sdk");
+  });
+
+  it("never overrides a key the service env already has", () => {
+    recovered({ ANDROID_HOME: "/sdk" });
+    expect(buildSessionEnv({ ANDROID_HOME: "/svc" }).ANDROID_HOME).toBe("/svc");
+  });
+
+  it("adds nothing when nothing was recovered", () => {
+    recovered({});
+    expect(buildSessionEnv({}).ANDROID_HOME).toBeUndefined();
   });
 });

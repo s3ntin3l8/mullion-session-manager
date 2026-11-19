@@ -25,9 +25,21 @@ export interface MergeReadinessInput {
   merged: boolean;
   state: "open" | "closed";
   mergeableState: string;
+  /** Needed only to honour `overrideHeadSha` below. */
+  headSha?: string;
 }
 
-export function classifyMergeReadiness(pr: MergeReadinessInput): MergeReadiness {
+/**
+ * `overrideHeadSha` is a human's "Merge anyway" on one specific head
+ * (`tasks.mergeOverrideHeadSha`): while it equals the PR's current head, an
+ * `unstable` PR (only NON-required checks red or running) reads as `clean`. A
+ * new push changes the head and voids it. `blocked` (a required check) is never
+ * overridable, and only `attemptMerge` passes this argument.
+ */
+export function classifyMergeReadiness(
+  pr: MergeReadinessInput,
+  overrideHeadSha?: string | null,
+): MergeReadiness {
   // Merged or closed out of band (a human merged it directly on GitHub, or
   // closed it) takes precedence over whatever `mergeableState` GitHub still
   // reports for a closed PR — checked first, matching `attemptMerge`'s
@@ -39,7 +51,7 @@ export function classifyMergeReadiness(pr: MergeReadinessInput): MergeReadiness 
     case "behind":
       return "behind";
     case "unstable":
-      return "unstable";
+      return overrideHeadSha && overrideHeadSha === pr.headSha ? "clean" : "unstable";
     case "dirty":
       return "dirty";
     case "blocked":

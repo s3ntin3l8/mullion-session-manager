@@ -1,0 +1,204 @@
+/*
+ * Vendored subset of facebook/idb's proto/idb.proto for Mullion's iOS Simulator driver.
+ * Source: https://github.com/facebook/idb/blob/main/proto/idb.proto
+ * Commit: 5f5a5fb35b78d58ea5d39f826b4198df78483fa6
+ *
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree
+ * (https://github.com/facebook/idb/blob/main/LICENSE).
+ */
+
+syntax = "proto3";
+
+package idb;
+
+// The idb companion service definition (subset used by Mullion).
+service CompanionService {
+  // Management
+  rpc describe(TargetDescriptionRequest) returns (TargetDescriptionResponse) {}
+  // Interaction
+  rpc hid(stream HIDEvent) returns (HIDResponse) {}
+  // Video/Audio
+  rpc video_stream(stream VideoStreamRequest)
+      returns (stream VideoStreamResponse) {}
+}
+
+message Payload {
+  oneof source {
+    string file_path = 1;
+    bytes data = 2;
+    string url = 3;
+    // Declares how the payload that follows is compressed. It is a frame of
+    // its own, sent before that payload; without one the payload is GZIP.
+    Compression compression = 4;
+  }
+  enum Compression {
+    GZIP = 0;
+    ZSTD = 1;
+  }
+}
+
+message Point {
+  double x = 1;
+  double y = 2;
+}
+
+message TargetDescriptionRequest {
+  bool fetch_diagnostics = 1;
+}
+
+message TargetDescriptionResponse {
+  TargetDescription target_description = 1;
+  // Field 2 (CompanionInfo companion) omitted — unused by Mullion.
+  reserved 2;
+}
+
+message HIDEvent {
+  enum HIDDirection {
+    DOWN = 0;
+    UP = 1;
+  }
+
+  message HIDTouch {
+    Point point = 1;
+  }
+
+  enum HIDButtonType {
+    APPLE_PAY = 0;
+    HOME = 1;
+    LOCK = 2;
+    SIDE_BUTTON = 3;
+    SIRI = 4;
+    PLAY_PAUSE = 5;
+    VOLUME_UP = 6;
+    VOLUME_DOWN = 7;
+    EJECT = 8;
+  }
+
+  message HIDButton {
+    HIDButtonType button = 1;
+  }
+
+  message HIDKey {
+    uint64 keycode = 1;
+  }
+
+  message HIDPressAction {
+    oneof action {
+      HIDTouch touch = 1;
+      HIDButton button = 2;
+      HIDKey key = 3;
+    }
+  }
+
+  message HIDPress {
+    HIDPressAction action = 1;
+    HIDDirection direction = 2;
+  }
+
+  message HIDSwipe {
+    Point start = 1;
+    Point end = 2;
+    double delta = 5;
+    double duration = 6;
+  }
+
+  message HIDDelay {
+    double duration = 1;
+  }
+
+  message HIDPinch {
+    Point center = 1;
+    double scale = 2;
+    double duration = 3;
+    double radius = 4;
+  }
+
+  enum HIDOrientationType {
+    PORTRAIT = 0;
+    PORTRAIT_UPSIDE_DOWN = 1;
+    LANDSCAPE_LEFT = 2;
+    LANDSCAPE_RIGHT = 3;
+  }
+
+  message HIDOrientation {
+    HIDOrientationType orientation = 1;
+  }
+
+  message HIDShake {}
+
+  message HIDHinge {
+    // Degrees from 0 (closed) to 180 (flat), inclusive.
+    double angle = 1;
+  }
+
+  // Experimental display-selection clients used field 7.
+  reserved 7;
+
+  oneof event {
+    HIDPress press = 1;
+    HIDSwipe swipe = 2;
+    HIDDelay delay = 3;
+    HIDPinch pinch = 4;
+    HIDOrientation orientation = 5;
+    HIDShake shake = 6;
+    HIDHinge hinge = 8;
+  }
+}
+
+message HIDResponse {}
+
+message ScreenDimensions {
+  uint64 width = 1;
+  uint64 height = 2;
+  double density = 3;
+  uint64 width_points = 4;
+  uint64 height_points = 5;
+}
+
+message TargetDescription {
+  string udid = 1;
+  string name = 2;
+  ScreenDimensions screen_dimensions = 3;
+  string state = 4;
+  string target_type = 5;
+  string os_version = 6;
+  string architecture = 7;
+  bytes extended = 9;
+  bytes diagnostics = 10;
+  // Field 11 (repeated Display displays) omitted — unused by Mullion.
+  reserved 11;
+}
+
+message VideoStreamRequest {
+  enum Format {
+    H264 = 0;
+    RBGA = 1;
+    MJPEG = 2;
+    MINICAP = 3;
+    I420 = 4;
+  }
+  message Start {
+    string file_path = 1;
+    uint64 fps = 2;
+    Format format = 3;
+    double compression_quality = 4;
+    double scale_factor = 5;
+    double avg_bitrate = 6;
+    double key_frame_rate = 7;
+  }
+  message Stop {}
+  oneof control {
+    Start start = 1;
+    Stop stop = 2;
+  }
+}
+
+message VideoStreamResponse {
+  oneof output {
+    bytes log_output = 1;
+    Payload payload = 2;
+  }
+}

@@ -9,6 +9,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 import { deriveTaskBranchName } from "../../src/services/git-worktree.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
 import { eq } from "drizzle-orm";
+import { nullTaskFileReads } from "../helpers/null-task-file-reads.js";
 
 // `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
 // remote backend has to satisfy all of it — a fake missing members would
@@ -52,8 +53,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     readTaskReviewFindings: vi.fn().mockResolvedValue(null),
     deleteTaskReviewFindings: vi.fn().mockResolvedValue(undefined),
     resolveSessionsDir: vi.fn().mockResolvedValue("/remote/sessions"),
-    readTaskCommitTitle: vi.fn().mockResolvedValue(null),
-    readTaskRereviewRequest: vi.fn().mockResolvedValue(null),
+    ...nullTaskFileReads(),
     ...overrides,
   };
 }
@@ -106,6 +106,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { enqueueTask, dispatchClaimedTask } = await import("../../src/services/task-claim.js");
 const { retryTask } = await import("../helpers/retry-task.js");
+const { enqueueRetry } = await import("../../src/services/task-retry.js");
 const { tasks, projects, hosts } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
@@ -1359,8 +1360,8 @@ describe("claimTask", () => {
       expect(row.failureReason).toContain("the `Platform:` line in its issue body");
       expect(row.failureReason).toContain("Also lives on");
       expect(row.placementRequirement).toBe(JSON.stringify({ platform: "darwin" }));
-      // Nothing was cut on the way: Retry refuses cleanly instead of trying to
-      // resume a branch that was only ever predicted.
+      // Nothing was cut on the way: Retry resets the task to ready instead of
+      // trying to resume a branch that was only ever predicted.
       expect(row.branchName).toBeNull();
       expect(row.worktreePath).toBeNull();
       expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
@@ -1380,11 +1381,9 @@ describe("claimTask", () => {
         expect.anything(),
         "failed",
       );
-      // ...and Retry says there is nothing to resume.
-      await expect(retryTask(app, task.id)).resolves.toMatchObject({
-        ok: false,
-        reason: "no-worktree",
-      });
+      // ...and Retry puts it back to ready, since there is nothing to resume.
+      expect(await enqueueRetry(app, task.id)).toMatchObject({ ok: true });
+      expect(getTask(app, task.id).status).toBe("ready");
 
       await app.close();
     });
@@ -2198,7 +2197,7 @@ describe("retryTask (#483)", () => {
     await app.close();
   });
 
-  it("refuses when the task has no recorded branch to resume", async () => {
+  it("resets a branchless failed task to ready instead of refusing (nothing to resume)", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
@@ -2208,9 +2207,10 @@ describe("retryTask (#483)", () => {
       .returning()
       .all();
 
-    const outcome = await retryTask(app, task.id);
+    const outcome = await enqueueRetry(app, task.id);
 
-    expect(outcome).toMatchObject({ ok: false, reason: "no-worktree" });
+    expect(outcome).toMatchObject({ ok: true });
+    expect(getTask(app, task.id)).toMatchObject({ status: "ready", resumeQueued: false });
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();

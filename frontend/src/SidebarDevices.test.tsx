@@ -337,6 +337,49 @@ describe("SidebarDevices (issue #1326)", () => {
     expect(onOpenDevice).not.toHaveBeenCalled();
   });
 
+  it("disables Start and Stop and says so when the device's host is unreachable", async () => {
+    const base = {
+      hostId: "host-b",
+      projectId: null,
+      name: null,
+      kind: "emulator" as const,
+      avdName: "pixel_7",
+      serial: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      live: null,
+      hostUnreachable: true,
+    };
+    devicesDb = [
+      { ...base, id: 1, status: "killed" },
+      { ...base, id: 2, status: "active" },
+    ];
+    resetStore({
+      devices: [],
+      hosts: [{ id: "host-b", name: "mac-mini" }] as never,
+    });
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    const stopped = await screen.findByTestId("device-row-1");
+    expect(within(stopped).getByTestId("device-start-1")).toBeDisabled();
+    expect(stopped).toHaveAttribute("title", "Unavailable — host unreachable");
+    expect(within(stopped).getByTestId("device-host-1")).toHaveTextContent("mac-mini");
+    // The reason is visible in the row (a tooltip is invisible on touch) and
+    // the host is part of the accessible names.
+    expect(within(stopped).getByTestId("device-unreachable-1")).toHaveTextContent(
+      "unavailable — host unreachable",
+    );
+    expect(stopped).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/ on mac-mini — host unreachable$/),
+    );
+    expect(within(stopped).getByTestId("device-start-1")).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/ on mac-mini — host unreachable$/),
+    );
+    const active = await screen.findByTestId("device-row-2");
+    expect(within(active).getByTestId("device-stop-2")).toBeDisabled();
+  });
+
   // A failed start/stop still rides on the row's `title` tooltip, which
   // makes the error per-row data: one shared string would put whichever row
   // failed LAST into every other row's tooltip until the next click.
@@ -563,5 +606,83 @@ describe("SidebarDevices (issue #1326)", () => {
       "/api/devices/1/stop",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("shows the iOS platform badge and falls back to the simulator name (avdName ?? name ?? udid)", async () => {
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: "iPhone 17",
+        platform: "ios",
+        kind: "emulator",
+        avdName: null,
+        serial: null,
+        udid: "00008110-001234563C88801E",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+      {
+        id: 2,
+        hostId: "local",
+        projectId: null,
+        name: null,
+        platform: "ios",
+        kind: "emulator",
+        avdName: "iPhone 16 Pro",
+        serial: null,
+        udid: "00008110-001234563C88801F",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+      {
+        id: 3,
+        hostId: "local",
+        projectId: null,
+        name: null,
+        platform: "ios",
+        kind: "emulator",
+        avdName: null,
+        serial: null,
+        udid: "00008110-001234563C888020",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+      {
+        id: 4,
+        hostId: "local",
+        projectId: null,
+        name: "My Pixel",
+        platform: "android",
+        kind: "emulator",
+        avdName: "pixel_7",
+        serial: null,
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    render(<SidebarDevices onOpenDevice={vi.fn()} />);
+
+    const row1 = await screen.findByTestId("device-row-1");
+    expect(row1).toHaveTextContent("iPhone 17");
+    expect(within(row1).getByTestId("device-platform-1")).toHaveTextContent("iOS");
+    expect(row1).toHaveAttribute("aria-label", "Open device iPhone 17 (iOS)");
+
+    const row2 = screen.getByTestId("device-row-2");
+    expect(row2).toHaveTextContent("iPhone 16 Pro");
+    expect(within(row2).getByTestId("device-platform-2")).toHaveTextContent("iOS");
+    expect(row2).toHaveAttribute("aria-label", "Open device iPhone 16 Pro (iOS)");
+
+    const row3 = screen.getByTestId("device-row-3");
+    expect(row3).toHaveTextContent("00008110-001234563C888020");
+    expect(within(row3).getByTestId("device-platform-3")).toHaveTextContent("iOS");
+
+    const row4 = screen.getByTestId("device-row-4");
+    expect(within(row4).queryByTestId("device-platform-4")).toBeNull();
   });
 });

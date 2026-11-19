@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/index.js";
 import type {
+  AndroidImagesStatus,
   CacheStorageStatus,
   DevWorktreeStatus,
   DockerStorageStatus,
@@ -59,8 +60,9 @@ export function useStorageProbes() {
   const caches = useProbe<CacheStorageStatus>((r) => api.getCacheStorage(r));
   const opencode = useProbe<OpencodeStorageStatus>((r) => api.getOpencodeStorage(r));
   const worktrees = useProbe<DevWorktreeStatus>((r) => api.getDevWorktrees(r));
+  const androidImages = useProbe<AndroidImagesStatus>((r) => api.getAndroidImages(r));
   const space = useProbe<SpaceReportStatus>((r) => api.getSpaceReport(r));
-  const probes = [docker, temp, caches, opencode, worktrees, space];
+  const probes = [docker, temp, caches, opencode, worktrees, androidImages, space];
 
   const loadStats = (refresh = false) =>
     api.getSystemStats(refresh).then(
@@ -107,6 +109,7 @@ export function useStorageProbes() {
     caches: caches.value,
     opencode: opencode.value,
     worktrees: worktrees.value,
+    androidImages: androidImages.value,
     space: space.value,
     /** A refresh was just asked for, or any measurement is still running. */
     busy: requesting || anyMeasuring,

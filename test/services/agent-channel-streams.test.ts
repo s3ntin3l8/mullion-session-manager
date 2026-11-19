@@ -323,10 +323,10 @@ describe("transport selection for streams (#2571)", () => {
         return mode === "up" ? { kind: "channel", channel: r.entry } : { kind: "channel-down" };
       },
     });
-    const ev = client.openEventsStream({ cursors: true }) as never as ChannelSocket;
+    const ev = client.streams.events({ cursors: true }) as never as ChannelSocket;
     await opened(ev);
     expect(r.calls[0]).toEqual({ kind: "events", query: { cursors: "1" } });
-    const att = client.openAttach({
+    const att = client.streams.attach({
       id: "s9",
       cwd: "/w",
       command: "bash",
@@ -348,14 +348,14 @@ describe("transport selection for streams (#2571)", () => {
         env: '{"A":"b"}',
       },
     });
-    const relay = client.openControlRelayStream() as never as ChannelSocket;
-    const ssh = client.openSshAgentStream() as never as ChannelSocket;
+    const relay = client.streams.controlRelay() as never as ChannelSocket;
+    const ssh = client.streams.sshAgent() as never as ChannelSocket;
     await Promise.all([opened(relay), opened(ssh)]);
     expect(r.calls.slice(2).map((c) => c.kind)).toEqual(["control-relay", "ssh-agent"]);
     expect(new Set(ops)).toEqual(new Set(["channel-streams"]));
 
     mode = "down";
-    const down = client.openAttach({
+    const down = client.streams.attach({
       id: "s9",
       cwd: "/w",
       command: "bash",
@@ -381,9 +381,9 @@ describe("preview WebSockets over the channel (#2620)", () => {
         return { kind: "channel", channel: r.entry };
       },
     });
-    const preview = client.openPreviewWs(5173, "/@vite/client?x=1") as never as ChannelSocket;
+    const preview = client.previews.ws(5173, "/@vite/client?x=1") as never as ChannelSocket;
     await opened(preview);
-    const configured = client.openConfiguredPreviewWs(
+    const configured = client.previews.configuredWs(
       "http://127.0.0.1:3000/",
     ) as never as ChannelSocket;
     await opened(configured);
@@ -418,8 +418,8 @@ describe("preview WebSockets over the channel (#2620)", () => {
       resolveTransport: () => ({ kind: "channel-down" }),
     });
     for (const sock of [
-      down.openPreviewWs(1, "/"),
-      down.openConfiguredPreviewWs("http://127.0.0.1:1/"),
+      down.previews.ws(1, "/"),
+      down.previews.configuredWs("http://127.0.0.1:1/"),
     ]) {
       const err = new Promise<Error>((res) => sock.once("error", res));
       expect((await err).message).toContain("not falling back");

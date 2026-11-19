@@ -12,6 +12,7 @@ const ENV_DEFAULTS: TaskMasterEnvDefaults = {
   budgetMinutes: 120,
   progressCommentMinutes: 15,
   rateLimitGraceMinutes: 5,
+  rateLimitMaxParkHours: 24,
   skipPermissions: false,
 };
 
@@ -25,8 +26,10 @@ describe("resolveTaskMaster", () => {
       budgetMinutes: 120,
       progressCommentMinutes: 15,
       rateLimitGraceMinutes: 5,
+      rateLimitMaxParkHours: 24,
       skipPermissions: false,
       reviewCiWaitMinutes: 15,
+      workerStartTimeoutMinutes: 10,
       maxAutoReturnRounds: 10,
     });
   });

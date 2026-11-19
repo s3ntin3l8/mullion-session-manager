@@ -311,6 +311,9 @@ export function describeEvent(
       }
     }
     case "status_change": {
+      if (event.payload.reason === "worker-not-started" && typeof event.payload.note === "string") {
+        return { text: event.payload.note, attention: true };
+      }
       if (event.payload.reason === "exited") return { text: "Exited", attention: false };
       if (event.payload.screen === "alt") {
         return { text: "Entered full-screen mode", attention: false };

@@ -41,8 +41,8 @@ const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 // uses elsewhere in this file for a different, shorter-lived streak.
 const FAILURE_RELOG_INTERVAL = 5;
 
-// openSshAgentStream() has no connect timeout of its own (same documented
-// gap as openEventsStream() — remote-host-client.ts) — bounded here so a
+// streams.sshAgent() has no connect timeout of its own (same documented
+// gap as streams.events() — remote-host-client.ts) — bounded here so a
 // half-open handshake can't stall this host's fan-out indefinitely.
 const CONNECT_TIMEOUT_MESSAGE = "[ssh-agent-fanout] connect timed out, terminating and retrying";
 const CONNECT_TIMEOUT_MS = 10_000;
@@ -281,7 +281,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
       // same hazard-4 reasoning as remote-event-subscriber.ts's own
       // connect(): a rotated agent token only takes effect on a fresh
       // getRemoteHostClient() call.
-      socket = getRemoteHostClient(app, f.hostId).openSshAgentStream();
+      socket = getRemoteHostClient(app, f.hostId).streams.sshAgent();
     } catch (err) {
       app.log.warn(
         { err, hostId: f.hostId },

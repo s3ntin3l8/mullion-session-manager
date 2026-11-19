@@ -59,6 +59,9 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "list_sessions",
       "start_dock_session",
       "list_dock_controls",
+      "get_dock_logs",
+      "wait_for_dock_output",
+      "switch_dock_branch",
       "spawn_child_session",
       "list_spawn_targets",
       "list_child_sessions",
@@ -69,9 +72,17 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "get_message_status",
       "kill_child_session",
       "stop_dock_session",
+      "get_dock_config",
+      "set_dock_config",
       "get_scrollback",
       "get_session_transcript",
       "push_task_branch",
+      "list_tasks",
+      "get_task",
+      "retry_task",
+      "start_task",
+      "close_task",
+      "archive_task",
       "request_review",
       "review_status",
       "stop_review",
@@ -596,6 +607,53 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(tool.description).toContain("operator");
   });
 
+  it("list_tasks calls client.listTasks with status/projectId and returns JSON", async () => {
+    const tool = TOOLS.find((t) => t.name === "list_tasks")!;
+    const listTasks = vi.fn().mockResolvedValue([{ id: 1, status: "ready", title: "T" }]);
+    const text = await tool.handler({ status: "ready", projectId: "3" }, { listTasks });
+    expect(listTasks).toHaveBeenCalledWith({ status: "ready", projectId: "3" });
+    expect(JSON.parse(text)).toEqual([{ id: 1, status: "ready", title: "T" }]);
+  });
+
+  it("get_task calls client.getTask with taskId and returns JSON", async () => {
+    const tool = TOOLS.find((t) => t.name === "get_task")!;
+    const getTask = vi.fn().mockResolvedValue({ id: 42, status: "done", title: "D" });
+    const text = await tool.handler({ taskId: "42" }, { getTask });
+    expect(getTask).toHaveBeenCalledWith("42");
+    expect(JSON.parse(text)).toEqual({ id: 42, status: "done", title: "D" });
+  });
+
+  it("retry_task, start_task, close_task, and archive_task forward arguments to client", async () => {
+    const retry = TOOLS.find((t) => t.name === "retry_task")!;
+    const retryTask = vi.fn().mockResolvedValue({ id: 1, status: "ready" });
+    expect(JSON.parse(await retry.handler({ taskId: "1", agent: "codex" }, { retryTask }))).toEqual(
+      { id: 1, status: "ready" },
+    );
+    expect(retryTask).toHaveBeenCalledWith("1", { agent: "codex", reviewAgent: undefined });
+
+    const start = TOOLS.find((t) => t.name === "start_task")!;
+    const startTask = vi.fn().mockResolvedValue({ id: 2, status: "claimed" });
+    expect(JSON.parse(await start.handler({ taskId: "2" }, { startTask }))).toEqual({
+      id: 2,
+      status: "claimed",
+    });
+    expect(startTask).toHaveBeenCalledWith("2", { agent: undefined, reviewAgent: undefined });
+
+    const close = TOOLS.find((t) => t.name === "close_task")!;
+    const closeTask = vi.fn().mockResolvedValue({ id: 3, status: "failed" });
+    expect(
+      JSON.parse(await close.handler({ taskId: "3", reason: "wontfix" }, { closeTask })),
+    ).toEqual({ id: 3, status: "failed" });
+    expect(closeTask).toHaveBeenCalledWith("3", { reason: "wontfix" });
+
+    const archive = TOOLS.find((t) => t.name === "archive_task")!;
+    const archiveTask = vi.fn().mockResolvedValue({ id: 4, status: "done", archivedAt: null });
+    expect(
+      JSON.parse(await archive.handler({ taskId: "4", unarchive: true }, { archiveTask })),
+    ).toEqual({ id: 4, status: "done", archivedAt: null });
+    expect(archiveTask).toHaveBeenCalledWith("4", { unarchive: true });
+  });
+
   it("request_review passes pr_number to client.requestReview and returns the result", async () => {
     const tool = TOOLS.find((t) => t.name === "request_review")!;
     const requestReview = vi
@@ -896,10 +954,73 @@ describe("use_device and device_action handlers (PR #1324)", () => {
     expect(JSON.parse(result)).toEqual({ ok: true });
   });
 
-  it("use_device's inputSchema advertises the clipboard action, op, and paste properties", () => {
+  it("use_device's inputSchema advertises the clipboard, logs, and button actions and properties", () => {
     expect(useDevTool.inputSchema.properties.action.enum).toContain("clipboard");
+    expect(useDevTool.inputSchema.properties.action.enum).toContain("logs");
+    expect(useDevTool.inputSchema.properties.action.enum).toContain("logcat");
+    expect(useDevTool.inputSchema.properties.action.enum).toContain("button");
+    expect(useDevTool.inputSchema.properties.button.enum).toEqual(["home", "lock", "side", "siri"]);
     expect(useDevTool.inputSchema.properties.op.enum).toEqual(["get", "set"]);
     expect(useDevTool.inputSchema.properties.paste.type).toBe("boolean");
+  });
+
+  it("use_device logs aliases logcat with the same request, output, and argument validation", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ logcat: "line 1\nline 2" });
+    const logsResult = await useDevTool.handler(
+      { deviceId: "3", action: "logs", lines: 50, filter: "MyApp" },
+      { deviceAction },
+    );
+    expect(deviceAction).toHaveBeenCalledWith("3", {
+      action: "logcat",
+      lines: 50,
+      filter: "MyApp",
+    });
+    expect(JSON.parse(logsResult)).toEqual({ logcat: "line 1\nline 2" });
+
+    const logcatResult = await useDevTool.handler(
+      { deviceId: "3", action: "logcat", lines: 50, filter: "MyApp" },
+      { deviceAction },
+    );
+    expect(JSON.parse(logcatResult)).toEqual({ logcat: "line 1\nline 2" });
+
+    const badClient = { deviceAction: vi.fn() };
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "logs", lines: "50" }, badClient),
+    ).rejects.toThrow("lines must be a number");
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "logs", filter: 123 }, badClient),
+    ).rejects.toThrow("filter must be a string");
+    expect(badClient.deviceAction).not.toHaveBeenCalled();
+  });
+
+  it("use_device button validates button name and forwards home|lock|side|siri", async () => {
+    const deviceAction = vi.fn().mockResolvedValue({ ok: true });
+    for (const button of ["home", "lock", "side", "siri"]) {
+      const res = await useDevTool.handler(
+        { deviceId: "3", action: "button", button },
+        { deviceAction },
+      );
+      expect(deviceAction).toHaveBeenLastCalledWith("3", { action: "button", button });
+      expect(JSON.parse(res)).toEqual({ ok: true });
+    }
+
+    const badClient = { deviceAction: vi.fn() };
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "button" }, badClient),
+    ).rejects.toThrow(/button is required/);
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "button", button: "power" }, badClient),
+    ).rejects.toThrow("button must be one of: home, lock, side, siri");
+    expect(badClient.deviceAction).not.toHaveBeenCalled();
+  });
+
+  it("use_device passes unsupported-action errors through verbatim without retrying", async () => {
+    const errMsg = 'action "button" is not supported on android devices';
+    const deviceAction = vi.fn().mockRejectedValue(new Error(errMsg));
+    await expect(
+      useDevTool.handler({ deviceId: "3", action: "button", button: "home" }, { deviceAction }),
+    ).rejects.toThrow(errMsg);
+    expect(deviceAction).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1006,6 +1127,9 @@ describe("wait_for_output", () => {
     await expect(
       tool.handler({ sessionId: "1", match: "x", afterOffset: -2 }, client),
     ).rejects.toThrow(/afterOffset/);
+    await expect(
+      tool.handler({ sessionId: "1", match: "x", afterSeq: 1.5 }, client),
+    ).rejects.toThrow(/afterSeq/);
     expect(client.waitForOutput).not.toHaveBeenCalled();
   });
 });

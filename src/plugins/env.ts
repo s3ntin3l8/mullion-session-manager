@@ -628,6 +628,16 @@ export const schema = {
       minimum: 0,
       maximum: 1440,
     },
+    // #3234 — the longest a rate-limited worker is parked for the provider
+    // reset. A reset further out than this fails the task with a
+    // "quota exhausted, resets <time>" reason instead of holding it for days.
+    // 0 = never park. Default 24, max 168 (a week).
+    MULLION_TASK_RATE_LIMIT_MAX_PARK_HOURS: {
+      type: "number",
+      default: 24,
+      minimum: 0,
+      maximum: 168,
+    },
     // Whether an unattended task spawn (claim/auto-claim/retry/review agent)
     // passes skipPermissions through to the agent's own flag. Default OFF:
     // an unattended agent bypassing every permission prompt is a deliberate
@@ -781,6 +791,18 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // The iOS Simulator panel (macOS hosts only, #1943). Off by default; it also
+    // needs the `xcode` host capability and an executable idb_companion.
+    DEVICE_IOS_ENABLED: {
+      type: "boolean",
+      default: false,
+    },
+    // Absolute path to the `idb_companion` binary. Empty means "not configured"
+    // (no PATH fallback), same posture as DEVICE_EMULATOR_PATH.
+    DEVICE_IDB_COMPANION_PATH: {
+      type: "string",
+      default: "",
+    },
     // Absolute path to the scrcpy-server binary pushed onto the device
     // (ansible-playbooks' `android-sdk` role downloads and pins this — see
     // that role's own comment on why it's a plain checksummed download, not
@@ -913,6 +935,13 @@ export const schema = {
     MULLION_SSH_AUTH_SOCK: {
       type: "string",
       default: "",
+    },
+    // Comma-separated variable NAMES recovered from the user's interactive
+    // shell (user-shell-env.ts) into every session's env, beyond PATH. Empty
+    // disables. See docs/configuration.md.
+    SESSION_ENV_RECOVER_KEYS: {
+      type: "string",
+      default: "ANDROID_HOME,ANDROID_SDK_ROOT,ANDROID_NDK_HOME,JAVA_HOME",
     },
     // Issue #1133 — opt-out for scaffold-generate.ts's mandatory bwrap
     // sandboxing of a generation turn. Default ON: when a usable bwrap is
@@ -1194,6 +1223,7 @@ declare module "fastify" {
       MULLION_TASK_BUDGET_MINUTES: number;
       MULLION_TASK_PROGRESS_COMMENT_MINUTES: number;
       MULLION_TASK_RATE_LIMIT_GRACE_MINUTES: number;
+      MULLION_TASK_RATE_LIMIT_MAX_PARK_HOURS: number;
       MULLION_TASK_SKIP_PERMISSIONS: boolean;
       MULLION_TASK_TRUSTED_LOGINS: string;
       BROWSER_ENABLED: boolean;
@@ -1204,6 +1234,8 @@ declare module "fastify" {
       DEVICE_ADB_PATH: string;
       DEVICE_ADB_SERVER_PORT: number;
       DEVICE_EMULATOR_PATH: string;
+      DEVICE_IOS_ENABLED: boolean;
+      DEVICE_IDB_COMPANION_PATH: string;
       DEVICE_SCRCPY_SERVER_PATH: string;
       DEVICE_VIDEO_MAX_SIZE: number;
       DEVICE_VIDEO_MAX_FPS: number;
@@ -1216,6 +1248,7 @@ declare module "fastify" {
       DEVICE_DISCOVERY_ENABLED: boolean;
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
+      SESSION_ENV_RECOVER_KEYS: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;
       MULLION_WEBHOOK_BASE_URL: string;
       MULLION_PUBLIC_URL: string;

@@ -20,7 +20,7 @@ grants you anything.
 
 `MULLION_HOOK_TOKEN` gives you **session scope**: everything you need to act
 on yourself (get/rename/logs, the `browser` surface, `project actions`, your
-own MCP tools, and `dock list/start/stop` for **your own project's** dock), but full-scope ops (`session list/create`, `session kill` of anything but your own
+own MCP tools, and `dock list/start/stop` for **your own project's** dock), but full-scope ops (`session create`, `session kill` of anything but your own
 child, `preview *`, `project list/dock`, `agents list`) will 403 —
 that's expected, not a bug. Run `mullion config` to see your resolved scope.
 One exception: if this host has in-app auth disabled entirely, every
@@ -104,31 +104,35 @@ enough for everything a session needs to do to itself — get/rename/logs,
 the full `browser` surface, `project actions`, `events tail`, and your own
 MCP tools. It is **never** enough for **full-scope** ops:
 
-| Op                                                  | Scope                               |
-| --------------------------------------------------- | ----------------------------------- |
-| `session get/rename/logs/scrollback`, `attach`      | full or session                     |
-| `session children` / `list_child_sessions`          | full or session                     |
-| `session wait` / `wait_for_session`                 | session: children only; full: any   |
-| `session wait-output` / `wait_for_output`           | session: children only; full: any   |
-| `session prompt` / `prompt_session`                 | session: children only; full: any   |
-| `session message` / `message_session`               | session only; coordinator + consent |
-| `session kill <child>` / `kill_child_session`       | session: children only; full: any   |
-| `attach` stream frames — `input`/`resize`/`detach`  | full or session                     |
-| `session list/create`                               | **full only**                       |
-| `session spawn-child` / `spawn_child_session`       | full or session                     |
-| `project actions`                                   | full or session                     |
-| `project targets` / `list_spawn_targets`            | full or session; coordinators only  |
-| `project list`, `project dock`                      | **full only**                       |
-| `project get_tooling`                               | full or session                     |
-| `project set_tooling`                               | **full only**                       |
-| `preview create/get/delete/list`                    | **full only**                       |
-| `dock start/stop/list` (`docks.*`)                  | full or session; own project only   |
-| `agents list`                                       | **full only**                       |
-| `device list/get/action/start/terminate/discovered` | full or session                     |
-| `device create` (an emulator)                       | full or session                     |
-| `device delete/pair/pair-and-connect`               | **full only**                       |
-| `bundle status/resync/remove`                       | **full only**                       |
-| `browser` (any action), `events tail`               | full or session                     |
+| Op                                                                                                       | Scope                                                                     |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `session get/rename/logs/scrollback`, `attach`                                                           | full or session                                                           |
+| `session children` / `list_child_sessions`                                                               | full or session                                                           |
+| `session wait` / `wait_for_session`                                                                      | session: children only; full: any                                         |
+| `session wait-output` / `wait_for_output`                                                                | session: children only; full: any                                         |
+| `session prompt` / `prompt_session`                                                                      | session: children only; full: any                                         |
+| `session message` / `message_session`                                                                    | session only; coordinator + consent                                       |
+| `session kill <child>` / `kill_child_session`                                                            | session: children only; full: any                                         |
+| `attach` stream frames — `input`/`resize`/`detach`                                                       | full or session                                                           |
+| `session list`                                                                                           | full or session; other projects only for a coordinator the target accepts |
+| `session create`                                                                                         | **full only**                                                             |
+| `session spawn-child` / `spawn_child_session`                                                            | full or session                                                           |
+| `project actions`                                                                                        | full or session                                                           |
+| `project targets` / `list_spawn_targets`                                                                 | full or session; coordinators only                                        |
+| `project list`, `project dock`                                                                           | **full only**                                                             |
+| `project get_tooling`                                                                                    | full or session                                                           |
+| `project set_tooling`                                                                                    | **full only**                                                             |
+| `preview create/get/delete/list`                                                                         | **full only**                                                             |
+| `task list/get` / `list_tasks` / `get_task`                                                              | full or session; other projects only for a coordinator the target accepts |
+| `task retry/start/close/archive/unarchive` / `retry_task` / `start_task` / `close_task` / `archive_task` | **full only**                                                             |
+| `task push` / `push_task_branch`                                                                         | full or session; own task only                                            |
+| `dock start/stop/list` (`docks.*`)                                                                       | full or session; own project only                                         |
+| `agents list`                                                                                            | **full only**                                                             |
+| `device list/get/action/start/terminate/discovered`                                                      | full or session                                                           |
+| `device create` (an emulator)                                                                            | full or session                                                           |
+| `device delete/pair/pair-and-connect`                                                                    | **full only**                                                             |
+| `bundle status/resync/remove`                                                                            | **full only**                                                             |
+| `browser` (any action), `events tail`                                                                    | full or session                                                           |
 
 (This mirrors `docs/socket-api.md`'s Ops table exactly — that's the
 authoritative source if it and this table ever drift; check there for
@@ -170,7 +174,7 @@ mullion config
 
 prints the resolved socket path, which env var supplied the token, your own
 session id, and the **resolved scope** (`full`/`session`) determined by
-probing a full-scope-only op — the fastest way to confirm which mode you're
+probing `projects.list`, a full-scope-only op — the fastest way to confirm which mode you're
 actually in before you build a multi-step script around an assumption.
 
 ## CLI vs. MCP — when to use which
@@ -203,11 +207,16 @@ session exec`), or for `device create`/`device pair`/`device
 pair-and-connect`, the three ops above with no MCP tool at all.
 
 **From inside a session, the full-scope-only MCP tools
-(`list_sessions`/`start_dock_session`/`stop_dock_session`/`list_projects`/
+(`start_dock_session`/`stop_dock_session`/`list_projects`/
 `create_preview`/`delete_preview`/`list_previews`/`set_project_tooling`/
-`delete_device`) reply with a scope error, same as the CLI's own** — they're
+`delete_device`/`retry_task`/`start_task`/`close_task`/`archive_task`) reply with a scope error, same as the CLI's own** — they're
 there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
-set, not for you. `get_scrollback` and `get_session_transcript` (both default to your own session),
+set, not for you. The read-only `list_sessions`, `list_tasks` and `get_task`
+(CLI `session list`, `task list`, `task get`) DO work at session scope: your own
+project's rows always, and another project's only when your project is a coordinator
+("This project coordinates") that reaches it and that project accepts it — anything
+else is absent, exactly as if it did not exist. `command`, `env` and `agentCommand`
+are omitted from those replies. `get_scrollback` and `get_session_transcript` (both default to your own session),
 `list_actions` (defaults to your own project), `get_project_tooling`
 (defaults to your own project), and `request_review` / `review_status` / `stop_review` (your own session's
 PR and runs; pass `repo` for a PR in another registered project's repository)
@@ -283,16 +292,28 @@ Docker discovery is not agent-controllable. A dock session started before
 Mullion recorded which control it ran (#2494) is not found by `list`; stop it
 from the dashboard once.
 
+Set the dock up with `mullion dock config get` / `set` (MCP `get_dock_config` /
+`set_dock_config`): `--upsert '<control json>'` adds or replaces one control,
+`--remove <id>` drops one, `--controls '<json>'` replaces the whole list. It
+edits the project's `.crs/dock.json` on your host, the file the dock reads. If
+you work in a separate git worktree that file is not inside your worktree, so it
+will not show up in your worktree's diff. It is validated exactly like
+Settings → Dock and refuses to overwrite an unparseable file.
+
 `start` runs the control's command, env and cwd from `.crs/dock.json`, a file in
 your own checkout that you can edit — no new capability beyond the shell you
 already have.
 
-Reading a dock session's output and switching its branch in place are not
-available to a session yet; until then:
+Read a running control's output with `mullion dock logs <controlId>` /
+`get_dock_logs`, block until it prints something with `wait_for_dock_output`,
+and move it to another branch with `mullion dock switch <controlId> <branch>`
+(or `--worktree <path>`: the project checkout, a directory inside it, or one of its git worktrees; a relative path is anchored at the project checkout; a control that is not running is started there) /
+`switch_dock_branch`. A switch validates the target first, then stops and
+restarts the control; `list` shows where it runs now.
 
-- Read your own scrollback (`mullion session logs`, or the `get_scrollback`
-  MCP tool) — including a dev server's startup banner if you started it
-  yourself as a plain process in your own shell.
+Other useful surfaces at session scope:
+
+- Your own scrollback (`mullion session logs`, or `get_scrollback`).
 - `mullion project actions` — whatever the project's own launcher config
   exposes as a one-shot action.
 - Drive the browser (above) against whatever's already listening.

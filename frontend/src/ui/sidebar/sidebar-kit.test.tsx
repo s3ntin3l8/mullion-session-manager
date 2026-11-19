@@ -32,6 +32,22 @@ describe("IconButton", () => {
     expect(onClick).toHaveBeenCalled();
   });
 
+  it("busy: aria-busy, ignores clicks, keeps focusable and spins", () => {
+    const onClick = vi.fn();
+    render(
+      <IconButton label="Refresh" busy onClick={onClick}>
+        <svg />
+      </IconButton>,
+    );
+    const btn = screen.getByRole("button", { name: "Refresh" });
+    expect(btn).toHaveAttribute("aria-busy", "true");
+    expect(btn).toHaveAttribute("aria-disabled", "true");
+    expect(btn).not.toBeDisabled();
+    expect(btn).toHaveClass("is-busy");
+    fireEvent.click(btn);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
   /** Focus as a keyboard user would. jsdom does match :focus-visible after el.focus(),
      but fireEvent.focus never moves document.activeElement, so stub the selector. */
   function keyboardFocus(el: HTMLElement) {

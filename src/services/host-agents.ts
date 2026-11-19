@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { appVersion } from "./app-version.js";
 import { getCachedAgents, type DetectedAgent } from "./agent-detect.js";
+import { getSessionEnvInfo, type SessionEnvInfo } from "./user-shell-env.js";
 import { getCachedCapabilities } from "./host-capabilities.js";
 import {
   LEGACY_BASELINE,
@@ -32,6 +33,8 @@ export interface HostAgentEntry {
   agents: string[] | null;
   /** `PLACEMENT_CAPABILITIES` the host has (issue #2306); null when unknown. */
   capabilities: string[] | null;
+  /** The session environment its agent reports (issue #3156); null/absent when unknown. */
+  sessionEnv?: SessionEnvInfo | null;
   /** The host's Mullion version; null when it could not be read. */
   mullionVersion: string | null;
   /** The host's `PROJECTS_ROOTS` (where a managed clone goes); absent/null when unknown. */
@@ -189,6 +192,13 @@ async function readRemoteHostAgents(
   } catch (err) {
     if (err instanceof HostRequestError && err.statusCode === 404) capabilities = null;
   }
+  // Same rule: 404 is unknown, any other failure keeps the previous reading.
+  let sessionEnv: SessionEnvInfo | null = tracker.get(hostId)?.sessionEnv ?? null;
+  try {
+    sessionEnv = await client.detectSessionEnv();
+  } catch (err) {
+    if (err instanceof HostRequestError && err.statusCode === 404) sessionEnv = null;
+  }
   let mullionVersion: string | null = null;
   let projectsRoots: string[] | null = tracker.get(hostId)?.projectsRoots ?? null;
   try {
@@ -217,6 +227,7 @@ async function readRemoteHostAgents(
   tracker.record(hostId, {
     agents,
     capabilities,
+    sessionEnv,
     mullionVersion,
     projectsRoots,
     protocol,
@@ -247,6 +258,7 @@ export function refreshLocalAgents(app: FastifyInstance): void {
       tracker.record(LOCAL_HOST_ID, {
         agents: availableAgentBins(detected),
         capabilities,
+        sessionEnv: getSessionEnvInfo(),
         mullionVersion: appVersion,
         protocol: { ...localProtocolInfo(), legacy: false },
       });

@@ -637,14 +637,27 @@ export function mapClaudeCodePermissionRequest(payload) {
 export function mapClaudeCodeStopFailure(payload) {
   const error = payload && typeof payload.error === "string" ? payload.error : "unknown";
   const result = { kind: "stop_failure", error };
-  if (payload && typeof payload.error_details === "string") {
-    result.errorDetails = payload.error_details;
-  }
   // Claude Code's own documented error_type enum (rate_limit, overloaded,
   // max_output_tokens, authentication_failed, ...) — the short, stable
   // label session-status.ts's deriveSessionStatus surfaces as `detail`.
   if (payload && typeof payload.error_type === "string") {
     result.errorType = payload.error_type;
+  } else if (error === "rate_limit") {
+    result.errorType = "rate_limit";
+  }
+  if (payload && typeof payload.error_details === "string") {
+    result.errorDetails = payload.error_details;
+  } else if (
+    result.errorType === "rate_limit" &&
+    payload &&
+    typeof payload.last_assistant_message === "string" &&
+    payload.last_assistant_message.length > 0
+  ) {
+    // Claude Code 2.1.326 StopFailure sends `error: "rate_limit"` and puts the
+    // human-readable message (e.g. "You've hit your 5-hour limit · resets
+    // 6:30pm (Europe/Berlin)") in `last_assistant_message`, with neither
+    // `error_details` nor `error_type` (issue #3265).
+    result.errorDetails = payload.last_assistant_message;
   }
   return result;
 }
@@ -1258,7 +1271,11 @@ export function mapAgyEvent(kind, payload) {
       ];
       const reason =
         typeof payload?.terminationReason === "string" ? payload.terminationReason : null;
-      if (reason === "error") {
+      // agy reports the reason in upper case ("ERROR", captured live against
+      // agy on 2026-11-17 with the quota exhausted), so compare
+      // case-insensitively: an exact "error" match never fired and a
+      // quota-exhausted turn looked like a clean finish (issue #3233).
+      if (reason?.toLowerCase() === "error") {
         const error = typeof payload?.error === "string" ? payload.error : "";
         const stopFailure = {
           kind: "stop_failure",

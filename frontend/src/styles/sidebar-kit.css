@@ -34,6 +34,19 @@
   opacity: 0.45;
   cursor: default;
 }
+/* A control with a request in flight (IconButton `busy`). The universal
+   reduced-motion reset already stops the spin; the dim is the cue that remains. */
+.sb-ibtn.is-busy {
+  cursor: progress;
+}
+.sb-ibtn.is-busy svg {
+  animation: cmuxSpin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sb-ibtn.is-busy svg {
+    opacity: 0.5;
+  }
+}
 /* open-on-GitHub: always the right-most icon, at full strength */
 .sb-ibtn--ext {
   color: var(--fg);
@@ -774,6 +787,60 @@ button.sb-chip:focus-visible,
 button.sb-chip--label[aria-pressed="true"] {
   background: color-mix(in srgb, var(--label-c) 30%, var(--sidebar));
 }
+.gh-ref-list {
+  display: flex;
+  flex-direction: column;
+}
+.gh-ref-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gh-ref-row:hover .gh-ref-title {
+  text-decoration: underline;
+}
+.gh-ref-row:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 1px;
+}
+.gh-ref-row--static {
+  cursor: default;
+}
+.gh-ref-row--static:hover .gh-ref-title {
+  text-decoration: none;
+}
+.gh-ref-state.closed {
+  color: var(--status-success-fg);
+}
+.gh-ref-num {
+  color: var(--dim);
+  flex: none;
+}
+.gh-ref-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gh-detail-parent {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 8px;
+  font-size: 0.75rem;
+}
+.gh-detail-parent .gh-ref-row {
+  width: auto;
+  min-width: 0;
+}
 .gh-issue-card {
   display: flex;
   flex-wrap: wrap;
@@ -1323,6 +1390,10 @@ button.sb-chip--label[aria-pressed="true"] {
   padding: 8px var(--rs-pad-x, 12px);
   border-bottom: 1px solid var(--border-soft);
 }
+/* Delete/Abandon under the transition buttons: its own row, not a mis-click neighbour. */
+.sb-actions-block .task-detail-actions-delete {
+  margin-top: 6px;
+}
 .sb-body {
   margin-top: 8px;
   font-size: 0.75rem;
@@ -1409,6 +1480,11 @@ button.sb-chip--label[aria-pressed="true"] {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--sidebar-2);
+  margin: 0 var(--sb-inset);
+}
+/* The held-workflow-change panel is shared with the docked task view, whose
+   edge-to-edge layout it was written for; inside the sidebar it takes the inset. */
+.sb-detail .task-detail-workflow-change {
   margin: 0 var(--sb-inset);
 }
 .sb-detail .sb-actions-block {

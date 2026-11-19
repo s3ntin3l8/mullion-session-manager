@@ -50,6 +50,12 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
 
+  it("labels a worker that never started while it is in progress", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress", needsHumanReason: "worker-not-started" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/Needs a human: worker has not started a turn/)).toBeInTheDocument();
+  });
+
   it("shows the review-post-failed block with the sync error, and not once it is cleared", () => {
     tasks = [
       makeTask({
@@ -135,5 +141,20 @@ describe("TaskDetail merge-tied needs-a-human reasons", () => {
     ];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByText(/approving review could not be posted to GitHub/)).toBeNull();
+  });
+
+  it("shows the review-inconclusive banner for a task that spent no auto-return round", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        needsHumanReason: "review-inconclusive",
+        autoReturnRounds: 0,
+        autoReturnCapAnnouncedAt: "2026-01-01T00:00:00.000Z",
+        reviewSessionId: 7,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/the review ended without a verdict twice/)).toBeInTheDocument();
   });
 });

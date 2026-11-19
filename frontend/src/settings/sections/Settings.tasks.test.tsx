@@ -5,7 +5,8 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
 import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
-import { DEFAULT_SETTINGS } from "../../api/index.js";
+import { DEFAULT_SETTINGS, type ServerInfo } from "../../api/index.js";
+import { makeAppSettings, makeTaskMaster, makeTaskMasterEnv } from "../../test/fixtures.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { dropdownValue, pickDropdownOption } from "../../test/dropdown.js";
 
@@ -16,16 +17,7 @@ import { dropdownValue, pickDropdownOption } from "../../test/dropdown.js";
 // sentinels stored settings.taskMaster actually carries — every assertion
 // here checks the resolved (env-default-or-override) value.
 
-const TEST_ENV = {
-  enabled: false,
-  maxConcurrent: 2,
-  budgetMinutes: 120,
-  progressCommentMinutes: 15,
-  rateLimitGraceMinutes: 5,
-  skipPermissions: false,
-  issueLabel: "mullion-task",
-  pollIntervalSeconds: 60,
-};
+const TEST_ENV = makeTaskMasterEnv();
 
 describe("Settings -> Task Master", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -342,23 +334,24 @@ describe("Settings -> Task Master", () => {
   it("Reset writes every sentinel back in one patch, from an install with every field overridden", async () => {
     const user = userEvent.setup();
     useDashboardStore.setState({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        taskMaster: {
+      settings: makeAppSettings({
+        taskMaster: makeTaskMaster({
           autoClaimPaused: true,
           enabled: "on",
           maxConcurrent: 5,
           budgetMinutes: 30,
+          workerStartTimeoutMinutes: 10,
           progressCommentMinutes: 5,
           rateLimitGraceMinutes: 5,
+          rateLimitMaxParkHours: 24,
           skipPermissions: "on",
           trustedLogins: [],
           reviewCiWaitMinutes: 30,
           maxAutoReturnRounds: 10,
           defaultAgent: "codex",
           defaultReviewAgent: "agy",
-        },
-      },
+        }),
+      }),
     });
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
 
@@ -391,6 +384,7 @@ describe("Settings -> Task Master", () => {
             budgetMinutes: -1,
             progressCommentMinutes: -1,
             rateLimitGraceMinutes: -1,
+            rateLimitMaxParkHours: -1,
             skipPermissions: "inherit",
           },
         }),
@@ -431,5 +425,20 @@ describe("Settings -> Task Master", () => {
     // Same fallback table store.ts uses before the first server-info fetch
     // resolves — see FALLBACK_TASK_MASTER_ENV.
     expect(maxInput).toHaveValue(2);
+  });
+
+  it("falls back to 24 h for Longest rate-limit park when a legacy server-info omits rateLimitMaxParkHours", async () => {
+    const legacyEnv = { ...makeTaskMasterEnv() } as Partial<ServerInfo["taskMasterEnv"]>;
+    delete legacyEnv.rateLimitMaxParkHours;
+    useDashboardStore.setState({
+      taskMasterEnv: legacyEnv as ServerInfo["taskMasterEnv"],
+    });
+    render(<Settings onClose={vi.fn()} initialSection="tasks" />);
+
+    const label = await screen.findByText("Longest rate-limit park");
+    const row = label.closest(".settings-row") as HTMLElement;
+    expect(row).toHaveTextContent("Server default: 24 h.");
+    const input = row.querySelector("input[type=number]") as HTMLInputElement;
+    expect(input).toHaveValue(24);
   });
 });

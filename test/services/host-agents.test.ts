@@ -15,6 +15,7 @@ vi.mock("../../src/services/agent-detect.js", () => ({
 const client = {
   detectAgents: vi.fn(),
   detectCapabilities: vi.fn(),
+  detectSessionEnv: vi.fn(),
   resolveConfig: vi.fn(),
   detectProtocol: vi.fn(),
 };
@@ -100,6 +101,7 @@ describe("host agent tracker (issue #2240)", () => {
     vi.clearAllMocks();
     client.detectCapabilities.mockResolvedValue({ capabilities: [] });
     getCachedCapabilities.mockResolvedValue([]);
+    client.detectSessionEnv.mockResolvedValue(null);
   });
 
   it("keeps only available agents, never shells", () => {
@@ -149,6 +151,30 @@ describe("host agent tracker (issue #2240)", () => {
       capabilities: [],
       mullionVersion: "0.3.40",
     });
+  });
+
+  it("reads the session env: 404 is unknown, another failure keeps the previous reading (#3156)", async () => {
+    const env = {
+      shell: "/bin/zsh",
+      interactiveResolve: "fallback",
+      reason: "timeout",
+      path: ["/usr/bin"],
+      recoveredKeys: [],
+    };
+    const tracker = new HostAgentTracker();
+    client.detectAgents.mockResolvedValue([]);
+    client.resolveConfig.mockResolvedValue({ version: "1" });
+    client.detectSessionEnv.mockResolvedValue(env);
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(tracker.get("mac")?.sessionEnv).toEqual(env);
+
+    client.detectSessionEnv.mockRejectedValue(new HostRequestError("mac", 502, ""));
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(tracker.get("mac")?.sessionEnv).toEqual(env);
+
+    client.detectSessionEnv.mockRejectedValue(new HostRequestError("mac", 404, ""));
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(tracker.get("mac")?.sessionEnv).toBeNull();
   });
 
   it("records an old agent (404 on the list) as unknown, not as having none", async () => {

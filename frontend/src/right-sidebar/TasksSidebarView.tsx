@@ -1,3 +1,4 @@
+import { useBusyAction } from "../hooks/useBusyAction.js";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Task } from "../api/types.js";
 import { needsYouReason, taskBucket, type TaskBucket } from "../github/taskMasterSummary.js";
@@ -48,6 +49,7 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
   const enabled = useDashboardStore((s) => s.taskMasterEnabled);
   const allTasks = useDashboardStore((s) => s.tasks);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
+  const { run: runRefresh, busy: refreshing } = useBusyAction(refreshTasks);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
   // The pop-out to a docked panel is offered from 1100px only (#3011, see
   // useCanPopOutTask).
@@ -127,7 +129,8 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
             key: "refresh",
             label: "Refresh",
             icon: RefreshIcon,
-            onClick: () => void refreshTasks(),
+            onClick: runRefresh,
+            busy: refreshing,
           },
         ]}
         overflow={[{ key: "open-board", label: "Open task board", onClick: actions.onOpenTasks }]}

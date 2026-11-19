@@ -45,7 +45,7 @@ class MockSocket extends EventEmitter {
 const openEventsStreamMock = vi.fn();
 
 vi.mock("../../src/services/remote-host-client.js", () => ({
-  getRemoteHostClient: vi.fn(() => ({ openEventsStream: openEventsStreamMock })),
+  getRemoteHostClient: vi.fn(() => ({ streams: { events: openEventsStreamMock } })),
 }));
 
 const listHostsMock = vi.fn();

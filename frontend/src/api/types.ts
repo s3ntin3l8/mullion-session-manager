@@ -45,8 +45,11 @@ import type {
   ReviewSummary,
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
+import type { NeedsHumanReason } from "../needsHuman.js";
 import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
+import type { HostSettings } from "./host-types.js";
 import type { UpdateStatus } from "./update-types.js";
+import type { DevicePlatform } from "./deviceTypes.js";
 import type {
   PlacementCapability,
   PlacementMode,
@@ -62,6 +65,7 @@ export type {
 export type { HostProtocolStatus } from "../../../src/shared/agent-protocol.js";
 
 export type { UpdateCheckResult, UpdatePhase, UpdateStatus } from "./update-types.js";
+export type { Agent, CodexHookTrust } from "./agent-types.js";
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
 export type { GitBranchOpReason, GitBranchOpResult };
 export type { GitBranchInfo, GitBranchMergeState, GitBranchPr, GitWorktreeInfo };
@@ -132,6 +136,8 @@ export interface SpaceEntry {
   isDirectory: boolean;
   /** The cleanup source that owns this path, e.g. "uv" or "npm cache". */
   coveredBy?: string;
+  /** Why Mullion does not clean this; only set when `coveredBy` is not. */
+  notCovered?: string;
   children?: SpaceEntry[];
 }
 
@@ -162,6 +168,12 @@ export interface DockerStorageStatus {
   totalSizeBytes: number;
   reclaimableBytes: number;
   estimates: { safeBytes: number | null; aggressiveBytes: number };
+  /** Absent when Docker's verbose usage could not be read ("unknown", not "none"). */
+  volumes?: {
+    anonymousUnused: { count: number; bytes: number };
+    named: { count: number; bytes: number };
+    inUse: { count: number; bytes: number };
+  };
   error?: string;
 }
 
@@ -170,6 +182,8 @@ export interface CacheDirStatus {
   label: string;
   bytes: number;
   exists: boolean;
+  /** Emptying is irreversible: not rebuilt or re-downloaded afterwards. */
+  permanent?: boolean;
 }
 
 export interface CacheStorageStatus {
@@ -179,8 +193,6 @@ export interface CacheStorageStatus {
 }
 
 export type DockerPruneMode = "safe" | "aggressive";
-
-export type CleanupSource = "docker" | "temp" | "caches" | "opencode" | "worktrees";
 
 /** One source's part of a cleanup job. */
 export interface CleanupStepState {
@@ -483,6 +495,7 @@ export type {
   HostCapacity,
   PlacementPreview,
 } from "./host-types.js";
+import type { CleanupSource } from "./storage-types.js";
 
 // Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
 // #820 PR7a/PR7c. Which of resolveSshAuthSock's three tiers is why
@@ -551,67 +564,8 @@ export interface BridgeSummary {
   priority: number;
 }
 
-// The device panel — routes/devices.ts's response shape: the `devices` DB
-// row's own intent merged with DeviceManager's live status at the route
-// layer, same "row is intent, manager is live truth" split as
-// BridgeSummary/Host above.
-export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" | "error";
-export type DeviceKind = "emulator" | "physical";
-
-export interface DeviceInfo {
-  id: string;
-  kind: DeviceKind;
-  avdName: string | null;
-  label: string | null;
-  status: DeviceLiveStatus;
-  serial: string | null;
-  error: string | null;
-}
-
-export interface Device {
-  id: number;
-  hostId: string;
-  projectId: number | null;
-  name: string | null;
-  kind: DeviceKind;
-  // Set for `kind: "emulator"`, null for `kind: "physical"`.
-  avdName: string | null;
-  // Set for `kind: "physical"` (its adb TCP address), null for
-  // `kind: "emulator"`.
-  serial: string | null;
-  status: "active" | "killed";
-  createdAt: string;
-  live: DeviceInfo | null;
-}
-
-// A phone advertising Wireless debugging over mDNS (issue #1378,
-// src/services/device-discovery.ts's own DiscoveredDevice) — returned by
-// GET /api/devices/discovered. `id` round-trips back to
-// POST /api/devices/pair-and-connect as `discoveryId`. Either address may be
-// missing: Android only advertises the pairing service while its "Pair device
-// with pairing code" screen is open.
-export interface DiscoveredDevice {
-  id: string;
-  name: string;
-  host: string;
-  pairingAddress?: string;
-  connectAddress?: string;
-  device?: string;
-  model?: string;
-  product?: string;
-  discoveredAt: string;
-}
-
-// POST /api/devices/pair-and-connect's body — either `discoveryId` (a cached
-// mDNS entry, `connectAddress` then an optional override) or the manual
-// `pairingAddress` + `connectAddress` pair. `pairingCode` is always required.
-export interface PairAndConnectBody {
-  discoveryId?: string;
-  pairingAddress?: string;
-  connectAddress?: string;
-  pairingCode: string;
-  name?: string;
-}
+// The device panel types live in deviceTypes.ts.
+export * from "./deviceTypes.js";
 
 // An installed Android system image (src/services/avd-manager.ts's own
 // SystemImage) — `packagePath` is both the stable identifier and the exact
@@ -1190,31 +1144,6 @@ export interface Group {
   createdAt: string;
 }
 
-export type CodexHookTrust = "trusted" | "pending" | "not-installed";
-
-export interface Agent {
-  id: string;
-  title: string;
-  command: string;
-  kind: "shell" | "agent";
-  available: boolean;
-  path: string | null;
-  /** Codex's `/hooks` trust status for Mullion's merged hooks (issue #259).
-   * Only present on the "codex" agent. */
-  hookTrust?: CodexHookTrust;
-  /** opencode only (issue #1593): its reported x.y.z, and a warning when too old for Mullion. */
-  version?: string;
-  versionWarning?: string;
-  /** Rich statuses (issue: extend surfaced session statuses) — the
-   * hook-protocol `kind`s this agent's launch can ever produce (mirrors
-   * src/services/agent-detect.ts's DetectedAgent.emits 1:1). Empty for
-   * shells and for any agent with no hook adapter at all — those reach only
-   * the byte-heuristic working/idle/needs_input/exited states. Drives
-   * sessionStatus.ts's capability filtering so the UI never offers a status
-   * legend entry/filter a given agent can never reach. */
-  emits: string[];
-}
-
 export interface DiscoveredProject {
   name: string;
   cwd: string;
@@ -1549,6 +1478,19 @@ export interface GitHubIssueDetail extends GitHubIssueListItem {
   /** GitHub-rendered HTML — sanitize before inserting. */
   bodyHtml: string;
   comments: GitHubIssueComment[];
+  /** Direct children (first 100); empty when none. */
+  subIssues: GitHubIssueRef[];
+  subIssuesSummary: { total: number; completed: number } | null;
+  parent: GitHubIssueRef | null;
+}
+
+/** A sub-issue or parent listed on an issue's detail. */
+export interface GitHubIssueRef {
+  number: number;
+  title: string;
+  state: "open" | "closed";
+  /** `owner/repo`, set only for an issue in another repository (listed, not openable here). */
+  repo?: string;
 }
 
 export type GitHubIssueSort = "updated" | "created" | "comments";
@@ -2013,6 +1955,7 @@ export interface ServerInfo {
     budgetMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
+    rateLimitMaxParkHours: number;
     skipPermissions: boolean;
     issueLabel: string;
     pollIntervalSeconds: number;
@@ -2046,6 +1989,8 @@ export interface ServerInfo {
     deviceDiscovery: boolean;
     // Device kinds this host can run (#1854). Optional: an older server omits it.
     deviceKinds?: ("physical" | "emulator")[];
+    // Device platforms this host can run. Optional: an older server omits it.
+    devicePlatforms?: DevicePlatform[];
   };
 }
 
@@ -2139,8 +2084,8 @@ export interface Task {
   // see TaskDetail.tsx's review card. Renamed from `reviewRounds`.
   autoReturnRounds: number;
   // Which trigger most recently spent a round — "review" | "ci" |
-  // "pr-comment". Null until the first auto-return.
-  lastAutoReturnReason: "review" | "ci" | "pr-comment" | null;
+  // "pr-comment" | "suggestions" | "conflict". Null until the first auto-return.
+  lastAutoReturnReason: "review" | "ci" | "pr-comment" | "suggestions" | "conflict" | null;
   // Task 258971's investigation: whether `autoReturnRounds` has reached the
   // resolved per-project cap — derived server-side (routes/tasks.ts's
   // withAutoReturnCapped) from the same resolveMaxAutoReturnRounds the
@@ -2186,17 +2131,18 @@ export interface Task {
   // "no-progress", "finding-persisted") are only meaningful while the announce
   // stamp above is set; the merge-tied ones ("rebase-exhausted",
   // "blocked-threads", "pr-closed", "ci-status-stalled") are set with mergeError and stand on their own; "review-post-failed" is set without the announce stamp.
+  // "ci-unfixable" and "ci-still-red" are review-loop reasons about a red CI
+  // check: set with the announce stamp, and shown even when an approval is held.
+  // "review-inconclusive" is also set with the announce stamp: the review ended
+  // without a verdict even after its automatic re-arm.
   // See needsHuman.ts.
-  needsHumanReason:
-    | "cap"
-    | "no-progress"
-    | "finding-persisted"
-    | "rebase-exhausted"
-    | "blocked-threads"
-    | "review-post-failed"
-    | "pr-closed"
-    | "ci-status-stalled"
-    | null;
+  needsHumanReason: NeedsHumanReason | null;
+  // The failing check names (and, for "ci-unfixable", the worker's sanitised
+  // reason) behind the two CI-hold reasons above. Null otherwise.
+  ciHoldNote: string | null;
+  // "Merge anyway" is offered: a done task whose merge is held only by named
+  // non-required checks (derived server-side from mergeError).
+  mergeOverridable: boolean;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned
@@ -2215,6 +2161,18 @@ export interface Task {
   // `Platform:` / `Host:` lines, resolved at dispatch. `null` = no requirement.
   // Rendered as the card/drawer host chip when the task has no worker session yet.
   placementRequirement: string | null;
+  // #3194 — the host a QUEUED RETRY is waiting for: its worker's host, whose
+  // preserved branch the retry resumes. Set while the retry waits (the
+  // original host is offline and the branch is not on origin); null when the
+  // task is not waiting for a host. Its presence is what offers the "Start
+  // fresh" action. Optional so the partial task fixtures (which predate the
+  // column) still type-check.
+  //
+  // It says WHERE the retry waits, and that is all: whether the branch is
+  // provably stranded there (which is what exempts the wait from the 6-hour
+  // give-up) is a backend-only fact (`tasks.retryStrandedOnHost`), because
+  // only the dispatcher acts on it.
+  retryHostId?: string | null;
   prUrl: string | null;
   // Set alongside prUrl — a draft PR opened at "-> reviewing", or the PR
   // approve creates directly as a fallback for a task that reached
@@ -2281,6 +2239,15 @@ export interface Task {
   // While status is "claimed", `failureReason` is the LAST dispatch error
   // (the task is still queued and being retried), not a terminal failure.
   dispatchFailingSince: string | null;
+  // #2940 — set while a rate-limited worker is parked: the task sits `ready`
+  // until this provider reset, then is claimed again automatically.
+  rateLimitUntil?: string | null;
+  // #3234 — the provider's own text for the latest rate limit (agy: "... Resets in
+  // 102h16m12s."), shown with a park or a quota give-up.
+  rateLimitMessage?: string | null;
+  // The task's latest worker session (an array of at most one) — what the task
+  // timeline shows once a park/return has cleared `sessionId`.
+  workerSessionIds?: number[];
   // #485 — the most recent GitHub sync or promotion failure (e.g. an
   // under-scoped token's 403), independent of task status and cleared the
   // next time any sync for this task succeeds. Null means no known problem,
@@ -2327,6 +2294,9 @@ export interface Task {
   // When the CURRENT worker spell started (dispatch, not enqueue) — null
   // while a task sits queued with no session yet.
   claimedAt: string | null;
+  nudgeCount: number; // #3179 — this spell only
+  nudgeLimit: number;
+  lastNudgedAt: string | null;
   startedAt: string | null;
   reviewingAt: string | null;
   completedAt: string | null;
@@ -2347,6 +2317,11 @@ export interface Task {
 // the backend's row shape, same pattern as Project/Session/etc. above.
 export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
+
+// `delegateModel` is optional: a settings blob from before it existed lacks it.
+type ModelSlots = Record<"defaultModel" | "reviewerModel", string | null> & {
+  delegateModel?: string | null;
+};
 
 export interface AppSettings {
   theme: Theme;
@@ -2415,8 +2390,9 @@ export interface AppSettings {
   externalReadRoots: string[];
   // Mirrors src/services/settings.ts's AppSettings.diskCleanup: which
   // allowlisted ~/.cache subtrees the aggressive cleanup may empty (ids from
-  // GET /api/storage/caches). Empty = none.
-  diskCleanup: { cacheDirs: string[] };
+  // GET /api/storage/caches). Empty = none. `optIns` are the non-directory
+  // sources (currently only "docker-volumes").
+  diskCleanup: { cacheDirs: string[]; optIns: string[] };
   launchers: {
     defaultShell: string;
     defaultAgent: string;
@@ -2569,9 +2545,7 @@ export interface AppSettings {
     pollQuietSeconds: number;
     pollStaleThresholdSeconds: number;
   };
-  hosts: {
-    heartbeatSeconds: number;
-  };
+  hosts: HostSettings;
   // Non-secret half of the Hermes review relay — the key itself is
   // write-only via api.setHermesKey and never part of settings.
   reviewRelay: {
@@ -2651,34 +2625,32 @@ export interface AppSettings {
     // null inherits DEVICE_EMULATOR_GPU.
     emulatorGpu: string | null;
   };
-  server: {
-    logLevel: "inherit" | LogLevel;
-  };
+  server: { logLevel: "inherit" | LogLevel };
   // Install-wide default `--model` per non-opencode CLI; `null` means no
   // flag (the CLI picks). Mirrors src/services/settings.ts.
-  claudeCode: {
-    defaultModel: string | null;
-    reviewerModel: string | null;
-    smallModel: string | null;
-  };
-  codex: { defaultModel: string | null; reviewerModel: string | null };
-  agy: { defaultModel: string | null; reviewerModel: string | null };
+  // `delegateModel` (every CLI): a Task Master worker's delegation target.
+  claudeCode: ModelSlots & { smallModel: string | null };
+  codex: ModelSlots;
+  agy: ModelSlots;
   // Issue: mcode support — mcode takes `-m <provider/model>`.
-  mcode: { defaultModel: string | null; reviewerModel: string | null };
+  mcode: ModelSlots;
   opencode: {
     implementerModel: string | null;
     reviewerModel: string | null;
     // Issue #958 — opencode's `small_model` config key, used for
     // lightweight tasks (title generation, summarization).
     defaultSmallModel: string | null;
+    delegateModel?: string | null;
   };
   taskMaster: {
     autoClaimPaused: boolean;
     enabled: "inherit" | "on" | "off";
     maxConcurrent: number;
     budgetMinutes: number;
+    workerStartTimeoutMinutes: number;
     progressCommentMinutes: number;
     rateLimitGraceMinutes: number;
+    rateLimitMaxParkHours: number;
     skipPermissions: "inherit" | "on" | "off";
     // GitHub logins trusted in addition to repo owners/members/collaborators
     // — mirrors settings.ts's AppSettings.taskMaster.trustedLogins.
@@ -2731,10 +2703,7 @@ export interface WorkflowConventionQuestion {
 export interface PushSubscriptionPayload {
   endpoint: string;
   expirationTime?: number | null;
-  keys: {
-    p256dh: string;
-    auth: string;
-  };
+  keys: { p256dh: string; auth: string };
 }
 
 export interface CreateProjectDirOptions {

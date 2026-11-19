@@ -7,6 +7,9 @@
 // image, issue #2884), or throws, which server.mjs turns into a tool-level
 // `isError: true` result rather than a protocol-level failure.
 
+import { createDockTools } from "./dock-tools.mjs";
+import { getDockConfig, setDockConfig } from "./dock-config-tools.mjs";
+import { listTasks, getTask, retryTask, startTask, closeTask, archiveTask } from "./task-tools.mjs";
 import { browserToolResult } from "./browser-screenshot.mjs";
 import { useDevice } from "./device-use.mjs";
 import { SELF_REPORT_STATES, WAIT_MAX_TIMEOUT_MS, statusTruncationNote } from "../cli/client.mjs";
@@ -201,7 +204,8 @@ const browserAction = {
 // #134 part 2 — session/project/preview/dock management, over the control
 // socket (MullionClient.controlRequest, client.mjs) rather than the hook
 // socket use_browser/promote_to_worktree speak. See client.mjs's own header
-// comment for the scope caveat: list_sessions, start_dock_session,
+// comment for the scope caveat (list_sessions, like list_tasks/get_task, is
+// also session-reachable as a read-only, opt-in-respecting view): start_dock_session,
 // stop_dock_session, list_projects, create_preview, delete_preview and
 // list_previews call full-scope-only control-socket ops, so they return a
 // clear "not permitted for this connection's scope" error (not a crash) when
@@ -217,9 +221,10 @@ const browserAction = {
 const listSessions = {
   name: "list_sessions",
   description:
-    "List Mullion sessions, optionally filtered by project or kind. Requires full scope " +
-    "(MULLION_AUTH_TOKEN) — 403s from inside a normal agent session when authentication is " +
-    "enabled (unrestricted if it's disabled entirely).",
+    "List Mullion sessions, optionally filtered by project or kind. Read-only. From inside a " +
+    "session it shows your own project's sessions, plus another project's only when your " +
+    "project is a coordinator ('This project coordinates') that reaches it and that project " +
+    "accepts it; other projects are simply absent. `command` and `env` are omitted there.",
   inputSchema: {
     type: "object",
     properties: {
@@ -234,54 +239,6 @@ const listSessions = {
   async handler(args, client) {
     const result = await client.listSessions({ projectId: args?.projectId, kind: args?.kind });
     return JSON.stringify(result);
-  },
-};
-
-const startDockSession = {
-  name: "start_dock_session",
-  description:
-    "Start one of a project's dock controls (e.g. the dev server) — see list_dock_controls for " +
-    "ids. From an agent session this works for your OWN project only (omit projectId); pass " +
-    "branch to run it on that branch in a preview worktree. Docker-discovered controls need " +
-    "full scope (MULLION_AUTH_TOKEN).",
-  inputSchema: {
-    type: "object",
-    required: ["dockControlId"],
-    properties: {
-      projectId: {
-        type: "string",
-        description: "The project (full scope; defaults to your own project in a session).",
-      },
-      dockControlId: { type: "string", description: "The dock control's id (list_dock_controls)." },
-      branch: { type: "string", description: "Optional branch to run the control on." },
-    },
-  },
-  async handler(args, client) {
-    const result = await client.startDockSession(
-      args?.projectId,
-      args?.dockControlId,
-      args?.branch,
-    );
-    return JSON.stringify(result);
-  },
-};
-
-const listDockControls = {
-  name: "list_dock_controls",
-  description:
-    "List your project's dock controls (id, title, command, port) and, for each, the running " +
-    "session if any. Use the ids with start_dock_session / stop_dock_session.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      projectId: {
-        type: "string",
-        description: "The project (full scope; defaults to your own project in a session).",
-      },
-    },
-  },
-  async handler(args, client) {
-    return JSON.stringify(await client.listDockControls(args?.projectId));
   },
 };
 
@@ -479,35 +436,6 @@ const listSpawnTargets = {
   },
 };
 
-const stopDockSession = {
-  name: "stop_dock_session",
-  description:
-    "Stop a dock control by dockControlId (your own project's, from list_dock_controls) — " +
-    "works from an agent session. Passing a raw sessionId instead kills any session by id and " +
-    "needs full scope (MULLION_AUTH_TOKEN).",
-  inputSchema: {
-    type: "object",
-    properties: {
-      dockControlId: { type: "string", description: "The dock control to stop." },
-      projectId: {
-        type: "string",
-        description: "The project (full scope; defaults to your own project in a session).",
-      },
-      sessionId: { type: "string", description: "Full scope only: a session id to kill." },
-    },
-  },
-  async handler(args, client) {
-    if (args?.dockControlId === undefined && args?.sessionId === undefined) {
-      throw new Error("pass dockControlId (or, with full scope, sessionId)");
-    }
-    const result = await client.stopDockSession(args?.sessionId, {
-      projectId: args?.projectId,
-      dockControlId: args?.dockControlId,
-    });
-    return JSON.stringify(result);
-  },
-};
-
 const listChildSessions = {
   name: "list_child_sessions",
   description:
@@ -614,10 +542,12 @@ const waitForOutput = {
     "Returns {matched, text, line, outputOffset} on a match, {matched:false, timedOut:true} or " +
     "{matched:false, gone:true} (the child exited). `match` is a literal substring unless " +
     "regex:true (then no backreferences/lookarounds or nested quantifiers; max 256 chars). It " +
-    "matches ANSI-stripped output (last 16 KiB window). To catch output a prompt_session just " +
+    "matches the RENDERED view of the output (the last 64 KiB of raw output replayed through a terminal emulator, so a TUI's in-place repaints resolve to what a person would read; text/line are that rendered text, last 16 KiB window). To catch output a prompt_session just " +
     "provoked, pass that call's outputOffset as afterOffset (taken after the prompt was typed and " +
     "submitted, so the typed echo is excluded; with submit:false the echo is still inside the window) — otherwise only output from now on counts. A TUI " +
-    "may redraw the submitted prompt into its transcript, so do not use a marker the prompt " +
+    "may redraw the submitted prompt into its transcript: also pass that reply's afterSeq, and for a CLI that emits hook events " +
+    "(Claude Code) the window then starts once the child began answering, so a marker the prompt contains no longer matches the echo. " +
+    "Without afterSeq, or for a CLI with no hook events (or before its first one arrived), do not use a marker the prompt " +
     "itself contains (ask for e.g. 'print the word DONE reversed', then match the reversed form). Default timeout 50s: on timedOut:true just call it again. Session scope may only " +
     "wait on its own children.",
   inputSchema: {
@@ -630,6 +560,11 @@ const waitForOutput = {
       afterOffset: {
         type: "number",
         description: "A previous prompt_session/wait_for_output outputOffset to start from.",
+      },
+      afterSeq: {
+        type: "number",
+        description:
+          "The prompt_session reply's afterSeq: with it, the match window starts where the child began answering (its first turn_start/progress hook), so a marker the prompt itself contains does not match its redrawn echo.",
       },
       timeoutSeconds: {
         type: "number",
@@ -655,6 +590,12 @@ const waitForOutput = {
     ) {
       throw new Error("afterOffset must be a non-negative integer");
     }
+    if (
+      args.afterSeq !== undefined &&
+      (typeof args.afterSeq !== "number" || !Number.isInteger(args.afterSeq) || args.afterSeq < 0)
+    ) {
+      throw new Error("afterSeq must be a non-negative integer");
+    }
     const { timeoutMs } = normalizeWaitArgs(args);
     const result = await client.waitForOutput({
       sessionId: args.sessionId,
@@ -662,6 +603,7 @@ const waitForOutput = {
       regex: args.regex,
       timeoutMs,
       afterOffset: args.afterOffset,
+      afterSeq: args.afterSeq,
     });
     return JSON.stringify(result);
   },
@@ -674,7 +616,7 @@ const promptSession = {
     "it as a new turn — the way to give a worker a follow-up after spawn_child_session. With " +
     "wait:true it then blocks server-side until the child's turn ends (finished, or it needs a " +
     "permission/plan/question answer, errored, or exited) and returns the wait result alongside " +
-    "{delivered, submitted, outputOffset} (pass outputOffset to wait_for_output as afterOffset); on wait.timedOut:true call wait_for_session to keep waiting. " +
+    "{delivered, submitted, outputOffset, afterSeq} (pass outputOffset and afterSeq to wait_for_output as afterOffset/afterSeq); on wait.timedOut:true call wait_for_session to keep waiting. " +
     "Refused with 409 `agent_blocked` while the child is waiting on a dialog (typing would " +
     "answer it — resolve that first), 409 `agent_busy` if you pass wait:true while the child is " +
     "mid-turn (prompt without wait to queue the message, or wait_for_session first), and 501 for " +
@@ -823,7 +765,12 @@ const getScrollback = {
     'mode "raw" for the undecoded byte stream (escape sequences included). Omit sessionId to ' +
     "get the calling session's own scrollback; a child session the caller spawned (see " +
     "list_child_sessions) can be named too, from inside a normal agent session. Any other " +
-    "session's id requires full scope (MULLION_AUTH_TOKEN).",
+    "session's id requires full scope (MULLION_AUTH_TOKEN). Caveat: a full-screen agent CLI " +
+    "that runs on the alternate screen keeps no history there, so you get its last screen " +
+    "(plus what the shell printed before it started), and raw mode shows partial repaints as " +
+    "dropped or merged characters. To read what an agent CLI did or said, including tool " +
+    "results, use get_session_transcript; keep get_scrollback for plain shells and for what " +
+    "is on screen now.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1263,7 +1210,7 @@ const setProjectTooling = {
 };
 
 // device.* ops (control-socket.ts) are reachable at session scope with no
-// full-scope requirement — unlike list_sessions/list_projects above, these
+// full-scope requirement — unlike list_projects above, these
 // work from inside a normal agent session, closing the "verify your own UI
 // change" loop the whole device panel feature exists for. `deviceId` is
 // always required (see control-socket.ts's own comment on why there's no
@@ -1375,6 +1322,15 @@ const reportStatus = {
   },
 };
 
+const {
+  startDockSession,
+  listDockControls,
+  getDockLogs,
+  waitForDockOutput,
+  switchDockBranch,
+  stopDockSession,
+} = createDockTools({ normalizeWaitArgs });
+
 export const TOOLS = [
   promoteToWorktree,
   reportStatus,
@@ -1389,6 +1345,9 @@ export const TOOLS = [
   listSessions,
   startDockSession,
   listDockControls,
+  getDockLogs,
+  waitForDockOutput,
+  switchDockBranch,
   spawnChildSession,
   listSpawnTargets,
   listChildSessions,
@@ -1399,9 +1358,17 @@ export const TOOLS = [
   getMessageStatus,
   killChildSession,
   stopDockSession,
+  getDockConfig,
+  setDockConfig,
   getScrollback,
   getSessionTranscript,
   pushTaskBranch,
+  listTasks,
+  getTask,
+  retryTask,
+  startTask,
+  closeTask,
+  archiveTask,
   requestReview,
   reviewStatus,
   stopReview,

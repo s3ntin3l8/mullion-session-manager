@@ -43,11 +43,16 @@ function bufferLines(buffer: TerminalType["buffer"]["active"], limit: number): s
  * stream into an emulator resolves every repaint to the final screen. If the
  * program ended on the alternate screen, the normal buffer (what was on the
  * terminal before it switched) is returned first, then the alternate screen
- * under a marker line.
+ * under a marker line and a one-line hint (a full-screen program keeps no
+ * history, so earlier output is not recoverable here).
  *
  * Bounded: input beyond the caller's own cap is the caller's concern (the
  * scrollback ring is 1 MiB); output is cut to the last `maxLines` lines.
  */
+export const ALTERNATE_SCREEN_MARKER = "--- alternate screen ---";
+export const ALTERNATE_SCREEN_HINT =
+  "(a full-screen program keeps no history; use get_session_transcript for an agent CLI's earlier output)";
+
 export async function renderScrollback(bytes: Uint8Array, opts: RenderOptions): Promise<string> {
   const term = new Terminal({
     cols: Math.max(2, Math.floor(opts.cols)),
@@ -65,8 +70,9 @@ export async function renderScrollback(bytes: Uint8Array, opts: RenderOptions): 
     // gets the line budget first and the normal buffer (what was on the terminal
     // before the program switched) fills what is left.
     const alt = bufferLines(term.buffer.alternate, max);
-    const normal = bufferLines(term.buffer.normal, Math.max(0, max - alt.length - 1));
-    return [...normal, "--- alternate screen ---", ...alt].join("\n");
+    // The marker and its hint take two lines of the budget.
+    const normal = bufferLines(term.buffer.normal, Math.max(0, max - alt.length - 2));
+    return [...normal, ALTERNATE_SCREEN_MARKER, ALTERNATE_SCREEN_HINT, ...alt].join("\n");
   } finally {
     term.dispose();
   }

@@ -145,9 +145,18 @@ function mergeAgyHooks(ctx: HookAdapterContext, hooksPath = resolveAgyHooksPath(
         {
           type: "command",
           command: forwarderHookCommand("agy", "Stop"),
-          // agy's Stop has no documented timeout; 10s is generous for a
-          // local socket round trip.
-          timeout: 10,
+          // Issue #3174 — agy's Stop has no documented timeout, and 10s was
+          // chosen as "generous for a local socket round trip". A Stop is
+          // now the one hook the forwarder RETRIES (a refused Stop is
+          // dropped otherwise, and the finished headless worker it belongs
+          // to then looks unfinished until its budget expires), and the
+          // forwarder's retry sequence takes at most ~97s in the worst case
+          // (67s of waiting between its six attempts, plus up to 5s for each
+          // attempt itself — see STOP_RETRY_DELAYS_MS in
+          // src/hooks/forwarder-delivery.mjs). An agent that killed the hook
+          // at 10s would cut that sequence short and lose the Stop exactly as
+          // before, so the timeout has to sit above the retry bound.
+          timeout: 120,
         },
       ],
       // Issue: sidebar worktree detection — PreToolUse for run_command
@@ -524,13 +533,14 @@ export const agyAdapter: HookAgentAdapter = {
   matches: (command) => AGY_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: AGY_EMITS,
-  delegationHint:
-    "If this task has parts that could be done independently, delegate them: " +
-    "`invoke_subagent` takes a subagent spec carrying its own `model` and " +
-    "`modelTier` — so route the mechanical parts to a cheaper tier, and " +
-    "keep the parts that need your own judgement for yourself. A delegated " +
-    "part may run in its own workspace or fork, so whatever you delegate " +
-    "has to land on this branch — you remain responsible for the final " +
+  delegationHint: (delegateModel) =>
+    "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
+    "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
+    "`invoke_subagent` takes a subagent spec carrying its own `model` and `modelTier`: use " +
+    `\`model: "${delegateModel}"\` for the parts you delegate. ` +
+    "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
+    "parts that need your own judgement for yourself. A delegated part may run in its own workspace or " +
+    "fork, so whatever you delegate has to land on this branch — you remain responsible for the final " +
     "commit here.",
   // `-i <prompt>`/`--prompt-interactive` — "Run an initial prompt
   // interactively and continue the session." Unlike Claude Code/Codex this

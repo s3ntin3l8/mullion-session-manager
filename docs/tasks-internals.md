@@ -472,7 +472,11 @@ ended since the claim and the ONLY thing keeping the session from deriving
 agent/subagent/MCP background work still blocks the hand-off regardless
 (issue #428). This backstop feeds two places: the `in_progress → reviewing`
 handoff above (once the grace has elapsed, the reconciler stops waiting and
-runs the normal commits-past-base gate), and the per-task time budget
+runs the normal commits-past-base gate; a worker with no commits yet keeps
+waiting instead, since the gate could only fail it, and the budget is its
+backstop — though once `now - lastTurnEndedAt` reaches `SHELL_TAIL_NUDGE_MS`
+(20 minutes), `nudgeShellTailWorker` nudges it (at most twice per spell, sharing
+`MAX_WORKER_NUDGES`) to check or kill a stuck wait loop), and the per-task time budget
 (`tasks.md`'s Safety envelope) — a task that hits its budget while its
 worker has finished (cleanly, or behind such a shell tail) **with commits on
 the branch** is handed to `reviewing` instead of force-failed, since failing
@@ -481,6 +485,43 @@ up anyway. Outstanding non-shell background work, or a worker still mid-turn
 with no commits, still fails on budget expiry — except a worker whose
 rate-limit grace window is still open (#2930), which is held instead of
 force-failed. The budget applies again once that window has elapsed.
+A worker that finished behind a shell tail with no commits is not salvaged either; its
+failure reason says so (`budget exceeded after N minutes; the worker had no commits and was
+waiting on a background shell job`, #3111). The shell-tail helpers live in `task-turn-signals.ts`.
+
+### Continuation nudge
+
+A worker that ends its turn with nothing committed — a summary that announces
+the next step instead of taking it, an offer to continue, a question nobody
+will answer — used to fail the task on the spot. Anthropic's Opus 5.5 guide
+says to treat a text-only end of turn as a report, not as proof the task is
+done, so `failReviewingGate` (`task-gate-failure.ts`) first asks
+`nudgeInsteadOfFailing` (`task-nudge.ts`):
+
+- It applies only to an `in_progress` spell whose worker has a finished turn
+  and no rate-limit or `api_error` signal (those keep their own grace and park
+  paths).
+- It types one short continuation through `promptLiveTaskWorker` (nothing is
+  committed yet; nobody can answer; carry on and commit, or state the blocker in
+  one line and end the turn), up to `MAX_WORKER_NUDGES` (2) times per spell.
+  `tasks.nudgeCount` / `tasks.lastNudgedAt` record it; a count from before the
+  latest `claimedAt` belongs to an earlier spell and is ignored, so no reset
+  write is needed on retry or reject.
+- After a nudge, `agentTurnInFlight` tells the reconciler whether the nudged
+  turn is still running. It waits while true, for at most `NUDGE_TURN_GRACE_MS`
+  (10 minutes) from `lastNudgedAt`; when false, even an immediate finish can
+  earn the next nudge. Older agent builds that omit the signal fall back to
+  comparing `workFinishedAt` with `lastNudgedAt` plus a 5-second clock-skew
+  tolerance.
+- A worker that cannot be typed into (blocked on a dialog, gone, host
+  unreachable) fails as before and does not count a nudge. The per-task budget
+  stays the backstop for a nudged turn that never ends.
+- A no-commit worker stuck behind a background shell job past
+  `SHELL_TAIL_NUDGE_MS` (20 minutes) is nudged through `nudgeShellTailWorker`
+  (`task-nudge.ts`), sharing `MAX_WORKER_NUDGES` and the same refusals, but
+  naming the outstanding job's description so it can check or kill a stuck wait
+  loop; if it cannot be typed into or stays behind the same job, it is left
+  alone until a new turn ends and the budget remains the backstop.
 
 ## The agent's contract
 
@@ -532,38 +573,77 @@ reviewing`. There is no marker to write, tool to call, or endpoint to hit.
   branchdam-mobile tasks #66/#67 are the concrete case this closed: an
   opencode worker invoked the superpowers `brainstorming` skill, asked a
   clarifying question nobody answered, and failed with no commits.
-- **You may decompose the task and delegate the mechanical parts.** A
-  CLI-specific clause, rendered only when the worker's command resolves to
-  an agent that has a subagent primitive (`getAdapterDelegationHint` in
-  `hook-adapters/index.ts`; a plain shell gets nothing). It names that
-  CLI's own delegation primitive and that CLI's own way of choosing the
-  child's model — Claude Code's `Task` tool takes a `subagent_type` and an
-  optional per-call `model` that takes precedence over that subagent's own
-  definition's `model:` frontmatter (ignored for `subagent_type: "fork"`,
-  which always inherits the parent model, and ignored outright when the
-  tool reports that the model parameter is ignored on this session), Codex's
-  `spawn_agent` takes a per-child model and reasoning effort where the
-  install exposes them, opencode's subagent tool takes an `agent` (the
-  subagent type; 1.x calls it `subagent_type`) and, on 2.x, an optional
-  per-call `model` written as `providerID/modelID` or
-  `providerID/modelID#variant` — Mullion only WARNS below 2.0.29 rather than
-  refusing the agent, so a 1.x install still launches and the row hedges
-  with "where the tool offers one" — agy's `invoke_subagent` takes a spec
-  with a model and a `modelTier`. One generic sentence would be wrong for
-  three of the four.
+- **Delegate sizeable, independent parts to a cheaper model — when one is
+  configured.** A CLI-specific clause, rendered only when (1) the worker's
+  command resolves to an agent that has a subagent primitive, (2) the install
+  set a **Delegate model** for that CLI (Settings → Models, the `delegateModel`
+  field next to each CLI's default and reviewer model; empty means no
+  delegation guidance at all), and (3) that model is cheaper than the one the
+  worker actually runs (`getAdapterDelegationHint` in
+  `hook-adapters/index.ts`; a plain shell gets nothing). Claim, retry, and follow-up
+  prompts (reject, red CI, review feedback, suggestions, rebase, PR comments)
+  all resolve and carry the same delegation context, so a worker re-seeded
+  into a fresh agent session receives the guidance too. The clause names the
+  configured model, tells the worker a subagent adds its own cost so only
+  independent, sizeable parts are worth handing off, and tells it to brief the
+  subagent fully because it sees nothing else.
 
-  This is **advisory**, not an obligation to delegate: the clause says the
-  task _may_ be split, and the agent decides whether it is worth splitting.
-  It exists so the worker can hand the mechanical 95% to a cheaper model
-  and keep the part that actually needs judgement — splitting an issue by
-  hand in the planner cannot do that, because the planner hasn't seen the
-  code and cannot know which part is which.
+  "Cheaper" is decided by each adapter's `modelTier` (`hook-adapters/
+delegation.ts`): Claude `haiku < sonnet < opus < fable`, Codex `luna <
+terra < sol < astra` (from the descriptions `codex debug models` prints). **`opusplan` ranks as Sonnet** — it is Opus only while
+  planning, and a Task Master worker is never in plan mode, so it effectively
+  runs Sonnet and is not told to delegate to Sonnet. A model an adapter cannot
+  rank (the CLI's own default, an opencode/agy/mcode id) shows the clause unless
+  the two names are identical: the operator chose the delegate on purpose. The
+  one exception is a Claude delegate outside the four `Task`-tool aliases below,
+  which shows no clause at all. The
+  worker's model is resolved exactly as the spawn resolves `--model`
+  (`task-delegation.ts`), so a task's `Model:` line is honoured.
+
+  The clause names each CLI's own delegation primitive and its own way of
+  choosing the child's model — Claude Code's `Task` tool takes a
+  `subagent_type` and an optional per-call `model` that takes precedence over
+  that subagent's own definition's `model:` frontmatter (ignored for
+  `subagent_type: "fork"`, which always inherits the parent model, and
+  ignored outright when the tool reports that the model parameter is ignored
+  on this session), Codex's `spawn_agent` takes a per-child model and
+  reasoning effort where the install exposes them, opencode's subagent tool
+  takes an `agent` (the subagent type; 1.x calls it `subagent_type`) and, on
+  2.x, an optional per-call `model` written as `providerID/modelID` or
+  `providerID/modelID#variant` — Mullion only WARNS below 2.0.29 rather than
+  refusing the agent, so a 1.x install still launches and the row hedges with
+  "where the tool offers it" — agy's `invoke_subagent` takes a spec with a
+  model and a `modelTier`.
+
+  This is **advisory**, not an obligation to delegate: the agent decides
+  whether a split is worth it. Why it is opt-in now: before the setting
+  existed the hint was unconditional ("route the mechanical parts to a cheaper
+  model") and named no model, and across ~930 Claude Code worker transcripts
+  none made a subagent call. Claude Code's `Task` tool accepts only the four
+  aliases `sonnet | opus | haiku | fable` for its `model`, so the clause maps a
+  stored full id or `[1m]` variant to one of those, shows no clause for a
+  delegate that belongs to none of the four families, and the Claude Delegate
+  picker offers only them.
 
   Every variant of the clause ends by keeping the worker responsible for the
   final commit on the branch. That is load-bearing, not boilerplate: a
   delegated implementation must not be able to satisfy the "no commits
   ahead of base" gate on its own, or the reviewer would judge a diff the
   worker never read.
+
+- **Don't end your turn with work still owed; stay inside the Scope; run a
+  real check.** Three lines drawn from Anthropic's model prompting guides for
+  unattended agents. Ending a turn is final here, so the worker is told not to
+  end it with a summary that announces the next step instead of taking it, an
+  offer to continue, or a list of non-blocking decisions, and to work through
+  ordinary obstacles (errors, timeouts, failing tools) while leaving a
+  deliberate blocker alone and recording it on a `Decision:` line. Scope: do
+  only what the issue's Scope (or the follow-up round's own instructions)
+  asks, put extras on a `Decision:` line instead. Verification: a fresh
+  worktree has no dependencies, so install them with the repo's own package
+  manager and lockfile (never sudo), a syntax-only check or a command that
+  failed to start is not a check, and a check that cannot run goes on a
+  `Not run locally:` line.
 
 The review agent gets its own shorter preamble instead — it keeps the
 advisory "you are not expected to make changes" framing and adds the hazard
@@ -646,6 +726,52 @@ reviewing` transition itself — `task-reconciler.ts`'s
   instead of spawning instantly — a deliberate tradeoff (Hermes review, PR
   #742) given this pass has no per-task backoff, acceptable at this tool's
   scale.
+
+  **A conflicting PR is not reviewed (#3339).** The same lookup reads the PR's
+  `mergeableState`. GitHub runs no `pull_request` workflows on a PR it cannot
+  merge, so a `dirty` PR has no CI to wait for and a review of its stale head
+  is wasted; this holds past the CI deadline too. Both dispatch passes (the
+  session spawn and `processHermesDispatch`) then call `holdConflictingReview`
+  instead of spawning: while the project auto-rebases (`autoApprove`) and
+  `rebaseAttempts < MAX_REBASE_ATTEMPTS` it calls `attemptAutoRebase`, which
+  owns the attempt counter. The dispatch queries already skip a task whose
+  rebase worker is in flight (`rebaseStartedAt` within
+  `REBASE_ATTEMPT_STALE_MS`) or in rapid-exit backoff, so a running rebase is
+  never stranded or doubled. Once the attempts are spent, the rebase declines
+  (it cannot run: no worktree, no seed-capable agent, a failed spawn) or the
+  project does not auto-rebase, `returnConflictingPrToWorker` sends the task back to its
+  worker through `autoReturnTask` with `reason: "conflict"` and a prompt
+  (`buildMergeConflictPrompt`) to merge `origin/<base>`, resolve the conflicts
+  and finish its turn (Mullion pushes as for any auto-return). That return spends
+  no `autoReturnRounds` round, carries no approval and does not touch
+  `inconclusiveReviewRearmCount`. It has no cap of its own, so it happens at most
+  once in a row: if `lastAutoReturnReason` is already `conflict` and the PR still
+  conflicts, the task is parked for a human (`needsHumanReason: "rebase-exhausted"`,
+  or the review-loop reason it already carried, which is preserved).
+  The same park happens, once and without a retry on later ticks, when
+  `attemptAutoRebase` returns `blocked` (a session that had to stop first could
+  not be stopped), when the task has no worktree or agent command to send back
+  to, when the worker's agent cannot take a seed prompt, or when the return
+  itself fails (the reseed could not spawn). A park is recognised by the
+  ` (Mullion will not retry automatically)` suffix on `mergeError` together
+  with a non-null `needsHumanReason`, not by the reason alone: a human reject or
+  a re-arm clears the reason, which lifts the park even though `mergeError` is
+  left alone.
+  A `null`/`unknown` mergeability (GitHub still computing) waits a tick like an
+  unfinished CI run, bounded by the same `reviewCiWaitMinutes` deadline, then
+  dispatches as before. Once the PR reads mergeable again, the `Conflicts with`
+  note the rebase flow left in `mergeError` is cleared.
+
+  **Commits the PR does not carry are not reviewed (#3382).** A Hermes run reviews
+  a clone of the PR's head, so `processHermesDispatch` holds (claim released)
+  while the task branch tip is strictly ahead of that head, i.e. the PR head is
+  its ancestor (`worktreeAheadOfPr`; a PR that is ahead or diverged never holds,
+  because the retry is a force-with-lease push). While held it retries the push
+  on the draft-PR backoff. After `UNPUSHED_HEAD_MAX_PUSHES` (3) refused pushes
+  for one tip it gives up, records a sync error on the card and reviews the PR
+  head. A refusal for workflow approval does not count: only a human clears it,
+  and approving resets the backoff. Session reviewers read the worktree and are
+  not held; their approved push is not retried (#3385).
 
   Model resolution for the reviewer follows the same per-CLI split as the
   worker's own (see [`tasks.md`](tasks.md#agent-selection)) — `commandIsOpencode`/
@@ -803,9 +929,12 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   or a mint failure all quietly downgrade that round's review to `COMMENT`
   from the primary identity — logged at `debug`, never a `githubSyncError`,
   the expected steady state for a repo the reviewer App doesn't cover. A 422
-  on a gating attempt (the anchors rejected, or an unexpected rejection of
-  the gating event itself) retries once, dropped back to a plain `COMMENT`
-  from the primary identity, so the round's findings still land either way.
+  on an anchored gating attempt (typically a stale anchor: a finding on a
+  file that left the PR diff) first retries as the reviewer App with the same
+  verdict and no anchors, findings folded into the body, so the verdict keeps
+  its identity. Only if that also 422s (or an anchor-less gating attempt 422s
+  on its own) does it drop back to a plain `COMMENT` from the primary
+  identity, so the round's findings still land either way.
   Either way, the rendered text is also appended to `tasks.reviewFindings` —
   durable across the worktree's own eventual removal, and rendered in the
   task detail's Review card.
@@ -917,7 +1046,10 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   outgrew a small suggestion; the transition reads it through the same
   backend → `/internal/task-rereview-request` path as the PR-title file, and its
   presence makes the return a normal review **and spends a round**, so a
-  worker that asks every time still ends at the cap. An unreadable request
+  worker that asks every time still ends at the cap. (A sibling channel,
+  `taskCiUnfixablePath`, carries a worker's "this red CI check cannot be fixed
+  from this PR" declaration; see "A red check on a head the worker was already
+  returned for" below.) An unreadable request
   (an older peer build, a 5xx) is read as "no request" and the approval is
   carried; a host that is merely unreachable is retried next tick, without
   holding up the host's other tasks.
@@ -943,7 +1075,8 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   distinguishable from a task that was never going to auto-return in the
   first place — and stays in `reviewing` for a human either way. Only a
   `changes-requested` review (and the CI / PR-comment triggers) spends a
-  round; the `suggestions` return above never does.
+  round; the `suggestions` return above never does, and neither does the
+  `conflict` return (see review dispatch gating, #3339).
 - **A loop that stops converging asks a human.** When a `changes-requested`
   review would otherwise send the task back again, `detectReviewStall`
   (`task-reconciler.ts`) checks two signals, and either one parks the task
@@ -960,6 +1093,34 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   of the human's own commit is never read as a stall. A human push
   re-arms the task through the same `reannounceCappedTasksAfterHumanPush` sweep
   as before, which clears the reason with the stamp.
+- **A review that stays inconclusive asks a human.** `reannounceInconclusiveReviewsAfterGrace`
+  re-arms an inconclusive review once (`MAX_AUTOMATIC_INCONCLUSIVE_REARMS`).
+  When the re-arm count has reached that bound and the latest round (a session
+  or an external run) has been ingested as `inconclusive` again,
+  `flagExhaustedInconclusiveReviews` (`task-late-findings.ts`, run right after
+  the re-arm sweep each tick) parks the task like the cap: it stamps
+  `autoReturnCapAnnouncedAt`, sets `needsHumanReason: "review-inconclusive"` and
+  posts one PR comment. The stamp is the compare-and-set guard, so it fires once,
+  and it keeps the re-arm sweep (which skips announced rows) off the row. The
+  flag also records the reviewed head in `lastReviewedHeadSha` (from the poller
+  cache), so only a genuine later push re-arms it; with a cold cache the
+  baseline stays null and `reannounceCappedTasksAfterHumanPush` skips this
+  reason rather than treating null as "unknown". It is cleared by Retry review
+  (`POST /api/tasks/:id/re-review`), by a human push
+  (`reannounceCappedTasksAfterHumanPush`, baseline known), and by the next
+  ingested verdict. Retry review spends the re-arm count, so a retried round
+  that comes back inconclusive is flagged again on the next tick: the retry is
+  a single-shot escape. The banner renders without an auto-return round.
+- **Worker never started.** An alive `in_progress` worker with no hook-independent
+  turn evidence after `taskMaster.workerStartTimeoutMinutes` (default 10 minutes;
+  0 disables) gets `needsHumanReason: "worker-not-started"`. The reconciler
+  notifies once and records a task activity note with the last 12 rendered screen
+  lines. It leaves the session running so a human can answer a startup prompt.
+  Local Codex rollout discovery uses session metadata for the worker's launch cwd
+  and spawn time; Claude transcript discovery looks for a user turn, before any
+  assistant output is required. Remote hosts use their transcript API. Unsupported,
+  unreadable or inconclusive sources fail open. The flag clears when a turn is
+  observed or the task leaves `in_progress`.
 - **Merge-tied reasons.** `tasks.needsHumanReason` also takes
   `rebase-exhausted` (the merge path's `recordMergeError` in
   `task-reconciler.ts` hit `MAX_REBASE_ATTEMPTS` with the PR still dirty) and
@@ -1110,7 +1271,12 @@ has no fresh id per round the way a session does. Two reconcile passes drive it:
   by id, so a Mullion restart resumes it. A completed run's reply goes through
   `extractFindingsJson` and `parseReviewFindings`; a reply that is not the
   findings JSON is **inconclusive**, never a freeform changes-requested. A
-  failed or cancelled run is inconclusive; a run Hermes no longer knows is
+  **failed** run with a non-empty reply gets the same parse (a run that hit the
+  bot's turn cap has often already written the JSON); a structured result is
+  ingested as a normal verdict, but with `finished: false`, so it never
+  auto-returns. When nothing parses, the inconclusive note keeps the last 2000
+  characters of the reply after the "failed" line. A failed run with an empty
+  reply, or a cancelled one, is inconclusive; a run Hermes no longer knows is
   inconclusive after three consecutive polls; a run still going 60 minutes
   after dispatch is stopped and recorded inconclusive. The outcome finishes
   through the same `ingestReviewOutcome` a session review ends in (round
@@ -1131,6 +1297,15 @@ re-arm, approve / give-up / merge cleanup (`cleanupTaskSessions`) and the
 abandon teardown. Task Master never uses the GitHub relay's
 `stopHermesReview` / `getHermesReviewStatus` for these runs.
 
+**Turn budget.** The review bot has a tool-turn limit (`hermes_review_bot_max_turns`
+in ansible-playbooks) that Mullion cannot read, so `buildReviewPrompt`'s `reply`
+mode states `HERMES_REVIEW_TURN_BUDGET` (`task-prompt.ts`, keep it equal to that
+setting): lean on the PR's CI result (that sentence is dropped when the prompt
+carries no CI summary), review in priority order, and emit the
+findings JSON before the budget runs out, marking unreviewed areas `not-checked`. A failed run's structured verdict is
+ingested with `finished: false` (never auto-returns) and its round comment
+ends with a note that the review ran out of turns.
+
 **What Hermes must do.** Nothing is installed on the Hermes host for this: the
 run message (`buildTaskReviewMessage` plus `buildReviewPrompt` in `reply`
 mode) carries the whole contract. Hermes checks out the PR head, reviews, and
@@ -1139,6 +1314,12 @@ answers with only the findings JSON. Unlike the GitHub relay's message
 push, post or comment anywhere, so a Hermes skill's posting how-to is never
 triggered. Mullion posts the one review, as `mullion-reviewer[bot]`. A reply
 that is not the findings JSON is **inconclusive** (see above), never a verdict.
+A re-armed round gets a **fresh Hermes session** (`mullion-task-<id>-r<round>-x<rearms>`; the first
+attempt keeps `…-r<round>`), so it does not replay the old conversation. When the previous round
+ended because the reply did not parse, the re-dispatch also carries a `Correction:` line naming
+the parser message (≤200 chars) and asking for escaped inner double quotes; it is derived from the
+stored inconclusive reason, and omitted after a timeout or a gone run. The prompt's output contract
+always asks for one JSON object with inner double quotes escaped.
 Observed against the review-bot profile with no extra skill: first and
 follow-up (changes-requested) rounds both ran, each 1-8 minutes and within the
 profile's 75-call turn budget (the worst observed was 67 calls, on a four-round
@@ -1383,7 +1564,7 @@ project. No match is never a fallback. When **nothing could ever match** (no hos
 that platform, or none with a `hostCwds` path for the project) the task goes
 `claimed → failed` (`via: placement-refusal`, synced to the issue) with the reason in
 `failureReason`, and its claim-time `branchName`/`worktreePath` are cleared,
-since nothing was cut (Retry then refuses with `no-worktree`; the recovery is
+since nothing was cut (Retry has nothing to resume, so it resets the task
 `failed → ready`). The resolved requirement is stored as JSON on
 `tasks.placementRequirement`, beside `agentCommand`, so a past placement can be
 explained; a re-claim re-parses the body like every other directive. The
@@ -1587,7 +1768,7 @@ keeps its context; its next turn end sends the task back to review. A worker
 that is blocked on a dialog is refused up front with a 409 — nothing changes
 and nothing is killed, and the human answers the dialog and rejects again. A
 merely busy worker (a stale background shell job never settles) still takes
-the prompt, so Reject stays the escape hatch out of a stranded review. A worker whose host does not answer is left as it was. If the worker's
+the prompt, so Reject stays the escape hatch out of a stranded review. A worker whose host does not answer is left as it was. If the live session's recorded `sessions.model` and the task's current resolved model are both known and differ, live typing is skipped so the old-model worker is terminated and re-seeded (`force: true`) on the right model (a `null` `sessions.model` is treated as unknown and keeps live typing). If the worker's
 agent takes no typed prompt (or the prompt fails after the check passed), it
 is terminated and re-seeded (`force: true`, as the review-feedback
 auto-return does); if its session had already exited, a fresh one is
@@ -1805,12 +1986,16 @@ Turning that on has consequences worth knowing before you do it:
 
 `dirty` is different from the rest of that table: a
 real conflict with the base branch never resolves on its own. `attemptAutoRebase`
-(task-reconciler.ts) has **two call sites**, not one: the merge sweep's
+(task-reconciler.ts) has **three call sites**, not one: the merge sweep's
 `dirty` row above (a `done` task, already approved, whose worktree
 `approveTask` already removed at approve time), and — separately —
 [Auto-approve](#auto-approve)'s own gate below, for a still-`reviewing` task
-whose PR is already `dirty`/unmergeable before it has ever been approved.
-Both share the exact same function and the exact same opt-in: with
+whose PR is already `dirty`/unmergeable before it has ever been approved,
+and the review dispatch gate (`holdConflictingReview`, #3339), which attempts it
+before a review is spawned for a `dirty` PR and, once `attemptAutoRebase`
+declines (cap spent, or it cannot run: no worktree, no seed-capable agent, a
+failed spawn) or `autoApprove` is off, auto-returns the task to its worker with
+the `conflict` reason (no review round spent). All share the exact same function and the exact same opt-in: with
 `projects.autoApprove` on (the same "nobody is watching" opt-in `#755`'s
 red-CI-return and `#757`'s PR-comment-ingest use), it spawns a worker into
 the task's branch to fix the conflict instead of just backing off:
@@ -1833,7 +2018,7 @@ the task's branch to fix the conflict instead of just backing off:
   and — unlike every other Task Master spawn — pushes the result inside its
   own turn, but through Mullion (`mullion task push` / the `push_task_branch`
   tool, #2102), never with `git push`: Mullion's own automatic push only ever
-  happens once, at the `-> reviewing` transition, and neither call site
+  happens once, at the `-> reviewing` transition, and no call site
   revisits it through the ordinary path. The push goes through the workflow-
   change approval gate with the bot's identity, as a force-with-lease, and any
   failure (a stale lease, a held workflow change, refused credentials) comes
@@ -1848,7 +2033,7 @@ the task's branch to fix the conflict instead of just backing off:
   same "stay running" contract every other re-seed uses). This is a sibling
   to the merge sweep's own retry loop, not an `autoReturnTask` round:
   `tasks.rebaseAttempts` is a separate, dedicated counter (default cap: **2**,
-  no per-project override yet, shared across both call sites), and
+  no per-project override yet, shared across all three call sites), and
   `tasks.rebaseStartedAt` tracks whether an attempt is still in its window
   (30 minutes) so consecutive sweep ticks don't spawn a second worker into
   the same worktree — deliberately NOT session-exit detection, since a Task
@@ -1862,7 +2047,8 @@ the task's branch to fix the conflict instead of just backing off:
 - If `resumeTaskWorktree` can't recreate the worktree (branch deleted or
   checked out elsewhere), or the attempt cap is spent, the sweep falls back to
   today's plain `dirty` backoff — surfaced in `tasks.mergeError` for a human,
-  same as `mergeOnApprove` without `autoApprove`.
+  same as `mergeOnApprove` without `autoApprove`. The review dispatch gate
+  instead sends the task back to its worker (the function returns `declined`).
 - **A rebase waits for other work in the worktree.** `attemptAutoRebase` does
   not spawn while another worker round could push into the same worktree: the
   task is neither `reviewing` nor `done` (a worker round is in flight), a
@@ -1934,8 +2120,26 @@ failing or still running — and this repo deliberately does not require
 `test-e2e` or `codecov/patch` (see [`ci-cd.md`](ci-cd.md)). Merging on
 `unstable` would silently skip whatever that check was verifying, right after
 a fresh push while e2e is still queued. A human clicking Squash-and-merge on
-GitHub at least sees the red X first; "Merge now" is the equivalent override
-here. The flip side: a non-required check that never reports at all leaves a
+GitHub at least sees the red X first; **"Merge anyway"** is the equivalent
+override here. A plain "Merge now" only re-arms the sweep (and so reads the same
+`unstable` state again); "Merge anyway" is `POST /api/tasks/:id/merge?overrideNonRequiredChecks=true`,
+offered only while `mergeError` names the red checks (`isMergeOverridable`, derived
+as `mergeOverridable` on the task row). The route reads the PR head from GitHub at
+click time (`resolveMergeOverrideHead`; it refuses unless GitHub still reports
+`unstable`) and stores it in `mergeOverrideHeadSha`; `classifyMergeReadiness(pr,
+task.mergeOverrideHeadSha)` then reads `unstable` as `clean` while the PR's head
+still equals it, and `mergePullRequest` is called with that head as its `sha`
+guard. The route also refuses (409) unless the recorded hold names exactly the checks red on
+that head (`holdNamesChecks`; `isMergeOverridable` reflects the LAST sweep, which can
+describe an older head). Names must match whole entries with the same count, so a newly
+red `test-node` never passes as the `test-node / lint-and-test` the hold named, while a
+check that rewrote its own summary (a coverage re-upload) still matches; a human never
+overrides a check they were not shown. A newly recorded hold clears an
+armed override too (`recordMergeError`).
+The override covers that commit: it also merges past a non-required check still
+running on it, as `unstable` includes pending ones. A push voids the override,
+every human merge request replaces it, and `CLEARED_MERGE_ERROR` and approval
+clear it; `blocked` (a required check) is never overridable. The flip side: a non-required check that never reports at all leaves a
 PR `unstable` — and therefore never auto-merging — forever.
 
 **A stuck non-Actions status gets its coverage re-uploaded (`#2904`).**
@@ -2259,8 +2463,8 @@ with only _pending_ checks is left alone, and the `unstable` trigger also waits
 for the head's Actions runs to finish (`unstable` means "failing or still
 running", and a push mid-run would cancel and restart them). The gate is
 name-agnostic, so a red check no commit can fix (a CLA gate, say) spends rounds
-until the cap and then parks the task with a comment naming it; "Merge now" is
-the override. A red check whose shape matches the PR-title-lint pattern above is
+until the cap and then parks the task with a comment naming it; "Merge anyway"
+is the override when only non-required checks are red. A red check whose shape matches the PR-title-lint pattern above is
 self-healed instead of returned to the worker — see "Exception — PR-title
 lint self-heals" above. The failing checks, with each check's own one-line
 summary (e.g. codecov's "66.66% of diff hit (target 75.00%)"), are listed in
@@ -2354,18 +2558,40 @@ the worker came back without pushing — typically because nothing in the code i
 wrong (a lost runner, an abandoned shard, a run GitHub never created jobs for;
 tasks 1031536, 1031838 and 1031834 looped on exactly that, one reseed per
 ~90 s, which an unlimited round cap does not stop). `holdRedCiWithoutProgress`
-then re-runs the failed Actions jobs itself — in the run that OWNS each red check, read
+first reads the worker's own declaration, then re-runs the failed Actions jobs
+itself — in the run that OWNS each red check, read
 from the check's `details_url`, not the latest run of the same workflow name, which can be a
 newer green one (`rerunFailedJobs`, at most
 `MAX_CI_RERUNS_PER_HEAD` per head, spaced `CI_RERUN_SETTLE_MS` apart, counted in
 `ciRerunCount`). When GitHub refuses the rerun (it does for CodeQL and
 dependency-review runs and for runs without jobs), the budget is spent, or the
-red check is not an Actions run at all, it parks the task the way the review
-loop does for a worker that returned unchanged: `needsHumanReason: "no-progress"`
-plus `autoReturnCapAnnouncedAt`, and one PR comment. A human push moves the head,
+red check is not an Actions run at all, it parks the task through
+`parkRedCiForHuman`: `needsHumanReason: "ci-still-red"` plus
+`autoReturnCapAnnouncedAt`, the check names in `ciHoldNote`, and one PR comment
+naming the checks (and, from GitHub's `mergeable_state`, whether any is required:
+`unstable` means none is, `blocked` means one is). A human push moves the head,
 and `reannounceCappedTasksAfterHumanPush` re-arms the task. A rerun request that
 itself fails (rate limit, network) holds the tick without parking. A new head
 that is still red is a real round and returns the worker as before.
+
+**A worker can declare a red check unfixable from this PR.** Some failures no
+commit can fix: an upstream advisory with no patched release, an outside service
+that is down, a check that is red on the base branch too. The CI-return prompt
+(`buildCiFailurePrompt`) names a file, `taskCiUnfixablePath(sessionsDir, taskId,
+headSha)` (`task-<id>.ci-unfixable.<head>`, outside the worktree, keyed by the
+head the worker was returned for so a stale declaration never matches a later
+push), where the worker writes one short paragraph naming the check and why, and
+tells it not to push a workaround or disable the check. On the next sweep
+`holdRedCiWithoutProgress` reads it (`SessionBackend.readTaskCiUnfixable`, the
+same backend → `/internal/task-ci-unfixable` path as the re-review request; the
+route validates `headSha` as a 40-char lowercase hex SHA) BEFORE any rerun and
+parks at once with `needsHumanReason: "ci-unfixable"`. The worker's text is
+flattened to one line, run through `redactSecrets`, capped at 500 characters and
+neutralised (`neutraliseDecisionLine`) before it reaches `ciHoldNote` or the PR
+comment. A host that is unreachable or busy holds the tick; any other read error
+(an older peer build with no route) reads as "no declaration" and the rerun path
+runs. The park is shown on the card and the drawer even while the task holds an
+approval (a CI fix keeps it), which the round-cap line never was.
 
 **New PR review comments return the task to the worker (`#757`).** A human
 leaving inline review comments directly on GitHub — not through Mullion's

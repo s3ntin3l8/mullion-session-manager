@@ -18,6 +18,7 @@ import {
   groupDockerControls,
   holdVanishedDockerControls,
   isDockPreviewPath,
+  resolveRememberedValueFromRunning,
   resolveSelectedValue,
   runningSessionFor,
 } from "./dockHelpers.js";
@@ -136,16 +137,20 @@ export function useDockProject(
     sessions,
     sessionsLoaded,
     gitBranchesByProject,
+    gitRefsLoaded,
     settings,
     dockConfigRefreshTrigger,
+    dockControlWorktrees,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
       sessions: s.sessions,
       sessionsLoaded: s.sessionsLoaded,
       gitBranchesByProject: s.gitBranchesByProject,
+      gitRefsLoaded: Boolean(s.gitRefsLoadedIds?.[projectId]),
       settings: s.settings,
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
+      dockControlWorktrees: s.dockControlWorktrees?.[String(projectId)],
     })),
   );
   // U8 — Settings -> Session management's "Confirm before kill" toggle.
@@ -198,9 +203,13 @@ export function useDockProject(
   const bumpToggleGen = (controlId: string) => {
     toggleGenRef.current.set(controlId, (toggleGenRef.current.get(controlId) ?? 0) + 1);
   };
-  // Per-monitor selected worktree path (by monitor config id) — not
-  // persisted, same reasoning as before this extraction.
-  const [worktreePaths, setWorktreePaths] = useState<Record<string, string>>({});
+  // Tracks which running session id + resolved value was already synced to
+  // `dockControlWorktrees` per control so an in-flight manual switch in
+  // `changeWorktree` is never overwritten by the outgoing session before
+  // `deleteSession` completes.
+  const syncedSessionByControlRef = useRef<Map<string, { sessionId: number; value: string }>>(
+    new Map(),
+  );
 
   // PR2b — holds a docker-sourced control's row across the brief discovery
   // gap a compose recreate opens up (RECREATE_GRACE_MS's own comment has the
@@ -416,6 +425,34 @@ export function useDockProject(
     projectId,
   ]);
 
+  // Issue #3230 — remember the branch/worktree a running monitor resolved to
+  // in the persisted store so stopping it (even after a reload, remount, or
+  // external start) keeps that selection instead of resetting to main. Runs
+  // in every mounted copy of this hook: it only writes on a change, so the
+  // bottom Dock and the Dock view agree after the first of them writes.
+  useEffect(() => {
+    const setWorktree = useDashboardStore.getState().setDockControlWorktree;
+    if (!setWorktree) return;
+    const opts = new Set(allOptions.map((o) => o.value));
+    for (const control of configuredControls) {
+      const running = runningFor(control);
+      if (!running) {
+        syncedSessionByControlRef.current.delete(control.id);
+        continue;
+      }
+      const remembered = resolveRememberedValueFromRunning(running, opts);
+      if (!remembered) continue;
+      const prevSynced = syncedSessionByControlRef.current.get(control.id);
+      if (prevSynced?.sessionId === running.id && prevSynced.value === remembered) continue;
+      syncedSessionByControlRef.current.set(control.id, {
+        sessionId: running.id,
+        value: remembered,
+      });
+      setWorktree(projectId, control.id, remembered);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- controls/sessions/gitRefs are the stable state inputs from which configuredControls/runningFor/allOptions are derived; dockControlWorktrees is omitted because this effect only writes to it and need not re-run on manual picks (syncedSessionByControlRef is what prevents clobbering an in-flight pick).
+  }, [projectId, controls, sessions, gitRefs]);
+
   const handleCheckUpdate = async (control: DockControl) => {
     try {
       const result = await api.checkDockerUpdate(projectId, control.id);
@@ -515,8 +552,9 @@ export function useDockProject(
     const optionValues = new Set(allOptions.map((o) => o.value));
     const selectedValue = resolveSelectedValue({
       running,
-      storedValue: worktreePaths[control.id],
+      storedValue: dockControlWorktrees?.[control.id],
       optionValues,
+      refsLoaded: gitRefs !== undefined || gitRefsLoaded,
       mainCheckoutPath: mainCheckout?.path,
       controlCwd: control.cwd,
     });
@@ -633,7 +671,7 @@ export function useDockProject(
       })();
     };
     const changeWorktree = (newValue: string) => {
-      setWorktreePaths((prev) => ({ ...prev, [control.id]: newValue }));
+      useDashboardStore.getState().setDockControlWorktree?.(projectId, control.id, newValue);
       relaunch(newValue);
     };
     const restart = () => {

@@ -10,6 +10,7 @@ import {
 } from "../services/device-manager.js";
 import { DeviceDiscoveryService } from "../services/device-discovery.js";
 import { devices } from "../db/schema.js";
+import type { DeviceKind } from "../services/device-drivers/types.js";
 import { resolveSessionsDirs } from "./pty.js";
 import {
   resolveDeviceDiscoveryEnabled,
@@ -97,7 +98,12 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   app.decorate("deviceEmulatorSupported", emulatorSupported);
   app.decorate("deviceEmulatorEnabled", app.config.DEVICE_ENABLED && emulatorSupported);
   app.decorate("deviceEmulatorUnavailableMessage", emulatorUnavailableMessage);
-  app.decorate("deviceKinds", [...capabilities]);
+  // The Android device KINDS only: "ios-simulator" is a capability, not a kind,
+  // and is reported through the platforms list instead.
+  app.decorate(
+    "deviceKinds",
+    [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator"),
+  );
 
   // Issue #1770 — resolved ONCE, here: the dir the sockets live in and the
   // set of dirs this instance may own scopes in (the current one plus every
@@ -123,6 +129,7 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     adbServerPort: app.config.DEVICE_ADB_SERVER_PORT,
     emulatorPath: app.config.DEVICE_EMULATOR_PATH,
     scrcpyServerPath: app.config.DEVICE_SCRCPY_SERVER_PATH,
+    idbCompanionPath: app.config.DEVICE_IDB_COMPANION_PATH || undefined,
     videoMaxSize: app.config.DEVICE_VIDEO_MAX_SIZE,
     videoMaxFps: app.config.DEVICE_VIDEO_MAX_FPS,
     videoBitRate: app.config.DEVICE_VIDEO_BIT_RATE,
@@ -157,7 +164,11 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // manager (and this callback) are constructed once, here. See
     // onPortAssigned's own comment on why this fires immediately rather
     // than after boot succeeds.
+    //
+    // An agent host has no database (#3200): there the primary persists the
+    // port itself, from the spawn response (routes/internal-devices.ts).
     onPortAssigned: (id, port) => {
+      if (!app.db) return;
       app.db
         .update(devices)
         .set({ port })
@@ -227,6 +238,6 @@ declare module "fastify" {
     deviceEmulatorEnabled: boolean;
     deviceEmulatorUnavailableMessage: string;
     /** The device kinds this platform supports (reported via /api/server-info). */
-    deviceKinds: ("physical" | "emulator")[];
+    deviceKinds: DeviceKind[];
   }
 }

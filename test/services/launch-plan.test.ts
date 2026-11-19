@@ -1,6 +1,6 @@
 // PR 32 (Wave 6) — unit tests for buildLaunchPlan(), extracted from
 // Session.bootstrapMaster() in pty-manager.ts. Unlike
-// test/services/pty-manager.test.ts's own integration-style coverage of the
+// the pty-manager suite's own integration-style coverage of the
 // master bootstrap (real Session, mocked node:child_process, assertions on
 // the eventual `systemd-run` call), these tests call buildLaunchPlan()
 // directly with a plain input object — no node-pty, no node:child_process,
@@ -286,6 +286,31 @@ describe("buildLaunchPlan — issue #822 caller-supplied env", () => {
   it("applies session.env into the launched env", () => {
     const plan = buildLaunchPlan(baseSession({ env: { CUSTOM_VAR: "hello" } }));
     expect(plan.env.CUSTOM_VAR).toBe("hello");
+  });
+
+  it("an explicit session.env wins over a key recovered from the user's shell (#3152)", async () => {
+    // The service env wins over a recovered key, so a runner that already
+    // exports JAVA_HOME/ANDROID_HOME (CI images do) would mask the recovery.
+    const saved = { ANDROID_HOME: process.env.ANDROID_HOME, JAVA_HOME: process.env.JAVA_HOME };
+    delete process.env.ANDROID_HOME;
+    delete process.env.JAVA_HOME;
+    const shellEnv = await import("../../src/services/user-shell-env.js");
+    vi.spyOn(shellEnv, "getUserShellRecoverKeys").mockReturnValue(["ANDROID_HOME", "JAVA_HOME"]);
+    vi.spyOn(shellEnv, "getUserShellEnv").mockReturnValue({
+      ANDROID_HOME: "/recovered/sdk",
+      JAVA_HOME: "/recovered/jdk",
+    });
+    try {
+      const plan = buildLaunchPlan(baseSession({ env: { ANDROID_HOME: "/explicit/sdk" } }));
+      expect(plan.env.ANDROID_HOME).toBe("/explicit/sdk");
+      expect(plan.env.JAVA_HOME).toBe("/recovered/jdk");
+    } finally {
+      vi.restoreAllMocks();
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 
   it("a MULLION_* injection always wins over a colliding key in session.env", () => {

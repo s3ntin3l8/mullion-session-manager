@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
-import { tasks } from "../../src/db/schema.js";
+import { projects, sessions, tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
 // POST /api/tasks/:id/reject on a task whose worker is still running (the
@@ -40,6 +40,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
+const { deliverRejectFeedback } = await import("../../src/services/task-reject.js");
 
 const tmpDb = path.join(os.tmpdir(), `tasks-reject-live-test-${process.pid}.db`);
 
@@ -88,6 +89,7 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
   // the seams under test.
   async function rejectActiveWorker(
     overrides: Partial<Pick<SessionBackend, "prompt" | "terminate" | "liveStatus">>,
+    opts?: { sessionModel?: string | null; taskModelOverride?: string | null },
   ) {
     const app = await buildApp();
     const cwd = createGitRepo();
@@ -100,7 +102,11 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
     const sessionRes = await app.inject({
       method: "POST",
       url: "/api/sessions",
-      payload: { projectId, command: "claude" },
+      payload: {
+        projectId,
+        command: "claude",
+        ...(opts?.sessionModel ? { model: opts.sessionModel } : {}),
+      },
     });
     const activeSessionId = sessionRes.json().id;
     const [task] = app.db
@@ -114,17 +120,23 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
         worktreePath: cwd,
         branchName: "mullion/task-reject-live",
         agentCommand: "claude",
+        modelOverride: opts?.taskModelOverride ?? null,
       })
       .returning()
       .all();
     const sessionBackendModule = await import("../../src/services/session-backend.js");
     const realResolveBackend = sessionBackendModule.resolveBackend;
+    const spawnCalls: Parameters<SessionBackend["spawn"]>[0][] = [];
     const resolveBackendSpy = vi
       .spyOn(sessionBackendModule, "resolveBackend")
       .mockImplementation((appArg, hostId) => {
         const real = realResolveBackend(appArg, hostId);
         const stubs: Partial<SessionBackend> = {
           liveStatus: () => Promise.resolve({}),
+          spawn: (spawnOpts) => {
+            spawnCalls.push(spawnOpts);
+            return real.spawn(spawnOpts);
+          },
           ...overrides,
         };
         return new Proxy(real, {
@@ -144,6 +156,7 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
       res,
       activeSessionId,
       taskId: task.id,
+      spawnCalls,
       app,
       cleanup: async () => {
         resolveBackendSpy.mockRestore();
@@ -252,5 +265,150 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
     expect(res.json().sessionId).not.toBe(activeSessionId);
     expect(res.json().sessionId).not.toBeNull();
     await cleanup();
+  });
+
+  it("terminates and re-seeds a live worker whose launched model differs from the task's resolved model", async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 });
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const { res, activeSessionId, spawnCalls, app, cleanup } = await rejectActiveWorker(
+      { prompt, terminate },
+      { sessionModel: "claude-sonnet-4-5", taskModelOverride: "claude-opus-4-5" },
+    );
+
+    try {
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe("in_progress");
+      const newSessionId = res.json().sessionId;
+      expect(newSessionId).not.toBe(activeSessionId);
+      expect(newSessionId).not.toBeNull();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(terminate).toHaveBeenCalledWith(String(activeSessionId));
+      const [newSession] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, newSessionId))
+        .all();
+      expect(newSession.model).toBe("claude-opus-4-5");
+      expect(spawnCalls).toHaveLength(1);
+      expect(spawnCalls[0].model).toBe("claude-opus-4-5");
+      expect(spawnCalls[0].initialPrompt).toContain("please fix the tests");
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("types feedback into a live worker when its launched model matches the task's resolved model", async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 });
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const { res, activeSessionId, spawnCalls, cleanup } = await rejectActiveWorker(
+      { prompt, terminate },
+      { sessionModel: "claude-opus-4-5", taskModelOverride: "claude-opus-4-5" },
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("in_progress");
+    expect(res.json().sessionId).toBe(activeSessionId);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(terminate).not.toHaveBeenCalled();
+    expect(spawnCalls).toHaveLength(0);
+    await cleanup();
+  });
+
+  it("types feedback into a live worker when sessions.model is null even if the task resolves a model", async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 });
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const { res, activeSessionId, spawnCalls, cleanup } = await rejectActiveWorker(
+      { prompt, terminate },
+      { sessionModel: null, taskModelOverride: "claude-opus-4-5" },
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("in_progress");
+    expect(res.json().sessionId).toBe(activeSessionId);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(terminate).not.toHaveBeenCalled();
+    expect(spawnCalls).toHaveLength(0);
+    await cleanup();
+  });
+
+  it("leaves a mismatched-model worker alone when its host is unreachable", async () => {
+    const prompt = vi.fn();
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const liveStatus = vi.fn().mockRejectedValue(new Error("connect ETIMEDOUT"));
+    const { res, activeSessionId, spawnCalls, cleanup } = await rejectActiveWorker(
+      { prompt, terminate, liveStatus },
+      { sessionModel: "claude-sonnet-4-5", taskModelOverride: "claude-opus-4-5" },
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("in_progress");
+    expect(res.json().sessionId).toBe(activeSessionId);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(terminate).not.toHaveBeenCalled();
+    expect(spawnCalls).toHaveLength(0);
+    await cleanup();
+  });
+
+  it("leaves a mismatched-model worker alone when deliverRejectFeedback is called without worker and the host is unreachable", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectRes = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { allowDuplicate: true, createDir: true, name: "reject-live-direct", cwd },
+    });
+    const projectId = projectRes.json().id as number;
+    const sessionRes = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "claude", model: "claude-sonnet-4-5" },
+    });
+    const activeSessionId = sessionRes.json().id as number;
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "under review",
+        body: "the widget explodes",
+        status: "in_progress",
+        sessionId: activeSessionId,
+        worktreePath: cwd,
+        branchName: "mullion/task-reject-live",
+        agentCommand: "claude",
+        modelOverride: "claude-opus-4-5",
+      })
+      .returning()
+      .all();
+    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    const sessionBackendModule = await import("../../src/services/session-backend.js");
+    const realResolveBackend = sessionBackendModule.resolveBackend;
+    const prompt = vi.fn();
+    const terminate = vi.fn().mockRejectedValue(new Error("connect ETIMEDOUT"));
+    const liveStatus = vi.fn().mockRejectedValue(new Error("connect ETIMEDOUT"));
+    const resolveBackendSpy = vi
+      .spyOn(sessionBackendModule, "resolveBackend")
+      .mockImplementation((appArg, hostId) => {
+        const real = realResolveBackend(appArg, hostId);
+        const stubs: Partial<SessionBackend> = { prompt, terminate, liveStatus };
+        return new Proxy(real, {
+          get(target, prop, receiver) {
+            if (prop in stubs) return stubs[prop as keyof SessionBackend];
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      });
+
+    try {
+      const ok = await deliverRejectFeedback(app, task, project, "please fix the tests");
+      expect(ok).toBe(true);
+      expect(liveStatus).toHaveBeenCalledTimes(1);
+      expect(prompt).not.toHaveBeenCalled();
+      expect(terminate).not.toHaveBeenCalled();
+    } finally {
+      resolveBackendSpy.mockRestore();
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    }
   });
 });

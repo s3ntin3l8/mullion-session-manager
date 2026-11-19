@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { tasks } from "../db/schema.js";
 import { getStoredSettings } from "./settings.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import {
@@ -7,6 +8,7 @@ import {
   validateCliModel,
   validateOpenCodeModel,
 } from "./hook-adapters/shared.js";
+import { stripFencedCode } from "./issue-body-directives.js";
 
 export type OpenCodeModelRole = "implementer" | "reviewer";
 
@@ -53,19 +55,19 @@ export function validateModel(value: string): boolean {
 
 function parseModelDirective(body: string | null): string | null {
   if (body === null) return null;
-  const match = MODEL_LINE_RE.exec(body);
+  const match = MODEL_LINE_RE.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 
 function parseReviewerModelDirective(body: string | null): string | null {
   if (body === null) return null;
-  const match = REVIEWER_MODEL_LINE_RE.exec(body);
+  const match = REVIEWER_MODEL_LINE_RE.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 
 function parseSmallModelDirective(body: string | null): string | null {
   if (body === null) return null;
-  const match = SMALL_MODEL_LINE_RE.exec(body);
+  const match = SMALL_MODEL_LINE_RE.exec(stripFencedCode(body));
   return match ? match[1] : null;
 }
 
@@ -294,4 +296,42 @@ export function explicitModelError(
     return `${field} must be in "provider/model" format, using only letters, digits, and . _ : / @ [ ] -`;
   }
   return null;
+}
+
+/**
+ * The `model` / `smallModel` a Task Master worker spawn must carry, resolved
+ * the way the claim and retry spawns resolve them: task row > issue body >
+ * install-wide default. `createSessionRecord` does NOT apply the settings
+ * default itself (only `POST /api/sessions` does), so every worker spawn site
+ * has to pass these or the CLI silently falls back to its own default — agy
+ * picked "Gemini 4 Argon" for a task configured for hydrogen once a review
+ * round re-seeded the worker (the re-seed and rebase spawns passed no model).
+ */
+export function resolveWorkerSpawnModels(
+  app: FastifyInstance,
+  command: string,
+  task: Pick<typeof tasks.$inferSelect, "modelOverride" | "smallModelOverride" | "body">,
+): { model: string | undefined; smallModel: string | undefined } {
+  const cli = commandModelCli(command);
+  const model = commandIsOpencode(command)
+    ? resolveOpenCodeModel(app, {
+        taskModel: task.modelOverride ?? null,
+        issueBody: task.body,
+        role: "implementer",
+      })
+    : cli !== null
+      ? resolveCliModel(app, cli, { taskModel: task.modelOverride, issueBody: task.body })
+      : null;
+  const smallModel = commandIsOpencode(command)
+    ? resolveOpenCodeSmallModel(app, {
+        taskSmallModel: task.smallModelOverride ?? null,
+        issueBody: task.body,
+      })
+    : cli === "claude-code"
+      ? resolveClaudeSmallModel(app, {
+          taskSmallModel: task.smallModelOverride ?? null,
+          issueBody: task.body,
+        })
+      : null;
+  return { model: model ?? undefined, smallModel: smallModel ?? undefined };
 }

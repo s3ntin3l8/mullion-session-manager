@@ -58,7 +58,10 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
   instead gets three roles — implementer, reviewer, and a small model for
   lightweight jobs like generating titles — covering Task Master's
   implementer/reviewer sessions and small-model jobs (a task's own
-  `Reviewer-Model:`/`SmallModel:` directive overrides those).
+  `Reviewer-Model:`/`SmallModel:` directive overrides those). A fourth
+  setting, **Delegate model**, names the cheaper model a Task Master worker
+  is told to hand sizeable, independent parts to; it is shown only when it is
+  cheaper than the model the worker runs, and empty means no delegation text.
 - **Settings, reorganized.** Settings is grouped into Personal/Sessions &
   agents/Workspace/Connections/System sections, and several values that used
   to be env-var-only are now editable from the UI at runtime (GitHub polling

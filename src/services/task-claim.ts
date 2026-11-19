@@ -16,6 +16,7 @@ import { modelFamily, resolveTaskModelPatch } from "./task-model-patch.js";
 import {
   resolveSessionHostId,
   resolveTaskWorkerHost,
+  taskWorkerSessionName,
   withLiveStatus,
 } from "./session-live-info.js";
 import {
@@ -31,6 +32,13 @@ import {
   parsePlacementRequirement,
   serializePlacementRequirement,
 } from "./task-placement-resolve.js";
+import { decideRetryHost } from "./task-retry-host.js";
+import { holdRetry } from "./task-retry-hold.js";
+import { failQueuedTask } from "./task-queue-fail.js";
+
+// Re-exported: task-dispatch.ts (the give-up) and task-retry.ts (the
+// no-branch refusal) call it through task-claim.ts's own surface.
+export { failQueuedTask } from "./task-queue-fail.js";
 import {
   resolveBackend,
   resolveSessionsDirWithFallback,
@@ -54,20 +62,16 @@ import {
   resolveSeedDelivered,
   workerAgentPinned,
 } from "./task-agent-resolve.js";
-import {
-  resolveCliModel,
-  resolveClaudeSmallModel,
-  resolveOpenCodeModel,
-  resolveOpenCodeSmallModel,
-} from "./task-model-resolve.js";
-import { commandAgentBin, commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
+import { resolveOpenCodeModel, resolveWorkerSpawnModels } from "./task-model-resolve.js";
+import { commandAgentBin, commandIsOpencode } from "./hook-adapters/index.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
+import { resolveWorkerDelegation } from "./task-delegation.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import { claimTargets, quarantinedTarget } from "./runway-quarantine.js";
 
-// Shared by claimTask's and retryTask's identical "cap" branches (Hermes
+// Shared by dispatchClaimedTask's and dispatchQueuedRetry's identical "cap" branches (Hermes
 // review, PR #765) — the limit shown here is always the RESOLVED value
 // (env default, possibly overridden by Settings → Task Master; see
 // task-config.ts), so this deliberately doesn't name either knob: whichever
@@ -246,9 +250,16 @@ export async function enqueueTask(
       worktreePath: keptBranch !== null ? current.worktreePath : predictedWorktreePath,
       branchName: keptBranch ?? branchName,
       rateLimitUntil: null,
+      rateLimitMessage: null,
       failureReason: null,
       dispatchFailingSince: null,
       dispatchHeld: false,
+      // Issue #3194 — a fresh claim is not waiting for any host: the markers
+      // that exempt a waiting retry from the 6-hour give-up (and that offer
+      // "Start fresh") are dropped here, so a row that somehow carried them
+      // into a new claim cannot ride them into a second wait.
+      retryHostId: null,
+      retryStrandedOnHost: false,
     };
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
@@ -289,68 +300,6 @@ export async function enqueueTask(
   void syncTaskTransition(app, { ...task, status: "claimed" }, project, "claimed");
 
   return { ok: true, task: queuedRow };
-}
-
-/**
- * Fails a still-`claimed` task, with the reason on the row where the user and
- * the board can see it, and records the `claimed -> failed` transition. The
- * conditional write makes it a no-op when something else moved the row first.
- *
- * The transition record is what the activity feed and the issue sync hang
- * off — a bare status write reaches neither, so the failure would be
- * invisible in both. `retryTask`'s own release() makes the same
- * `claimed -> failed` write and records it the same way.
- *
- * `extra` is written with the failure AND shown to the issue sync, so what it
- * syncs is the row as it now is. The dispatch-failure clock is always cleared:
- * the task is no longer queued.
- *
- * Shared by the placement refusal below and the dispatcher's give-up
- * (task-dispatch.ts, issue #1997).
- */
-export function failQueuedTask(
-  app: FastifyInstance,
-  taskId: number,
-  opts: {
-    detail: string;
-    via: "placement-refusal" | "dispatch-give-up";
-    hostId: string | null;
-    context?: Record<string, unknown>;
-    extra?: Partial<typeof tasks.$inferInsert>;
-  },
-): boolean {
-  const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
-  if (!task) return false;
-  const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
-  if (!project) return false;
-  const patch: Partial<typeof tasks.$inferInsert> = {
-    status: "failed",
-    resumeQueued: false,
-    failureReason: opts.detail,
-    failureDiagnostics: null,
-    dispatchFailingSince: null,
-    dispatchHeld: false,
-    ...opts.extra,
-  };
-  const updated = app.db
-    .update(tasks)
-    .set(patch)
-    .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
-    .run();
-  if (updated.changes === 0) return false;
-  recordTaskTransition(app, {
-    taskId,
-    projectId: project.id,
-    from: "claimed",
-    to: "failed",
-    via: opts.via,
-    context: { reason: opts.detail, hostId: opts.hostId, ...opts.context },
-  });
-  // Fire-and-forget, same posture as every other sync on this path — the
-  // transition is already committed, and a GitHub-side problem must not
-  // unwind it.
-  void syncTaskTransition(app, { ...task, ...patch } as typeof task, project, "failed");
-  return true;
 }
 
 // Issue #2364 — a hold's reason starts with this, so the card and the clear
@@ -915,6 +864,15 @@ export async function dispatchClaimedTask(
       await release(detail);
       return { ok: false, reason: "worktree-failed", detail };
     }
+    // `fetched` is absent from an agent too old to report it: unknown, so keep
+    // the old behaviour. An explicit `false` means the fetch of origin failed
+    // and the SHA below may be arbitrarily stale — release and let the
+    // dispatch backoff retry rather than cut the worktree from it.
+    if (baseRefResult.value.fetched === false) {
+      const detail = `could not fetch origin on host ${placement.hostId}: the base ref may be stale`;
+      await release(detail);
+      return { ok: false, reason: "worktree-failed", detail };
+    }
     const { baseRef, baseSha } = {
       baseRef: baseRefResult.value.baseRef,
       baseSha: baseRefResult.value.sha,
@@ -934,6 +892,7 @@ export async function dispatchClaimedTask(
       budgetMinutes: taskMasterConfig.budgetMinutes,
       mode: "claim",
       agentCommand: command,
+      delegation: resolveWorkerDelegation(app, command, task),
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles
@@ -948,30 +907,7 @@ export async function dispatchClaimedTask(
           )
         : undefined,
     });
-    const cliModelAgent = commandModelCli(command);
-    const model = commandIsOpencode(command)
-      ? (resolveOpenCodeModel(app, {
-          taskModel: task.modelOverride ?? null,
-          issueBody: task.body,
-          role: "implementer",
-        }) ?? undefined)
-      : cliModelAgent !== null
-        ? (resolveCliModel(app, cliModelAgent, {
-            taskModel: task.modelOverride ?? null,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
-    const smallModel = commandIsOpencode(command)
-      ? (resolveOpenCodeSmallModel(app, {
-          taskSmallModel: task.smallModelOverride ?? null,
-          issueBody: task.body,
-        }) ?? undefined)
-      : cliModelAgent === "claude-code"
-        ? (resolveClaudeSmallModel(app, {
-            taskSmallModel: task.smallModelOverride ?? null,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
+    const { model, smallModel } = resolveWorkerSpawnModels(app, command, task);
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
@@ -987,7 +923,7 @@ export async function dispatchClaimedTask(
       // update can still override it, but a task session's whole point is
       // a name that reliably identifies which task it belongs to, which an
       // OSC update would defeat.
-      name: `Task #${task.id} · worker`,
+      name: taskWorkerSessionName(task.id),
       nameLocked: true,
       model,
       smallModel,
@@ -1168,8 +1104,8 @@ export async function dispatchClaimedTask(
  * It has to explain WHY, because the row on the board looks like any other
  * `failed` task: without this, "Retry did nothing" reads like a bug.
  *
- * It lives HERE, next to the refusal that produces it, rather than beside the
- * merge's own wording (task-supersede.ts): `retryTask` already fans out to a
+ * It lives HERE, not beside the merge's own wording (task-supersede.ts):
+ * `enqueueRetry` (task-retry.ts), which returns it, already fans out to a
  * long list of modules, and an import added only for one string would widen
  * that coupling for no reason.
  */
@@ -1187,7 +1123,20 @@ export type RetryTaskOutcome =
         | "no-worktree"
         | "remote-not-supported"
         | "worktree-failed"
-        | "spawn-failed";
+        | "spawn-failed"
+        // Issue #3194 — the retry is waiting for its original host (the
+        // preserved branch lives there and is not on origin). The task stays
+        // `claimed` and is looked at again on the next sweep; it is NOT
+        // failed after 6h (the give-up does not apply to this wait).
+        | "retry-waiting"
+        // Issue #3194 — a RE-PLACED retry whose checkout could not be prepared
+        // on the replacement host (the clone failed). This is the ONE
+        // failure here that does NOT fail the row: the retry stays `claimed`
+        // and the next sweep tries the clone again — so the 6-hour give-up is
+        // what ends it (the branch is on origin, so failing the task frees
+        // something). It is its own reason, not "worktree-failed", because
+        // that one comes from the RESUME and always fails the row.
+        | "checkout-failed";
       detail?: string;
       /** Only set for "cap" — mirrors claimTask's own shape. */
       limit?: number;
@@ -1261,6 +1210,151 @@ export async function dispatchQueuedRetry(
   });
   const seedCapable = commandSupportsSeed(command);
 
+  // Issue #2240 — the worker's CLI AND the reviewer's must both be on the host
+  // the task lands on (the reviewer reads the worker's worktree) — the same
+  // requirement a fresh claim places with.
+  const reviewCommand = resolveReviewAgentCommand(app, {
+    taskReviewAgent: task.reviewAgent,
+    issueBody: task.body,
+    projectDefaultReviewAgent: project.defaultReviewAgent,
+  });
+  const requiredAgent = [command, reviewCommand]
+    .map((c) => (c === null ? null : commandAgentBin(c)))
+    .filter((bin, i, all): bin is string => bin !== null && all.indexOf(bin) === i);
+
+  // Issue #1954 — the task's `Platform:` / `Host:` / `Capability:`
+  // requirement. A requirement is a HARD one on every path (the issue's
+  // review focus): a retry never lands on a host that does not satisfy it.
+  const requirement = parsePlacementRequirement(task.body);
+  const requirementJson = serializePlacementRequirement(requirement);
+
+  // Issue #1724 — the host the task's worker ran on, which is where its
+  // preserved branch lives.
+  const originalHostId = resolveTaskWorkerHost(app, task, { hostId: project.hostId });
+
+  // Issue #2596 — read any unread host protocol (bounded) before placement,
+  // exactly as the fresh-claim path does.
+  await ensureRemoteHostProtocols(app, { target: requirement });
+
+  // Issue #3194 — WHERE this retry runs: the original host when it can take
+  // it, otherwise another eligible host (only when the branch is confirmed to
+  // be on origin), otherwise the task waits for its original host.
+  const decision = await decideRetryHost(app, {
+    task,
+    project,
+    requirement,
+    requiredAgent,
+    originalHostId,
+    launchNeeds: TASK_LAUNCH_NEEDS,
+  });
+
+  if (decision.kind === "wait") {
+    // The preserved branch lives on the original host, and it is not on
+    // origin, so the retry cannot start anywhere else — and failing the task
+    // would free nothing (the branch is still there, with its commits). The
+    // task stays `claimed` with the reason on it, and the next sweep looks
+    // again. The 6h give-up does NOT apply here (task-dispatch.ts's
+    // giveUpIfOverdue skips a waiting retry) — see the issue's scope.
+    //
+    // TWO facts, TWO columns (issue #3194, review round 2):
+    //
+    //   - `retryHostId` names the host the retry WAITS FOR. It is set for
+    //     EVERY original-host wait, whatever the origin state — that is what
+    //     offers "Start fresh", the operator's only escape from a wait that
+    //     never ends. A wait whose origin state could not be confirmed (a
+    //     local-only repository, a project with no GitHub token) is exactly
+    //     the one that needs it: without it the task waited forever with no
+    //     way out.
+    //   - `retryStrandedOnHost` says the branch is CONFIRMED to be only on
+    //     that host (GitHub's 404). THAT is what exempts the wait from the
+    //     6-hour give-up — failing the task would free nothing, because the
+    //     commits stay there. A wait whose branch is safely on origin (or
+    //     whose origin state could not be confirmed) is an ordinary
+    //     placement wait and keeps the give-up.
+    holdRetry(app, task, project, {
+      detail: decision.detail,
+      waitHostId: decision.hostId,
+      strandedOnHost: decision.strandedOnHost,
+      requirementJson,
+    });
+    return { ok: false, reason: "retry-waiting", detail: decision.detail };
+  }
+
+  // The host the retry runs on: the original one, or the replacement host it
+  // was re-placed onto (the branch is on origin there, so it is checked out
+  // from origin).
+  const workerHostId = decision.hostId;
+  // The project root ON THE WORKER'S HOST. Null when the project is not
+  // mapped there — and then there is no directory to resume the worktree in,
+  // which is a failure rather than something to paper over with the
+  // project's own path (that path does not exist on this host).
+  const workerCwd = projectCwdOnHost(project, workerHostId, parseHostCwds(project.hostCwds));
+  if (workerCwd === null) {
+    app.log.warn(
+      { taskId: task.id, hostId: workerHostId },
+      "task retry: the worker's host has no path for this project — the worktree cannot be resumed there",
+    );
+  }
+
+  // Lazy checkout materialization (issue #3194): a replacement host that has
+  // no checkout of the project yet gets one cloned in the background; the
+  // claim is held while that runs and the next sweep continues. Same shape
+  // as the fresh-claim path above.
+  if (decision.kind === "replace" && decision.placement.needsCheckout === true) {
+    const failedJob = takeFailedMaterialize(project.id, workerHostId);
+    if (failedJob !== null) {
+      const detail = `could not prepare a checkout on ${workerHostId}: ${failedJob.detail ?? "the clone failed"}`;
+      const written = app.db
+        .update(tasks)
+        .set({
+          failureReason: detail,
+          // Issue #3194 — the failure clock SURVIVES the attempt, exactly like
+          // the fresh-claim path's own `failingSince ?? new Date()` above: a
+          // fresh `new Date()` here would restart the 6-hour bound on every
+          // sweep, and a host that cannot clone would be asked to clone again
+          // for six hours without the retry ever being given up on.
+          dispatchFailingSince: task.dispatchFailingSince ?? new Date(),
+          dispatchHeld: false,
+          // The retry is being RE-PLACED, not waiting for its original host:
+          // the branch is on origin (that is the only reason it may leave the
+          // original host at all), so nothing is stranded there. The markers
+          // of an original-host wait are cleared with it — a stale one would
+          // keep offering "Start fresh" on a task that is not waiting for a
+          // host, and would keep the give-up exemption this wait must not
+          // have (failing it frees something: the branch is on origin).
+          retryHostId: null,
+          retryStrandedOnHost: false,
+        })
+        .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+        .run();
+      app.log.warn({ taskId, hostId: workerHostId }, `task retry: ${detail}`);
+      if (written.changes === 0) {
+        // The row left the queue while the clone was failing (cancelled,
+        // deleted, or dispatched by someone else): there is nothing left to
+        // wait for, and the sweep must not keep a backoff for it.
+        return { ok: false, reason: "not-queued" };
+      }
+      // The row stays `claimed` and the next sweep tries the clone again, so
+      // this is a WAIT, not a failure — the sweep gives up on it after 6h
+      // (task-dispatch.ts), like every other placement wait.
+      return { ok: false, reason: "checkout-failed", detail };
+    }
+    startMaterialize(app, project.id, workerHostId);
+    // This wait is NOT about the original host — the branch is on origin, so
+    // nothing is stranded there and failing the task would free something.
+    // No wait host is recorded, which keeps "Start fresh" off a task that is
+    // not waiting for its original host, and keeps the 6-hour give-up in
+    // force for this wait (the issue's scope: the exemption covers the
+    // original-host wait only).
+    holdRetry(app, task, project, {
+      detail: describePreparing(workerHostId),
+      waitHostId: null,
+      strandedOnHost: false,
+      requirementJson,
+    });
+    return { ok: false, reason: "retry-waiting", detail: describePreparing(workerHostId) };
+  }
+
   // Same atomic reservation shape as dispatchClaimedTask: the cap check and
   // the claimed -> in_progress flip succeed or fail together. The budget clock
   // (claimedAt) starts HERE, at dispatch, so time spent queued behind a full
@@ -1272,8 +1366,8 @@ export async function dispatchQueuedRetry(
     if (!current || current.status !== "claimed" || !current.resumeQueued) {
       return { reserved: false as const };
     }
-    // Defensive: enqueueRetry refuses a branchless task, so this is a row
-    // written by something else.
+    // Defensive: enqueueRetry resets a branchless task to ready instead of
+    // queuing it, so a queued branchless row was written by something else.
     if (!current.branchName) return { reserved: false as const, noBranch: true as const };
     const inFlight = tx
       .select({ id: tasks.id })
@@ -1289,6 +1383,10 @@ export async function dispatchQueuedRetry(
         claimedAt: new Date(),
         startedAt: new Date(),
         resumeQueued: false,
+        // Issue #3194 — the retry owns a host from here on; the waiting
+        // markers are dropped with the reservation.
+        retryHostId: null,
+        retryStrandedOnHost: false,
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
@@ -1321,6 +1419,12 @@ export async function dispatchQueuedRetry(
     from: "claimed",
     to: "in_progress",
     via: "retry-dispatch",
+    // Issue #3194 — a re-placed retry records the move, so the activity feed
+    // says which host owns the task now (and which one it came from).
+    context: {
+      hostId: workerHostId,
+      ...(decision.kind === "replace" ? { movedFrom: originalHostId, movedTo: workerHostId } : {}),
+    },
   });
 
   // Mirrors claimTask's own release() — puts the reservation back rather
@@ -1368,7 +1472,14 @@ export async function dispatchQueuedRetry(
     }
     const updated = app.db
       .update(tasks)
-      .set({ status: "failed", failureReason: reason, failureDiagnostics: null })
+      .set({
+        status: "failed",
+        failureReason: reason,
+        failureDiagnostics: null,
+        // Issue #3194 — the retry is not waiting for a host any more.
+        retryHostId: null,
+        retryStrandedOnHost: false,
+      })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress"), isNull(tasks.sessionId)))
       .run();
     // #488 — previously unlogged: retry's own rollback back to "failed" had
@@ -1391,18 +1502,12 @@ export async function dispatchQueuedRetry(
   // repo-level git operations stay on the project's host (that is where the
   // repository lives), but the checkout this session works in has to be on
   // the machine the session runs on.
-  const workerHostId = resolveTaskWorkerHost(app, task);
-  // The project root ON THE WORKER'S HOST. Null when the project is not
-  // mapped there — and then there is no directory to resume the worktree
-  // in, which is a failure rather than something to paper over with the
-  // project's own path (that path does not exist on this host).
-  const workerCwd = projectCwdOnHost(project, workerHostId, parseHostCwds(project.hostCwds));
-  if (workerCwd === null) {
-    app.log.warn(
-      { taskId: task.id, hostId: workerHostId },
-      "task retry: the worker's host has no path for this project — the worktree cannot be resumed there",
-    );
-  }
+  //
+  // Issue #3194 — `workerHostId`/`workerCwd` are decided ABOVE (the retry's
+  // host decision), not re-derived here: a re-placed retry resumes on the
+  // host it was moved to, and the branch is checked out FROM ORIGIN there
+  // (it was confirmed to be on origin — that is the only reason a retry may
+  // leave its original host).
 
   let committed = false;
   // Hoisted out of the try block (rather than a `const` declared inside
@@ -1429,7 +1534,14 @@ export async function dispatchQueuedRetry(
     }
     const backend = resolveBackend(app, workerHostId);
     try {
-      worktree = await backend.resumeTaskWorktree(workerCwd, branchName);
+      // Issue #3194 — a re-placed retry checks the branch out FROM ORIGIN:
+      // the branch lives on the ORIGINAL host, so this host has never seen it.
+      // The original host's own resume never fetches (its branch is local),
+      // so that path keeps the plain two-argument call.
+      worktree =
+        decision.kind === "replace"
+          ? await backend.resumeTaskWorktree(workerCwd, branchName, { fromOrigin: true })
+          : await backend.resumeTaskWorktree(workerCwd, branchName);
     } catch (err) {
       if (err instanceof HostRequestError && err.statusCode === 404) {
         await release("this host's agent build doesn't support retrying a remote-hosted task yet");
@@ -1443,13 +1555,26 @@ export async function dispatchQueuedRetry(
       throw err;
     }
     if (!worktree) {
+      // Issue #3194 — a re-placed retry resumes from ORIGIN, and the host
+      // refuses when it cannot. There are THREE ways it refuses, and the
+      // operator needs all three: the branch is no longer on origin, this
+      // host's own ref has commits origin does not (git refuses the
+      // non-fast-forward), or this host already has a checkout of the branch
+      // (git refuses to move a checked-out branch). The last one is the
+      // only thing here a human can clear, but the first two are what a
+      // host that ran this task earlier looks like — so all three are named.
+      const fromOrigin = decision.kind === "replace";
       await release(
-        "could not resume the preserved branch — it may no longer exist or is checked out elsewhere",
+        fromOrigin
+          ? "could not resume the branch from origin — it may no longer be there, this host may hold commits origin does not, or it already has a checkout of it"
+          : "could not resume the preserved branch — it may no longer exist or is checked out elsewhere",
       );
       return {
         ok: false,
         reason: "worktree-failed",
-        detail: `Could not check out ${branchName} into a fresh worktree — it may no longer exist, or is already checked out elsewhere`,
+        detail: fromOrigin
+          ? `Could not check out ${branchName} from origin — it may no longer be there, this host may hold commits origin does not, or it already has a checkout of it`
+          : `Could not check out ${branchName} into a fresh worktree — it may no longer exist, or is already checked out elsewhere`,
       };
     }
 
@@ -1478,6 +1603,7 @@ export async function dispatchQueuedRetry(
       mode: "retry",
       reusedWorktree: worktree.reused === true,
       agentCommand: command,
+      delegation: resolveWorkerDelegation(app, command, task),
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
       commitTitlePath: project.conventionalCommitTitles
@@ -1496,30 +1622,11 @@ export async function dispatchQueuedRetry(
     // Issue #2491 — the same resolution as the claim spawn, so a model picked
     // after the failure reaches the retried worker (and `tasks.model` records
     // what this attempt ran with).
-    const cliModelAgent = commandModelCli(command);
-    const model = commandIsOpencode(command)
-      ? (resolveOpenCodeModel(app, {
-          taskModel: modelOverride,
-          issueBody: task.body,
-          role: "implementer",
-        }) ?? undefined)
-      : cliModelAgent !== null
-        ? (resolveCliModel(app, cliModelAgent, {
-            taskModel: modelOverride,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
-    const smallModel = commandIsOpencode(command)
-      ? (resolveOpenCodeSmallModel(app, {
-          taskSmallModel: smallModelOverride,
-          issueBody: task.body,
-        }) ?? undefined)
-      : cliModelAgent === "claude-code"
-        ? (resolveClaudeSmallModel(app, {
-            taskSmallModel: smallModelOverride,
-            issueBody: task.body,
-          }) ?? undefined)
-        : undefined;
+    const { model, smallModel } = resolveWorkerSpawnModels(app, command, {
+      modelOverride,
+      smallModelOverride,
+      body: task.body,
+    });
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
@@ -1529,7 +1636,7 @@ export async function dispatchQueuedRetry(
       initialPrompt: seedCapable ? prompt : undefined,
       skipPermissions: taskMasterConfig.skipPermissions,
       // #9 — see the claim spawn's own comment (above, in this same file).
-      name: `Task #${task.id} · worker`,
+      name: taskWorkerSessionName(task.id),
       nameLocked: true,
       // Same "this is an unattended Task Master worker" marker as
       // dispatchClaimedTask's claim spawn above — see that block's own
@@ -1544,7 +1651,10 @@ export async function dispatchQueuedRetry(
       // machine.
       unattended: true,
       hostId: workerHostId,
-      placementReason: `task #${task.id} retry joins its worker's host ${workerHostId} (the worktree lives there)`,
+      placementReason:
+        decision.kind === "replace"
+          ? `task #${task.id} retry re-placed onto ${workerHostId} (its original host ${originalHostId} is offline; the branch is on origin)`
+          : `task #${task.id} retry joins its worker's host ${workerHostId} (the worktree lives there)`,
     });
     if (!result.ok) {
       const reason =

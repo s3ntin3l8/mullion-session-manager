@@ -134,6 +134,8 @@ export interface TaskHostChip {
   /** Visible text. */
   label: string;
   title: string;
+  /** Alternate wording for the task details row, when needed. */
+  detailsLabel?: string;
 }
 
 /**
@@ -144,10 +146,11 @@ export interface TaskHostChip {
  * Null on an install with no remote hosts.
  */
 export function describeTaskHost(
-  task: { placementRequirement: string | null },
+  task: { placementRequirement: string | null; sessionId: number | null },
   workerSession: { resolvedHostId: string; placementReason: string | null } | null | undefined,
   projectHostId: string | null | undefined,
   hosts: readonly Host[],
+  sessionsLoaded: boolean,
 ): TaskHostChip | null {
   if (!hasRemoteHosts(hosts)) return null;
   const nameOf = (id: string) => hosts.find((h) => h.id === id)?.name ?? id;
@@ -159,7 +162,13 @@ export function describeTaskHost(
     // install with remote hosts "it ran here" is worth saying after claim.
     return badge
       ? { label: `on ${badge.name}`, title: badge.title }
-      : { label: "on this machine", title: "Runs on this machine" };
+      : { label: "on this machine", detailsLabel: "this machine", title: "Runs on this machine" };
+  }
+
+  // A claimed task's missing session cannot tell us where it ran. Do not
+  // present the pre-claim plan as its actual host after the session is reaped.
+  if (task.sessionId != null && sessionsLoaded) {
+    return { label: "unknown (session ended)", title: "The worker session is no longer known" };
   }
 
   const req = parseRequirement(task.placementRequirement);
@@ -167,9 +176,10 @@ export function describeTaskHost(
     const parts: string[] = [];
     if (req.platform) parts.push(req.platform);
     if (req.hostId) parts.push(nameOf(req.hostId));
+    if (req.capabilities) parts.push(...req.capabilities);
     return {
       label: `needs ${parts.join(" · ")}`,
-      title: "This task's issue requires this placement (Platform:/Host: line)",
+      title: "This task's issue requires this placement (Platform:/Host:/Capability: line)",
     };
   }
 
@@ -182,17 +192,23 @@ export function describeTaskHost(
   return { label: "auto", title: "Placed automatically when the task is claimed" };
 }
 
-function parseRequirement(raw: string | null): { platform?: string; hostId?: string } | null {
+function parseRequirement(
+  raw: string | null,
+): { platform?: string; hostId?: string; capabilities?: string[] } | null {
   if (!raw) return null;
   try {
     const v: unknown = JSON.parse(raw);
     if (typeof v !== "object" || v === null) return null;
-    const { platform, hostId } = v as Record<string, unknown>;
+    const { platform, hostId, capabilities } = v as Record<string, unknown>;
+    const caps = Array.isArray(capabilities)
+      ? capabilities.filter((c): c is string => typeof c === "string")
+      : [];
     const out = {
       ...(typeof platform === "string" && { platform }),
       ...(typeof hostId === "string" && { hostId }),
+      ...(caps.length > 0 && { capabilities: caps }),
     };
-    return out.platform || out.hostId ? out : null;
+    return out.platform || out.hostId || out.capabilities ? out : null;
   } catch {
     return null;
   }

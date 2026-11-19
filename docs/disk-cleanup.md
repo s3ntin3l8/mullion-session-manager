@@ -13,7 +13,7 @@ service. Everything here is local to the machine the Mullion server runs on.
 
 A cleanup can take minutes (the temp tier re-scans `/tmp` before it deletes
 anything), so it is a job on the server, not a request the page waits on.
-`POST /api/storage/cleanup` (`{ mode, cacheDirs? }`) answers `202` with the job
+`POST /api/storage/cleanup` (`{ mode, cacheDirs?, optIns? }`) answers `202` with the job
 and runs the sources one after another in the background; `GET
 /api/storage/cleanup` is its status, and the page polls it every two seconds
 while it runs. A reload or a second tab finds the job where it was (and its
@@ -31,6 +31,13 @@ still be read. Only one job runs at a time (`409` otherwise).
   entirely when there is nothing to reclaim), and stale developer worktrees
   (always, whatever the preview says, since fetching is the first thing it
   does).
+- Aggressive only, Docker step: `docker volume prune --force` when
+  `docker-volumes` is in **both** the request's `optIns` and the saved
+  `diskCleanup.optIns` (see "Docker" below). No `optIns` in the request means
+  nothing opted in runs, whatever is saved.
+- Aggressive only: uninstall unused Android SDK system images when
+  `android-system-images` is in **both** the request's `optIns` and the saved
+  `diskCleanup.optIns` (see "Android system images" below).
 - A source nobody has measured yet still runs: each prune re-checks its own
   safety. The measurements are never started just to make this decision.
 
@@ -67,7 +74,40 @@ cold start.
 `services/docker-storage.ts`. Safe prunes dangling images (any age), stopped
 containers and unused networks older than 7 days, and build cache older than
 24 hours. Aggressive drops the windows and also removes unused tagged images
-(`docker system prune --all`). Volumes are never touched.
+(`docker system prune --all`). Volumes are not touched unless the opt-in below
+is set.
+
+The status also splits the volumes (parsed from the same `docker system df -v`
+call, no extra docker invocation): **anonymous** volumes have a name of exactly
+64 lowercase hex characters and are reported as unused (link count 0) or in
+use; every other volume is **named** and counted as one total, in use or not.
+Named volumes are never cleanup candidates. `volumes` is omitted from the
+status when the verbose call fails, so "none" and "unknown" differ.
+
+**Opt-in volume cleanup.** `diskCleanup.optIns` (settings; ids allowlisted by
+`OPT_IN_IDS` in `services/cleanup-opt-ins.ts`, unknown ids dropped) holds
+opt-ins for sources that are not a directory, so they cannot use `cacheDirs`.
+The ids today are `docker-volumes` and `android-system-images`; the first is ticked in Settings → Storage as "Also
+remove unused anonymous volumes". Like the caches it needs both sides: the
+request's `optIns` and the saved settings. Unlike the caches, a request with no
+`optIns` runs nothing, so a saved opt-in alone never deletes. Safe mode never
+prunes volumes. When it applies, the Docker step runs exactly
+`docker volume prune --force` after `system prune` (never `--all`, never
+`--filter`) and adds the "Total reclaimed space" to the Docker figure. The
+volumes are deleted permanently: whatever an unused, unnamed volume holds, such
+as a stopped dev database, is lost.
+
+The step is gated on `docker version --format '{{.Server.Version}}'`: only a
+major version of 23 or newer runs it, because older engines' `volume prune`
+also removes unused **named** volumes. A version that is older, unparsable, or
+whose command fails skips the volume prune and the step's note says
+`Docker volume cleanup skipped: needs Docker Engine 23+ (found <version or
+unknown>)`; the rest of the Docker step is unaffected. The aggressive estimate
+adds `volumes.anonymousUnused.bytes` only when the opt-in is saved and the same
+gate passes (the figure follows the saved setting once the Docker probe
+refreshes). The "Where the space is" report does not list Docker volumes (it
+walks the home directory, and volumes live under Docker's own data root), so
+they are not in its covered list.
 
 The aggressive estimate is the larger of the summary rows' `Reclaimable` and
 the sum of the per-entry sizes in `docker system df -v` (unused images,
@@ -78,11 +118,27 @@ what the prune frees, so the rows alone understate it.
 ## Temp files
 
 `services/temp-storage.ts`, over the top level of `os.tmpdir()`. It only
-considers entries owned by the server's user, skips sockets and anything on
-another filesystem, and has a denylist of live tool caches (`tmux-*`, `ssh-*`,
-`systemd-private-*`, `dbus-*`, `mullion-*`, ...). An entry is judged by the
-newest mtime anywhere in its tree: safe takes those untouched for 7 days,
-aggressive for 24 hours, and aggressive also runs `npm cache clean`.
+considers entries owned by the server's user, skips anything on another
+filesystem, and has a denylist of live tool caches (`tmux-*`, `ssh-*`,
+`systemd-private-*`, `dbus-*`, `mullion-*` except `mullion-test-suite-*`, ...).
+An entry is judged by the newest mtime anywhere in its tree: safe takes those
+untouched for 7 days, aggressive for 24 hours, and aggressive also runs
+`npm cache clean`.
+
+**Sockets.** A tree that contains a unix socket with a listener is skipped
+whole: a live process owns it. A socket nobody has bound (a crashed test run
+leaves these behind) no longer blocks its tree. Listeners come from
+`/proc/net/unix`, read once per scan and again (at most once a second) before
+removals. The kernel reports a socket's path as it was bound, so a socket counts
+as live if the listener table shows its path, its resolved path (bound through a
+symlinked directory), or _any relative path_ that ends the same way; a relative
+bind can't be mapped to a directory, so it protects every matching name. Where
+the table can't be read (not Linux) every socket protects its tree, as before.
+
+Known gap: only the server's own network namespace is visible. A listener in
+another one (a container with `/tmp` bind-mounted) can't be seen, and the age
+window doesn't protect an idle one, so don't bind-mount `/tmp` into a container
+that keeps a long-lived listener there.
 
 ### Claude scratch under `claude-<uid>`
 
@@ -144,6 +200,41 @@ files read-only, so only that cache is made writable and retried when a removal
 fails with `EACCES`; symlinks are never followed or changed. The server only empties ids that
 are both ticked in the stored settings and requested, so neither side can
 widen the other.
+
+Four more were added because they grow unnoticed (#2188):
+
+- **`gh`** (`~/.cache/gh`) and **`claude-cli-nodejs`** (`~/.cache/claude-cli-nodejs`):
+  plain re-creatable caches.
+- **`npm-npx`** (`~/.npm/_npx`): `npx` runs packages from here, so an entry is
+  kept if any running process's command line or working directory is inside it
+  (matched both as configured and with symlinks resolved, since the kernel
+  reports a resolved cwd and npm's shims put a resolved path in argv), or if it
+  was modified in the last 10 minutes (`npx` creates the directory before
+  anything refers to it). If `/proc` can't be read, nothing is removed.
+- **`trash`** (`~/.local/share/Trash`): emptied permanently, with `files/` and
+  `info/` put back empty. Anything in it is unrecoverable afterwards, which is why
+  it is opt-in. The status carries `permanent: true` for it, and Settings →
+  Storage says under the toggles that it is the exception to "rebuilt or
+  re-downloaded on next use".
+
+Three more hold the old versions agent CLIs download and never remove:
+**`claude-versions`** (`~/.local/share/claude/versions`), **`claude-remote-cli`**
+(`~/.claude/remote/ccd-cli`) and **`minimax-releases`** (`~/.minimax-code/releases`).
+They carry `keepNewest`, and a child is kept when any of these holds:
+
+- it is the newest by version (the leading dotted number compared numerically,
+  so `2.1.322` > `2.1.99`; the full name breaks a tie). A name with no leading
+  number is never the newest and is never removed;
+- a running process executes it: `/proc/<pid>/exe` resolves to the child or
+  inside it. The newest is not always the one running, so this check is
+  independent of the first;
+- a symlink named `current`, beside the versions or one directory above them
+  (`~/.minimax-code/current`), resolves to it;
+- the `npm-npx` rules above apply (command line or working directory, 10-minute
+  grace).
+
+If `/proc` can't be read nothing is removed. The size shown next to each toggle
+is only what ticking it would free.
 
 ## opencode's database
 
@@ -216,10 +307,47 @@ directory (and in unreadable folders) as its own line. It exists to answer
 "what is using my disk?" for the space no cleanup tier handles: nothing in it
 can be deleted. Entries a cleanup source owns carry a `coveredBy` label (the
 opt-in caches, `~/.npm/_cacache`, opencode's data directory, developer
-worktree roots), which the page shows as "cleanable: …". The walk stays on the
+worktree roots, and the per-session files under `$SESSIONS_DIR`, as "session
+cleanup"), which the page shows as "cleanable: …". An entry no source owns may
+carry a `notCovered` hint instead, from the ordered `NOT_COVERED_HINTS` table in
+`space-report.ts` (a toolchain, agent session history, application data under
+`~/.config`, the Android SDK, your checkouts); the page shows it as muted text.
+Entries matching no rule say nothing. A cleanup source added later registers its
+own path in `spaceCovered()`. The walk stays on the
 home directory's filesystem, never follows symlinks, shares the temp walks'
 syscall limiter, and stops at 3 million entries (`truncated`, every figure then
 a lower bound). It takes tens of seconds on a large home directory.
+
+## Android system images
+
+`services/android-storage.ts`, `GET /api/storage/android-images`, cleanup source
+`android-images`. An opt-in (`android-system-images`, Settings → Storage → "Also
+remove unused Android system images") for the aggressive tier, with the same
+two-sided rule as Docker volumes: the request's `optIns` and the saved settings
+must both carry it, and a request with no `optIns` runs nothing.
+
+An image under `<DEVICE_ANDROID_SDK_ROOT>/system-images/<api>/<tag>/<abi>` is
+**unreferenced** when no AVD names it. The AVDs are every `*.avd` directory and
+every `<name>.ini` pointer's `path` under the SDK's AVD roots (`avdConfigRoots()`:
+`~/.android/avd`, `$ANDROID_AVD_HOME`, `$ANDROID_USER_HOME/avd`,
+`$ANDROID_SDK_HOME/.android/avd`); a `config.ini`'s `image.sysdir.*` lines (relative
+to the SDK root, or absolute) say which image it uses. A sysdir that is only a
+parent of an image folder counts as using everything below it. With no AVDs at
+all, every image is unreferenced.
+
+**Fail closed.** The source is `available: false` with the reason, and nothing
+is offered or removed, when the SDK root is unset or missing, `sdkmanager`
+(`DEVICE_SDKMANAGER_PATH`) is not configured or not executable, or any AVD
+folder, pointer or `config.ini` cannot be read or names no image: an AVD that
+cannot be read might use any image. The references are read again right before
+each uninstall, so an AVD created meanwhile protects its image.
+
+Removal is `sdkmanager --uninstall <package> --sdk_root=<root>` (the same helper
+the AVD page uses), one image at a time, stopping at the first failure; the
+directories are never deleted directly. The estimate and the list in Settings are
+each image's disk usage. Using a removed image again means downloading it. The
+"Where the space is" report marks `system-images` as cleanable ("Android system
+images"), though only the unused images are removed.
 
 ## Developer worktrees
 
@@ -395,3 +523,48 @@ Mullion; one created before this existed is not tracked (they carry no
 whether some remote branch happens to contain its tip.
 
 During orphan removal a temporary `.mullion-orphan-*` directory can appear as untracked in the project. If restoration fails it remains there with the recovery files; check the recovery notice before moving them.
+
+## Per-session files under the sessions directory
+
+`<id>.tmp/`, `<id>.opencode-config/`, `<id>.mullion-bundle/`, `<id>.hooks.json`, `<id>.mcp.json` and the
+token, state, agent-guide, workflow-conventions, briefing and opencode seed
+files are removed when a session terminates. Sessions that never got that far
+(a crashed server, a killed host) are caught by the orphan sweep, which runs at
+boot and on every reconcile tick: it treats every one of those artifacts as
+belonging to the session id in its name, waits until the _newest_ of them is a
+minute old, asks PtyManager whether the session is confirmed dead, and then
+removes them all, and the dead master's `<id>.sock` with them (a normal
+terminate stops the master through the scope backend, which removes the socket
+itself; the sweep handles a master that died without doing so). A session that is alive or of unknown
+state is left alone. The sweep reports a session as swept only when none of its
+files remain; a stuck one is retried on the next pass.
+
+## Mullion's own database
+
+`services/db-compaction.ts`, run by the event-retention sweep
+(`startEventRetentionSweep`, hourly). The sweep deletes `session_events` rows
+but SQLite keeps the freed pages inside `app.db`, and the `-wal` file only
+shrinks when something truncates it. After every tick that deleted at least one
+row:
+
+- **WAL checkpoint.** `PRAGMA wal_checkpoint(TRUNCATE)` folds the WAL back into
+  the main file and truncates it to zero. If a reader holds the WAL it reports
+  busy; that is logged at debug and retried on the next tick.
+- **VACUUM, rarely.** Only when the free pages are at least 64 MiB **and** at
+  least 25% of the file, and at most once per 24 hours (the timestamp is in
+  memory, so a restart may allow one more). One log line records the size
+  before and after. A `SQLITE_BUSY` is not an error: it is logged and the next
+  eligible tick tries again. A failed `VACUUM` is atomic and leaves the database
+  as it was.
+- **What requests see.** The server has one connection to this file and
+  `better-sqlite3` is synchronous, so the checkpoint or `VACUUM` runs to
+  completion on the event loop: requests on that connection wait (they cannot
+  interleave, so they never get a `SQLITE_BUSY` from it) and then proceed.
+  That is why the `VACUUM` is gated so hard. Only another process holding a
+  lock can make it busy, and for the duration of each compaction step the
+  connection's `busy_timeout` is lowered from 5 s to 500 ms (restored after),
+  so a foreign lock makes the compaction give up quickly instead of freezing
+  the server. A `VACUUM` needs about the database's size free in temp space.
+- **Not changed.** `auto_vacuum` stays off (switching it needs a one-off full
+  `VACUUM`), and nothing is deleted beyond what the retention settings already
+  remove.

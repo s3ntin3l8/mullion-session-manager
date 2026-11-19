@@ -1,37 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildTestApp } from "../helpers/app.js";
-import {
-  closeDeniedRelayStreams,
-  dispatch,
-  type ConnectionState,
-} from "../../src/plugins/control-socket.js";
+import { makeConnectionState } from "../helpers/control-socket.js";
+import { closeDeniedRelayStreams, dispatch } from "../../src/plugins/control-socket.js";
 import { projects, sessions } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 
 // dispatch() writes only through `conn.send` and `conn.onClose`, so a
 // connection with no socket behind it (what a relay builds, #1656) works.
-function sinkConn(
-  scope: "full" | "session",
-  sessionId: string | null,
-): { conn: ConnectionState; frames: Record<string, unknown>[] } {
-  const frames: Record<string, unknown>[] = [];
-  const conn: ConnectionState = {
-    send: (message) => void frames.push(message),
-    onClose: () => () => {},
-    socket: null,
-    scope,
-    sessionId,
-    openChannels: new Map(),
-    activeWaits: 0,
-  };
-  return { conn, frames };
-}
 
 describe("dispatch over a socket-less connection (#1656)", () => {
   it("replies through the sink for an unknown op", async () => {
     const app = await buildTestApp();
     await app.ready();
-    const { conn, frames } = sinkConn("session", "1");
+    const { conn, frames } = makeConnectionState("session", "1");
     await dispatch(app, conn, { id: 7, op: "nope" });
     expect(frames).toEqual([{ id: 7, ok: false, status: 404, error: "unknown op: nope" }]);
   });
@@ -39,7 +20,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
   it("rejects an op outside the connection's scope through the sink", async () => {
     const app = await buildTestApp();
     await app.ready();
-    const { conn, frames } = sinkConn("session", "1");
+    const { conn, frames } = makeConnectionState("session", "1");
     await dispatch(app, conn, { id: 2, op: "projects.list" });
     expect(frames[0]).toMatchObject({ id: 2, ok: false, status: 403 });
   });
@@ -47,7 +28,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
   it("refuses streaming ops: they need a local socket", async () => {
     const app = await buildTestApp();
     await app.ready();
-    const { conn, frames } = sinkConn("session", "1");
+    const { conn, frames } = makeConnectionState("session", "1");
     await dispatch(app, conn, { id: 3, op: "sessions.attach", body: {} });
     await dispatch(app, conn, { id: 4, op: "events.subscribe", body: {} });
     expect(frames).toHaveLength(2);
@@ -70,7 +51,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
         .lastInsertRowid,
     );
     expect(app.pty.get(String(sessionId))).toBeUndefined();
-    const { conn, frames } = sinkConn("session", String(sessionId));
+    const { conn, frames } = makeConnectionState("session", String(sessionId));
     await dispatch(app, conn, { id: 5, op: "projects.actions" });
     expect(frames[0]).toMatchObject({ id: 5, ok: true });
   });
@@ -78,7 +59,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
   it("400s when the pinned session has no row", async () => {
     const app = await buildTestApp();
     await app.ready();
-    const { conn, frames } = sinkConn("session", "999999");
+    const { conn, frames } = makeConnectionState("session", "999999");
     await dispatch(app, conn, { id: 6, op: "projects.actions" });
     expect(frames[0]).toMatchObject({ id: 6, ok: false, status: 400 });
   });
@@ -99,7 +80,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
         .values({ projectId, command: "bash", cwd: "/tmp/waiter", parentSessionId: parent })
         .run().lastInsertRowid,
     );
-    const { conn, frames } = sinkConn("session", String(parent));
+    const { conn, frames } = makeConnectionState("session", String(parent));
     let fire: (() => void) | undefined;
     let unsubscribed = 0;
     conn.onClose = (listener) => {
@@ -131,7 +112,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
         .values({ projectId, command: "bash", cwd: "/tmp/gone", status: "exited" })
         .run().lastInsertRowid,
     );
-    const { conn, frames } = sinkConn("session", String(sessionId));
+    const { conn, frames } = makeConnectionState("session", String(sessionId));
     await dispatch(app, conn, { id: 9, op: "projects.actions" });
     expect(frames[0]).toMatchObject({ id: 9, ok: false, status: 400 });
   });
@@ -147,7 +128,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
       app.db.insert(sessions).values({ projectId, command: "bash", cwd: "/tmp/closing" }).run()
         .lastInsertRowid,
     );
-    const { conn, frames } = sinkConn("session", String(sessionId));
+    const { conn, frames } = makeConnectionState("session", String(sessionId));
     // What app.inject() throws once the app has closed.
     vi.spyOn(app, "inject").mockRejectedValue(
       Object.assign(new Error("closed"), { code: "FST_ERR_REOPENED_CLOSE_SERVER" }),
@@ -174,7 +155,7 @@ describe("closeDeniedRelayStreams (#2125)", () => {
         .values({ projectId, command: "bash", cwd: "/tmp/r", hostId: "remote-1" })
         .run().lastInsertRowid,
     );
-    const { conn, frames } = sinkConn("session", String(id));
+    const { conn, frames } = makeConnectionState("session", String(id));
     const closed: number[] = [];
     for (const streamId of [10, 11]) {
       conn.openChannels.set(streamId, {

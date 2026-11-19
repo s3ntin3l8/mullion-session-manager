@@ -220,7 +220,7 @@ export function startControlRelayFanout(app: FastifyInstance): ControlRelayFanou
     }
     let socket: NodeWebSocket;
     try {
-      socket = getRemoteHostClient(app, f.hostId).openControlRelayStream();
+      socket = getRemoteHostClient(app, f.hostId).streams.controlRelay();
     } catch (err) {
       app.log.warn(
         { err, hostId: f.hostId },

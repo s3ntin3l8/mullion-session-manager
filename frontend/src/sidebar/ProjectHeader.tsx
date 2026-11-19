@@ -3,6 +3,7 @@ import { useDashboardStore } from "../store/index.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
 import { deleteProjectAndEndSessions, gitPullState, pullProject } from "./projectActions.js";
 import { ProjectEditModal } from "./ProjectEditModal.js";
+import { useHostPull } from "../git/useHostPull.js";
 import { LOCAL_HOST_ID } from "../api/index.js";
 import type { Host, Project, Session } from "../api/index.js";
 import { HostStatusLabel } from "../HostStatusLabel.js";
@@ -89,6 +90,7 @@ export function ProjectHeader({
   // detached HEAD, conflicts), and SourceControlSection's Pull button already
   // surfaces the same shape there — keep parity.
   const [pullError, setPullError] = useState<string | null>(null);
+  const hostPull = useHostPull(project, hosts);
 
   const attentionCount = sessions.filter((s) => s.attention).length;
   // Only a remote project needs a badge at all — the common single-host
@@ -281,6 +283,14 @@ export function ProjectHeader({
                   setPullError(await pullProject(project.id));
                 },
               },
+              ...hostPull.targets.map((target) => ({
+                key: `git-pull-${target.id}`,
+                label: `${target.pending ? "Pulling" : "Git pull"} on ${target.name}`,
+                icon: <PullIcon size={14} style={{ color: "var(--muted)" }} />,
+                disabled: !!target.unavailable || target.pending,
+                title: target.unavailable ?? target.cwd,
+                onClick: () => void hostPull.pull(target.id),
+              })),
               {
                 key: "scaffold-mullion",
                 label: "Scaffold Mullion",
@@ -319,6 +329,13 @@ export function ProjectHeader({
         <div className="project-row-error" title={pullError}>
           {pullError}
         </div>
+      )}
+      {hostPull.targets.map((target) =>
+        hostPull.messages[target.key] ? (
+          <div key={target.id} className="github-panel-empty-row" role="status">
+            {target.name}: {hostPull.messages[target.key]}
+          </div>
+        ) : null,
       )}
     </>
   );

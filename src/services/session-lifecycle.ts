@@ -81,7 +81,7 @@ import {
 // caller used. Not a security boundary (a full-scope caller can already
 // achieve an arbitrary env var via `command` composition, e.g. `FOO=bar
 // claude`) — the real constraint is transport, not intent:
-// remote-host-client.ts's openAttach() has nowhere to put `env` but the WS
+// remote-host-client.ts's `streams.attach()` has nowhere to put `env` but the WS
 // upgrade's query string (a GET has no body, and the `ws` package exposes
 // no custom-body-on-upgrade option), which shares Node's 16 KB
 // --max-http-header-size with the request line, the Bearer token, and the
@@ -417,7 +417,7 @@ export type CreateSessionParams = CreateSessionBody & {
   // `small_model` config key.
   smallModel?: string;
   // Set ONLY by the Task Master spawn sites (task-claim.ts's
-  // dispatchClaimedTask/retryTask, task-reconciler.ts's spawnReviewAgentNow,
+  // dispatchClaimedTask/dispatchQueuedRetry, task-reconciler.ts's spawnReviewAgentNow,
   // task-reseed.ts's reseedTaskIfSessionExited) to signal "this session is
   // an unattended Task Master agent." Threaded all the way through to the
   // opencode and codex adapters' HookAdapterContext.taskId, which use a
@@ -2023,7 +2023,8 @@ async function spawnOrRollback(
     //
     // Fresh-review finding (Hermes, this PR): a LOCAL spawn failure means
     // PtyManager.getOrCreate() already inserted a Session into its own
-    // `sessions`/`hookTokens` maps before spawn() was awaited — that Session
+    // `sessions` map (and its token into the hook-token registry, issue
+    // #3166) before spawn() was awaited — that Session
     // never attached anything, so app.pty.kill() here is a safe,
     // side-effect-free map eviction, not a real "detach a live client" call.
     // Without this, a failed local spawn permanently leaks that Session plus

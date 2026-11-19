@@ -94,6 +94,12 @@ export function buildHostTargetOptions(
   ];
   for (const id of Object.keys(project.hostCwds ?? {})) {
     if (id === own) continue;
+    // A host that was removed leaves its `hostCwds` key behind; once the host
+    // list has loaded, an id with no host row is gone, not selectable. An empty
+    // list means "not loaded yet": a loaded list is never empty because the
+    // undeletable `local` host row is always in it (drizzle/0008). If that ever
+    // changes, replace this length check with an explicit loaded flag.
+    if (hosts.length > 0 && !byId.has(id)) continue;
     const state =
       unavailableState(byId.get(id)) ??
       platformFlagViolation(byId.get(id), project.placementConstraints) ??
@@ -142,6 +148,10 @@ export function resolveHostChoice(
   if (remembered === project.hostId) return project.placement === "auto" ? remembered : null;
   if (!Object.hasOwn(project.hostCwds ?? {}, remembered)) return fallback;
   const host = hosts.find((h) => h.id === remembered);
+  // A removed host is as gone as an offline one. Empty `hosts` = not loaded yet
+  // (a loaded list always holds the undeletable `local` host); same proxy as
+  // `buildHostTargetOptions`.
+  if (hosts.length > 0 && !host) return fallback;
   // Issue #2241 — a host the project's platform flag now forbids is as gone as an offline one.
   const usable =
     unavailableState(host) === null &&

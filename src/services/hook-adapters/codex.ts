@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
+import { codexModelTier } from "./delegation.js";
 import {
   shellQuote,
   tomlString,
@@ -166,6 +167,17 @@ function hookGroup(
 // reasoning as Claude Code's PERMISSION_REQUEST_TIMEOUT_SECONDS.
 const PERMISSION_REQUEST_TIMEOUT_SECONDS = 300;
 
+// Issue #3174 — a `Stop` is the one hook the forwarder retries (a refused
+// Stop is dropped otherwise, and the finished headless worker it belongs to
+// then looks unfinished until its budget expires). The forwarder's own
+// retry sequence takes at most ~97s in the worst case (67s of waiting between
+// its six attempts, plus up to 5s for each attempt itself — see
+// STOP_RETRY_DELAYS_MS in src/hooks/forwarder-delivery.mjs), so the hook
+// timeout has to sit above that bound — an agent that killed the hook at its
+// own 10s timeout would cut the retry sequence short and lose the Stop
+// exactly as before.
+const STOP_HOOK_TIMEOUT_SECONDS = 120;
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -282,7 +294,7 @@ function mergeCodexHooks(): void {
   // codex-trust.ts must keep using isCurrentMullionGroup instead.
   hooks.Stop = [
     ...(hooks.Stop ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "Stop")),
-    hookGroup("Stop"),
+    hookGroup("Stop", undefined, { timeoutSeconds: STOP_HOOK_TIMEOUT_SECONDS }),
   ];
   hooks.SessionStart = [
     ...(hooks.SessionStart ?? []).filter((g) => !isMullionOwnedByAnyRelease(g, "SessionStart")),
@@ -753,14 +765,17 @@ export const codexAdapter: HookAgentAdapter = {
   matches: (command) => CODEX_COMMAND_RE.test(command.trim()),
   prepareLaunch,
   emits: CODEX_EMITS,
-  delegationHint:
-    "If this task has parts that could be done independently, delegate them: " +
-    "`spawn_agent` creates a child agent; if the tool offers a `model` and " +
-    "a reasoning effort for it, give that child a cheaper one for the " +
-    "mechanical parts, and keep the parts that need your own judgement for " +
-    "yourself. A delegated part may run in its own workspace or fork, so " +
-    "whatever you delegate has to land on this branch — you remain " +
-    "responsible for the final commit here.",
+  delegationHint: (delegateModel) =>
+    "A subagent adds its own cost to this task, so delegate only parts that are independent and sizeable " +
+    "(mechanical edits across many files, a broad search) and do small or sequential work yourself. " +
+    "`spawn_agent` creates a child agent; if the tool offers a `model` and a reasoning effort for it, " +
+    `give the child \`model: "${delegateModel}"\` (with a low or medium reasoning effort) for the parts ` +
+    "you delegate. " +
+    "Brief a subagent with the goal, the files and what is ruled out — it sees nothing else. Keep the " +
+    "parts that need your own judgement for yourself. A delegated part may run in its own workspace or " +
+    "fork, so whatever you delegate has to land on this branch — you remain responsible for the final " +
+    "commit here.",
+  modelTier: codexModelTier,
   // `codex [OPTIONS] [PROMPT]` — "Optional user prompt to start the
   // session," a plain trailing positional in interactive mode (the default;
   // `exec`/`review` subcommands are the non-interactive path and aren't

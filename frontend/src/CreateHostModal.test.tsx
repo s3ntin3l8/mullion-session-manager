@@ -117,8 +117,34 @@ describe("CreateHostModal", () => {
     await user.clear(screen.getByLabelText(/^Base URL/));
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
-    expect(screen.getByText("Base URL can't be cleared once set.")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Base URL can't be cleared: this agent has no live machine identity/),
+    ).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  // Issue #3091
+  it("edit mode saves an emptied Base URL for a host with a machine identity, and says what else to do", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CreateHostModal
+        onClose={vi.fn()}
+        onSave={onSave}
+        mode="edit"
+        initialName="macbook"
+        initialBaseUrl="http://192.168.2.92:3000"
+        canClearBaseUrl
+      />,
+    );
+
+    expect(screen.getByText(/Clear it to make this host outbound-only/)).toBeInTheDocument();
+    expect(screen.getByText(/unset MULLION_AGENT_ADVERTISE_URL/)).toBeInTheDocument();
+    await user.clear(screen.getByLabelText(/^Base URL/));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith("macbook", "", ""));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("surfaces a rejected save as an inline error and keeps the modal open", async () => {

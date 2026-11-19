@@ -84,7 +84,15 @@ An agent session can list, start and stop its **own project's** dock controls
 [`agent-guide.md`](agent-guide.md#dev-servers-and-the-dock). The dock session
 is tagged with the control it came from (`sessions.dock_control_id`), which is
 how `list` and `stop` find it. Previews, devices, other projects' docks and
-Docker-discovered controls stay full-scope.
+Docker-discovered controls stay full-scope. The same session can read a running
+control's output (`docks.logs`, `docks.wait_for_output`) and restart it on
+another branch or worktree (`docks.switch`; a `worktreePath` must be the
+project checkout, a directory inside it, or one of its git worktrees; a relative path is anchored at the project checkout, and the resolved path is what runs). Switching a control that is not running simply starts it there.
+
+An agent can also edit the dock config itself (`dock config get|set`, MCP
+`get_dock_config` / `set_dock_config`), which rewrites the project's `.crs/dock.json` (the file the dock reads, on
+the session's host; not a separate worktree's copy) under the same validation
+as the Settings editor.
 
 ### Port conflicts
 
@@ -116,6 +124,12 @@ shows a branch selector the first time you start the monitor. You can:
   checked out with a **detached HEAD** rather than a real branch checkout.
   Preview worktrees are cleaned up when you switch branches or toggle the
   monitor off.
+
+The selected branch or worktree is remembered per control in the browser:
+stopping a monitor (including after a Dock remount or page reload, or when
+started externally) keeps that selection rather than resetting to the main
+checkout, falling back to the main checkout only if that branch or worktree is
+no longer available.
 
 If you want the preview worktree to stay in sync with commits an agent makes
 in the main checkout, set `"worktreeRefresh": true` on the control (or enable

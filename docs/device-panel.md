@@ -67,7 +67,11 @@ reading it as "dead" lets the next launch reclaim the id instead of wedging it.
 On a platform without a capability, the routes that **add, start or change**
 such a device answer **400** with the platform named ("Emulator devices are not
 supported on `<platform>` …") rather than a raw spawn error. `GET
-/api/server-info` reports the kinds a host can run as `features.deviceKinds`,
+/api/server-info` reports the kinds a host can run as `features.deviceKinds`
+and the platforms as `features.devicePlatforms` (`android`, plus `ios` when the
+iOS Simulator is available: macOS, `DEVICE_IOS_ENABLED`, the `xcode` host
+capability and an executable `DEVICE_IDB_COMPANION_PATH`; empty when the panel
+is off),
 and the Settings → Devices page hides the emulator controls when `"emulator"` is
 not listed. The `/api/devices` reads and the teardown routes (`POST
 /api/devices/:id/stop`, `DELETE /api/devices/:id`) stay open on purpose — an
@@ -215,13 +219,9 @@ deliberately a **separate** implementation from `PtyManager`/
   Mullion (a host reboot, a crash) while its row stayed `status: "active"`
   would strand that pool slot for the rest of the process's lifetime.
   Populated synchronously (better-sqlite3, no plugin-registration ordering
-  issue). Currently a no-op on the multi-host "agent" role: `devicePlugin`
-  registers there too, but with no `app.db` to read a persisted port from at
-  all (same `app.db ? ... :` fallback posture as `hooksPlugin`,
-  `src/plugins/hooks.ts`) — every `devices` row today is `hostId: "local"`
-  anyway (`src/routes/devices.ts` never sets it from a request), so this is
-  a latent gap rather than an active one, not a claim that the agent role is
-  unaffected in principle.
+  issue). On an agent host (which has no `app.db`) this seed is empty; the
+  primary instead names the ports of that host's other active devices in every
+  spawn request (`reservedPorts`, see "Devices on agent hosts" below).
 - **Scope ownership**, unlike a session's, isn't anchored on a real dtach
   socket (an emulator has neither dtach nor a PTY) — `device-process.ts`
   makes `systemd-run` set the scope's `Description` explicitly to a
@@ -262,11 +262,14 @@ deliberately a **separate** implementation from `PtyManager`/
   e.g. the Ctrl/Shift bits a modifier chord sets; defaults to `0`),
   `clipboard`
   (`{text: string}`, host clipboard text to paste onto the device — see
-  below), `back` (no fields), and `rotate` (no fields — toggles the
-  emulator's orientation). Neither a malformed (unparseable JSON,
+  below), `back` (no fields), `rotate` (no fields — toggles the
+  emulator's orientation), `button` (`{button: "home"|"lock"|"side"|"siri"}` —
+  iOS hardware/assistant buttons, ignored on Android), and `hidKey`
+  (`{usage: number, action: "down"|"up"}`, USB HID usage integer `0`–`0xFFFF` —
+  iOS HID key events, ignored on Android). Neither a malformed (unparseable JSON,
   server-logged) nor an unrecognized (valid JSON, wrong shape, silently
   ignored) message ever produces an error frame back to the client — see
-  `parseInputMessage`'s own comment.
+  `parseDeviceInput`'s own comment (`services/device-drivers/input.ts`).
 
 - **`DevicePane.tsx`** decodes with
   [`@yume-chan/scrcpy-decoder-webcodecs`](https://www.npmjs.com/package/@yume-chan/scrcpy-decoder-webcodecs)
@@ -340,6 +343,67 @@ the advertised name/model while the real one is offline, so that case is always
 shown as a confirm-style prompt. If the phone needs a fresh pairing code, delete and re-pair as before.
 The prompt only appears when mDNS can reach the device; otherwise **Edit
 address** remains the manual path.
+
+### Devices on agent hosts (issue #3200)
+
+A device runs on the host its `devices` row names (`hostId`, default `"local"`).
+`POST /api/devices` takes an optional `hostId` (otherwise the project's host,
+else the primary) and refuses, before inserting a row, a kind that host cannot
+serve: an agent reports the kinds it can run, and its `platforms`, at `GET /internal/devices/kinds` (an answer without `platforms` is read as Android-only)
+(empty while its own
+`DEVICE_ENABLED` is off); an agent that predates the route is refused with
+"update its agent".
+
+Every route on the primary resolves the row's host through a `DeviceHost`
+(`src/services/device-host.ts`): the local one drives this process's
+`DeviceManager`; the remote one calls the agent's `/internal/devices*` routes
+(`src/routes/internal-devices.ts`), which run the same `DeviceManager` and the
+same driver code. The agent has no database, so each request carries what it
+needs:
+
+- `POST /internal/devices` is an idempotent get-or-create from the full spawn
+  spec: id, kind, AVD name or adb address, label, the row's persisted emulator
+  `port` (so a scope that survived an agent restart reattaches) and
+  `reservedPorts`, the ports of the host's _other_ active emulator rows. The
+  agent skips those when it allocates a fresh port, because it keeps no record
+  of them across a restart. It answers the live info and the port it holds,
+  which the primary persists on the row.
+- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate` and
+  `POST /internal/devices/:id/action` are the live-list, stop/delete and
+  one-shot-action counterparts. The action runs through the same `DeviceDriver`
+  as a local one, so a driver's 4xx (no live adb connection, unsupported
+  action) is forwarded with its own status and message.
+- `/internal/ws/device/:id` is the agent half of the panel's socket. The
+  primary's `/ws/device/:id` proxies to it (`proxyToRemoteDevice`): it first
+  runs the same get-or-create over REST, then relays control messages up and
+  frames down. Binary frames pass through unchanged and the agent keeps the
+  keyframe gating for its own socket. The one thing the agent cannot see is
+  this hop's backlog: when the _browser_ socket is backed up the proxy drops
+  the frame, holds every delta until a keyframe has gone out, and sends the
+  agent `{"type":"requestKeyframe"}` (an H.264 delta cannot be dropped the way a
+  browser pane's JPEG can).
+
+A host that is down does not fail the list: `GET /api/devices` marks its rows
+`hostUnreachable: true` with `live: null` (Settings → Devices and the sidebar read
+the flag: the row shows "unavailable — host unreachable" and its Start/Stop are
+disabled), and a mutating call answers 503 (or 502 when the request may have
+been delivered), like every other forwarded host call.
+
+`GET /api/devices/hosts` lists the hosts that could hold a device (the primary
+and each registered agent) as `{hostId, name, status, deviceKinds}`: `status` is
+`ok`, `unsupported` (an agent that predates the kinds route) or `unreachable`
+(it did not answer within 5 s, or answered with an error). Each agent is asked in parallel and its answer
+is cached for 10 s; `features.deviceKinds` in `/api/server-info` still reports
+only the primary's own kinds.
+
+Not covered yet, each tracked on its own issue: pairing and mDNS discovery
+still run on the primary only, so a physical device on an agent host is added
+by its adb address ([#3271](https://github.com/s3ntin3l8/mullion-session-manager/issues/3271));
+AVD and system-image management (`/api/avds`, `/api/system-images`) is
+primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)), so the
+create form's Host picker offers remote hosts but its AVD list is still the primary's;
+and the panel's socket to an agent reached only over the outbound channel needs a
+`device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
 
 ### Toolbar and gestures (issue #1419)
 
@@ -494,9 +558,9 @@ commands against the device's live adb connection
 video panel is currently open anywhere, and do **not** go through the
 scrcpy control channel the live panel uses. **`text` and `clipboard` are the
 two exceptions**: `routes/devices.ts` routes `text` through
-`device.controller.injectText()` — the same scrcpy control channel the live
-WS panel's own "text" input message uses (`routes/device.ts`'s
-`dispatchInput`) — rather than `adb shell input text`, since `injectText`
+`AndroidDriver.text()` (`device.controller.injectText()`) — the same scrcpy
+control channel the live WS panel's own "text" input message uses
+(`AndroidDriver.input` in `services/device-drivers/android.ts`) — rather than `adb shell input text`, since `injectText`
 needs no shell at all. Both 400 if no scrcpy controller exists yet (a narrow
 window during boot, after adb comes up but before scrcpy does) rather than
 falling back to the shell.
@@ -553,13 +617,22 @@ expose them.
 
 ## 3. REST API
 
-`src/routes/devices.ts` — `GET/POST /api/devices`, `POST /api/devices/pair`,
+`src/routes/devices.ts` — `GET/POST /api/devices`, `GET /api/devices/hosts`, `POST /api/devices/pair`,
 `POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
 `GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/start`,
 `POST /api/devices/:id/stop`, `POST /api/devices/:id/action` (body:
 `{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat"|"clipboard", ...}`
 — `clipboard` additionally carries `{op: "get"}` or
 `{op: "set", text, paste?}` — same shape the CLI/MCP surface forwards).
+Every device carries a `platform` (`"android"`, the default, or `"ios"`) and a
+`udid` (an iOS Simulator's identifier, null for Android); `kind`, `avdName`,
+`serial` and `port` stay Android-shaped. `POST /api/devices` takes each
+platform's own fields only: a non-null `udid` is refused for an Android device, and
+`kind: "physical"`, `avdName` and `address` are refused for an iOS one. An iOS
+device answers 400 "not supported yet" until its driver exists
+([#1943](https://github.com/s3ntin3l8/mullion-session-manager/issues/1943)), and
+an agent refuses an iOS spawn the same way. Rows from before the columns existed
+read back as `android`.
 Lifecycle: `POST /:id/start` flips a stopped row
 back to `active` and runs `getOrCreate()` so something is actually running
 behind it. Errors: 400 when `getOrCreate()` throws — synchronously, so a

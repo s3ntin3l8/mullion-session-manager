@@ -286,6 +286,14 @@ describe("eventDescriptions (Phase 2, issue #176)", () => {
   });
 
   describe("describeEvent — status_change progress phase", () => {
+    it("quotes the startup prompt in the worker activity note", () => {
+      const note = "Worker has not started a turn.\nTrust these hooks?";
+      expect(
+        describeEvent(
+          makeEvent({ kind: "status_change", payload: { reason: "worker-not-started", note } }),
+        ),
+      ).toEqual({ text: note, attention: true });
+    });
     it("describes a hook progress phase", () => {
       const event = makeEvent({ kind: "status_change", payload: { phase: "thinking" } });
       expect(describeEvent(event)).toEqual({ text: "Agent: thinking", attention: false });

@@ -1,5 +1,4 @@
 import type { AgentProtocolInfo } from "../shared/agent-protocol.js";
-import { browserTargetQuery, type BrowserTarget } from "./browser-manager.js";
 import { renderScrollback } from "./scrollback-render.js";
 import type { TerminalPalette } from "./terminal-query-reply.js";
 import type { TranscriptQuery, TranscriptResult } from "./session-transcript.js";
@@ -24,12 +23,8 @@ import type { GitDiffStats } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import type { UpdateStatus, ApplyUpdateBody } from "./update-apply.js";
 import type { HostTransport } from "./agent-channel-tunnel.js";
-import {
-  downloadOverChannel,
-  previewHttpOverChannel,
-  uploadOverChannel,
-} from "./remote-host-channel-transfers.js";
-import { attachStreamQuery, openStreamOnTransport } from "./agent-channel-streams.js";
+import { downloadOverChannel, uploadOverChannel } from "./remote-host-channel-transfers.js";
+import { openStreamOnTransport } from "./agent-channel-streams.js";
 import {
   AGENT_CHANNEL_STREAMS_OPERATION,
   type AgentChannelStreamKind,
@@ -37,6 +32,10 @@ import {
 import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
+import { createBrowserClient, type BrowserClient } from "./remote-host-browser.js";
+import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
+import { createStreamsClient, type StreamsClient } from "./remote-host-streams.js";
+import { createPreviewsClient, type PreviewsClient } from "./remote-host-previews.js";
 import { probeHealth } from "./host-health-probe.js";
 
 export {
@@ -46,12 +45,10 @@ export {
 } from "./remote-host-errors.js";
 import type {
   AgentConfig,
-  OpenAttachOptions,
   RemoteWaitOutputResult,
   SpawnResult,
   SpawnSessionOptions,
 } from "./remote-host-client-types.js";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, NONCE_HEADER } from "./request-signature.js";
 import { uploadInbound, downloadInbound } from "./remote-host-file-streams.js";
 import { RemoteHostTransport, type HostCredentials } from "./remote-host-transport.js";
 import type { PromoteDecision } from "../shared/promote-decision.js";
@@ -71,6 +68,7 @@ import type { GitBranchOpResult } from "./git-branch-ops.js";
 import type { CloneHealth, RepairOutcome, RepairPlan } from "./git-doctor.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
+import type { SessionEnvInfo } from "./user-shell-env.js";
 import type {
   ProjectDirListing,
   ProjectFileContent,
@@ -93,7 +91,7 @@ export type {
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
 // `Authorization: Bearer <token>`; a bearer WS header (not a query-string
 // token) is only settable via the `ws` package's client, not the global
-// WebSocket — see src/routes/internal.test.ts's identical reasoning.
+// WebSocket — see test/helpers/internal-routes.ts (`waitForNodeWsOutcome`).
 
 // A network blip must never read as "the agent said no sessions are alive"
 // (landmine #1 — an unreachable host's sessions must be skipped, not
@@ -169,13 +167,11 @@ const GIT_READ_CACHE_TTL_MS = 3_000;
 // host as unreachable for at most one more cooldown.
 const LIVE_STATUS_DOWN_COOLDOWN_MS = 10_000;
 
-// A preview asset request (issue #28 phase 6) can legitimately take longer
-// than REQUEST_TIMEOUT_MS's 5s — a dev server compiling a route on first
-// request (Vite/webpack's on-demand compilation) is a real, non-error delay
-// this proxy must not preempt.
-const PREVIEW_REQUEST_TIMEOUT_MS = 30_000;
+// The preview forward's own budget (PREVIEW_REQUEST_TIMEOUT_MS) lives with
+// the previews facet, in remote-host-previews.ts.
 
-// Same reasoning as PREVIEW_REQUEST_TIMEOUT_MS above, for the same reason:
+// Same reasoning as the previews facet's PREVIEW_REQUEST_TIMEOUT_MS (see
+// remote-host-previews.ts), for the same reason:
 // a file upload (issue #68) can be up to MAX_UPLOAD_BYTES (25 MiB,
 // session-upload.ts) — a real, non-error transfer time over a WAN/VPN link
 // to a remote agent that REQUEST_TIMEOUT_MS's 5s is nowhere near generous
@@ -209,7 +205,8 @@ export function overrideTransferIdleTimeoutForTests(ms: number): () => void {
 // running — e.g. reporting push-failed on a branch that actually landed.
 // Each constant below is the agent-side budget plus headroom, following the
 // same "real, non-error delay this proxy must not preempt" reasoning as
-// PREVIEW_REQUEST_TIMEOUT_MS/UPLOAD_REQUEST_TIMEOUT_MS above.
+// the previews facet's PREVIEW_REQUEST_TIMEOUT_MS (remote-host-previews.ts)
+// and UPLOAD_REQUEST_TIMEOUT_MS above.
 /** git-push.ts's GIT_TIMEOUT_MS is 120s (one `git push`, raised from 30s so
  * `--no-verify` doesn't have to also budget for a target repo's own
  * pre-push hook — see that file's header comment). Kept in lockstep with
@@ -240,9 +237,9 @@ const WORKTREE_PATH_COMPARE_TIMEOUT_MS = 30_000;
 // orphaning a real worktree the primary never tracked: an unrecoverable
 // leak, same class as the accepted restart-leak limitation). 45s gives 15s
 // of margin for network RTT on top of the 30s agent-side worst case.
-// Distinct from PREVIEW_REQUEST_TIMEOUT_MS (that one covers the browser
-// dev-server proxy, an unrelated "preview" — dock-preview worktrees are a
-// different feature despite the name collision).
+// Distinct from the previews facet's PREVIEW_REQUEST_TIMEOUT_MS (that one
+// covers the browser dev-server proxy, an unrelated "preview" — dock-preview
+// worktrees are a different feature despite the name collision).
 const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
 
 // Issue #1951 follow-up — the agent validates every root with a few stat/realpath
@@ -340,6 +337,11 @@ export class RemoteHostClient {
     this.hostId = opts.hostId;
     this.transport = new RemoteHostTransport(opts);
     this.channelApp = opts.channelApp;
+    this.previews = createPreviewsClient({
+      transport: this.transport,
+      openInbound: (target) => this.inboundStream(target, false),
+      openChannel: (kind, identity, query) => this.channelStream(kind, identity, query),
+    });
   }
 
   /**
@@ -358,9 +360,33 @@ export class RemoteHostClient {
     return this.transport.request<T>(path, init, timeoutMs);
   }
 
-  // `request`, bound, for the git path builders in remote-host-git.ts.
-  private readonly gitRequest: git.GitRequest = (path, init, timeoutMs) =>
+  // `request`, bound, for the facet modules (remote-host-git.ts, remote-host-devices.ts, remote-host-browser.ts, remote-host-streams.ts).
+  private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
+
+  readonly devices: DevicesClient = createDevicesClient({
+    request: this.boundRequest,
+    openInbound: (target) => this.inboundStream(target, false),
+  });
+
+  readonly browser: BrowserClient = createBrowserClient({
+    request: this.boundRequest,
+    openInbound: (target) => this.inboundStream(target, false),
+  });
+
+  readonly streams: StreamsClient = createStreamsClient({
+    openInbound: (target, capPayload) => this.inboundStream(target, capPayload),
+    openChannel: (kind, identity, query) => this.channelStream(kind, identity, query),
+  });
+
+  /**
+   * The previews facet (issue #3289 / #3304): the preview HTTP forward and
+   * the two preview WebSocket kinds. Built in the constructor rather than in
+   * a field initializer because it takes the transport itself — its bearer
+   * token, its signature headers and its SSRF pinning — and the transport is
+   * built there; a field initializer would run before it exists.
+   */
+  readonly previews: PreviewsClient;
 
   discover(): Promise<DiscoveredCandidate[]> {
     return this.request("/internal/discover");
@@ -504,6 +530,9 @@ export class RemoteHostClient {
   detectCapabilities = (): Promise<{ capabilities: string[] }> =>
     this.request("/internal/capabilities");
 
+  // Issue #3156 — the session environment summary; 404 on an older agent.
+  detectSessionEnv = (): Promise<SessionEnvInfo> => this.request("/internal/session-env");
+
   // Issue #2248 — the protocol handshake; an agent build without it answers 404.
   detectProtocol = (): Promise<AgentProtocolInfo> => this.request("/internal/protocol");
 
@@ -541,11 +570,11 @@ export class RemoteHostClient {
   }
 
   resolveGitHubRepo(cwd: string): Promise<GitHubRepoRef | null> {
-    return git.resolveGitHubRepo(this.gitRequest, cwd);
+    return git.resolveGitHubRepo(this.boundRequest, cwd);
   }
 
   resolveGitBranch(cwd: string): Promise<string | null> {
-    return git.resolveGitBranch(this.gitRequest, cwd);
+    return git.resolveGitBranch(this.boundRequest, cwd);
   }
 
   /** Mirrors `/internal/git-status`'s `{ isRepo, status }` shape exactly (see
@@ -560,7 +589,7 @@ export class RemoteHostClient {
    * polls) omits it and keeps the cached read, at the default timeout. */
   resolveGitStatus(cwd: string, opts?: { fresh?: boolean }): Promise<GitStatusResult> {
     return this.sharedGitRead(`status\0${cwd}`, opts?.fresh === true, () =>
-      git.resolveGitStatus(this.gitRequest, cwd, opts),
+      git.resolveGitStatus(this.boundRequest, cwd, opts),
     );
   }
 
@@ -615,7 +644,7 @@ export class RemoteHostClient {
     // back to the current branch."
     defaultBranch?: string | null;
   } | null> {
-    return git.resolveGitBranches(this.gitRequest, cwd, detail);
+    return git.resolveGitBranches(this.boundRequest, cwd, detail);
   }
 
   /** Creates a worktree on this agent's own filesystem (issue #271's
@@ -802,7 +831,7 @@ export class RemoteHostClient {
     opts: { fresh?: boolean } = {},
   ): Promise<{ isRepo: boolean; stats: GitDiffStats | null; baseResolved?: boolean }> {
     return this.sharedGitRead(`diff\0${cwd}\0${baseRef ?? ""}`, opts.fresh === true, () =>
-      git.resolveGitDiffStats(this.gitRequest, cwd, baseRef, opts),
+      git.resolveGitDiffStats(this.boundRequest, cwd, baseRef, opts),
     );
   }
 
@@ -814,7 +843,7 @@ export class RemoteHostClient {
     filePath: string,
     baseRef?: string,
   ): Promise<{ patch: string | null }> {
-    return git.resolveGitFileDiff(this.gitRequest, cwd, filePath, baseRef);
+    return git.resolveGitFileDiff(this.boundRequest, cwd, filePath, baseRef);
   }
 
   /** Commit history (issue #1969) for a remote-hosted project's Git view —
@@ -824,7 +853,7 @@ export class RemoteHostClient {
     cwd: string,
     opts: { worktree?: string; skip: number; limit: number; scope: "all" | "head" },
   ): Promise<{ commits: CommitLogEntry[] | null; forbidden?: boolean }> {
-    return git.resolveGitLog(this.gitRequest, cwd, opts);
+    return git.resolveGitLog(this.boundRequest, cwd, opts);
   }
 
   /** One commit's message and changed files — mirrors /internal/git-commit. */
@@ -833,7 +862,7 @@ export class RemoteHostClient {
     sha: string,
     worktree?: string,
   ): Promise<{ detail: CommitDetail | null; forbidden?: boolean }> {
-    return git.resolveGitCommit(this.gitRequest, cwd, sha, worktree);
+    return git.resolveGitCommit(this.boundRequest, cwd, sha, worktree);
   }
 
   /** One file's patch within a commit — mirrors /internal/git-commit-file. */
@@ -843,7 +872,7 @@ export class RemoteHostClient {
     filePath: string,
     worktree?: string,
   ): Promise<{ patch: string | null; forbidden?: boolean }> {
-    return git.resolveGitCommitFile(this.gitRequest, cwd, sha, filePath, worktree);
+    return git.resolveGitCommitFile(this.boundRequest, cwd, sha, filePath, worktree);
   }
 
   /** Runs `git fetch origin` on this agent's filesystem (issue #369 —
@@ -858,7 +887,7 @@ export class RemoteHostClient {
     cwd: string,
     token?: string,
   ): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
-    return git.resolveGitFetch(this.gitRequest, cwd, token);
+    return git.resolveGitFetch(this.boundRequest, cwd, token);
   }
 
   /** Issue #1851 — the READ-ONLY clone health check on this agent's
@@ -867,7 +896,7 @@ export class RemoteHostClient {
    * Its own timeout: the agent-side check runs `git fsck`, which has a 30s
    * budget of its own — see GIT_HEALTH_REQUEST_TIMEOUT_MS above. */
   resolveGitHealth(cwd: string): Promise<CloneHealth> {
-    return git.resolveGitHealth(this.gitRequest, cwd);
+    return git.resolveGitHealth(this.boundRequest, cwd);
   }
 
   /** Issue #1896 — the clone REPAIR on this agent's filesystem, and the
@@ -886,14 +915,14 @@ export class RemoteHostClient {
     cwd: string,
     opts: { confirm?: boolean } = {},
   ): Promise<RepairPlan | RepairOutcome> {
-    return git.resolveGitRepair(this.gitRequest, cwd, opts);
+    return git.resolveGitRepair(this.boundRequest, cwd, opts);
   }
 
   /** Runs a fast-forward `git pull` on this agent's filesystem (issue #745).
    * Returns `{ pulled: boolean, reason?, detail? }` matching runGitPull's
    * GitPullResult shape. */
   resolveGitPull(cwd: string): Promise<GitPullResult> {
-    return git.resolveGitPull(this.gitRequest, cwd);
+    return git.resolveGitPull(this.boundRequest, cwd);
   }
 
   /** The guarded checkout / create / rebase on this agent's filesystem
@@ -901,7 +930,7 @@ export class RemoteHostClient {
    * and /internal/git-rebase, each returning git-branch-ops.ts's
    * GitBranchOpResult. */
   resolveGitCheckout(cwd: string, branch: string): Promise<GitBranchOpResult> {
-    return git.resolveGitCheckout(this.gitRequest, cwd, branch);
+    return git.resolveGitCheckout(this.boundRequest, cwd, branch);
   }
 
   resolveGitBranchCreate(
@@ -910,11 +939,11 @@ export class RemoteHostClient {
     startPoint: string,
     checkout?: boolean,
   ): Promise<GitBranchOpResult> {
-    return git.resolveGitBranchCreate(this.gitRequest, cwd, name, startPoint, checkout);
+    return git.resolveGitBranchCreate(this.boundRequest, cwd, name, startPoint, checkout);
   }
 
   resolveGitRebase(cwd: string, onto?: string): Promise<GitBranchOpResult> {
-    return git.resolveGitRebase(this.gitRequest, cwd, onto);
+    return git.resolveGitRebase(this.boundRequest, cwd, onto);
   }
 
   /** Resolves this agent's default base ref (and its pinned commit SHA) on
@@ -924,7 +953,9 @@ export class RemoteHostClient {
    * comment. Never throws for a git-level failure: a non-repo cwd resolves
    * `{ baseRef: "HEAD", sha: null }`, the same last-resort fallback the
    * local path produces. */
-  resolveHostBaseRef(cwd: string): Promise<{ baseRef: string; sha: string | null }> {
+  resolveHostBaseRef(
+    cwd: string,
+  ): Promise<{ baseRef: string; sha: string | null; fetched?: boolean }> {
     return this.request(
       `/internal/git-base-ref?cwd=${encodeURIComponent(cwd)}`,
       undefined,
@@ -955,7 +986,7 @@ export class RemoteHostClient {
    * already-signed, IP-pinned channel; never logged by this method or the
    * route it calls. */
   resolveGitClone(url: string, name: string, token?: string): Promise<CloneResult> {
-    return git.resolveGitClone(this.gitRequest, url, name, token);
+    return git.resolveGitClone(this.boundRequest, url, name, token);
   }
 
   /** Reads `paths`' current content directly off this agent's own
@@ -1259,14 +1290,22 @@ export class RemoteHostClient {
    * remote-hosted task. Mirrors /internal/git-worktree/resume's
    * `WorktreeResult | null` shape; `null` (not thrown) means the resume
    * failed for a git-level reason, same "not applicable, not unreachable"
-   * posture as resolveCreateWorktree above. */
-  resolveResumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
+   * posture as resolveCreateWorktree above.
+   *
+   * Issue #3194 — `opts.fromOrigin` asks the agent to fetch the branch from
+   * `origin` when it does not have it locally: a retry re-placed onto this
+   * host resumes the branch FROM origin there. */
+  resolveResumeTaskWorktree(
+    cwd: string,
+    branchName: string,
+    opts?: { fromOrigin?: boolean },
+  ): Promise<WorktreeResult | null> {
     return this.request(
       "/internal/git-worktree/resume",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ cwd, branchName }),
+        body: JSON.stringify({ cwd, branchName, fromOrigin: opts?.fromOrigin === true }),
       },
       GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS,
     );
@@ -1485,7 +1524,13 @@ export class RemoteHostClient {
    */
   resolveWaitOutput(
     id: string,
-    body: { match: string; regex: boolean; timeoutMs: number; afterOffset?: number },
+    body: {
+      match: string;
+      regex: boolean;
+      timeoutMs: number;
+      afterOffset?: number;
+      afterSeq?: number;
+    },
   ): Promise<RemoteWaitOutputResult> {
     return this.request(
       `/internal/sessions/${encodeURIComponent(id)}/wait-output`,
@@ -1662,10 +1707,7 @@ export class RemoteHostClient {
    * peer build — throws HostRequestError, never collapses into `null`).
    */
   async resolveReadTaskCommitTitle(taskId: number): Promise<string | null> {
-    const result = await this.request<{ content: string | null }>(
-      `/internal/task-commit-title?taskId=${taskId}`,
-    );
-    return result.content;
+    return this.readTaskFile(`/internal/task-commit-title?taskId=${taskId}`);
   }
 
   /**
@@ -1676,10 +1718,24 @@ export class RemoteHostClient {
    * `null`.
    */
   async resolveReadTaskRereviewRequest(taskId: number, key: number): Promise<string | null> {
-    const result = await this.request<{ content: string | null }>(
-      `/internal/task-rereview-request?taskId=${taskId}&key=${key}`,
-    );
-    return result.content;
+    return this.readTaskFile(`/internal/task-rereview-request?taskId=${taskId}&key=${key}`);
+  }
+
+  /**
+   * Reads a worker's "this red CI check cannot be fixed from this PR" file off
+   * this agent's own filesystem (`taskCiUnfixablePath`). Same shape and
+   * version-skew posture as `resolveReadTaskRereviewRequest`: a 404 from a peer
+   * build without the route throws HostRequestError, never collapses into `null`.
+   * `headSha` is a validated full lowercase hex SHA (`assertFullSha`), so it needs
+   * no encoding.
+   */
+  async resolveReadTaskCiUnfixable(taskId: number, headSha: string): Promise<string | null> {
+    return this.readTaskFile(`/internal/task-ci-unfixable?taskId=${taskId}&headSha=${headSha}`);
+  }
+
+  /** GET one of the agent's `{ content }` task-file routes (a 404 from an old peer throws). */
+  private async readTaskFile(route: string): Promise<string | null> {
+    return (await this.request<{ content: string | null }>(route)).content;
   }
 
   /** The bearer+signature-authed inbound WebSocket to one `/internal/ws/*` route. */
@@ -1703,267 +1759,6 @@ export class RemoteHostClient {
   ): NodeWebSocket | null {
     const transport = this.transport.resolveTransport?.(AGENT_CHANNEL_STREAMS_OPERATION);
     return openStreamOnTransport(this.channelApp, transport, kind, identity, query);
-  }
-
-  /**
-   * Opens (but does not wait for) a WS connection to this agent's
-   * `/internal/ws/attach`, bearer-authed via a request header (the `ws`
-   * package is required for this — the browser/global WebSocket API can't
-   * set one). Callers (routes/terminal.ts) own the open/error/close
-   * lifecycle and the actual byte piping; this just constructs the socket.
-   */
-  openAttach(opts: OpenAttachOptions): NodeWebSocket {
-    const viaChannel = this.channelStream("attach", opts.id, attachStreamQuery(opts));
-    if (viaChannel) return viaChannel;
-    const query = new URLSearchParams({
-      id: opts.id,
-      cwd: opts.cwd,
-      command: opts.command,
-      cols: String(opts.cols),
-      rows: String(opts.rows),
-    });
-    if (opts.projectId !== undefined) {
-      query.set("projectId", String(opts.projectId));
-    }
-    if (opts.env !== undefined) {
-      query.set("env", JSON.stringify(opts.env));
-    }
-    const requestTarget = `/internal/ws/attach?${query.toString()}`;
-    return this.inboundStream(requestTarget, false);
-  }
-
-  /** POST to an agent browser route, naming the target in the query. */
-  postBrowser(path: string, target: BrowserTarget, body?: unknown): Promise<unknown> {
-    return this.request(`${path}?${browserTargetQuery(target)}`, {
-      method: "POST",
-      // No JSON content type without a body: Fastify refuses an empty body
-      // under it, which failed every close against a real agent (#2688).
-      headers: body === undefined ? undefined : { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  }
-
-  browserAutomationAction(sessionId: number, target: BrowserTarget, body: unknown) {
-    return this.postBrowser(`/internal/sessions/${sessionId}/browser`, target, body);
-  }
-
-  browserAutomationFind(sessionId: number, target: BrowserTarget, body: unknown) {
-    return this.postBrowser(`/internal/sessions/${sessionId}/browser/find`, target, body);
-  }
-
-  openBrowserWs(sessionId: number, target: BrowserTarget): NodeWebSocket {
-    const requestTarget = `/internal/ws/browser/${sessionId}?${browserTargetQuery(target)}`;
-    return this.inboundStream(requestTarget, false);
-  }
-
-  /**
-   * Opens (but does not wait for) a WS connection to this agent's
-   * `/internal/ws/events` (issue #166) — the events-channel counterpart to
-   * openAttach() above, bearer-authed the same header-only way (the `ws`
-   * package, not the browser/global WebSocket API, is what makes a custom
-   * Authorization header possible on the upgrade request). Unlike
-   * openAttach(), this takes no per-session target — it's one aggregated
-   * stream covering every session this agent tracks, so there are no query
-   * params to build. Callers (routes/events.ts's relayRemoteEventsHost,
-   * services/remote-event-subscriber.ts) own the open/error/close lifecycle
-   * and the actual frame relaying/handling.
-   *
-   * `maxPayload` bounds inbound frames on this (client) socket, matching
-   * plugins/websocket.ts's own 1 MiB server-side cap (Hermes review, PR
-   * #564 round 4) — without it, `ws`'s 100 MiB default leaves both callers
-   * exposed to an oversized frame from a buggy or compromised agent: an
-   * unbounded `JSON.parse` and, for remote-event-subscriber.ts, an
-   * unbounded flush-buffer entry. A frame over the cap makes `ws` close the
-   * connection (RFC 6455 1009) rather than deliver it — both callers
-   * already handle an unexpected close via their normal reconnect/relay
-   * teardown paths, so this doesn't need its own error handling.
-   *
-   * Issue #1459 — `opts.cursors` (only ever passed by
-   * routes/events.ts's relayRemoteEventsHost, never by
-   * remote-event-subscriber.ts's own history-capture subscription, which has
-   * no browser-facing cursors/seen story to opt into) appends `?cursors=1`
-   * to `requestTarget` — BEFORE it's used for both the actual URL and the
-   * signature's canonical request-target string, so the two can never
-   * diverge (buildCanonicalString's own doc comment: the signed target must
-   * match byte-for-byte what's actually sent on the wire). This is what
-   * tells the agent's own `/internal/ws/events` route to also send its own
-   * `cursors` frame and join its seenSubscribers broadcast set — see
-   * relayRemoteEventsHost's own doc comment for why this is opt-in rather
-   * than unconditional.
-   */
-  openEventsStream(opts?: { cursors?: boolean }): NodeWebSocket {
-    const cursors = opts?.cursors ? { cursors: "1" } : undefined;
-    const viaChannel = this.channelStream("events", cursors ? "cursors" : "", cursors);
-    if (viaChannel) return viaChannel;
-    const requestTarget = opts?.cursors ? "/internal/ws/events?cursors=1" : "/internal/ws/events";
-    return this.inboundStream(requestTarget, true);
-  }
-
-  /**
-   * Opens (but does not wait for) a WS connection to this agent's
-   * `/internal/ws/ssh-agent` (issue #820, PR5b) — bearer+signature-authed
-   * the same header-only way as openEventsStream() above. The caller
-   * (ssh-agent-fanout.ts's subscriber, PR5c) is expected to immediately
-   * wrap the returned socket in `createMuxConnection(socket,
-   * {channelIdParity: "odd"})` — THIS side (primary) dials out, so it must
-   * be "odd" to match the agent's own "even" pin (routes/internal.ts's
-   * `/internal/ws/ssh-agent` handler). `maxPayload` matches
-   * openEventsStream()'s own 1 MiB cap (plugins/websocket.ts's identical
-   * server-side limit) — well above `CHANNEL_WINDOW_BYTES` (256 KiB,
-   * ssh-agent-mux.ts), the largest a single mux Data frame's payload can
-   * legitimately be.
-   */
-  openSshAgentStream(): NodeWebSocket {
-    const viaChannel = this.channelStream("ssh-agent", "");
-    if (viaChannel) return viaChannel;
-    const requestTarget = "/internal/ws/ssh-agent";
-    return this.inboundStream(requestTarget, true);
-  }
-
-  /**
-   * Opens this agent's `/internal/ws/control-relay` (issue #1656): the mux
-   * the primary dials so sessions on the agent can reach the primary's
-   * control surface. Same bearer, signing and pinning as every other stream
-   * here; `maxPayload` matches the mux's largest Data frame.
-   */
-  openControlRelayStream(): NodeWebSocket {
-    const viaChannel = this.channelStream("control-relay", "");
-    if (viaChannel) return viaChannel;
-    const requestTarget = "/internal/ws/control-relay";
-    return this.inboundStream(requestTarget, true);
-  }
-
-  /**
-   * Forwards an HTTP preview request to this agent's own
-   * `/internal/preview/:port/*` (issue #28 phase 6) — the agent, not this
-   * process, dials the actual dev server, always on its own loopback (see
-   * internal.ts's own loopback assertion; `port` is never a caller-supplied
-   * host, only a number this method interpolates into the path). Returns
-   * the raw Response regardless of status (a 404/500 from the dev server is
-   * not this method's failure to report — only a network-level failure to
-   * reach the agent itself is, same distinction request()'s callers rely
-   * on but this method can't reuse it for: unlike request(), a non-2xx
-   * upstream status must pass through to the caller unchanged, not throw).
-   *
-   * `body`/`duplex`, when present, stream a non-GET/HEAD request body
-   * through to the agent unbuffered — see http-proxy.ts's
-   * buildUpstreamRequestBody. Note PREVIEW_REQUEST_TIMEOUT_MS now also
-   * bounds upload time for those requests, not just the response: a large
-   * POST to a remote-hosted preview can abort mid-upload once it elapses.
-   */
-  async openPreviewHttp(
-    port: number,
-    pathAndQuery: string,
-    init: {
-      method: string;
-      headers: Headers;
-      body?: ReadableStream<Uint8Array>;
-      duplex?: "half";
-    },
-  ): Promise<Response> {
-    return this.openPreviewHttpRequest(`/internal/preview/${port}${pathAndQuery}`, init);
-  }
-
-  openConfiguredPreviewHttp(
-    url: string,
-    init: { method: string; headers: Headers; body?: ReadableStream<Uint8Array>; duplex?: "half" },
-  ): Promise<Response> {
-    return this.openPreviewHttpRequest(
-      `/internal/configured-preview?${new URLSearchParams({ url })}`,
-      init,
-    );
-  }
-
-  openConfiguredPreviewWs(url: string): NodeWebSocket {
-    const viaChannel = this.channelStream("configured-preview", url, { url });
-    if (viaChannel) return viaChannel;
-    const requestTarget = `/internal/ws/configured-preview?${new URLSearchParams({ url })}`;
-    return this.inboundStream(requestTarget, false);
-  }
-
-  private async openPreviewHttpRequest(
-    requestTarget: string,
-    init: { method: string; headers: Headers; body?: ReadableStream<Uint8Array>; duplex?: "half" },
-  ): Promise<Response> {
-    const headers = new Headers(init.headers);
-    // Issue #249 / roadmap 7.5 — `init.headers` here is seeded from a
-    // BROWSER-controlled request forwarded through the preview proxy
-    // (preview-proxy.ts), unlike every other call site in this file, which
-    // only ever builds its own headers from scratch. Delete-then-set, never
-    // just set-without-delete: this route's own request body is exempt from
-    // hashing (isUnsignedBodyPath), so if the auth/signature headers below
-    // were only conditionally set (empty for a static-Bearer host) a
-    // browser could otherwise inject its own x-request-signature/
-    // -timestamp/-nonce and have them pass straight through unexamined.
-    headers.delete("authorization");
-    headers.delete(SIGNATURE_HEADER);
-    headers.delete(TIMESTAMP_HEADER);
-    headers.delete(NONCE_HEADER);
-    const t = this.requestTransport();
-    if (t.kind !== "inbound") {
-      return previewHttpOverChannel(
-        this.hostId,
-        t,
-        requestTarget,
-        init,
-        headers,
-        PREVIEW_REQUEST_TIMEOUT_MS,
-      );
-    }
-    headers.set("authorization", `Bearer ${this.transport.token}`);
-    for (const [key, value] of Object.entries(
-      this.transport.signatureHeaders(init.method, requestTarget, undefined),
-    )) {
-      headers.set(key, value);
-    }
-    try {
-      return await fetch(`${this.transport.baseUrl}${requestTarget}`, {
-        method: init.method,
-        headers,
-        ...(init.body !== undefined ? { body: init.body, duplex: init.duplex } : {}),
-        // "manual" here for the same reason request()'s own comment gives:
-        // a followed redirect would resend this bearer token whichever way
-        // the redirect's target points, cross-origin-redirect stripping
-        // rules notwithstanding — never rely on that instead of just not
-        // following. The dev server's own 3xx (relayed by the agent's
-        // /internal/preview handler as an ordinary response status, not an
-        // HTTP-level redirect of *this* fetch) reaches this method as an
-        // ordinary non-ok Response either way, which the caller forwards
-        // to the browser unchanged.
-        redirect: "manual",
-        signal: AbortSignal.timeout(PREVIEW_REQUEST_TIMEOUT_MS),
-        dispatcher: this.transport.pinnedDispatcher(),
-      } as RequestInit & { duplex?: "half" });
-    } catch (err) {
-      throw new HostUnreachableError(this.hostId, err);
-    }
-  }
-
-  /**
-   * Opens (but does not wait for) a WS connection to this agent's
-   * `/internal/ws/preview` (issue #28 phase 6) — the WS analog of
-   * openPreviewHttp above, and constructed the same bearer-header way as
-   * openAttach (the `ws` package is required for a request header the
-   * browser/global WebSocket API can't set). Callers (preview-proxy.ts) own
-   * the open/error/close lifecycle and the actual frame piping.
-   *
-   * No connect timeout, deliberately matching openAttach's own gap rather
-   * than a bespoke one just for this method (Hermes review, PR #48): if the
-   * agent accepts the TCP/WS handshake but its own loopback dev server
-   * never answers, this connection can sit open with nothing flowing. A
-   * hung *preview* pane is a lower-stakes failure mode than the equivalent
-   * for a terminal attach — worth fixing for both together in a follow-up,
-   * not diverging on here in isolation.
-   */
-  openPreviewWs(port: number, pathAndQuery: string): NodeWebSocket {
-    const viaChannel = this.channelStream("preview", `${port}${pathAndQuery}`, {
-      port: String(port),
-      path: pathAndQuery,
-    });
-    if (viaChannel) return viaChannel;
-    const query = new URLSearchParams({ port: String(port), path: pathAndQuery });
-    const requestTarget = `/internal/ws/preview?${query.toString()}`;
-    return this.inboundStream(requestTarget, false);
   }
 
   /** Best-effort reachability probe for the Settings hosts panel's "test

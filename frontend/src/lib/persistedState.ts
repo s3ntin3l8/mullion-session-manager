@@ -108,6 +108,11 @@ export const STORAGE_KEYS = {
   // collapsed projectIds), keyed by `String(activeWorkspaceId)`. Expanded
   // (not present in the array) is the default for a project not yet seen.
   dockCollapsedGroups: "crs.dockCollapsedGroups",
+  // Issue #3230 — per-control selected worktree/branch value in the Dock,
+  // keyed by `String(projectId)` then `controlId`. Survives stop, remount,
+  // and page reload so stopping a dev server keeps its branch selected.
+  // Entries for removed controls or projects are left unpruned (harmless).
+  dockControlWorktrees: "crs.dockControlWorktrees",
   projectCollapsed: "crs.projectCollapsed",
   expandedSessionRows: "crs.expandedSessionRows",
   expandedSubagentRows: "crs.expandedSubagentRows",
@@ -130,6 +135,9 @@ export const STORAGE_KEYS = {
   taskQuickView: "crs.taskQuickView",
   taskEpicFilter: "crs.taskEpicFilter",
   taskAgentFilter: "crs.taskAgentFilter",
+  // The board's host filter (JSON string[] of host ids / "__unplaced__"). Absent in
+  // state saved before it existed, which loads as [] (every host).
+  taskHostFilter: "crs.taskHostFilter",
   taskFacets: "crs.taskFacets",
   taskRecentProjects: "crs.taskRecentProjects",
   // #2841 — how the board groups its columns (none / epic / project) and card density.

@@ -155,7 +155,7 @@ in `machine_credential`.
   agent is terminal in memory, so nothing short of a restart re-reads either
   file; `install.sh` restarts a unit that was running when it rewrote the
   `.env`). The recipe is tested through the real boot path
-  (`test/plugins/agent-restart-reenroll.test.ts`). A credential unused for 90 days is rejected the same way as a
+  (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not at rotation time: rotating to retire a leaked token (rotate and discard) does not need it, but it leaves the `.env` token dead, so a later re-pairing needs a second, fresh rotation. A credential unused for 90 days is rejected the same way as a
   revoked one, so the agent log's "revoked or unknown" can also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
@@ -185,7 +185,8 @@ in `machine_credential`.
   active session. A row that carries a machine identity is never offered on
   hostname alone, addressed or not, so two agents that share a hostname are not
   flagged; and an outbound-only agent that lost its state (a new identity, no
-  address) leaves its old row unflagged, to be removed by hand. The one
+  address) leaves its old row unmatched by duplicate detection. It can still be
+  offered for cleanup after a long absence, as described below. The one
   exception to "an identity-bearing row is never matched" is the advertised
   `baseUrl`: two rows that both carry a machine identity and advertise the same
   URL **are** flagged (once the older is offline with no active session), because
@@ -196,6 +197,19 @@ in `machine_credential`.
   delete (with its confirmation, and its refusal while projects still
   reference the host). Two live agents sharing a URL are not flagged. Nothing
   is deleted automatically.
+- **Hosts offline for a long time.** Settings → Hosts also shows a "Not seen for
+  N days" badge when a remote host is offline, has no active session, and its
+  persisted last successful contact is older than `hosts.staleAfterDays` (30
+  days by default; 0 never flags hosts). This works for outbound-only hosts
+  without matching a replacement identity. The setting is editable beside the
+  health check interval. Successful heartbeats save last-seen time at most once
+  per host per hour, and the API falls back to that saved time after a primary
+  restart. Existing remote rows start their age at upgrade time, so upgrading
+  does not immediately flag them all. "Remove stale hosts" lists these hosts
+  with unchecked selection boxes: only hosts the operator selects are removed,
+  using the normal delete flow. A host that owns projects still shows the
+  existing confirmation to delete the host and its projects. Nothing is deleted,
+  parked or hidden automatically; the local host is never offered for removal.
 - **Shared per-host token.** If a second agent claims a row with the same
   per-host token, the incumbent's credential moves to the grace slot and
   the primary logs a warning; the displaced agent converges onto the new
@@ -334,14 +348,31 @@ specific address.
   blocks `/api/internal/register`, so use the primary's direct address
   (e.g. `http://dev-01:3100`) if that applies to you.
 - **Rotate token** (the host's `…` menu, click twice to confirm) mints a new
-  token, shows it once, and clears the host's session. The running agent is
-  locked out until its `.env` carries the new value and it is restarted —
-  re-running the installer does not rewrite an existing `.env`. An agent that
-  registered itself needs `MULLION_ENROLLMENT_TOKEN=<new>` and
-  `MULLION_AGENT_TOKEN=` empty (leave its `MULLION_PRIMARY_URL` as installed); a host added with **Use my own token** needs
-  `MULLION_AGENT_TOKEN=<new>` instead (it never registers, so clearing it would
-  leave the agent with no credential and it would refuse to boot). The dialog
-  shows both.
+  token, shows it once, and clears the host's session. What that means depends
+  on the host:
+  - **No live machine identity** (a manual-token host, a legacy agent, a revoked
+    row): the running agent is locked out until its `.env` carries the new value
+    and it is restarted — re-running the installer does not rewrite an existing
+    `.env`. An agent that registered itself needs
+    `MULLION_ENROLLMENT_TOKEN=<new>` and `MULLION_AGENT_TOKEN=` empty (leave its
+    `MULLION_PRIMARY_URL` as installed); a host added with **Use my own token**
+    needs `MULLION_AGENT_TOKEN=<new>` instead (it never registers, so clearing it
+    would leave the agent with no credential and it would refuse to boot). The
+    dialog shows both.
+  - **Live machine identity** (the agent registered itself): the running agent is
+    unaffected. It renews with its `{hostId, machineCredential}` and never
+    presents the bootstrap token again. Two cases:
+    - **Leak:** a per-host token is never cleared after first registration, and
+      `claimHost` does not check for a live identity, so anyone holding it can
+      take the row over. Rotate it now with **Rotate token and discard it**: the
+      old value dies, the running agent is untouched, the new token is never
+      shown. The token left in the agent's `.env` is now dead.
+    - **Repair** (state file lost, identity revoked, or expired after 90 days
+      unused): rotate again (the leak rotation's token was discarded), paste the
+      new value into `.env`, delete `agent-identity.json`, restart. Do this at
+      repair time, not at rotation time.
+      An agent without an identity whose bootstrap token was rotated logs a one-time
+      warning and picks up the new `.env` value without a restart.
 - Tick **Use my own token** to supply a token yourself instead (the manual
   flow below).
 
@@ -1259,6 +1290,17 @@ the macOS one is process-based. See
 [#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854) for
 the history.
 
+#### Devices on agent hosts
+
+A device can run on an agent host, which is where a Mac's Android tooling (and,
+later, the iOS Simulator) lives. `POST /api/devices` takes a `hostId`; the
+device's row records it, and the REST routes, the panel's WebSocket and
+`mullion device` all resolve the owning host and go there. The agent serves
+`/internal/devices*` behind the same auth as every other `/internal/*` route and
+reports the kinds it can run at `/internal/devices/kinds`. See
+[`device-panel.md`](device-panel.md#devices-on-agent-hosts-issue-3200) for the
+request shapes, port handling and what is not covered yet.
+
 ### Windows agents (preview)
 
 Windows agent hosts are in progress under
@@ -1369,19 +1411,69 @@ same as a fresh boot.
 
 Issue [#2306](https://github.com/s3ntin3l8/mullion-session-manager/issues/2306)
 — a host reports what it can do beyond running agent CLIs: `xcode` (the iOS
-Simulator toolchain) and `android-emulator` (an emulator Mullion can start).
+Simulator toolchain; also one of the conditions for the device panel's iOS
+Simulator, together with `DEVICE_IOS_ENABLED` and `DEVICE_IDB_COMPANION_PATH`) and `android-emulator` (an emulator Mullion can start).
 `GET /internal/capabilities` on the agent answers `{ "capabilities": [...] }`,
 and the primary keeps it beside the agent list (same TTL, same invalidation).
 `GET /api/hosts` exposes it as `capabilities`; Settings → Hosts shows chips.
 
-- `xcode`: darwin only, and `xcrun --find simctl` must exit 0 (Command Line
-  Tools alone do not have it). Nothing is spawned on any other platform.
+- `xcode`: darwin only, and all of these hold, checked in order and stopping
+  at the first failure: `xcrun --find simctl` exits 0 (Command Line Tools alone
+  do not have it); `xcodebuild -checkFirstLaunchStatus` exits 0 (Xcode's
+  first-launch setup is done and the licence accepted); and
+  `xcrun simctl list runtimes available -j` exits 0 and lists at least one
+  runtime. The last step only runs after the second passed, because
+  `simctl list` on an incomplete install starts the first-launch installer.
+  Each step has a 10 s budget. A timeout or spawn error is inconclusive, not
+  "lacks": the previous reading is kept (and a warning logged), while a clean
+  non-zero exit is a real "lacks". The agent logs at info, once per change,
+  which step failed (`simctl missing`, `first launch incomplete`,
+  `no simulator runtime`); Settings → Hosts shows the `Xcode` chip when present
+  (and does not show the failing-step reason). It does **not** promise
+  swiftlint, xcbeautify, fastlane, CocoaPods or an Android SDK, or that
+  Homebrew tools are on a session's `PATH`, so a task on an `xcode` host can
+  still fail in a build.
+  Nothing is spawned on any other platform. The checklist is in
+  [Preparing a Mac to build mobile tasks](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks).
 - `android-emulator`: the device panel's emulator support is enabled and
   `DEVICE_EMULATOR_PATH` is set to an executable file. That is exactly what
   the device manager launches, so there is no `PATH` or SDK-root fallback.
 - `null` means unknown (an older agent whose route answers 404, or nothing
   read yet), which is not the same as `[]` (known to have none). A failed
   read keeps the previous reading.
+
+### Session environment
+
+Issue [#3156](https://github.com/s3ntin3l8/mullion-session-manager/issues/3156)
+— why a worker says "build tools not available" is decided on the agent: the
+service PATH plus whatever `resolveUserShellEnv()` recovers from the user's
+interactive shell. `GET /internal/session-env` on the agent (same auth and rate
+limit as its siblings) reports it from the resolver's cached state, never
+re-running the shell, and never with a variable's value:
+
+```json
+{
+  "shell": "/bin/zsh",
+  "interactiveResolve": "fallback",
+  "reason": "timeout",
+  "path": ["/usr/bin", "/bin"],
+  "recoveredKeys": []
+}
+```
+
+`interactiveResolve` is `ok` or `fallback`; the `reason` for a fallback is one of
+`disabled` (`MULLION_RESOLVE_INTERACTIVE_ENV=0`), `unsupported-shell`, `timeout`,
+`spawn-failed`, `unparseable` or `pending` (not resolved yet). `path` is the PATH
+a new session gets. `recoveredKeys` lists the recovered variable names (never
+their values) configured by `SESSION_ENV_RECOVER_KEYS`.
+
+The primary reads it beside the capabilities (same TTL) and `GET /api/hosts`
+returns it as `sessionEnv`. As with capabilities, a 404 (an older agent) means
+unknown (`null`, shown as "not reported"), and any other failure keeps the
+previous reading. Settings → Hosts shows a collapsed "Session environment"
+detail per host, with a warning chip naming the reason on a fallback. A task
+that fails while placed on an agent host also records this reading in its
+failure diagnostics (skipped when unknown).
 
 Enrollment's `capabilities` / `hosts.agentMetadata` is a static snapshot that
 goes stale, so it is intentionally **not** read.
@@ -1630,6 +1722,16 @@ applies: the project's host and `projects.cwd`. The batch routes
 (`git-statuses?sessionIds=`, `git-diff-stats`) and `git-file-diff?sessionId=`
 use the same resolver, so they agree with the single-session routes.
 
+`git-pull` also accepts `?hostId=<id>` when the caller wants a project's
+registered checkout on a particular host without selecting a session. The
+host must be the project's primary host or have a checkout recorded in
+`hostCwds`; otherwise the route returns 400. This option
+cannot be combined with `sessionId`. The selected checkout is pulled locally
+or through that host's agent, as appropriate. With neither query parameter,
+the project's default host and `projects.cwd` are used.
+The Git view, Source Control and project menu offer per-host Pull controls
+for extra checkouts and show the host's result or refusal.
+
 The batch routes ask a remote agent **once per `(host, cwd[, base])`**, not once
 per id: ten sessions on one checkout cost one `git-status` and one `git-diff`
 round trip, and a host that is not `offline` but does not answer is tried once per batch (every id still
@@ -1870,6 +1972,14 @@ error, and the dot recovers on its own once the process comes back up.
 restart flips, so the final phase (`done`/`failed`) is still readable
 immediately after the restart completes.
 
+The primary refuses `POST /api/hosts/:id/update/apply` with `409` if any Task
+Master task in `claimed`, `in_progress`, or `reviewing` is currently running
+on that host (`resolveTaskWorkerHost`), because restarting the agent in the
+middle of a worker's turn interrupts hook delivery and heartbeat tracking.
+Plain interactive sessions do not block the update. Pass `?force=true` (or
+confirm "Update anyway" in Settings → Hosts & SSH bridges) to override the guard
+and restart the agent immediately.
+
 **Bootstrapping:** an agent host running a build older than #647 has no
 `/internal/updates/*` routes at all, so the first update attempt against it
 404s. That one update has to happen by hand (re-run `deploy/install.sh
@@ -2028,6 +2138,15 @@ you pass `MULLION_AGENT_ADVERTISE_URL` / `MULLION_AGENT_HOST` /
 `MULLION_AGENT_PORT`, which are still accepted exactly as before; a rerun never
 rewrites an existing `.env`.
 
+If an agent's configured `HOST` address is not on the machine at startup (a
+laptop away from its home network, a down interface), the listen fails with
+`EADDRNOTAVAIL`. Instead of exiting, and crash-looping under a supervisor, the
+agent logs a warning naming the host and listens on `127.0.0.1:<PORT>`; the
+outbound channel and local sessions keep working, only inbound LAN dialing is
+lost until a restart on a network that has the address. The fallback is
+loopback only, and a primary still exits. `HOST=127.0.0.1` remains the right
+setting for an outbound-only agent.
+
 Everything except the browser WebSocket (`/internal/ws/browser/:id`, which
 still dials the advertised URL) rides the channel, so a host with no URL can do
 terminal attach, live events, the control relay, ssh-agent fan-out, previews and
@@ -2045,6 +2164,62 @@ modal accept an outbound-only host as soon as it has a machine identity, even
 between channel connections. The duplicate-row flag never matches two rows by
 hostname unless both have a `baseUrl`, so two outbound agents with the same
 hostname keep separate rows.
+
+### An agent that works at home and goes dark away from it
+
+**Symptom.** A laptop agent is online on the primary's network and shows
+`unreachable` the moment it leaves it, even though it can still reach the
+primary (for instance over Tailscale). The primary logs a run of
+`connect EHOSTUNREACH <the agent's LAN address>` from the heartbeat, the control
+relay and the git fetcher, and the agent's own `register` calls keep arriving.
+
+**Cause.** The agent has no machine identity (a release before v0.3.59, or a
+manually added host that never registered one), so it never opens the outbound
+channel. The primary has to dial the agent's stored `baseUrl`, which is an
+address only the home network can route.
+
+**How to see it.** Settings → Hosts shows **Outdated agent — upgrade** on the
+row. Wherever the app names a host (the sidebar project header, pane tabs and
+session rows) it shows `outdated agent` beside the name. An agent that already
+reports v0.3.59 or later reads **Not registered — set primary URL**
+(`not registered` as the chip) instead, because upgrading would change nothing
+for it; see Fix. Every surface has a hover with the agent's reported version, but
+only the Settings hover also gives the primary's version. The `GET /api/hosts`
+field is `legacyAgent`: true for a non-local host that has a `baseUrl`, no
+machine identity and no revoked identity. An older row that a newer registration
+replaced is not flagged (it shows as a possible duplicate instead). The server
+logs the "legacy agent registered" notice once per host per process, not on every
+renewal.
+
+**Fix.** Upgrade the agent to v0.3.59 or later and restart it. It then
+registers with a machine identity and dials out to `MULLION_PRIMARY_URL`; the
+flag clears on its own. If the agent already reports v0.3.59 or later and is
+flagged anyway, it has never registered (no `MULLION_PRIMARY_URL`, or its state
+file was lost): set `MULLION_PRIMARY_URL` in its `.env` and restart it — the
+hover text says which case applies. Remove `MULLION_AGENT_ADVERTISE_URL` and leave `HOST`
+on loopback if you want it outbound-only. The primary's `MULLION_PRIMARY_URL`
+must be reachable from wherever the agent roams.
+
+### Clearing a host's address
+
+An agent with a machine identity connects out, so the primary needs no address
+for it; the stored `baseUrl` is only what the in-app browser WebSocket dials. An
+address left over from before the agent moved to the channel (a LAN address on a
+laptop that now roams) therefore only produces `EHOSTUNREACH` from that one path.
+
+Edit the host (Settings → Hosts → ⋯ → Edit) and empty **Base URL** to clear it,
+or `PATCH /api/hosts/:id` with `{ "baseUrl": null }`. The row then reads "outbound
+only — waiting for the agent to connect" until the channel reports online (the
+clear drops the old health verdict), and "connected over the outbound channel"
+after that. An empty string is still rejected, and the clear is refused (400) for
+a host without a live machine identity (none, revoked, expired, or with no recorded expiry): without one
+the address is the only way anything reaches it.
+
+Clearing only sticks while the agent stops advertising an address. A registration
+or renewal that carries one overwrites the stored value, so also unset
+`MULLION_AGENT_ADVERTISE_URL` in the agent's `.env` and bind `HOST` to loopback.
+A renewal that advertises none leaves a `manual` row's address as the operator set
+it (including none) and clears an `enrolled` row's.
 
 ### Mixed fleets: which transport a host uses
 
@@ -2066,8 +2241,8 @@ What rides the channel for a host bound to it (#2620):
 | Operation                                                                   | Over the channel                                                                                                                                                    |
 | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | File-browser upload / download (`uploadProjectFile`, `downloadProjectFile`) | `channel-requests`. Streamed: the body moves under the mux send window and the idle (not total) timeout, and a download is read at the consumer's pace.             |
-| HTTP preview forward (`openPreviewHttp`, `openConfiguredPreviewHttp`)       | `channel-requests`. The browser's headers are replayed to the dev server; its `authorization`, signature and every `x-mullion-*` header are dropped on both ends.   |
-| Preview WebSockets (`openPreviewWs`, `openConfiguredPreviewWs`)             | `channel-streams`, as the `preview` and `configured-preview` stream kinds.                                                                                          |
+| HTTP preview forward (`previews.http`, `previews.configuredHttp`)           | `channel-requests`. The browser's headers are replayed to the dev server; its `authorization`, signature and every `x-mullion-*` header are dropped on both ends.   |
+| Preview WebSockets (`previews.ws`, `previews.configuredWs`)                 | `channel-streams`, as the `preview` and `configured-preview` stream kinds.                                                                                          |
 | Health ping                                                                 | The channel's state plus one small round trip (`GET /internal/protocol`) over it; `/health` is not probed. A bound host whose channel is down reads as unreachable. |
 | Browser WebSocket                                                           | Still the advertised URL (a follow-up).                                                                                                                             |
 

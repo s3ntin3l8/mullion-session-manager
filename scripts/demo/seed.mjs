@@ -628,6 +628,10 @@ export async function seedDemo({
           agent: "claude",
           claimedAt: ago(110),
           startedAt: ago(105),
+          // One continuation typed since the claim: the board card's
+          // "Nudged the worker to continue (1/2)" note (#3179, kanban scene).
+          nudgeCount: 1,
+          lastNudgedAt: ago(4),
         },
         {
           title: "Cache the session lookup",
@@ -697,6 +701,11 @@ export async function seedDemo({
           agent: "claude",
           claimedAt: ago(80),
           startedAt: ago(75),
+          // A held workflow push, for the tasks-workflow-approval scene.
+          workflowChange: JSON.stringify({
+            sha: "0123456789abcdef0123456789abcdef01234567", // pragma: allowlist secret
+            files: [".github/workflows/ci-cd.yml"],
+          }),
         },
       ],
     }),

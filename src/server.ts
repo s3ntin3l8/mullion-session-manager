@@ -1,9 +1,17 @@
+// Very first: renames the process so `pkill -f "dist/server.js"` from another
+// project cannot match (and SIGTERM) Mullion. See src/process-title.ts.
+import "./process-title.js";
 // First on purpose: patches child_process before any module-scope
 // `promisify(execFile)` elsewhere in the graph captures the original.
 import "./services/windows-hide-install.js";
 import { buildApp } from "./app.js";
+import { listenWithAgentFallback } from "./listen.js";
 import { getCachedAgents } from "./services/agent-detect.js";
-import { setUserShellEnvLogger } from "./services/user-shell-env.js";
+import {
+  parseRecoverKeys,
+  setUserShellEnvLogger,
+  setUserShellRecoverKeys,
+} from "./services/user-shell-env.js";
 
 async function start() {
   const app = await buildApp();
@@ -22,13 +30,12 @@ async function start() {
     });
   }
 
+  setUserShellRecoverKeys(parseRecoverKeys(app.config.SESSION_ENV_RECOVER_KEYS));
+  setUserShellEnvLogger(app.log);
+
   try {
-    const address = await app.listen({
-      port: app.config.PORT,
-      host: app.config.HOST,
-    });
+    const address = await listenWithAgentFallback(app);
     app.log.info(`Server listening at ${address}`);
-    setUserShellEnvLogger(app.log);
     // Warm the launcher/agent probe cache (login-shell `command -v` per
     // binary) so the first palette open doesn't pay for it. Fire-and-forget:
     // it must never delay or fail boot.

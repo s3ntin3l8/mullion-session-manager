@@ -167,4 +167,48 @@ describe("MullionClient dock methods", () => {
       "no dock control 'missing' for project 3",
     );
   });
+
+  it("dockLogs / waitForDockOutput / switchDockControl use docks.logs / wait_for_output / switch", async () => {
+    const ops: unknown[] = [];
+    const socketPath = await startControlServer((msg, socket) => {
+      ops.push([msg.op, msg.body]);
+      socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: {} })}\n`);
+    });
+    const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+    await client.dockLogs(undefined, "dev");
+    await client.waitForDockOutput({
+      projectId: undefined,
+      dockControlId: "dev",
+      match: "ready",
+      regex: true,
+      timeoutMs: 1000,
+      afterOffset: 3,
+    });
+    await client.switchDockControl("2", "dev", { branch: "feat/x" });
+    expect(ops).toEqual([
+      ["docks.logs", { dockControlId: "dev" }],
+      [
+        "docks.wait_for_output",
+        { dockControlId: "dev", match: "ready", regex: true, timeoutMs: 1000, afterOffset: 3 },
+      ],
+      ["docks.switch", { projectId: "2", dockControlId: "dev", branch: "feat/x" }],
+    ]);
+  });
+
+  it("getDockConfig / setDockConfig use projects.get_dock_config / set_dock_config", async () => {
+    const ops: unknown[] = [];
+    const socketPath = await startControlServer((msg, socket) => {
+      ops.push([msg.op, msg.body]);
+      socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: {} })}\n`);
+    });
+    const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+    await client.getDockConfig();
+    await client.setDockConfig("2", { upsert: { id: "a" } });
+    await client.setDockConfig(undefined, { remove: "a" });
+    expect(ops).toEqual([
+      ["projects.get_dock_config", {}],
+      ["projects.set_dock_config", { projectId: "2", upsert: { id: "a" } }],
+      ["projects.set_dock_config", { remove: "a" }],
+    ]);
+  });
 });

@@ -1,14 +1,15 @@
+import { checkWorkerStarted, clearStoppedWorkerWarnings } from "./task-worker-start.js";
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { reviewRoundLabel } from "./task-round-label.js";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
-import type { SessionStatus } from "../shared/types.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import { holdForUnpushedHead, setBounded } from "./task-unpushed-hold.js";
 import {
   healUntrackedLocalSession,
   TASK_REVIEW_STATUS,
@@ -24,6 +25,7 @@ import {
   type SessionBackend,
 } from "./session-backend.js";
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
+import { isShellTailHandoff, turnFinishedSinceClaim } from "./task-turn-signals.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 // #2416 — the three-state "did the worker commit past the base" verdict.
@@ -32,12 +34,18 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveCommitsPastBase } from "./commits-past-base.js";
 // #2416 — one throttle policy for the reconciler's "this state is stuck"
 // warnings, instead of a copy per lookup.
-import { failReviewingGate, removeFailedTaskWorktree } from "./task-gate-failure.js";
+import { killDiags, gateFailOrNudge, removeFailedTaskWorktree } from "./task-gate-failure.js";
 import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
 // module's header.
-import { readPrCheckRuns, type PrCheckRuns } from "./pr-check-runs.js";
+import { readPrCheckRuns } from "./pr-check-runs.js";
+import {
+  clearConflictHold,
+  fetchCurrentCiStatus,
+  holdConflictingReview,
+  resolveReviewCi,
+} from "./task-review-gate.js";
 import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
 // One bounded, exponential-backoff retry ledger behind every retry site in
 // this file (draft PR, merge, release, auto-approve) — see the module's
@@ -51,7 +59,8 @@ import {
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
   dispatchTaskReview,
-  extractFindingsJson,
+  parseTerminalReply,
+  cutShortNote,
   isUnsentRunId,
   pollTaskReview,
   stopHermesRunQuietly,
@@ -86,6 +95,7 @@ import { pruneLateFindingsCaches } from "./task-late-findings-cache.js";
 import {
   ingestLateFindings,
   reannounceInconclusiveReviewsAfterGrace,
+  staleReviewFlagPatch,
 } from "./task-late-findings.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
@@ -95,6 +105,7 @@ import {
   buildCiFailurePrompt,
   buildPrReviewCommentsPrompt,
   taskCommitTitlePath,
+  taskCiUnfixablePath,
   taskRereviewRequestPath,
   isApprovingVerdict,
   parseReviewFindings,
@@ -102,9 +113,14 @@ import {
   parseCommitTitle,
   renderReviewFindingsMarkdown,
   resolvePrTitle,
-  type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
+import { resolveWorkerDelegation } from "./task-delegation.js";
+import {
+  openRefsOfRenderedRound,
+  hasCurrentApproval,
+  rereviewRequestKey,
+} from "./task-review-signals.js";
 import { priorRoundFor } from "./task-prior-round.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
@@ -151,8 +167,6 @@ import {
   updatePullRequestTitle,
 } from "./github-write.js";
 import {
-  computeCiStatus,
-  fetchRunsForHeadChecked,
   isRedCheckConclusion,
   actionsRunIdFromCheckUrl,
   getPRsStatus,
@@ -162,6 +176,7 @@ import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.
 import { flagClosedUnmergedDoneTask } from "./task-pr-closed.js";
 import { repollUnmergedDoneTasks } from "./task-merge-repoll.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
+import { unstableHeldReason } from "./task-merge-override.js";
 import { resolveReleaseMerge } from "./release-merge.js";
 import {
   isRateLimitGraceActive,
@@ -176,17 +191,6 @@ import type { ReleaseMergeResult } from "../shared/types.js";
 export { REBASE_ATTEMPT_STALE_MS };
 
 export type ReviewStallReason = "no-progress" | "finding-persisted";
-
-/** `- **ref** — still-open: …` lines of a rendered "### Earlier findings"
- * section, as `renderReviewFindingsMarkdown` writes them. */
-function openRefsOfRenderedRound(block: string | undefined): Set<string> {
-  const refs = new Set<string>();
-  if (!block) return refs;
-  for (const m of block.matchAll(/^- \*\*(.+?)\*\* — (?:still-open|re-broken)/gm)) {
-    refs.add(m[1]);
-  }
-  return refs;
-}
 
 /**
  * Is a review loop with no human watching it going nowhere? Two signals, both
@@ -250,15 +254,6 @@ async function detectReviewStall(
   return null;
 }
 
-/** Does the task's approval still stand for the head under review? True when
- * an approving verdict was ingested for the CURRENT review session — the same
- * pair of facts the auto-approve gate reads — so a later head-moving return
- * (a CI fix, a reviewer's inline suggestions) can carry it instead of
- * re-reviewing. */
-function hasCurrentApproval(task: typeof tasks.$inferSelect): boolean {
-  return isApprovingVerdict(task.lastReviewVerdict) && hasIngestedCurrentReview(task);
-}
-
 /**
  * Review agent decision (this phase's binding design) — when a project or
  * the task's own issue configures one, entering "reviewing" spawns it IN
@@ -293,182 +288,6 @@ function hasCurrentApproval(task: typeof tasks.$inferSelect): boolean {
  */
 // Actually spawning — `spawnReviewAgentNow` and `clearReviewSpawnClaim` —
 // live in task-review-spawn.ts.
-
-/**
- * Shared primitive behind both `resolveReviewCi` below (which layers a
- * wait-then-give-up deadline on top, for gating a review-agent spawn) and
- * the auto-approve gate's own CI check (`processAutoApprovals`, which never
- * gives up — see that function's own doc comment on why). Reads the task's
- * PR and its Actions runs for the current head commit; returns `null` for
- * every "nothing to check yet" case (no PR, no resolvable repo/token) with
- * no logging, since that's an ordinary, expected state for plenty of tasks,
- * not a failure. Can still throw on a real lookup failure (a thrown
- * `getPullRequestByNumber` call) — callers decide their own retry/deadline
- * posture around that. The Actions-runs lookup itself never throws: a failed
- * one comes back as `runsAnswered: false` with `status: null`, which reads the
- * same as "no Actions runs" unless the caller checks the flag.
- */
-async function fetchCurrentCiStatus(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  project: typeof projects.$inferSelect,
-): Promise<{
-  headSha: string;
-  status: ReturnType<typeof computeCiStatus>;
-  runs: ReviewCiInfo["runs"];
-  // #755 — the PR's own repo/base branch, for the red-CI-return gate.
-  // Returned here (rather than re-resolved by that gate) since this function already has both in scope from the
-  // `getPullRequestByNumber` call below — one fewer redundant GitHub call.
-  repoRef: GitHubRepoRef;
-  baseRef: string;
-  mergeable: boolean | null;
-  mergeableState: string;
-  // Set by the red-CI return once it has read this head's check runs, so the
-  // approval gate does not read the same list again this tick.
-  checkRuns?: PrCheckRuns;
-  // False when the Actions-runs lookup itself failed (a non-2xx or a network
-  // error): `status` is then `null`, which reads the same as "no Actions runs".
-  // Only the red-CI gate's `unstable` arm needs to tell the two apart.
-  runsAnswered: boolean;
-  // #2103 — the PR's own lifecycle state, already in the payload: a closed or
-  // merged PR is the end of a reviewing task, not something to keep polling.
-  prState: "open" | "closed";
-  merged: boolean;
-  mergedAt: string | null;
-} | null> {
-  if (task.prNumber === null) return null;
-  const repoRef = await resolveRepoRef(app, project);
-  if (!repoRef) return null;
-  // "read" scope (#489's least-privilege split) — this only ever reads the
-  // PR and its Actions runs, never writes.
-  const token = await resolveGitHubToken(app, repoRef, "read");
-  if (!token) return null;
-  const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-  const { ok: runsAnswered, runs } = await fetchRunsForHeadChecked(
-    token,
-    repoRef.owner,
-    repoRef.repo,
-    pr.headSha,
-  );
-  const status = computeCiStatus(runs);
-  const runSummaries = runs.map((r) => ({
-    name: r.name,
-    conclusion: r.conclusion,
-    htmlUrl: r.htmlUrl,
-  }));
-  return {
-    headSha: pr.headSha,
-    status,
-    runs: runSummaries,
-    repoRef,
-    baseRef: pr.baseRef,
-    mergeable: pr.mergeable,
-    mergeableState: pr.mergeableState,
-    runsAnswered,
-    prState: pr.state,
-    merged: pr.merged,
-    mergedAt: pr.mergedAt,
-  };
-}
-
-/**
- * Resolves the CI signal for a task's PR head commit, or reports that the
- * caller should wait and re-check next tick. Never throws — a resolution
- * failure (no repo, no token, the PR/runs lookup itself throwing) waits up
- * to the same deadline as `in_progress`/`null` below, then degrades to
- * `undefined` (spawn with no CI context at all, the pre-#738-followup
- * behavior) past it, rather than blocking the spawn forever. The reviewer
- * must never be the thing a task gets stuck on.
- *
- * `undefined` also covers the case with nothing to check in the first
- * place: an issue-only task, or one whose draft PR hasn't opened yet.
- *
- * `null` (Hermes review, #742) waits too, same as `"in_progress"` — not
- * "proceed." `openDraftPRForTask` and this pass's own call both run inside
- * the SAME reconcile tick as the `→ reviewing` transition (`maybeOpenDraftPR`
- * above, then `processPendingReviewSpawns` at the very end of
- * `reconcileTasks`), so the very first lookup here almost always lands
- * within a second or two of the push that created the head commit —
- * GitHub's Actions runs for a just-pushed commit routinely aren't registered
- * yet, so the runs lookup answers `[]` and `computeCiStatus` returns
- * `null` indistinguishably from "this repo genuinely has no CI" (a lookup that
- * did not answer at all also gives `null`, but carries `runsAnswered: false`,
- * which only changes the wording of the note below). Treating
- * `null` as "proceed" on that very first check reproduces the #213782
- * incident this whole change exists to fix: the reviewer spawns before a
- * real check has even registered, let alone failed. Waiting on `null` the
- * same as `in_progress` costs nothing for a no-CI repo — it just spawns at
- * the deadline instead of instantly — and is what actually closes the gap
- * for the common case of a CI-having repo whose runs simply haven't shown
- * up yet.
- */
-async function resolveReviewCi(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  project: typeof projects.$inferSelect,
-  waitMinutes: number,
-  now: number,
-): Promise<"wait" | ReviewCiInfo | undefined> {
-  if (task.prNumber === null) return undefined;
-
-  try {
-    const current = await fetchCurrentCiStatus(app, task, project);
-    if (!current) return undefined;
-    const { headSha, status, runs: runSummaries, runsAnswered } = current;
-
-    if (status !== "in_progress" && status !== null) {
-      return { headSha, status, runs: runSummaries };
-    }
-
-    // `waitMinutes === 0` disables waiting entirely — `now - reviewingAt`
-    // is always `>= 0`, so this deadline is already "past" on the very
-    // first check, same effect as never having entered this branch at all.
-    // `reviewingAt` is set in the very same DB write that put this task in
-    // "reviewing" (both `→ reviewing` transition sites), so it's never
-    // actually null here — the `?? now` is defensive, not load-bearing.
-    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
-    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
-    if (!pastDeadline) return "wait";
-    return {
-      headSha,
-      status,
-      runs: runSummaries,
-      // `status: null` is "no runs" only when GitHub actually answered; a failed
-      // lookup must not tell the reviewer there is no CI (`runsAnswered`).
-      note:
-        status === null
-          ? runsAnswered
-            ? `no CI checks found after the ${waitMinutes}-minute wait`
-            : `CI status could not be read after the ${waitMinutes}-minute wait (the Actions lookup failed)`
-          : `still running after the ${waitMinutes}-minute wait`,
-    };
-  } catch (err) {
-    // Same reasoning as the `null`-status branch above (Hermes review, PR
-    // #742, second pass) — a thrown lookup (a transient network blip, or
-    // GitHub not yet consistent on the brand-new PR) in the exact
-    // just-pushed window is indistinguishable from "will succeed on the
-    // next tick," and spawning without CI on the very first failure would
-    // reintroduce the same #213782 gap this whole change exists to close.
-    // Wait up to the same deadline; past it (a persistently broken
-    // repo/token, not a blip), fall through to "spawn without CI" exactly
-    // as before — this lookup must never be the reason a task wedges in
-    // "reviewing" forever.
-    const reviewingAtMs = task.reviewingAt?.getTime() ?? now;
-    const pastDeadline = now - reviewingAtMs >= waitMinutes * 60_000;
-    if (!pastDeadline) {
-      app.log.warn(
-        { err, taskId: task.id, prNumber: task.prNumber },
-        "task reconcile: CI lookup for review spawn failed — waiting to retry",
-      );
-      return "wait";
-    }
-    app.log.warn(
-      { err, taskId: task.id, prNumber: task.prNumber },
-      "task reconcile: CI lookup for review spawn still failing past the wait deadline — spawning without it",
-    );
-    return undefined;
-  }
-}
 
 /**
  * Spawns the review agent for every "reviewing" task that doesn't have one
@@ -639,6 +458,18 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           now,
         );
         if (ci === "wait") continue;
+        if (ci !== undefined && "conflict" in ci) {
+          await holdConflictingReview(
+            app,
+            task,
+            project,
+            ci.conflict.baseRef,
+            resolvedTaskMaster,
+            autoReturnTask,
+          );
+          continue;
+        }
+        clearConflictHold(app, task);
 
         // Claim the slot immediately before the spawn's own I/O (the CI
         // lookup above is read-only — nothing to protect there) — CAS
@@ -706,11 +537,7 @@ const hermesDispatchFailures = new Map<number, number>();
 
 function bumpBounded<K>(map: Map<K, number>, key: K): number {
   const next = (map.get(key) ?? 0) + 1;
-  if (!map.has(key) && map.size >= HERMES_STATE_MAX_ENTRIES) {
-    const oldest = map.keys().next();
-    if (!oldest.done) map.delete(oldest.value);
-  }
-  map.set(key, next);
+  setBounded(map, key, next, HERMES_STATE_MAX_ENTRIES);
   return next;
 }
 
@@ -787,6 +614,18 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
         now,
       );
       if (ci === "wait") return;
+      if (ci !== undefined && "conflict" in ci) {
+        await holdConflictingReview(
+          app,
+          task,
+          project,
+          ci.conflict.baseRef,
+          resolvedTaskMaster,
+          autoReturnTask,
+        );
+        return;
+      }
+      clearConflictHold(app, task);
 
       // Same claim slot and stale rule as the session spawn.
       const claimed = app.db
@@ -826,6 +665,19 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
               await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber!)
             ).headSha;
           })());
+        // The run reviews a clone of the PR's head, so commits that never
+        // reached it (a workflow-approval hold, a failed push) would be
+        // reviewed as the old head and the round reported as "no progress".
+        // Hold, retrying the push, until the PR carries the worktree's head.
+        if (
+          await holdForUnpushedHead(app, task, headSha, now, {
+            backoff: draftPrRetryBackoff,
+            push: () => maybeOpenDraftPR(app, task, project),
+          })
+        ) {
+          releaseClaim();
+          return;
+        }
         const priorRound = priorRoundFor(task, headSha);
         const roundsRemaining = Math.max(
           0,
@@ -864,6 +716,7 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
             baseSha: priorRound?.reviewedSha ?? undefined,
           },
           prompt,
+          previousFindings: task.reviewFindings,
         });
         const attached = app.db
           .update(tasks)
@@ -1013,20 +866,9 @@ async function processHermesRuns(app: FastifyInstance): Promise<void> {
           return;
         }
 
-        let parsed: ReturnType<typeof parseReviewFindings> | null = null;
-        let reason = `The Hermes review ${poll.status}${poll.error ? `: ${poll.error}` : ""}`;
-        if (poll.status === "completed") {
-          const json = extractFindingsJson(poll.output ?? "");
-          if (json !== null) {
-            const candidate = parseReviewFindings(json, {
-              ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
-            });
-            // An unstructured reply parses as a freeform changes-requested;
-            // from an external reviewer that is noise, not a verdict.
-            if (candidate.structured) parsed = candidate;
-          }
-          if (parsed === null) reason = "The Hermes reply was not the findings JSON";
-        }
+        const { parsed, reason } = parseTerminalReply(poll, {
+          ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
+        });
         await ingestReviewOutcome(app, {
           ...row,
           parsed,
@@ -1056,91 +898,6 @@ async function processHermesRuns(app: FastifyInstance): Promise<void> {
       }
     }),
   );
-}
-
-// #722's investigation, RC5 — session-status.ts's `derived.status ===
-// "finished"` is a LATCH on `lastTurnEndedAt`, not an edge: once set, it
-// stays true until the NEXT turn starts (hook-handlers.ts's `turn_start`) or
-// a genuine keystroke clears it (pty-manager.ts's `isGenuineUserInput`).
-// Reject (`reviewing -> in_progress`, routes/tasks.ts) deliberately leaves a
-// still-active session's latch untouched so a human can type feedback into
-// it themselves (task-reseed.ts's own `force: false` doc comment) — but
-// that means the very next reconcile tick re-derives "finished" from that
-// SAME stale latch and flips the task straight back to "reviewing" before
-// the human ever gets a chance to type, pushing again and spawning a second
-// review agent that clobbers `reviewSessionId`.
-//
-// Fixed by requiring the finish signal to postdate this specific
-// claimed/in_progress spell, anchored on `claimedAt`: it's already reset to
-// `now` on every fresh entry into that pool — a new claim, Retry, Reject
-// (routes/tasks.ts's own reject handler, already documented there as the
-// budget-deadline anchor), AND autoReturnTask (issue #1357 — the shared
-// auto-return mechanism behind changes-requested review feedback, #755's
-// CI-red return, and the PR-comment return) — so one comparison covers all
-// four without a new column. A small tolerance guards against clock skew
-// between this process and a remote-hosted project's own host (#484) — both
-// are NTP-synced in practice, but a bare `>` would let a few hundred ms of
-// skew wrongly stick a task in "in_progress" forever.
-const CLOCK_SKEW_TOLERANCE_MS = 5_000;
-
-function turnFinishedSinceClaim(
-  info: SessionInfo | null,
-  task: { claimedAt: Date | null },
-): boolean {
-  if (info === null || info.workFinishedAt === null || task.claimedAt === null) return false;
-  // Issue #1735 — `workFinishedAt`, not `lastTurnEndedAt`. The latter says a
-  // turn ENDED (which a machine-woken turn does too, and which drives the
-  // session's derived `finished` status, `agentTurnInFlight` and the
-  // "Finished" ping). The former says the agent's WORK is done — which is
-  // the only thing this gate is about.
-  //
-  // Without that distinction a session that loops internally tripped this
-  // gate MID-LOOP: the task advanced to `reviewing` while the worker was
-  // still working, and the review agent judged an incomplete diff in the
-  // same worktree the worker was still writing to.
-  return info.workFinishedAt >= task.claimedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
-}
-
-// How long a worker's finished turn may sit behind a still-"running"
-// background SHELL job before the reconciler stops waiting on it. Such a job
-// (a `until ...; do sleep 5; done` wait loop the worker started for its own
-// gate run and never stopped — task 441117, issue #1380) holds the session
-// at `derived.status === "background"` forever: nothing re-stamps
-// `backgroundTasksAt` after the final turn, and the stale-latch sweep (busy
-// TTL, default 2h, PLUS a PTY-silence requirement any later redraw breaks)
-// can't beat the claim-anchored budget. Only shell tasks are excused —
-// outstanding agent/MCP work still blocks the handoff (issue #428).
-const SHELL_TAIL_GRACE_MS = 5 * 60_000;
-const SHELL_TAIL_STATUSES: ReadonlySet<SessionStatus> = new Set([
-  "background",
-  "tool_failure",
-  "needs_input",
-]);
-
-/**
- * True when the worker's turn ended since this claim and the ONLY thing
- * keeping the session from deriving `finished` is background `shell` tasks
- * that have outlived `SHELL_TAIL_GRACE_MS` past that turn end. The derived
- * status must be one a stuck shell tail can present as: `background` itself,
- * or a higher-precedence status that merely masks it (`tool_failure` after a
- * failed last gate run, byte-heuristic `needs_input` once the PTY goes
- * quiet). Every other status (awaiting_*, api_error, compacting, subagent,
- * exited, ...) is a real, separate reason not to hand off. The
- * commits-past-base check stays with the existing `checkReviewingGate`.
- */
-function isShellTailHandoff(
-  derivedStatus: SessionStatus,
-  info: SessionInfo | null,
-  task: { claimedAt: Date | null },
-  now: number,
-): boolean {
-  if (!SHELL_TAIL_STATUSES.has(derivedStatus)) return false;
-  if (info === null || !turnFinishedSinceClaim(info, task)) return false;
-  if (info.lastTurnEndedAt === null || now - info.lastTurnEndedAt < SHELL_TAIL_GRACE_MS) {
-    return false;
-  }
-  const outstanding = info.outstandingBackgroundTasks;
-  return outstanding.length > 0 && outstanding.every((t) => t.type === "shell");
 }
 
 /**
@@ -1278,7 +1035,7 @@ async function maybeOpenDraftPR(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
-): Promise<void> {
+): Promise<string | null> {
   const result = await openDraftPRForTask(app, task, project, resolveTaskWorkerHost(app, task));
   if (!result.ok && result.reason === "push-forbidden") {
     // Permanent until the operator fixes the App installation: say so at warn
@@ -1289,7 +1046,7 @@ async function maybeOpenDraftPR(
     );
     permanentFailureTaskIds.add(task.id);
     setDraftPrRetryState(task.id, PERMANENT_FAILURE_ATTEMPTS, Date.now());
-    return;
+    return result.reason;
   }
   if (!result.ok) {
     // dirty-tree/no-worktree/remote-not-supported are ordinary, expected
@@ -1302,7 +1059,7 @@ async function maybeOpenDraftPR(
       { taskId: task.id, reason: result.reason, detail: result.detail },
       "task reconcile: draft PR not opened",
     );
-    return;
+    return result.reason;
   }
   // CAS'd on `status = "reviewing"` (independent review, PR #725) — the
   // retry sweep below awaits a real network call (openDraftPRForTask) per
@@ -1322,9 +1079,10 @@ async function maybeOpenDraftPR(
       { taskId: task.id, prUrl: result.prUrl },
       "task reconcile: draft PR opened but the task left 'reviewing' before this could record it — leaving the PR as-is for a human to notice",
     );
-    return;
+    return null;
   }
   app.log.info({ taskId: task.id, prUrl: result.prUrl }, "task reconcile: draft PR opened");
+  return null;
 }
 
 // Stranded draft-PR retry sweep (#722's investigation, task 213765) — a
@@ -1690,7 +1448,7 @@ async function attemptMerge(
 
   try {
     const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-    const readiness = classifyMergeReadiness(pr);
+    const readiness = classifyMergeReadiness(pr, task.mergeOverrideHeadSha);
 
     // A finished auto-rebase attempt is judged while the PR reads settled and
     // not conflicting: on a later tick main may already have outrun it, and a
@@ -1803,12 +1561,7 @@ async function attemptMerge(
         // sends a human hunting, while "codecov/patch: 66.66% of diff hit
         // (target 75.00%)" says what to fix — or what "Merge now" overrides.
         const redUnstable = unstableCheckRuns.filter((c) => isRedCheckConclusion(c.conclusion));
-        const heldReason =
-          redUnstable.length > 0
-            ? `Held: a non-required check is red — ${redUnstable
-                .map((c) => (c.detail ? `${c.name}: ${c.detail}` : c.name))
-                .join("; ")}. Fix it, or use "Merge now" to override.`
-            : "A non-required check is failing or still running";
+        const heldReason = unstableHeldReason(redUnstable);
         // #2904 — a non-Actions status (codecov's `codecov/patch`) that stays
         // `pending` on a green head holds the PR forever, and the red-check
         // path cannot see it (it is pending, not red, and has no workflow run
@@ -2446,6 +2199,12 @@ export function resetAutoApproveBackoff(taskId: number): void {
   autoApproveRetryBackoff.reset(taskId);
 }
 
+/** Lets the next sweep retry a task's push at once (an operator just approved
+ * the workflow change that was holding it). */
+export function resetDraftPrRetryBackoff(taskId: number): void {
+  draftPrRetryBackoff.clear(taskId);
+}
+
 /**
  * #755 — a red check (required or not) on a task's PR sends it back to the worker
  * for one automatic round, same mechanism as a "changes-requested" review
@@ -2662,7 +2421,12 @@ async function attemptReturnRedCiToWorker(
       app,
       task,
       project,
-      { headSha: current.headSha, repoRef: current.repoRef, failedRunIds },
+      {
+        headSha: current.headSha,
+        repoRef: current.repoRef,
+        failedRunIds,
+        mergeableState: current.mergeableState,
+      },
       redChecks,
     );
   }
@@ -2709,19 +2473,15 @@ async function attemptReturnRedCiToWorker(
   // holds its worktree, so its sessions dir is resolved there.
   const workerHostId = resolveTaskWorkerHost(app, task);
   const carryApproval = hasCurrentApproval(task);
-  // Only resolved when something below uses it: a remote-hosted task pays a
-  // round trip for the lookup.
-  const sessionsDir =
-    project.conventionalCommitTitles || carryApproval
-      ? await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
-          taskId: task.id,
-          hostId: workerHostId,
-        })
-      : null;
-  const commitTitlePath =
-    project.conventionalCommitTitles && sessionsDir !== null
-      ? taskCommitTitlePath(sessionsDir, task.id)
-      : undefined;
+  // Always resolved: the unfixable-declaration path below needs it on every
+  // CI return, not only when a commit title or a carried approval does.
+  const sessionsDir = await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
+    taskId: task.id,
+    hostId: workerHostId,
+  });
+  const commitTitlePath = project.conventionalCommitTitles
+    ? taskCommitTitlePath(sessionsDir, task.id)
+    : undefined;
   // #939/#1016 — resolved once per spawn, fail-open — see
   // task-issue-context.ts's own doc comment.
   const issueContext = await resolveTaskIssueContextSafe(app, task, project);
@@ -2738,9 +2498,11 @@ async function attemptReturnRedCiToWorker(
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
     failingChecks: redChecks.map((c) => ({ name: c.name, detail: c.detail, url: c.url })),
     commitTitlePath,
+    ciUnfixablePath: taskCiUnfixablePath(sessionsDir, task.id, current.headSha),
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     rereviewRequestPath:
-      carryApproval && sessionsDir !== null && task.lastReviewVerdictAt
+      carryApproval && task.lastReviewVerdictAt
         ? taskRereviewRequestPath(
             sessionsDir,
             task.id,
@@ -3067,6 +2829,7 @@ async function attemptReturnPrCommentsToWorker(
         budgetMinutes: resolvedTaskMaster.budgetMinutes,
         commitTitlePath,
         agentCommand: task.agentCommand,
+        delegation: resolveWorkerDelegation(app, task.agentCommand, task),
         suggestions: newComments
           .map(
             (c) =>
@@ -3101,6 +2864,7 @@ async function attemptReturnPrCommentsToWorker(
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     commitTitlePath,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     comments: newComments.map((c): PrReviewCommentInfo => ({
       author: c.author,
       path: c.path,
@@ -3624,7 +3388,7 @@ const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
 // across a growing list of triggers (review feedback here; a red
 // CI check and an unresolved PR review comment are later triggers on the
 // same model — see the roadmap plan).
-export type AutoReturnReason = "review" | "ci" | "pr-comment" | "suggestions";
+export type AutoReturnReason = "review" | "ci" | "pr-comment" | "suggestions" | "conflict";
 
 // `via` naming for recordTaskTransition — kept distinct from
 // AutoReturnReason itself (rather than reusing the reason string directly)
@@ -3635,15 +3399,8 @@ const AUTO_RETURN_VIA: Record<AutoReturnReason, string> = {
   ci: "ci-feedback",
   "pr-comment": "pr-comment-feedback",
   suggestions: "suggestions-feedback",
+  conflict: "conflict-feedback",
 };
-
-/** Epoch seconds of an ingested verdict — the key `taskRereviewRequestPath`
- * hangs a suggestions-round worker's "review this" request on. Seconds, not
- * ms, because `lastReviewVerdictAt` round-trips through a `timestamp` column
- * that stores whole seconds; the writer and the reader must agree. */
-function rereviewRequestKey(verdictAt: Date): number {
-  return Math.floor(verdictAt.getTime() / 1000);
-}
 
 // The round cap lives in its own module: the review spawner needs it too, and
 // it used to import THIS module for the sake of one helper — an import cycle
@@ -3767,14 +3524,19 @@ export async function autoReturnTask(
   // a task that has used every round it had. It also marks the approval as
   // carried, so the worker's return skips the review (see the
   // `in_progress -> reviewing` transition).
-  const spendsRound = opts.reason !== "suggestions";
+  // A "conflict" return (a PR that cannot merge, handed back before its review
+  // was dispatched) spends nothing either: no review ran, so no fix-up round
+  // was used. Unlike a suggestions round it carries no approval — the head the
+  // worker pushes has never been reviewed.
+  const spendsRound = opts.reason !== "suggestions" && opts.reason !== "conflict";
   const roundAfter = task.autoReturnRounds + (spendsRound ? 1 : 0);
   const updated = app.db
     .update(tasks)
     .set({
       status: "in_progress",
       autoReturnRounds: roundAfter,
-      approvalCarriedAt: (opts.carryApproval ?? false) || !spendsRound ? new Date() : null,
+      approvalCarriedAt:
+        (opts.carryApproval ?? false) || opts.reason === "suggestions" ? new Date() : null,
       lastAutoReturnReason: opts.reason,
       // Issue #1038 — every caller of autoReturnTask already gated on
       // !capReached, so this is null already in every designed path; clear
@@ -4272,7 +4034,7 @@ async function ingestReviewOutcome(
   const roundLabel = reviewRoundLabel(task, input.supersedeInconclusive, task.reviewFindings);
 
   const commentBody = parsed
-    ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
+    ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}${cutShortNote(finished, latch)}`
     : `${roundLabel}\n\n${noFindingsReason} — treat this review as inconclusive.`;
 
   const appendedFindings = task.reviewFindings
@@ -4452,7 +4214,7 @@ async function ingestReviewOutcome(
           body: commentBody + cappedNote,
           ...(parsed
             ? {
-                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
+                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cutShortNote(finished, latch)}${cappedNote}`,
                 findings: parsed.findings,
               }
             : {}),
@@ -4480,9 +4242,7 @@ async function ingestReviewOutcome(
       lastReviewVerdictAt: new Date(now),
       ...(announcingCap
         ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason }
-        : task.needsHumanReason === "review-post-failed"
-          ? { needsHumanReason: null }
-          : {}),
+        : staleReviewFlagPatch(task)),
       ...(reviewedHeadSha !== undefined ? { lastReviewedHeadSha: reviewedHeadSha } : {}),
     })
     .where(
@@ -4559,6 +4319,7 @@ async function ingestReviewOutcome(
       worktreePath: task.worktreePath!,
       budgetMinutes: resolvedTaskMaster.budgetMinutes,
       agentCommand: task.agentCommand,
+      delegation: resolveWorkerDelegation(app, task.agentCommand, task),
       suggestions: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
       rereviewRequestPath: taskRereviewRequestPath(
         sessionsDir,
@@ -4592,6 +4353,7 @@ async function ingestReviewOutcome(
     worktreePath: task.worktreePath!,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     agentCommand: task.agentCommand,
+    delegation: resolveWorkerDelegation(app, task.agentCommand, task),
     // Rendered, not the raw findings-file content — `shouldAutoReturn`
     // guarantees `parsed !== null` here, but `parsed` may be JSON; the
     // worker should read prose, not the wire format Mullion parses.
@@ -4689,6 +4451,9 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
     // advisory review that re-parks if there was nothing to find; that's
     // the safer direction to be wrong in.
     if (task.lastReviewedHeadSha !== null && pr.headSha === task.lastReviewedHeadSha) continue;
+    // Exception: an inconclusive-review flag with no baseline has no push to
+    // detect; re-arming would restart a review Mullion stopped.
+    if (!task.lastReviewedHeadSha && task.needsHumanReason === "review-inconclusive") continue;
 
     // Narrowed by the query's own `isNotNull(tasks.autoReturnCapAnnouncedAt)`
     // filter above — TypeScript can't see that across the two queries.
@@ -4849,6 +4614,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   await reannounceInconclusiveReviewsAfterGrace(app);
   await processConventionalTitlesAutoEnable(app);
 
+  clearStoppedWorkerWarnings(app);
   const rows = app.db
     .select({ task: tasks, session: sessions, project: projects })
     .from(tasks)
@@ -4932,6 +4698,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // failure so the normal handoff below moves it to reviewing
             // (checkReviewingGate re-verifies the commits there).
             let salvage = false;
+            let heldNoCommits = false;
             if (now > deadline && task.status === "in_progress") {
               const liveInfo = liveMap[String(session.id)];
               if (liveInfo) {
@@ -4951,13 +4718,25 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // commits". Failing it here would throw away completed work;
                 // keeping it alive instead needs a bounded-retry policy and
                 // is tracked separately.
-                salvage =
-                  resolvedTaskMaster.enabled &&
-                  ((liveDerived.status === "finished" && turnFinishedSinceClaim(liveInfo, task)) ||
-                    isShellTailHandoff(liveDerived.status, liveInfo, task, now.getTime())) &&
-                  (await resolveCommitsPastBase(app, task, hostId)).state === "ahead";
+                const tail = isShellTailHandoff(liveDerived.status, liveInfo, task, now.getTime());
+                if (
+                  tail ||
+                  (resolvedTaskMaster.enabled &&
+                    liveDerived.status === "finished" &&
+                    turnFinishedSinceClaim(liveInfo, task))
+                ) {
+                  const verdict = (await resolveCommitsPastBase(app, task, hostId)).state;
+                  salvage = resolvedTaskMaster.enabled && verdict === "ahead";
+                  // #3111 — say so when the budget ends a worker #3105 kept waiting.
+                  heldNoCommits = tail && verdict === "none";
+                }
               }
             }
+            const failureReason = `budget exceeded after ${budgetMinutes} minutes${
+              heldNoCommits
+                ? "; the worker had no commits and was waiting on a background shell job"
+                : ""
+            }`;
             // #2930 — a worker inside rate-limit grace is not failed for the
             // budget. Parking it until the provider reset is #2940, not this.
             if (
@@ -4965,12 +4744,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               !salvage &&
               !isTaskInRateLimitGrace(task, resolvedTaskMaster.rateLimitGraceMinutes)
             ) {
+              // The scrollback dies with the PTY, so read it before the kill.
+              // Best-effort and bounded: null on any failure or timeout.
+              const budgetDiagnostics = await killDiags(app, task, session, backend, now);
               const updated = app.db
                 .update(tasks)
                 .set({
                   status: "failed",
-                  failureReason: `budget exceeded after ${budgetMinutes} minutes`,
-                  failureDiagnostics: null,
+                  failureReason,
+                  failureDiagnostics: budgetDiagnostics,
                   completedAt: now,
                 })
                 .where(
@@ -5003,8 +4785,8 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   {
                     ...task,
                     status: "failed",
-                    failureReason: `budget exceeded after ${budgetMinutes} minutes`,
-                    failureDiagnostics: null,
+                    failureReason,
+                    failureDiagnostics: budgetDiagnostics,
                     completedAt: now,
                   },
                   project,
@@ -5014,9 +4796,8 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // inspection rather than retried forever (see
                 // removeWorktreeIfClean's own doc comment on why "dirty" is
                 // the only real refusal condition it has).
-                if (task.worktreePath) {
-                  await removeFailedTaskWorktree(app, task, project, hostId, "budget failure");
-                }
+                // (removeFailedTaskWorktree itself no-ops without a worktreePath.)
+                await removeFailedTaskWorktree(app, task, project, hostId, "budget failure");
               }
               continue;
             }
@@ -5032,6 +4813,17 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             dbStatus: session.status,
             info: defaultDeriveStatusInfo(info),
           });
+          if (info !== null && info.alive !== false) {
+            await checkWorkerStarted(
+              app,
+              task,
+              session,
+              hostId,
+              backend,
+              resolvedTaskMaster.workerStartTimeoutMinutes,
+              now,
+            );
+          }
 
           // The session already exited — #282's hook in
           // session-reconciler.ts owns flipping this task to failed (it runs
@@ -5207,16 +4999,20 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // branch above — same "don't strand it in reviewing" reasoning.
             const gate = await checkReviewingGate(app, task, project, info, hostId);
             if (!gate.ok) {
-              await failReviewingGate(
+              // Shell tail + no commits: mid-work behind a long job (pocket #1264); keep
+              // waiting, nudging past SHELL_TAIL_NUDGE_MS so a stuck wait loop can be
+              // killed while the budget deadline stays the backstop.
+              await gateFailOrNudge(
                 app,
                 task,
                 session,
                 project,
                 backend,
-                "in_progress",
                 gate.failureReason,
                 now,
                 info,
+                shellTail,
+                derived.status,
               );
               continue;
             }
@@ -5429,9 +5225,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               // forever, no longer pointed to by any task row — exactly the
               // orphan this PR exists to stop creating (see #772).
               // Best-effort, fire-and-forget — deliberately NOT awaited,
-              // unlike retryTask's/failReviewingGate's own kill calls
-              // (task-claim.ts, above in this file): those run at the END
-              // of their function, with nothing left to do afterward, so
+              // unlike failReviewingGate's own kill call
+              // (task-gate-failure.ts): that one runs at the END
+              // of its function, with nothing left to do afterward, so
               // awaiting costs nothing. This one sits in the MIDDLE of the
               // "-> reviewing" transition, with `recordTaskTransition` and
               // `syncTaskTransition` still to come — a kill failure must

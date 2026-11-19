@@ -1,43 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import {
-  useDashboardStore,
-  clearTaskMasterEnvCacheForTests,
-  FALLBACK_RUNTIME_ENV,
-} from "./store/index.js";
+import { useDashboardStore, clearTaskMasterEnvCacheForTests } from "./store/index.js";
 import { api } from "./api/index.js";
-import type { ServerInfo } from "./api/index.js";
+import { makeServerInfo, makeTaskMasterEnv } from "./test/fixtures.js";
 
-const SERVER_INFO: ServerInfo = {
-  version: "0.1.0",
-  role: "primary",
-  nodeEnv: "test",
-  port: 3000,
-  encryptionEnabled: false,
-  sessionsDir: "/tmp/sessions",
-  dbPath: "/tmp/app.db",
-  uptimeSeconds: 1,
-  rateLimit: { max: 100, window: "1 minute" },
-  projectsRoots: "",
-  crsConfigDir: "~/.config/crs",
-  previewsEnabled: false,
-  previewBaseHost: "",
-  previewAuthRequired: false,
+const SERVER_INFO = makeServerInfo({
   taskMasterEnabled: true,
-  taskMasterEnv: {
-    enabled: true,
-    maxConcurrent: 2,
-    budgetMinutes: 120,
-    progressCommentMinutes: 15,
-    rateLimitGraceMinutes: 5,
-    skipPermissions: false,
-    issueLabel: "mullion-task",
-    pollIntervalSeconds: 60,
-  },
-  runtimeEnv: FALLBACK_RUNTIME_ENV,
-  running: { browserEnabled: false, browserMaxInstances: 4, deviceDiscoveryEnabled: true },
+  taskMasterEnv: makeTaskMasterEnv({ enabled: true }),
   features: { browser: false, devices: false, deviceDiscovery: true },
-};
+});
 
 // UnifiedBoard.tsx's "No tasks yet." empty state (tasks.length === 0) needs
 // to tell "nothing has loaded yet" apart from "genuinely no tasks," the same

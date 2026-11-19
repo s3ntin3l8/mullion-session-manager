@@ -1,6 +1,6 @@
 ---
 name: taskmaster-issues
-description: "Read this before filing ANY GitHub issue from a Mullion-hosted session — a deferred follow-up, a bug you found, a spike, or a Task Master task. Covers the Conventional Commits title and the repo's scope vocabulary, attaching the issue to an existing epic as a sub-issue, and sequencing with blocked_by; and, where Task Master is enabled, the mullion-task label, the eight body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree."
+description: "Read this before filing ANY GitHub issue from a Mullion-hosted session — a deferred follow-up, a bug you found, a spike, or a Task Master task. Covers the Conventional Commits title and the repo's scope vocabulary, attaching the issue to an existing epic as a sub-issue, and sequencing with blocked_by; and, where Task Master is enabled, the mullion-task label, the nine body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree."
 ---
 
 # Filing an issue from a Mullion session
@@ -194,23 +194,24 @@ and implements on its own.
 
 ## Body directives
 
-Eight directives, each matched **case-insensitively on its own line** — a
+Nine directives, each matched **case-insensitively on its own line** — a
 directive that merely appears in prose (e.g. "remember to set `Agent:
 claude`") is deliberately not picked up, only a line matching exactly
 (whitespace aside):
 
-| Directive                 | Effect                                                                                                                                                                                                                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Manual: true`            | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. Closed by a merged PR → task `done`; closed otherwise → `failed`. |
-| `Agent: <name>`           | Which worker agent claims this task.                                                                                                                                                                                                                                               |
-| `ReviewAgent: <name>`     | Which agent reviews the diff. `hermes` runs it on the Hermes server (offered once Settings → Review relay → "Task Master reviews" is on). `none`/`false` disables review.                                                                                                          |
-| `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.                                                                                                                                                                                                             |
-| `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                                                                                     |
-| `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                                                                                       |
-| `Platform: <os>`          | The task must run on a host of that platform (`darwin`, `linux`, `win32`).                                                                                                                                                                                                         |
-| `Host: <host id>`         | The task must run on exactly that host. With `Platform:`, both must hold.                                                                                                                                                                                                          |
+| Directive                     | Effect                                                                                                                                                                                                                                                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Manual: true`                | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. Closed by a merged PR → task `done`; closed otherwise → `failed`. |
+| `Agent: <name>`               | Which worker agent claims this task.                                                                                                                                                                                                                                               |
+| `ReviewAgent: <name>`         | Which agent reviews the diff. `hermes` runs it on the Hermes server (offered once Settings → Review relay → "Task Master reviews" is on). `none`/`false` disables review.                                                                                                          |
+| `Model: <model>`              | Implementer model override — every claimable agent, not just opencode.                                                                                                                                                                                                             |
+| `Reviewer-Model: <model>`     | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                                                                                     |
+| `SmallModel: <model>`         | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                                                                                       |
+| `Platform: <os>`              | The task must run on a host of that platform (`darwin`, `linux`, `win32`).                                                                                                                                                                                                         |
+| `Host: <host id>`             | The task must run on exactly that host. With `Platform:`, both must hold.                                                                                                                                                                                                          |
+| `Capability: <name>[,<name>]` | The host must report these capabilities (`xcode`, `android-emulator`), on top of the project's own requirement. A host that hasn't reported yet isn't excluded; an unknown name is refused.                                                                                        |
 
-Matching rules, all eight:
+Matching rules, all nine:
 
 - **The key is always case-insensitive. For `Agent:`/`ReviewAgent:`/the
   `Model:` family, the value is not.** `Agent: Claude` matches the line,
@@ -222,9 +223,10 @@ Matching rules, all eight:
   `Agent: claude # default` doesn't match.
 - It must be alone on the line: a `- ` bullet or `> ` quote prefix breaks
   the match.
-- **A fenced code block doesn't hide a directive** — the parsers are
-  plain regexes over the raw issue body with no markdown awareness. A
-  directive still fires even if you paste it inside a fenced block.
+- **A fenced code block hides a directive** — lines inside a ``` or ~~~
+  fenced block are ignored, so a snippet that quotes `host: x` or
+  `Agent: claude` does not fire. An unterminated fence hides everything to
+  the end of the body. To make a directive fire, write it outside any fence.
 - First match wins if a directive line appears more than once.
 - `Manual: true`/`Manual: True`/`Manual: TRUE` all match — only the word
   `true` counts, in any casing; `Manual: yes` is inert.
@@ -249,11 +251,11 @@ Matching rules, all eight:
   platform is matched case-insensitively; a value no host reports (`mac`
   instead of `darwin`) matches nothing and is refused naming it. Leave both
   out and placement is the usual load-based choice. **Beware `Host:`** — it is
-  an everyday word: a `Host: localhost` line in a pasted HTTP request or config
-  snippet is parsed as the directive (fenced blocks do not hide it) and fails
-  the task. Put such a line behind a `- ` or `> ` prefix, or reword it
-  (indentation does not help — leading whitespace is ignored); the refusal
-  names the line it came from.
+  an everyday word: a bare `Host: localhost` line in prose is parsed as the
+  directive and fails the task. Inside a fenced code block it is ignored, so
+  put pasted HTTP requests or config snippets in a fence, or put such a line
+  behind a `- ` or `> ` prefix, or reword it (indentation does not help —
+  leading whitespace is ignored); the refusal names the line it came from.
 - An unrecognized or malformed value at any tier is logged and falls
   through — never blocks pickup. If a directive doesn't seem to be taking
   effect, check it's really alone on its own line first.

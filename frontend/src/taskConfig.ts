@@ -10,8 +10,10 @@ export interface ResolvedTaskMasterConfig {
   autoClaimPaused: boolean;
   maxConcurrent: number;
   budgetMinutes: number;
+  workerStartTimeoutMinutes: number;
   progressCommentMinutes: number;
   rateLimitGraceMinutes: number;
+  rateLimitMaxParkHours: number;
   skipPermissions: boolean;
   reviewCiWaitMinutes: number;
   maxAutoReturnRounds: number;
@@ -24,6 +26,7 @@ export function resolveTaskMaster(
   return {
     enabled: taskMaster.enabled === "inherit" ? envDefaults.enabled : taskMaster.enabled === "on",
     autoClaimPaused: taskMaster.autoClaimPaused,
+    workerStartTimeoutMinutes: taskMaster.workerStartTimeoutMinutes ?? 10,
     maxConcurrent:
       taskMaster.maxConcurrent === -1 ? envDefaults.maxConcurrent : taskMaster.maxConcurrent,
     budgetMinutes:
@@ -36,6 +39,12 @@ export function resolveTaskMaster(
       taskMaster.rateLimitGraceMinutes === -1
         ? envDefaults.rateLimitGraceMinutes
         : taskMaster.rateLimitGraceMinutes,
+    rateLimitMaxParkHours:
+      // Keep the `?? 24` fallback for pre-#3269 `/api/server-info` payloads in
+      // mixed-build environments where `taskMasterEnv.rateLimitMaxParkHours` may be absent.
+      taskMaster.rateLimitMaxParkHours === -1
+        ? (envDefaults.rateLimitMaxParkHours ?? 24)
+        : taskMaster.rateLimitMaxParkHours,
     skipPermissions:
       taskMaster.skipPermissions === "inherit"
         ? envDefaults.skipPermissions

@@ -12,6 +12,8 @@
  * (it shows as not running); stop it from the dashboard once.
  */
 import type { FastifyInstance } from "fastify";
+import { realpathSync } from "node:fs";
+import path from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
@@ -21,6 +23,7 @@ import { getRemoteHostClient } from "./remote-host-client.js";
 import { getProjectRow } from "./session-host.js";
 import { killSession } from "./session-lifecycle.js";
 import { withLiveStatus } from "./session-live-info.js";
+import { isSiblingWorktreeCwd } from "./session-cwd.js";
 import { getStoredSettings } from "./settings.js";
 
 export interface DockControlView {
@@ -124,15 +127,101 @@ async function resolveControl(
   return control ? { ok: true, value: control } : fail(404, "Dock control not found");
 }
 
+/** Where to run the control: a branch (preview worktree) or an existing
+ * worktree path of the project; neither means the control's own cwd. */
 export interface StartTarget {
   branch?: string;
+  worktreePath?: string;
 }
 
 /** Launches a session exactly as the dashboard does (`POST /api/sessions`).
  * Supplied by the route, so this service does not depend on the plugin layer. */
 export type LaunchSession = (
   payload: Record<string, unknown>,
-) => Promise<{ statusCode: number; body: { id?: number; message?: string; code?: unknown } }>;
+) => Promise<{ statusCode: number; body: LaunchOutcome }>;
+
+/** The only parts of the launch response this service passes on: numbers and a
+ * known code. Upstream message text is deliberately not echoed to the caller. */
+export interface LaunchOutcome {
+  id?: number;
+  code?: "port_in_use";
+  port?: number;
+  holderSessionId?: number;
+}
+
+const LAUNCH_FAILURE: Record<number, string> = {
+  400: "The launch was refused as invalid.",
+  404: "Project not found.",
+  409: "The control is already running, or its port is in use.",
+  429: "Too many live sessions.",
+  502: "Failed to spawn the session.",
+  503: "The spawn outcome is unknown; check the dock.",
+};
+
+/** A relative `worktreePath` is anchored at the project checkout (what a
+ * session user means), never at the Mullion process's cwd. */
+function resolveTargetPath(projectCwd: string, worktreePath: string): string {
+  return path.resolve(projectCwd, worktreePath);
+}
+
+/** `realpath` that tolerates a path that does not exist yet: the deepest
+ * existing ancestor is resolved and the rest appended, so a symlink inside the
+ * checkout cannot make an outside directory look like it is inside. */
+function realpathLoose(p: string): string {
+  const missing: string[] = [];
+  let cur = p;
+  for (;;) {
+    try {
+      return path.join(realpathSync(cur), ...missing.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return p;
+      missing.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/** A distinct shape from DockControlResult on purpose: the validated path
+ * (`cwd`) is for the launch only and never travels in a reply value. */
+type TargetCheck =
+  { ok: true; cwd: string | undefined } | { ok: false; error: DockControlResult<never> };
+
+/** A bad target is refused before anything is stopped or launched. On success
+ * the value is the cwd to launch in (the validated path itself), or undefined
+ * when the target is a branch or nothing. */
+async function validateTarget(
+  app: FastifyInstance,
+  projectId: number,
+  target: StartTarget,
+): Promise<TargetCheck> {
+  if (target.branch !== undefined && target.worktreePath !== undefined) {
+    return { ok: false, error: fail(400, "pass either branch or worktreePath, not both") };
+  }
+  if (target.worktreePath === undefined) return { ok: true, cwd: undefined };
+  // The dock session's cwd must be the project checkout, a directory inside it
+  // (a monorepo package), or one of its git worktrees; nothing else (a session
+  // has no parent here, so createSessionRecord's child-cwd containment does
+  // not apply). On the local host symlinks are resolved first.
+  const project = getProjectRow(app, projectId)!;
+  const local = project.hostId === LOCAL_HOST_ID;
+  const fix = (p: string) => (local ? realpathLoose(p) : p);
+  const root = fix(path.resolve(project.cwd));
+  const resolved = fix(resolveTargetPath(path.resolve(project.cwd), target.worktreePath));
+  const ok =
+    resolved === root ||
+    resolved.startsWith(root + path.sep) ||
+    (await isSiblingWorktreeCwd({ cwd: project.cwd, hostId: project.hostId }, resolved));
+  return ok
+    ? { ok: true, cwd: resolved }
+    : {
+        ok: false,
+        error: fail(
+          400,
+          "worktreePath must be the project checkout, a directory inside it, or one of its git worktrees",
+        ),
+      };
+}
 
 export async function startDockControl(
   app: FastifyInstance,
@@ -161,6 +250,8 @@ export async function startDockControl(
     await killSession(app, running.id, "detach");
   }
   const c = control.value;
+  const checked = await validateTarget(app, projectId, target);
+  if (!checked.ok) return checked.error;
   const worktreeRefresh =
     c.worktreeRefresh ?? getStoredSettings(app.db).dock?.defaultWorktreeRefresh ?? false;
   const payload = {
@@ -171,15 +262,20 @@ export async function startDockControl(
     name: c.title,
     ...(target.branch !== undefined
       ? { worktree: { branch: target.branch }, worktreeRefresh }
-      : c.cwd
-        ? { cwd: c.cwd }
-        : {}),
+      : target.worktreePath !== undefined
+        ? { cwd: checked.cwd }
+        : c.cwd
+          ? { cwd: c.cwd }
+          : {}),
     ...(c.env ? { env: c.env } : {}),
   };
   const { statusCode, body } = await launch(payload);
   if (statusCode !== 201 || typeof body.id !== "number") {
-    return fail(statusCode >= 400 ? statusCode : 502, body.message ?? "Failed to start", {
+    const status = statusCode >= 400 ? statusCode : 502;
+    return fail(status, LAUNCH_FAILURE[status] ?? `Failed to start (HTTP ${status}).`, {
       ...(body.code !== undefined ? { code: body.code } : {}),
+      ...(body.port !== undefined ? { port: body.port } : {}),
+      ...(body.holderSessionId !== undefined ? { holderSessionId: body.holderSessionId } : {}),
     });
   }
   return { ok: true, value: { sessionId: body.id } };
@@ -196,4 +292,34 @@ export async function stopDockControl(
   if (!running) return { ok: true, value: { sessionId: null } };
   await killSession(app, running.id, "detach");
   return { ok: true, value: { sessionId: running.id } };
+}
+
+/** Stops the control if it is running, then starts it on `target` (a stopped
+ * control is simply started there). */
+export async function switchDockControl(
+  app: FastifyInstance,
+  projectId: number,
+  controlId: string,
+  target: StartTarget,
+  launch: LaunchSession,
+): Promise<DockControlResult<{ sessionId: number }>> {
+  if (target.branch === undefined && target.worktreePath === undefined) {
+    return fail(400, "pass branch or worktreePath");
+  }
+  const control = await resolveControl(app, projectId, controlId);
+  if (!control.ok) return control;
+  // Validate before stopping: a bad target must not kill a healthy server.
+  const checked = await validateTarget(app, projectId, target);
+  if (!checked.ok) return checked.error;
+  const stopped = await stopDockControl(app, projectId, controlId);
+  if (!stopped.ok) return stopped;
+  const started = await startDockControl(app, projectId, controlId, target, launch);
+  if (started.ok || stopped.value.sessionId === null) return started;
+  // The old session is already stopped: say so, so the caller knows to start
+  // it again. A constant message (plus the numeric status and the machine
+  // `code`), not the upstream text echoed back.
+  return {
+    ...started,
+    message: `The control was stopped but could not be restarted (HTTP ${started.status}); start it again.`,
+  };
 }

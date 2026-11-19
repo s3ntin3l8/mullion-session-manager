@@ -62,6 +62,8 @@ export const hosts = sqliteTable("hosts", {
   sessionIdEnc: text("session_id_enc"),
   sessionSecretEnc: text("session_secret_enc"),
   sessionExpiresAt: integer("session_expires_at", { mode: "timestamp" }),
+  // Historical successful contact; live health remains in the heartbeat tracker.
+  lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
   // "manual" (today's Settings -> Add host flow) | "enrolled" (agent-
   // initiated registration, #245). Null for every pre-#245 row and for
   // "local" — only ever set by the registration route itself.
@@ -848,9 +850,20 @@ export const devices = sqliteTable(
     // Cosmetic label the user can rename; falls back to `avdName`/`serial`
     // when unset.
     name: text("name"),
+    // Which platform's engine runs this device (#1943). `kind`, `avdName`,
+    // `serial` and `port` below stay Android-shaped (adb + scrcpy); an iOS
+    // Simulator is identified by `udid` instead. Every row that predates this
+    // column is an Android one, which is the default it reads back as.
+    platform: text("platform", { enum: ["android", "ios"] })
+      .notNull()
+      .default("android"),
     kind: text("kind", { enum: ["emulator", "physical"] })
       .notNull()
       .default("emulator"),
+    // The Simulator's UDID (`xcrun simctl list`), set only for `platform:
+    // "ios"` — null for an Android device, which is identified by `avdName` or
+    // `serial`.
+    udid: text("udid"),
     // The AVD name passed to `emulator -avd <avdName>`. Only set for
     // `kind: "emulator"` — null for a physical device.
     avdName: text("avd_name"),
@@ -1055,7 +1068,7 @@ export const tasks = sqliteTable(
     // left running — no path in the task lifecycle ever terminated it once
     // this pointer moved on, so it lingered indefinitely as a live process
     // with no task attached to it. See task-approve.ts's cleanupTaskSessions
-    // and task-claim.ts's retryTask for the two call sites that touch this
+    // and task-retry.ts's enqueueRetry for the two call sites that touch this
     // column directly.
     sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
     // Claimed-task-never-starts-a-turn fix — whether the worker's most
@@ -1148,7 +1161,7 @@ export const tasks = sqliteTable(
     // from the verdict itself (`lastReviewVerdict`, below), since not every
     // trigger is a review verdict. Null until the first auto-return.
     lastAutoReturnReason: text("last_auto_return_reason", {
-      enum: ["review", "ci", "pr-comment", "suggestions"],
+      enum: ["review", "ci", "pr-comment", "suggestions", "conflict"],
     }),
     // Set when a "suggestions" round (an APPROVED review that left only
     // suggestions) returns to `reviewing`: the approving verdict still holds
@@ -1254,8 +1267,33 @@ export const tasks = sqliteTable(
         "review-post-failed",
         "pr-closed",
         "ci-status-stalled",
+        "ci-unfixable",
+        "ci-still-red",
+        // The review ended without a verdict even after its one automatic
+        // re-arm (`flagExhaustedInconclusiveReviews`); set with the announce
+        // stamp, cleared by Retry review, a human push or a later verdict.
+        "review-inconclusive",
+        // #3234 — the provider quota resets beyond `rateLimitMaxParkHours`, so
+        // the worker was not parked; set with the task `failed`, the reset in
+        // `rateLimitUntil` and the provider text in `rateLimitMessage`.
+        "rate-limited",
+        "worker-not-started",
       ],
     }),
+    // `ci-unfixable` — the worker was returned for a red check and declared, in
+    // its `task-<id>.ci-unfixable.<head>` file, that no change to this PR can fix
+    // it (an upstream advisory with no patched release, an outside service down);
+    // `ci-still-red` — it came back without pushing and two reruns of the failed
+    // jobs did not clear the check. Both are review-loop reasons: they are set
+    // with the announce stamp above, cleared where it is cleared, and a human
+    // push re-arms the task. `ciHoldNote` carries the check names and, for
+    // `ci-unfixable`, the worker's sanitised reason.
+    ciHoldNote: text("ci_hold_note"),
+    // The PR head a human chose "Merge anyway" on while only NON-required checks
+    // were red. `attemptMerge`'s `unstable` arm merges only while this equals the
+    // PR's current head, so a later push voids it. Never read by the `blocked`
+    // arm: a red REQUIRED check is not overridable.
+    mergeOverrideHeadSha: text("merge_override_head_sha"),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
     // actually about, recorded at every ingest write alongside
     // reviewFindingsIngestedSessionId above (task-reconciler.ts's
@@ -1403,6 +1441,12 @@ export const tasks = sqliteTable(
     // resets it to 0; a merge/rebase-clearing path must not. See `attemptAutoRebase`
     // (task-reconciler.ts) for the cap.
     rebaseAttempts: integer("rebase_attempts").notNull().default(0),
+    // Continuation nudges typed into a worker whose turn ended with no commits,
+    // and when the last one was typed (task-nudge.ts). Only meaningful while
+    // `lastNudgedAt >= claimedAt` — every re-entry into in_progress restamps
+    // `claimedAt`, which retires an older spell's count without a reset write.
+    nudgeCount: integer("nudge_count").notNull().default(0),
+    lastNudgedAt: integer("last_nudged_at", { mode: "timestamp" }),
     // #758 — set when an auto-rebase worker is spawned, read back on the
     // next merge-sweep tick to decide "is an attempt already in flight" —
     // NOT session-exited detection, because a Task Master worker is told to
@@ -1608,6 +1652,11 @@ export const tasks = sqliteTable(
     // #2940 — a parked task stays `ready` until this time, then may be claimed.
     // Null means it is not parked. Not `dispatchHeld`: that give-up is hours, and a weekly reset is longer.
     rateLimitUntil: integer("rate_limit_until", { mode: "timestamp" }),
+    // #3234 — the provider's own message for the latest rate_limit stop_failure
+    // (agy: "... Resets in 102h16m12s."), kept beside lastRateLimitAt because the
+    // session's in-memory copy is TTL-cleared. Written by parkRateLimitedTask (the
+    // park and the beyond-cap give-up) and shown on the card. Cleared on (re)claim.
+    rateLimitMessage: text("rate_limit_message"),
     // #667 — dependency-aware auto-claim. Snapshot of GitHub's
     // `issue_dependencies_summary.total_blocked_by`, written on every
     // ingest (rides the `listLabeledIssues` list response for free — see
@@ -1703,6 +1752,35 @@ export const tasks = sqliteTable(
     // auto-claim pacing (a held task is waiting for a HOST, not a slot), the
     // give-up's worktree clear, and dropping a stale hold.
     dispatchHeld: integer("dispatch_held", { mode: "boolean" }).notNull().default(false),
+    // Issue #3194 — the host a QUEUED RETRY is waiting for: the host its
+    // worker ran on, whose preserved branch the retry resumes. Set while the
+    // retry waits for that host (the original is offline and the branch is not
+    // on origin, so there is nowhere else to run it); null whenever the task
+    // is not waiting for a host.
+    //
+    // It says WHICH host the retry waits for — and that is all it says. The
+    // board card and the task sidebar offer the "Start fresh" action against
+    // it (the operator's way out of a wait that never ends), and the task
+    // records which host owns it now.
+    retryHostId: text("retry_host_id"),
+    // Issue #3194 — the preserved branch is CONFIRMED to be only on the host
+    // `retryHostId` names: GitHub's 404 for the branch's ref, so the work
+    // exists nowhere else. THAT is what exempts the wait from the
+    // dispatcher's 6-hour give-up (task-dispatch.ts): failing the task would
+    // free nothing — the commits stay on that host, with the work.
+    //
+    // A SEPARATE flag from `retryHostId` on purpose: the two answer different
+    // questions. `retryHostId` says where the retry waits (and so whether
+    // "Start fresh" is offered); this says whether the branch is provably
+    // stranded there (and so whether the wait may run past the give-up). A
+    // wait whose origin state could NOT be confirmed waits for a host too —
+    // it offers "Start fresh" — but its branch may well be on origin, so the
+    // give-up still applies to it. Folding the two into one column took that
+    // escape away from exactly the projects whose origin can never be
+    // confirmed (a local-only repository, a project with no GitHub token).
+    retryStrandedOnHost: integer("retry_stranded_on_host", { mode: "boolean" })
+      .notNull()
+      .default(false),
     // Workflow-change approval gate: a task whose branch edits
     // `.github/workflows/` is not pushed under the App's ordinary token.
     // `workflowChange` is JSON `{ sha, files }` — the head commit and the
@@ -1747,7 +1825,7 @@ export const tasks = sqliteTable(
     // behaviours hang off it), and deliberately NOT the same thing as
     // `archivedAt`: a merge archives the copy, but a human can Unarchive it
     // (which clears only `archivedAt`), and the fact that a merge superseded
-    // it does not change when the row is unhidden. `retryTask` refuses a
+    // it does not change when the row is unhidden. `enqueueRetry` refuses a
     // marked task outright (it would otherwise resume the copy's branch and
     // spawn a duplicate worker for work another task already owns). Null =
     // "not superseded" — the safe default for every pre-existing row.

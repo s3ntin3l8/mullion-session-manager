@@ -59,8 +59,12 @@ child actually said — the ordered conversation, user turns, replies and a line
 call — from the agent's own transcript, and `--after <cursor>` (the cursor the previous
 page printed) returns only what came since your last look, so after `prompt` + `wait` you
 read the child's reply and anything earlier you missed. Prefer it over scrollback for
-Claude Code and Codex children. `mullion session logs <childId> --text` / `get_scrollback`
-(with `sessionId`) reads the terminal output as plain text — the terminal replayed through an emulator, so a
+Claude Code and Codex children: a full-screen agent CLI runs on the alternate screen, which
+keeps no history, so scrollback only shows its last screen and earlier output (tool results
+included) is not recoverable from the terminal. The transcript needs the child still tracked
+on its host and the hook-reported `transcript_path` (`409` until its first hook, `404` if
+untracked, `501` for any CLI but Claude Code and Codex). `mullion session logs <childId> --text` / `get_scrollback`
+(with `sessionId`) is for plain shells and "what is on screen now": it reads the terminal output as plain text — the terminal replayed through an emulator, so a
 full-screen agent CLI reads as its final screen rather than as cursor-movement
 escapes (`mode: "raw"` / no `--text` gives the raw byte stream); `mullion session kill <childId>` / `kill_child_session` stops it.
 
@@ -86,10 +90,13 @@ printed from now on — so to catch what a prompt just provoked, pass the
 `outputOffset` that `session prompt` / `prompt_session` returned as
 `--after-offset` / `afterOffset` (it is taken after the prompt was typed and
 submitted, so the typed echo is excluded; a prompt sent with `submit: false` is
-not yet submitted, so its echo is still inside the window). A TUI child may
-still redraw the submitted prompt into its transcript, so never wait on text
-the prompt itself contains: ask for a derived marker (e.g. "print DONE
-reversed") and match that. `--regex` / `regex: true` is available but
+not yet submitted, so its echo is still inside the window). Also pass the
+reply's `afterSeq` (`--after-seq` / `afterSeq`): for a CLI that emits hook
+events (Claude Code) the window then starts where the child began answering, so
+a TUI redrawing the submitted prompt cannot satisfy a marker the prompt contains.
+Without `afterSeq`, for a CLI with no hook events, or before its first hook
+arrived, a TUI may still redraw the prompt into its transcript: ask for a
+derived marker (e.g. "print DONE reversed") and match that. `--regex` / `regex: true` is available but
 guarded (no backreferences, lookarounds or nested quantifiers).
 
 To give a running child a follow-up, use `mullion session prompt <childId>
@@ -211,3 +218,8 @@ owner/name` with `--pr` (MCP: `repo` + `pr_number`). The repository must be
   landed.
 - Drive the browser (see the Mullion browser skill) against whatever's
   already listening, dock-managed or started in your own shell.
+- Task Master reads (`task list|get`, `list_tasks`/`get_task`) work read-only: your
+  own project's tasks, and other projects' only if yours is a coordinator they accept.
+  Task Master writes (`task retry|start|close|archive|unarchive`, or `retry_task`/
+  `start_task`/`close_task`/`archive_task`) are **full scope only** — only `mullion task push` /
+  `push_task_branch` is reachable at session scope (for your own task).

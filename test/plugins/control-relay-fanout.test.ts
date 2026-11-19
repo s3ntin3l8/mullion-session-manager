@@ -29,7 +29,7 @@ class MockSocket extends EventEmitter {
 
 const openControlRelayStreamMock = vi.fn();
 vi.mock("../../src/services/remote-host-client.js", () => ({
-  getRemoteHostClient: () => ({ openControlRelayStream: openControlRelayStreamMock }),
+  getRemoteHostClient: () => ({ streams: { controlRelay: openControlRelayStreamMock } }),
 }));
 const listHostsMock = vi.fn();
 vi.mock("../../src/services/host-registry.js", () => ({

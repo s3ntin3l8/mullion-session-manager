@@ -1277,7 +1277,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
   // from app.config and passes it into generateScaffoldContent's own
   // `sandbox` option (only ever consulted for a LOCAL_HOST_ID project — see
   // that function's own doc comment). Mirrors
-  // test/routes/internal.test.ts's own "honors this agent's own
+  // test/routes/internal-scaffold.test.ts's own "honors this agent's own
   // MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED" test for the remote-agent
   // side of the same split.
   it("threads MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED into generateScaffoldContent's sandbox option", async () => {

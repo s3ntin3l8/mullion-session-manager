@@ -1,3 +1,4 @@
+import { useBusyAction } from "./hooks/useBusyAction.js";
 import { PreviewTargetsEditor } from "./PreviewTargetsEditor.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
@@ -128,6 +129,7 @@ function MonitorsEditor({ params }: { params: DockConfigPanelParams }) {
       cancelledRef.current = true;
     };
   }, [fetchConfig]);
+  const { run: retryLoad, busy: retrying } = useBusyAction(() => fetchConfig());
 
   useEffect(() => {
     let cancelled = false;
@@ -283,8 +285,13 @@ function MonitorsEditor({ params }: { params: DockConfigPanelParams }) {
       return (
         <EmptyStateNote>
           <div>Couldn't load dock.json.</div>
-          <button className="git-panel-fetch-btn" onClick={() => void fetchConfig()}>
-            Retry
+          <button
+            className="git-panel-fetch-btn"
+            disabled={retrying}
+            aria-busy={retrying || undefined}
+            onClick={retryLoad}
+          >
+            {retrying ? "Retrying…" : "Retry"}
           </button>
         </EmptyStateNote>
       );

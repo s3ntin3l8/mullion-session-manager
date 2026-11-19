@@ -64,6 +64,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   sessionGitStatuses: {},
   gitDiffStats: {},
   gitBranchesByProject: {},
+  gitRefsLoadedIds: {},
   prsByProject: {},
   defaultBranchCiByProject: {},
   gitRefreshTrigger: 0,
@@ -255,7 +256,12 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
     const run = async (scopeIds: number[] | undefined) => {
       const allProjects = get().projects;
       if (allProjects.length === 0) {
-        set({ gitBranchesByProject: {}, prsByProject: {}, defaultBranchCiByProject: {} });
+        set({
+          gitBranchesByProject: {},
+          gitRefsLoadedIds: {},
+          prsByProject: {},
+          defaultBranchCiByProject: {},
+        });
         return;
       }
       const scoped = scopeIds !== undefined;
@@ -265,6 +271,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
       const gitBranchesByProject: Record<number, GitBranchesResult | undefined> = scoped
         ? { ...get().gitBranchesByProject }
         : {};
+      const gitRefsLoadedIds: Record<number, true> = scoped ? { ...get().gitRefsLoadedIds } : {};
       const prsByProject: Record<number, GitHubPRsStatus | undefined> = scoped
         ? { ...get().prsByProject }
         : {};
@@ -280,8 +287,10 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
           // (transiently unavailable) simply keeps whatever was already in
           // the spread base above, same last-known-good posture as
           // refreshGitStatuses.
-          if (p.id in result.branches)
+          if (p.id in result.branches) {
             gitBranchesByProject[p.id] = result.branches[p.id] ?? undefined;
+            gitRefsLoadedIds[p.id] = true;
+          }
           if (p.id in result.prs) prsByProject[p.id] = result.prs[p.id] ?? undefined;
           if (p.id in result.defaultBranchCi)
             defaultBranchCiByProject[p.id] = result.defaultBranchCi[p.id] ?? undefined;
@@ -289,7 +298,7 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
       } catch (err) {
         console.warn("[git] refreshGitRefs batch failed", err);
       }
-      set({ gitBranchesByProject, prsByProject, defaultBranchCiByProject });
+      set({ gitBranchesByProject, gitRefsLoadedIds, prsByProject, defaultBranchCiByProject });
     };
 
     gitRefsRefreshInFlight = run(projectIds).finally(() => {
@@ -330,8 +339,10 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   },
 
   // Issue #745 — Manual fast-forward git pull for a project.
-  pullProjectGit: async (projectId: number, sessionId?: number) => {
-    const res = await api.postProjectGitPull(projectId, sessionId);
+  pullProjectGit: async (projectId: number, sessionId?: number, hostId?: string) => {
+    const res = await (hostId === undefined
+      ? api.postProjectGitPull(projectId, sessionId)
+      : api.postProjectGitPull(projectId, sessionId, hostId));
     get().bumpGitRefreshTrigger();
     return res;
   },

@@ -159,7 +159,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   projectRoots: [],
   autoDetectHostCheckouts: false,
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
-  diskCleanup: { cacheDirs: [] },
+  diskCleanup: { cacheDirs: [], optIns: [] },
   launchers: {
     defaultShell: "zsh",
     defaultAgent: "claude",
@@ -247,6 +247,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   hosts: {
     heartbeatSeconds: -1,
+    staleAfterDays: 30,
   },
   reviewRelay: {
     provider: "none",
@@ -287,23 +288,26 @@ export const DEFAULT_SETTINGS: AppSettings = {
   server: {
     logLevel: "inherit",
   },
-  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
-  codex: { defaultModel: null, reviewerModel: null },
-  agy: { defaultModel: null, reviewerModel: null },
+  claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null, delegateModel: null },
+  codex: { defaultModel: null, reviewerModel: null, delegateModel: null },
+  agy: { defaultModel: null, reviewerModel: null, delegateModel: null },
   // Issue: mcode support — mcode takes `-m <provider/model>`.
-  mcode: { defaultModel: null, reviewerModel: null },
+  mcode: { defaultModel: null, reviewerModel: null, delegateModel: null },
   opencode: {
     implementerModel: null,
     reviewerModel: null,
     defaultSmallModel: null,
+    delegateModel: null,
   },
   taskMaster: {
     autoClaimPaused: false,
     enabled: "inherit",
     maxConcurrent: -1,
     budgetMinutes: -1,
+    workerStartTimeoutMinutes: 10,
     progressCommentMinutes: -1,
     rateLimitGraceMinutes: -1,
+    rateLimitMaxParkHours: -1,
     skipPermissions: "inherit",
     trustedLogins: [],
     reviewCiWaitMinutes: 15,

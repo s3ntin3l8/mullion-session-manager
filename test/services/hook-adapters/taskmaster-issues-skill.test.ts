@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Drift guard for src/bundle/skills/taskmaster-issues/ — the skill tells
-// authors exactly what eight directives do and how they're matched. Rather
+// authors exactly what nine directives do and how they're matched. Rather
 // than re-declaring the parsers' regexes here (a copy drifts right along
 // with the source and detects nothing), this feeds the skill's own worked
 // example through the REAL production resolvers, so a future change to
@@ -111,6 +111,7 @@ const DIRECTIVE_PATTERNS = [
   { name: "SmallModel:", re: /^\s*SmallModel:\s*(\S+)\s*$/im },
   { name: "Platform:", re: /^\s*Platform:\s*(\S+)\s*$/im },
   { name: "Host:", re: /^\s*Host:\s*(\S+)\s*$/im },
+  { name: "Capability:", re: /^\s*Capability:\s*(\S+)\s*$/im },
 ];
 
 function countDirectiveLines(text: string, re: RegExp): number {
@@ -120,7 +121,7 @@ function countDirectiveLines(text: string, re: RegExp): number {
 
 describe("taskmaster-issues skill — SKILL.md's own prose never doubles as a directive", () => {
   // Mirrors task-prompt.test.ts's "directive-line collisions" guard on the
-  // preamble text, extended to all eight directives this skill documents.
+  // preamble text, extended to all nine directives this skill documents.
   // Not a live hazard (nothing parses SKILL.md), but a skill that
   // illustrates a directive on its own line would be teaching the wrong
   // lesson about what "on its own line" means.
@@ -193,6 +194,7 @@ describe("taskmaster-issues skill — worked-example.md carries exactly its two 
     "SmallModel:": 0,
     "Platform:": 0,
     "Host:": 0,
+    "Capability:": 0,
   };
 
   for (const { name, re } of DIRECTIVE_PATTERNS) {
@@ -220,10 +222,11 @@ describe("taskmaster-issues skill — the documented Platform:/Host: rules hold 
     expect(parsePlacementRequirement("run on Platform: darwin please")).toBeNull();
   });
 
-  it("is not hidden by a fenced code block, like every other directive", async () => {
+  it("is ignored inside a fenced code block, like every other directive", async () => {
     const { parsePlacementRequirement } =
       await import("../../../src/services/task-placement-resolve.js");
-    expect(parsePlacementRequirement("```\nPlatform: darwin\n```")).toEqual({
+    expect(parsePlacementRequirement("```\nPlatform: darwin\n```")).toBeNull();
+    expect(parsePlacementRequirement("```\nx\n```\nPlatform: darwin")).toEqual({
       platform: "darwin",
     });
   });
@@ -276,13 +279,13 @@ describe("taskmaster-issues skill — documented matching rules hold against the
     expect(command).toBe("anthropic/claude-sonnet-4-5");
   });
 
-  it("a directive inside a fenced code block still fires", () => {
+  it("a directive inside a fenced code block is ignored", () => {
     const body = "Some context.\n\n```\nAgent: codex\n```\n";
     const command = resolveAgentCommand(mockApp(), {
       issueBody: body,
       projectDefaultAgent: "opencode",
     });
-    expect(command).toBe("codex");
+    expect(command).toBe("opencode");
   });
 
   it("the first Agent: line wins when the body has two", () => {

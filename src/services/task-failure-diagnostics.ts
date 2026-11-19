@@ -1,4 +1,5 @@
 import { desc, eq } from "drizzle-orm";
+import type { SessionEnvInfo } from "./user-shell-env.js";
 import type { FastifyInstance } from "fastify";
 import { sessionEvents, type tasks } from "../db/schema.js";
 import type { SessionBackend } from "./session-backend.js";
@@ -57,6 +58,8 @@ export interface DiagnosticParts {
   gitStatus: DiagnosticGitStatus | null;
   /** What the salvage commit did; null if it was not attempted. */
   salvage: string | null;
+  /** The worker host's session environment (issue #3156); absent/null when unknown. */
+  sessionEnv?: SessionEnvInfo | null;
 }
 
 export async function collectScrollbackTail(
@@ -76,6 +79,24 @@ export async function collectScrollbackTail(
     app.log.warn({ err, sessionId }, "task diagnostics: scrollback unavailable");
     return null;
   }
+}
+
+/**
+ * Like `collectScrollbackTail`, but reads the backend's RENDERED scrollback
+ * (what a terminal would show, with the `--- alternate screen ---` marker) so
+ * a TUI worker's last screen is readable instead of a raw repaint stream.
+ * Throws on a read failure: the caller decides what an unreadable tail means.
+ */
+export async function collectRenderedScrollbackTail(
+  backend: SessionBackend,
+  sessionId: number,
+): Promise<string> {
+  const rendered = await backend.getRenderedScrollback(String(sessionId));
+  const lines = sanitizeDiagnosticText(rendered.slice(-SCROLLBACK_TAIL_BYTES))
+    .split("\n")
+    .map((l) => l.trimEnd())
+    .filter((l) => l.length > 0);
+  return lines.slice(-SCROLLBACK_TAIL_LINES).join("\n");
 }
 
 export function collectRecentEvents(app: FastifyInstance, sessionId: number): string[] | null {
@@ -118,6 +139,13 @@ export function formatFailureDiagnostics(
     lines.push(`Runtime: ${formatRuntime(endedAt.getTime() - task.claimedAt.getTime())}`);
   } else {
     lines.push("Runtime: unavailable (task has no claim time)");
+  }
+
+  if (parts.sessionEnv) {
+    const env = parts.sessionEnv;
+    lines.push(
+      `Host session env: interactive resolve ${env.interactiveResolve}${env.reason ? ` (${env.reason})` : ""}; shell ${env.shell ?? "none"}; PATH ${env.path.join(":") || "empty"}${env.recoveredKeys.length > 0 ? `; recovered: ${env.recoveredKeys.join(", ")}` : ""}`,
+    );
   }
 
   if (parts.gitStatus === null) {

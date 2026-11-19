@@ -1,3 +1,4 @@
+import { parseReviewFindings } from "../../src/services/task-prompt.js";
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
@@ -23,7 +24,9 @@ import {
 import {
   buildTaskReviewMessage,
   dispatchTaskReview,
+  correctionFromStoredFindings,
   extractFindingsJson,
+  notFindingsJsonReason,
   isUnsentRunId,
   pollTaskReview,
   stopHermesRunQuietly,
@@ -292,8 +295,9 @@ describe("hermes client", () => {
         taskReviewIdempotencyKey(target, { taskId: 5, round: 2, rearms: 1, enteredAt: 101 }),
       ).not.toBe(key);
       expect(key).not.toBe(reviewIdempotencyKey("acme", "widgets", 7, "b0", "h1"));
-      expect(taskReviewSessionId({ taskId: 5, round: 2 })).toBe("mullion-task-5-r2");
-      expect(taskReviewSessionId({ taskId: 5, round: 2 })).not.toBe(
+      expect(taskReviewSessionId({ taskId: 5, round: 2, rearms: 0 })).toBe("mullion-task-5-r2");
+      expect(taskReviewSessionId({ taskId: 5, round: 2, rearms: 1 })).toBe("mullion-task-5-r2-x1");
+      expect(taskReviewSessionId({ taskId: 5, round: 2, rearms: 0 })).not.toBe(
         reviewSessionId("acme", "widgets", 7),
       );
       expect(
@@ -313,6 +317,11 @@ describe("hermes client", () => {
       expect(msg).toContain("post nothing to GitHub");
       expect(msg).not.toContain("GitHub App");
       expect(msg.endsWith("THE PROMPT")).toBe(true);
+      expect(msg).toContain("must be escaped");
+      expect(msg).not.toContain("Correction:");
+      expect(buildTaskReviewMessage(target, "P", "Correction: fix it")).toContain(
+        "\nCorrection: fix it\n",
+      );
       expect(buildTaskReviewMessage({ ...target, baseSha: undefined }, "p")).not.toContain(
         "FOLLOW-UP",
       );
@@ -371,6 +380,33 @@ describe("hermes client", () => {
       ).rejects.toBeInstanceOf(HermesUnavailableError);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("unparseable reply handling", () => {
+  const bad =
+    '{"verdict":"approved","notes":["against a batch answering branches: {"1": null} ok"],"findings":[]}';
+  it("pins the observed shape: the full reply is never extracted", () => {
+    // The only parseable object inside is the stray `{"1": null}` fragment, which
+    // is not a findings object (the reconciler drops it as unstructured).
+    expect(() => JSON.parse(bad)).toThrow();
+    expect(extractFindingsJson(bad)).not.toBe(bad);
+    expect(parseReviewFindings(extractFindingsJson(bad) ?? "", {}).structured).toBe(false);
+  });
+  it("round-trips the parser message into a correction line", () => {
+    const reason = notFindingsJsonReason(bad);
+    expect(reason).toMatch(/^The Hermes reply was not the findings JSON \(.+\)$/);
+    const stored = `## Round 1\n\n${reason} — treat this review as inconclusive.`;
+    expect(correctionFromStoredFindings(stored)).toMatch(
+      /^Correction: your previous reply was not valid JSON: .+; escape inner double quotes\.$/,
+    );
+  });
+  it("derives no correction for other inconclusive reasons", () => {
+    const t =
+      "## Round 1\n\nThe Hermes review did not finish within 60 minutes — treat this review as inconclusive.";
+    expect(correctionFromStoredFindings(t)).toBeNull();
+    expect(correctionFromStoredFindings(null)).toBeNull();
+    expect(correctionFromStoredFindings("## Round 1\n\nfine")).toBeNull();
   });
 });
 

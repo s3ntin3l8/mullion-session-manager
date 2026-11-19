@@ -7,17 +7,72 @@ import { resolveGitIdentity } from "./git-identity.js";
 import { getStoredSettings } from "./settings.js";
 import { killSession } from "./session-lifecycle.js";
 import { removeCheckoutIfClean } from "./checkout-removal.js";
+import { resolveCleanupTarget } from "./task-cleanup.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
 import type { SessionBackend } from "./session-backend.js";
 import type { SessionInfo } from "./pty-manager.js";
+import type { SessionStatus } from "./session-status.js";
 import { syncTaskTransition } from "./task-github-sync.js";
+import { nudgeInsteadOfFailing, nudgeShellTailWorker } from "./task-nudge.js";
+import { isShellTailNudgeDue } from "./task-turn-signals.js";
 import { recordTaskTransition } from "./task-state.js";
+import { LOCAL_HOST_ID } from "../shared/constants.js";
 import {
   collectRecentEvents,
+  collectRenderedScrollbackTail,
   collectScrollbackTail,
   formatFailureDiagnostics,
   type DiagnosticParts,
 } from "./task-failure-diagnostics.js";
+
+/** Upper bound on the diagnostics read before a worker is killed. */
+export const KILL_DIAGNOSTICS_TIMEOUT_MS = 5_000;
+
+/**
+ * Diagnostic snapshot for a task about to be failed WITH its live session
+ * killed (budget exceeded): the scrollback dies with the PTY, so it is read
+ * first. Strictly best-effort — any error or a timeout yields `null` (logged
+ * at warn) and must never stop the caller from failing the task or killing
+ * the session.
+ */
+export async function killDiags(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  session: typeof sessions.$inferSelect,
+  backend: SessionBackend,
+  now: Date,
+  timeoutMs: number = KILL_DIAGNOSTICS_TIMEOUT_MS,
+): Promise<string | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const collect = (async () => {
+      const scrollback = await collectRenderedScrollbackTail(backend, session.id);
+      const events = collectRecentEvents(app, session.id);
+      return formatFailureDiagnostics(
+        task,
+        { scrollback, events, gitStatus: null, salvage: null },
+        now,
+      );
+    })();
+    // A late rejection after the timeout wins the race must not go unhandled.
+    collect.catch(() => {});
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`diagnostics read timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+    return await Promise.race([collect, timeout]);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id, sessionId: session.id },
+      "task reconcile: failure diagnostics unavailable before kill",
+    );
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 /** Best-effort removal of a failed task's worktree (and its browsers, via
  * `removeCheckoutIfClean`); a dirty tree stays for inspection. */
@@ -29,11 +84,18 @@ export async function removeFailedTaskWorktree(
   after: string,
 ): Promise<void> {
   if (!task.worktreePath) return;
+  // Issue #3193 — the worktree is on the worker's host, so the project root
+  // passed as the parent cwd must be that host's path (`projects.hostCwds`),
+  // not the primary's `project.cwd`. When the project has no path on that
+  // host there is nothing to remove — skip with a warning rather than send a
+  // path the agent there will reject (as retryTask already does).
+  const target = resolveCleanupTarget(app, task, project, hostId);
+  if (!target) return;
   await removeCheckoutIfClean(app, {
     projectId: project.id,
-    hostId,
+    hostId: target.hostId,
     worktreePath: task.worktreePath,
-    parentCwd: project.cwd,
+    parentCwd: target.cwdOnHost,
   }).catch((err) => {
     app.log.warn(
       { err, taskId: task.id, worktreePath: task.worktreePath },
@@ -93,13 +155,24 @@ export async function failReviewingGate(
   failureReason: string,
   now: Date,
   info: SessionInfo | null = null,
+  // #3234 — extra columns written with the failure (a rate-limit give-up sets
+  // its needs-human reason and the reset).
+  extraFields: Partial<typeof tasks.$inferInsert> = {},
 ): Promise<void> {
+  // A worker that ended its turn with nothing committed gets a continuation
+  // before the task fails (task-nudge.ts); only an unattended in_progress spell.
+  if (fromStatus === "in_progress" && (await nudgeInsteadOfFailing(app, task, info, now))) return;
   // Diagnostic snapshot — gathered BEFORE the salvage commit (which would
   // empty `git status`) and before the session/worktree are cleaned up.
   // Best-effort: every piece swallows its own error, and the whole thing is
   // guarded again so it can never change the failure transition below.
   const parts: DiagnosticParts = { scrollback: null, events: null, gitStatus: null, salvage: null };
   const workerHostId = resolveTaskWorkerHost(app, task);
+  // Issue #3156 — the tracker's last reading of the worker host's environment
+  // (a remote host only; the primary's own is not what an agent host ran).
+  if (workerHostId !== LOCAL_HOST_ID) {
+    parts.sessionEnv = app.hostAgentTracker?.get(workerHostId)?.sessionEnv ?? null;
+  }
   try {
     parts.scrollback = await collectScrollbackTail(app, backend, session.id);
     parts.events = collectRecentEvents(app, session.id);
@@ -171,7 +244,7 @@ export async function failReviewingGate(
 
   const updated = app.db
     .update(tasks)
-    .set({ status: "failed", failureReason, failureDiagnostics, completedAt: now })
+    .set({ status: "failed", failureReason, failureDiagnostics, completedAt: now, ...extraFields })
     .where(and(eq(tasks.id, task.id), eq(tasks.status, fromStatus)))
     .run();
   if (updated.changes === 0) return;
@@ -198,11 +271,53 @@ export async function failReviewingGate(
   });
   await syncTaskTransition(
     app,
-    { ...task, status: "failed", failureReason, failureDiagnostics, completedAt: now },
+    {
+      ...task,
+      ...extraFields,
+      status: "failed",
+      failureReason,
+      failureDiagnostics,
+      completedAt: now,
+    },
     project,
     "failed",
   );
   if (task.worktreePath) {
     await removeFailedTaskWorktree(app, task, project, workerHostId, "the no-commits gate failure");
   }
+}
+
+/**
+ * Handles a failed `checkReviewingGate` on an `in_progress` task: when the
+ * worker's turn ended behind a shell-only tail, keeps waiting (nudging once
+ * `SHELL_TAIL_NUDGE_MS` has elapsed); otherwise runs `failReviewingGate`.
+ */
+export async function gateFailOrNudge(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  session: typeof sessions.$inferSelect,
+  project: typeof projects.$inferSelect,
+  backend: SessionBackend,
+  failureReason: string,
+  now: Date,
+  info: SessionInfo | null,
+  shellTail: boolean,
+  derivedStatus: SessionStatus,
+): Promise<void> {
+  if (shellTail) {
+    if (isShellTailNudgeDue(derivedStatus, info, task, now.getTime()))
+      await nudgeShellTailWorker(app, task, info, now);
+    return;
+  }
+  await failReviewingGate(
+    app,
+    task,
+    session,
+    project,
+    backend,
+    "in_progress",
+    failureReason,
+    now,
+    info,
+  );
 }

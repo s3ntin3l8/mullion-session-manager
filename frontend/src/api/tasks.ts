@@ -122,7 +122,13 @@ export const tasksApi = {
   // with a linked PR; does not merge inline (main's branch protection can't
   // guarantee that synchronously). See task-reconciler.ts's
   // processMergeRequests for what actually lands it.
-  mergeTask: (id: number) => request<Task>(`/api/tasks/${id}/merge`, { method: "POST" }),
+  // `overrideNonRequiredChecks` is "Merge anyway": the server binds it to the PR
+  // head it reads now and refuses unless only named non-required checks hold the merge.
+  mergeTask: (id: number, opts?: { overrideNonRequiredChecks?: boolean }) =>
+    request<Task>(
+      `/api/tasks/${id}/merge${opts?.overrideNonRequiredChecks ? "?overrideNonRequiredChecks=true" : ""}`,
+      { method: "POST" },
+    ),
 
   // Operator approval for a held `.github/workflows/` change. `sha` is the
   // head commit the drawer showed; the server refuses (409
@@ -143,12 +149,19 @@ export const tasksApi = {
 
   // #483 — failed -> claimed: queues a resume on the task's preserved
   // mullion/task-<id> branch (no work lost); it starts when a concurrency
-  // slot is free. Same response shape as claimTask.
+  // slot is free. A task with no branch (it never got a worktree) goes
+  // failed -> ready instead, for a normal claim. Same response shape as claimTask.
   retryTask: (id: number, opts?: { agent?: string | null; reviewAgent?: string | null }) =>
     request<Task>(`/api/tasks/${id}/retry`, {
       method: "POST",
       body: opts ? JSON.stringify(opts) : undefined,
     }),
+
+  // #3194 — abandons a retry that is WAITING for its original host (the
+  // preserved branch is there and not on origin, so the retry cannot start
+  // anywhere else). The branch stays on that host, with its commits; the
+  // task is re-queued as a new claim. Same response shape as claimTask.
+  startFreshTask: (id: number) => request<Task>(`/api/tasks/${id}/start-fresh`, { method: "POST" }),
 
   // #483 — reviewing -> failed: the other resolver of a reviewing task,
   // alongside approve/reject, for when the answer is "give up entirely"

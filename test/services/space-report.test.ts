@@ -118,6 +118,51 @@ describe("space report", () => {
     expect(opencode).toMatchObject({ coveredBy: "opencode database" });
   });
 
+  it("hints why an uncovered entry is not cleaned, and never on a covered one", async () => {
+    const rules: Array<[string, string]> = [
+      [".pyenv/v", "a toolchain you installed; not touched"],
+      [".nvm/v", "a toolchain you installed; not touched"],
+      [".rustup/v", "a toolchain you installed; not touched"],
+      [".cargo/bin/x", "a toolchain you installed; not touched"],
+      [".claude/projects/p", "agent session history; resuming a session needs it"],
+      [".codex/sessions/s", "agent session history; resuming a session needs it"],
+      [".gemini/g", "agent session history; resuming a session needs it"],
+      [".config/app/c", "application data, managed by that application"],
+      ["Android/sdk", "Android SDK and emulators; not touched"],
+      [".android/avd", "Android SDK and emulators; not touched"],
+      ["projects/repo", "your checkouts; developer worktrees are covered separately"],
+    ];
+    for (const [rel] of rules) await put(rel, 10);
+    await put(".cargo/registry/crate", 10);
+    await put("unmatched/blob", 10);
+    await put(".pyenv-covered/blob", 10);
+    await put(".nvm/covered/blob", 10);
+    const report = await inspectSpaceReport({
+      root,
+      covered: [{ path: path.join(root, ".nvm"), label: "nvm" }],
+    });
+    const byName = (name: string) => report.entries.find((e) => path.basename(e.path) === name)!;
+    expect(byName(".pyenv").notCovered).toBe(rules[0][1]);
+    expect(byName(".rustup").notCovered).toBe(rules[2][1]);
+    expect(byName(".claude").notCovered).toBeUndefined(); // only .claude/projects matches
+    expect(byName(".claude").children![0].notCovered).toBe(rules[4][1]);
+    expect(byName(".codex").children![0].notCovered).toBe(rules[5][1]);
+    expect(byName(".gemini").notCovered).toBe(rules[6][1]);
+    expect(byName(".config").notCovered).toBeUndefined(); // needs a segment below it
+    expect(byName(".config").children![0].notCovered).toBe(rules[7][1]);
+    expect(byName("Android").notCovered).toBe(rules[8][1]);
+    expect(byName(".android").notCovered).toBe(rules[9][1]);
+    expect(byName("projects").notCovered).toBe(rules[10][1]);
+    const cargo = byName(".cargo");
+    expect(cargo.notCovered).toBe(rules[3][1]);
+    expect(cargo.children!.find((c) => c.path.endsWith("registry"))?.notCovered).toBeUndefined();
+    expect(byName("unmatched").notCovered).toBeUndefined();
+    expect(byName(".pyenv-covered").notCovered).toBeUndefined();
+    const nvm = byName(".nvm");
+    expect(nvm.coveredBy).toBe("nvm");
+    expect(nvm.notCovered).toBeUndefined();
+  });
+
   it("counts directories it can't read instead of failing", async () => {
     if (process.getuid?.() === 0) return; // root reads everything
     await put("ok/blob", 300);

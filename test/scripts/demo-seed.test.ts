@@ -22,21 +22,86 @@ import { pinnedPath } from "../helpers/pinned-path.js";
 const dir = mkdtempSync(path.join(tmpdir(), "mullion-demo-seed-test-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-/** Runs a generated script for `ms` and returns everything it wrote. */
-function runFor(script: string, ms: number): Promise<string> {
+/**
+ * How long a spawned script may take to produce the output a test waits for.
+ *
+ * The wait is on the OUTPUT (see `runUntil`), so this only has to cover the
+ * script actually starting — and starting is what a loaded CI runner is
+ * slowest at. A fixed 2 s window was not enough there: the pty-manager split
+ * (issue #3277) moved six heavy suites into the same CI shard as this file,
+ * and on a saturated runner the spawned shell had not printed its first line
+ * inside that window, so the transcript assertion failed with an empty
+ * string. Kept under the suite's 20 s per-test timeout.
+ */
+const SPAWN_WAIT_MS = 12_000;
+
+/**
+ * Spawns a generated script and collects everything it writes.
+ *
+ * `ready(out)` ends the wait as soon as it holds; `ms` is only the deadline
+ * for that wait. A script that exits has said all it is going to say, so its
+ * exit ends the wait too.
+ */
+function spawnScript(script: string, ms: number, ready: (out: string) => boolean): Promise<string> {
   const file = path.join(dir, `agent-${Math.random().toString(36).slice(2)}.sh`);
   writeFileSync(file, script, { mode: 0o755 });
   return new Promise((resolve, reject) => {
     // TERM=dumb so `clear` prints nothing we have to strip.
     const child = spawn(file, { env: { PATH: pinnedPath(), TERM: "dumb" } });
     let out = "";
-    child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
-    child.on("error", reject);
-    setTimeout(() => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       child.kill("SIGKILL");
       resolve(out);
-    }, ms);
+    };
+    // The deadline timer is unref'd: it must never be the reason the process
+    // stays alive. A wait that ends early leaves it pending, but it fires
+    // once, finds the wait already settled, and does nothing.
+    const timer = setTimeout(finish, ms);
+    timer.unref();
+    child.stdout.on("data", (d: Buffer) => {
+      out += d.toString("utf8");
+      if (ready(out)) finish();
+    });
+    child.on("error", (err) => {
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("exit", finish);
   });
+}
+
+/** Runs a generated script for `ms` and returns everything it wrote. */
+function runFor(script: string, ms: number): Promise<string> {
+  return spawnScript(script, ms, () => false);
+}
+
+/**
+ * Runs a generated script until `ready(out)` holds, and returns everything it
+ * wrote. The assertions are about what the script PRINTS, so the wait is on
+ * the output rather than on a clock — a slow start must not read as "the
+ * script printed nothing".
+ */
+function runUntil(
+  script: string,
+  ready: (out: string) => boolean,
+  ms: number = SPAWN_WAIT_MS,
+): Promise<string> {
+  return spawnScript(script, ms, ready);
+}
+
+/** What the script wrote after its last transcript line. */
+function keepaliveTail(out: string): string {
+  const at = out.indexOf("done\n");
+  return at < 0 ? "" : out.slice(at + "done\n".length);
+}
+
+/** The keepalive resets in the script's tail. */
+function keepaliveResets(out: string): number {
+  return keepaliveTail(out).split("\u001b[0m").length - 1;
 }
 
 describe("agentTranscriptScript options", () => {
@@ -75,21 +140,25 @@ describe("agentTranscriptScript options", () => {
 describe("agentTranscriptScript", () => {
   it("prints the transcript verbatim, including shell metacharacters", async () => {
     const lines = ["Claude Code v2.1.0", "", "const key = `${req.ip}`;", "it's done"];
+    const transcript = "Claude Code v2.1.0\n\nconst key = `${req.ip}`;\nit's done\n";
     // `releaseFile` is optional in the implementation (`releaseFile ? ... :
     // ""`), but scripts/demo/seed.mjs is plain JS — its options destructuring
     // has no default, so TypeScript infers the field as required. Pass it
     // explicitly as undefined where the test means "no release file".
-    const out = await runFor(agentTranscriptScript({ lines, releaseFile: undefined }), 2_000);
-    expect(out).toContain("Claude Code v2.1.0\n\nconst key = `${req.ip}`;\nit's done\n");
+    const out = await runUntil(agentTranscriptScript({ lines, releaseFile: undefined }), (o) =>
+      o.includes(transcript),
+    );
+    expect(out).toContain(transcript);
   });
 
   it("keeps writing an invisible SGR reset after the transcript", async () => {
-    // Two keepalives at a 1 s cadence, with margin for a loaded host.
-    const out = await runFor(
+    // Two keepalives at a 1 s cadence. The wait ends on the second reset
+    // arriving — and on a COMPLETE one, so the tail never ends mid-escape.
+    const out = await runUntil(
       agentTranscriptScript({ lines: ["done"], releaseFile: undefined }),
-      3_600,
+      (o) => keepaliveResets(o) >= 2 && keepaliveTail(o).endsWith("\u001b[0m"),
     );
-    const tail = out.slice(out.indexOf("done\n") + "done\n".length);
+    const tail = keepaliveTail(out);
     // Nothing but keepalives after the last line, and more than one of them.
     expect(tail.replaceAll("\u001b[0m", "")).toBe("");
     expect(tail.split("\u001b[0m").length - 1).toBeGreaterThanOrEqual(2);
@@ -98,16 +167,23 @@ describe("agentTranscriptScript", () => {
   it("holds the transcript until its release file exists", async () => {
     const releaseFile = path.join(dir, "release-me");
     const script = agentTranscriptScript({ lines: ["held line"], releaseFile });
+    // Nothing to wait for before the release: the script prints nothing at
+    // all until the file exists, so this half is a fixed window by nature.
     const before = runFor(script, 1_500);
     expect(await before).not.toContain("held line");
     writeFileSync(releaseFile, "");
-    expect(await runFor(script, 1_500)).toContain("held line");
+    // After the release the wait is on the line itself, not on a clock.
+    expect(await runUntil(script, (o) => o.includes("held line"))).toContain("held line");
   });
 
   it("records its size next to the release file and prints even without a tty", async () => {
     const releaseFile = path.join(dir, "release-sized");
     writeFileSync(releaseFile, "");
-    const out = await runFor(agentTranscriptScript({ lines: ["sized line"], releaseFile }), 1_500);
+    // The script writes the size file BEFORE it prints the transcript, so
+    // the line's arrival is also the size file's arrival.
+    const out = await runUntil(agentTranscriptScript({ lines: ["sized line"], releaseFile }), (o) =>
+      o.includes("sized line"),
+    );
     expect(out).toContain("sized line");
     // No tty here, so stty fails: the file exists but holds no size.
     expect(parseSttySize(readFileSync(ptySizeFile(releaseFile), "utf8"))).toBeNull();

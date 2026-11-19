@@ -1,3 +1,4 @@
+import { getStoredSettings } from "../services/settings.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { listLeakedBrowserCloses } from "../services/session-browsers.js";
 import { closeAgentChannel } from "./agent-channel.js";
@@ -11,8 +12,10 @@ import {
   createHost,
   deleteHost,
   getHostRow,
+  hasLiveMachineIdentity,
   listHosts,
   findPossibleDuplicates,
+  activeSessionHostIds,
   mintHostToken,
   revokeMachineIdentity,
   updateHost,
@@ -21,6 +24,7 @@ import {
   deleteProjectRows,
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { listActiveTasksOnHost } from "../services/session-live-info.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
@@ -49,7 +53,8 @@ interface CreateHostBody {
 
 interface UpdateHostBody {
   name?: string;
-  baseUrl?: string;
+  // `null` clears the address (issue #3091).
+  baseUrl?: string | null;
   token?: string;
   // Issue #1725 / roadmap 8.11 — park this host: it takes no new work.
   // A flag, not an action — nothing is terminated.
@@ -78,7 +83,9 @@ const updateHostSchema = {
     minProperties: 1,
     properties: {
       name: { type: "string", minLength: 1 },
-      baseUrl: { type: "string", minLength: 1 },
+      // Issue #3091 — `null` clears the address of a host that has a machine
+      // identity; an empty string is still invalid.
+      baseUrl: { type: ["string", "null"], minLength: 1 },
       token: { type: "string", minLength: 1 },
       // Issue #1725 — the drain flag (park the host / un-park it). A new
       // host is never parked: parking is a decision about a host that is
@@ -185,9 +192,13 @@ export async function hostsRoute(app: FastifyInstance) {
   // "pending", which this route never hits since /api/hosts itself is a
   // primary-only route.
   app.get("/api/hosts", async () => {
+    const busy = activeSessionHostIds(app);
+    const { staleAfterDays } = getStoredSettings(app.db).hosts;
+    const now = Date.now();
     const duplicates = findPossibleDuplicates(
       app,
       (id) => app.hostHeartbeatTracker?.getHealth(id).status ?? "pending",
+      busy,
     );
     // Issue #2641 — browsers the primary gave up closing, by host. (Listing
     // also prunes pending closes of hosts that no longer exist, #2687.)
@@ -195,6 +206,11 @@ export async function hostsRoute(app: FastifyInstance) {
     for (const leak of listLeakedBrowserCloses(app)) {
       leakedByHost.set(leak.hostId, (leakedByHost.get(leak.hostId) ?? 0) + 1);
     }
+    // Issue #2969 — an older offline row a newer registration replaced is a
+    // leftover, not an agent waiting for an upgrade: its successor already
+    // has an identity, so flagging the leftover would say "upgrade" about an
+    // agent that already did. It is reported as a possible duplicate instead.
+    const superseded = new Set([...duplicates.values()].flat());
     return listHosts(app).map((host) => {
       const health = app.hostHeartbeatTracker?.getHealth(host.id) ?? {
         status: "pending" as const,
@@ -233,8 +249,11 @@ export async function hostsRoute(app: FastifyInstance) {
       const agentEntry = app.hostAgentTracker?.get(host.id);
       return {
         ...host,
+        legacyAgent: host.legacyAgent && !superseded.has(host.id),
         agents: agentEntry?.agents ?? null,
         capabilities: agentEntry?.capabilities ?? null,
+        // Issue #3156 — null = not reported (an older agent, or nothing read yet).
+        sessionEnv: agentEntry?.sessionEnv ?? null,
         protocol: protocolStatus(agentEntry?.protocol),
         // Issue #2450 — channel readiness, separate from pairing/credential
         // state (hasMachineIdentity / machineIdentityRevoked above).
@@ -249,7 +268,14 @@ export async function hostsRoute(app: FastifyInstance) {
         platform: host.id === LOCAL_HOST_ID ? process.platform : host.platform,
         health: health.status,
         healthReason: health.reason ?? null,
-        lastSeenAt: toIso(health.lastSeenAt),
+        lastSeenAt: toIso(health.lastSeenAt ?? host.lastSeenAt?.getTime() ?? null),
+        stale:
+          host.id !== LOCAL_HOST_ID &&
+          health.status === "offline" &&
+          !busy.has(host.id) &&
+          staleAfterDays > 0 &&
+          host.lastSeenAt !== null &&
+          now - host.lastSeenAt.getTime() > staleAfterDays * 86400_000,
         lastCheckedAt: toIso(health.lastCheckedAt),
         capacity,
         // Issue #2582 — older offline rows this one probably replaced.
@@ -325,10 +351,25 @@ export async function hostsRoute(app: FastifyInstance) {
         }
       }
       if (
-        request.body.baseUrl !== undefined &&
+        typeof request.body.baseUrl === "string" &&
         !isValidHttpUrl(request.body.baseUrl, app.config.MULLION_ALLOW_TAILNET_HOSTS)
       ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
+      }
+      // Issue #3091 — an address is how a host WITHOUT a live machine identity
+      // is reached at all, so clearing it would strand one. Live means what
+      // renewal means by it (renewMachineCredential): present, not revoked,
+      // not expired. The agent then connects out and the address is only the
+      // in-app browser's.
+      if (request.body.baseUrl === null) {
+        const row = getHostRow(app, id);
+        if (!row) return reply.notFound();
+        if (!hasLiveMachineIdentity(row)) {
+          return reply.badRequest(
+            "the address can only be cleared for a host with a live machine identity: without " +
+              "one nothing else can reach it",
+          );
+        }
       }
       const updated = updateHost(app, id, request.body);
       if (!updated) return reply.notFound();
@@ -633,61 +674,87 @@ export async function hostsRoute(app: FastifyInstance) {
   // internal channel. Per-host only, deliberately: no "update all hosts" —
   // a fleet-wide concurrent apply is how every host goes down at once, and
   // at a small fleet size the convenience buys nothing.
-  app.post<{ Params: { id: string } }>("/api/hosts/:id/update/apply", async (request, reply) => {
-    const { id } = request.params;
-    if (id === LOCAL_HOST_ID) {
-      return reply.badRequest("the local host updates from Settings → Server, not here");
-    }
-    const pending = pendingHostReply(app, id, reply);
-    if (pending) return pending;
-    const client = getRemoteHostClient(app, id);
-
-    // Independent review — the frontend only renders the Update button when
-    // the GET route above reported `updatable: true`, but this route has no
-    // server-side equivalent check: a stale poll response, a direct API
-    // call, or a race could otherwise trigger a redundant re-install/
-    // restart on an already-current agent.
-    try {
-      const hostVersion = (await client.resolveConfig()).version;
-      if (hostVersion === appVersion) {
-        return reply.badRequest("this host is already on the primary's version");
+  app.post<{ Params: { id: string }; Querystring: { force?: string } }>(
+    "/api/hosts/:id/update/apply",
+    async (request, reply) => {
+      const { id } = request.params;
+      if (id === LOCAL_HOST_ID) {
+        return reply.badRequest("the local host updates from Settings → Server, not here");
       }
-    } catch (err) {
-      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
-      app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
-      return reply.serviceUnavailable(`Host ${id} is unreachable`);
-    }
+      const pending = pendingHostReply(app, id, reply);
+      if (pending) return pending;
 
-    let release;
-    try {
-      release = await resolveReleaseByTag(app.config.MULLION_UPDATE_REPO, appVersion);
-    } catch (err) {
-      if (!(err instanceof UpdateCheckError)) throw err;
-      return reply.badGateway(`could not resolve the primary's own release: ${err.message}`);
-    }
-    if (!release?.assetUrl || !release.checksumUrl) {
-      return reply.badRequest(
-        "the primary's own release has no downloadable asset yet — cannot update this agent to it",
-      );
-    }
+      // Issue #3180 — refuse restarting an agent while Task Master workers
+      // or reviewers are running on it unless explicitly forced. Always run the
+      // lookup so a forced bypass over active tasks is logged and diagnosable.
+      const force = request.query.force === "true";
+      const blockingTasks = listActiveTasksOnHost(app, id);
+      if (!force && blockingTasks.length > 0) {
+        return reply.code(409).send({
+          error: `Cannot update host while ${blockingTasks.length} Task Master ${blockingTasks.length === 1 ? "task is" : "tasks are"} running on it`,
+          tasks: blockingTasks,
+        });
+      }
+      if (force && blockingTasks.length > 0) {
+        app.log.warn(
+          {
+            hostId: id,
+            taskIds: blockingTasks.map((t) => t.id),
+            statuses: blockingTasks.map((t) => t.status),
+          },
+          "force-updating a host with running Task Master tasks",
+        );
+      }
 
-    try {
-      const status = await client.applyUpdate({
-        version: appVersion,
-        assetUrl: release.assetUrl,
-        checksumUrl: release.checksumUrl,
-      });
-      // The agent restarts onto a new build: what it advertised is now stale.
-      refreshHostProtocolSoon(app, id);
-      reply.code(202);
-      return status;
-    } catch (err) {
-      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
-      app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
-      // The call that matters: the update may already be installing.
-      return replyHostUnreachable(reply, id, err, "applying the update");
-    }
-  });
+      const client = getRemoteHostClient(app, id);
+
+      // Independent review — the frontend only renders the Update button when
+      // the GET route above reported `updatable: true`, but this route has no
+      // server-side equivalent check: a stale poll response, a direct API
+      // call, or a race could otherwise trigger a redundant re-install/
+      // restart on an already-current agent.
+      try {
+        const hostVersion = (await client.resolveConfig()).version;
+        if (hostVersion === appVersion) {
+          return reply.badRequest("this host is already on the primary's version");
+        }
+      } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+        app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
+        return reply.serviceUnavailable(`Host ${id} is unreachable`);
+      }
+
+      let release;
+      try {
+        release = await resolveReleaseByTag(app.config.MULLION_UPDATE_REPO, appVersion);
+      } catch (err) {
+        if (!(err instanceof UpdateCheckError)) throw err;
+        return reply.badGateway(`could not resolve the primary's own release: ${err.message}`);
+      }
+      if (!release?.assetUrl || !release.checksumUrl) {
+        return reply.badRequest(
+          "the primary's own release has no downloadable asset yet — cannot update this agent to it",
+        );
+      }
+
+      try {
+        const status = await client.applyUpdate({
+          version: appVersion,
+          assetUrl: release.assetUrl,
+          checksumUrl: release.checksumUrl,
+        });
+        // The agent restarts onto a new build: what it advertised is now stale.
+        refreshHostProtocolSoon(app, id);
+        reply.code(202);
+        return status;
+      } catch (err) {
+        if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+        app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
+        // The call that matters: the update may already be installing.
+        return replyHostUnreachable(reply, id, err, "applying the update");
+      }
+    },
+  );
 
   // A remote host with projects 409s by default (client must move/delete
   // them first); `?cascade=true` instead best-effort terminates every live

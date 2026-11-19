@@ -22,6 +22,7 @@ import { useCleanupJob } from "../useCleanupJob.js";
 import { useOrphanRemoval } from "../useOrphanRemoval.js";
 import { summarizeCleanup } from "../cleanupSummary.js";
 import { KeptSessionWorktrees } from "./KeptSessionWorktrees.js";
+import { AndroidImagesOptIn } from "./AndroidImagesOptIn.js";
 import { SpaceReport } from "./SpaceReport.js";
 
 function describeWorktree(candidate: DevWorktreeCandidate): string {
@@ -374,6 +375,7 @@ export function StorageSection() {
   const caches = hasMeasuredData(probes.caches) ? probes.caches : null;
   const opencode = hasMeasuredData(probes.opencode) ? probes.opencode : null;
   const worktrees = hasMeasuredData(probes.worktrees) ? probes.worktrees : null;
+  const androidImages = hasMeasuredData(probes.androidImages) ? probes.androidImages : null;
   // Orphans are excluded from automatic cleanup, but can be removed individually.
   const removableWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason !== "orphaned");
   const orphanedWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason === "orphaned");
@@ -381,6 +383,9 @@ export function StorageSection() {
   const settings = useDashboardStore((s) => s.settings);
   const updateSettings = useDashboardStore((s) => s.updateSettings);
   const selectedCaches = settings.diskCleanup.cacheDirs;
+  const selectedOptIns = settings.diskCleanup.optIns;
+  const androidOptedIn = selectedOptIns.includes("android-system-images");
+  const volumesOptedIn = selectedOptIns.includes("docker-volumes");
   // A cache that was opted in but has since disappeared from disk stays listed
   // (as "not found") so the stale opt-in can still be cleared.
   const visibleCaches = (caches?.caches ?? []).filter(
@@ -444,6 +449,15 @@ export function StorageSection() {
         : null
       : failed(data),
   );
+  const androidRow = androidOptedIn
+    ? tierRow("Android system images", probes.androidImages, (data) =>
+        data.available
+          ? data.images.length > 0
+            ? { bytes: data.reclaimableBytes }
+            : null
+          : failed(data),
+      )
+    : null;
   const present = (rows: Array<TierRow | null>) =>
     rows.filter((row): row is TierRow => row !== null);
 
@@ -522,6 +536,48 @@ export function StorageSection() {
         </div>
       )}
 
+      {docker?.available && (
+        <div className="settings-footer-note" data-testid="docker-volumes">
+          {docker.volumes
+            ? `Volumes: ${docker.volumes.anonymousUnused.count} unused anonymous (${formatBytes(docker.volumes.anonymousUnused.bytes)}) · ${docker.volumes.named.count} named (${formatBytes(docker.volumes.named.bytes)}), never removed by cleanup`
+            : "Volumes: unknown (Docker's detailed usage could not be read)"}
+        </div>
+      )}
+      {docker?.available && (
+        <div data-testid="docker-volumes-optin">
+          <div className="settings-info-row">
+            <span className="settings-info-key">Also remove unused anonymous volumes</span>
+            <span className="settings-info-value">
+              <Toggle
+                size="small"
+                on={volumesOptedIn}
+                ariaLabel="Also remove unused anonymous volumes"
+                onChange={(on) =>
+                  updateSettings({
+                    diskCleanup: {
+                      cacheDirs: selectedCaches,
+                      optIns: on
+                        ? [
+                            ...selectedOptIns.filter((id) => id !== "docker-volumes"),
+                            "docker-volumes",
+                          ]
+                        : selectedOptIns.filter((id) => id !== "docker-volumes"),
+                    },
+                  })
+                }
+              />
+            </span>
+          </div>
+          <div className="settings-footer-note">
+            Deleted permanently. Anything an unused, unnamed volume still holds, such as a stopped
+            dev database, is lost. Named volumes are never removed. Aggressive cleanup only, and
+            only on Docker Engine 23 or newer.
+          </div>
+        </div>
+      )}
+
+      <AndroidImagesOptIn status={androidImages} />
+
       <div className="storage-tiers">
         <TierCard
           title="Safe"
@@ -535,7 +591,7 @@ export function StorageSection() {
               armedLabel="Confirm safe cleanup"
               title="Remove dangling images and stale containers, networks, build cache, and temp files"
               disabled={cleanup.running}
-              onConfirm={() => void cleanup.start("safe", selectedCaches)}
+              onConfirm={() => void cleanup.start("safe", selectedCaches, selectedOptIns)}
             >
               {cleanup.activeMode === "safe" ? "Cleaning up…" : "Clean up (safe)…"}
             </ConfirmButton>
@@ -553,6 +609,7 @@ export function StorageSection() {
             cacheRow,
             opencodeRow,
             worktreeRow,
+            androidRow,
           ])}
           action={
             <ConfirmButton
@@ -560,7 +617,7 @@ export function StorageSection() {
               armedLabel="Confirm aggressive cleanup"
               title="Remove ALL unused images (including tagged), ALL unused build cache, recent temp files, the npm cache, free space inside opencode's database, and developer worktrees whose branch is merged or gone"
               disabled={cleanup.running}
-              onConfirm={() => void cleanup.start("aggressive", selectedCaches)}
+              onConfirm={() => void cleanup.start("aggressive", selectedCaches, selectedOptIns)}
             >
               {cleanup.activeMode === "aggressive" ? "Cleaning up…" : "Aggressive cleanup…"}
             </ConfirmButton>
@@ -585,6 +642,7 @@ export function StorageSection() {
                     onChange={(on) =>
                       updateSettings({
                         diskCleanup: {
+                          optIns: selectedOptIns,
                           cacheDirs: on
                             ? [...selectedCaches, cache.id]
                             : selectedCaches.filter((id) => id !== cache.id),
@@ -597,14 +655,28 @@ export function StorageSection() {
             ))}
           </div>
           <div className="settings-footer-note">
-            Ticked caches under <code>{caches.root}</code> are emptied by aggressive cleanup only (
+            Ticked caches (from <code>{caches.root}</code> and elsewhere in your home directory) are
+            emptied by aggressive cleanup only (
             {formatBytes(
               caches.caches
                 .filter((c) => selectedCaches.includes(c.id))
                 .reduce((sum, c) => sum + c.bytes, 0),
             )}
-            ). They are rebuilt or re-downloaded on next use, e.g. Playwright browsers and Hugging
+            ). Most are rebuilt or re-downloaded on next use, e.g. Playwright browsers and Hugging
             Face models. Close anything using them first, such as a running Playwright browser.
+            {visibleCaches.some((c) => c.permanent) && (
+              <>
+                {" "}
+                <strong>
+                  {visibleCaches
+                    .filter((c) => c.permanent)
+                    .map((c) => c.label)
+                    .join(", ")}{" "}
+                  {visibleCaches.filter((c) => c.permanent).length === 1 ? "is" : "are"} the
+                  exception: emptied for good, with no way to get it back.
+                </strong>
+              </>
+            )}
           </div>
         </>
       )}
@@ -737,7 +809,8 @@ export function StorageSection() {
           Aggressive cleanup also removes <strong>all unused images, including tagged ones</strong>{" "}
           (they must be pulled or rebuilt again) and all unused build cache, and it drops the 7-day
           window for stopped containers and unused networks too. Neither uses <code>--volumes</code>
-          , so volumes are always preserved. Figures are estimates.
+          , so volumes are preserved unless you opt in to removing unused anonymous volumes
+          (aggressive only, Docker Engine 23+, never named volumes). Figures are estimates.
         </div>
         {temp?.available && (
           <div className="settings-footer-note">

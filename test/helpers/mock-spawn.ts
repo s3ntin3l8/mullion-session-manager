@@ -22,7 +22,7 @@ import type * as ChildProcess from "node:child_process";
 // sites, the real variance is which commands get fake-vs-real treatment,
 // not the shape of the fake itself (an EventEmitter that fires a success
 // event on the next tick) — a handful of files (agent-detect.test.ts,
-// actions.test.ts, agents.test.ts, internal.test.ts,
+// actions.test.ts, agents.test.ts, helpers/internal-routes.ts,
 // projects-dev-server-detect.test.ts) also fake command-specific stdout
 // content (e.g. `command -v claude` output, `systemctl is-active` replies),
 // which is specific enough per-file that it isn't worth generalizing here —

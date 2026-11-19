@@ -1,3 +1,4 @@
+import { useBusyAction } from "../hooks/useBusyAction.js";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
 import { usePrDetail, usePrList, useRunJobs } from "../hooks/useGitHubData.js";
@@ -323,6 +324,10 @@ export function PrDetailView({
     setActionError(null);
     void refresh();
   };
+  const { run: runReload, busy: reloading } = useBusyAction(() => {
+    setActionError(null);
+    return refresh();
+  });
   const threadWrites = usePrThreadWrites(projectId, number, reload);
 
   // The CI rows load their jobs once the Checks row is open (cached per run).
@@ -648,7 +653,7 @@ export function PrDetailView({
           }
           subtitle={`${pr.baseBranch} ← ${pr.headBranch}`}
           actions={
-            <IconButton label="Refresh" onClick={() => reload()}>
+            <IconButton label="Refresh" busy={reloading} onClick={runReload}>
               <RefreshIcon size={14} />
             </IconButton>
           }

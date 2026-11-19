@@ -334,7 +334,17 @@ describe("forwarder.mjs (issue #174)", () => {
     dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
     const exitCode = await runForwarder(
       ["claude-code", "Stop"],
-      { MULLION_HOOK_SOCKET: path.join(dir, "no-such.sock"), MULLION_HOOK_TOKEN: "tok" },
+      {
+        MULLION_HOOK_SOCKET: path.join(dir, "no-such.sock"),
+        MULLION_HOOK_TOKEN: "tok",
+        // Issue #3174 — a Stop is now retried, and a socket that is not there
+        // at all is exactly the case that earns a retry (nothing was
+        // written, so nothing can have landed). The production bound is ~97s
+        // in the worst case (STOP_RETRY_DELAYS_MS in
+        // src/hooks/forwarder-delivery.mjs); the test hook shortens it so
+        // this suite does not sit through the whole bound.
+        MULLION_FORWARDER_STOP_RETRY_DELAYS_MS: "10,20,30",
+      },
       "{}",
     );
     expect(exitCode).toBe(0);
@@ -964,6 +974,143 @@ describe("forwarder.mjs (issue #174)", () => {
       expect(JSON.parse(stdout.trim())).toEqual({
         injectSteps: [{ ephemeralMessage: "resume the refactor" }],
       });
+    });
+  });
+
+  // Issue #3174 — a `Stop` is the one hook the forwarder delivers with an
+  // acknowledgement and retries: a Stop the socket refuses (Mullion or an
+  // agent host restarting, the session's token not registered again yet) was
+  // dropped on the floor by the fire-and-forget path, and the session it
+  // belongs to — a headless Task Master worker that has finished — then
+  // looked unfinished until its budget expires.
+  describe("Stop delivery retry (issue #3174)", () => {
+    it("retries a refused Stop until the socket accepts it, and delivers it exactly once", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+
+      let connections = 0;
+      const dispatched: unknown[] = [];
+      const created = net.createServer((socket) => {
+        const index = connections++;
+        let buffer = "";
+        let handshakeSeen = false;
+        let refused = false;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          let newlineIndex = buffer.indexOf("\n");
+          while (newlineIndex !== -1) {
+            const line = buffer.slice(0, newlineIndex);
+            buffer = buffer.slice(newlineIndex + 1);
+            newlineIndex = buffer.indexOf("\n");
+            if (line.trim() === "") continue;
+            if (!handshakeSeen) {
+              handshakeSeen = true;
+              if (index < 2) {
+                // The real listener's refusal: nothing is dispatched — the
+                // messages the client already wrote behind the handshake are
+                // dropped with the connection.
+                refused = true;
+                socket.write(`${JSON.stringify({ ack: "refused" })}\n`);
+                socket.end();
+                return;
+              }
+              socket.write(`${JSON.stringify({ ack: "accepted" })}\n`);
+              continue;
+            }
+            if (refused) continue;
+            dispatched.push(JSON.parse(line));
+            socket.write(`${JSON.stringify({ ack: "delivered" })}\n`);
+          }
+        });
+      });
+      server = created;
+      await new Promise<void>((resolve) => created.listen(socketPath, () => resolve()));
+
+      const exitCode = await runForwarder(
+        ["claude-code", "Stop"],
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          // Short retry delays so the test does not wait out the production
+          // bound (see STOP_RETRY_DELAYS_MS in src/hooks/forwarder-delivery.mjs).
+          MULLION_FORWARDER_STOP_RETRY_DELAYS_MS: "10,20,30",
+        },
+        "{}",
+      );
+      expect(exitCode).toBe(0);
+
+      // Three connections: two refused, one accepted — the Stop is delivered
+      // ONCE, even though the delivery was attempted three times.
+      expect(connections).toBe(3);
+      expect(dispatched).toEqual([{ kind: "progress", phase: "done" }]);
+    });
+
+    it("gives up silently after the retry bound when the socket keeps refusing", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+
+      let connections = 0;
+      const server = net.createServer((socket) => {
+        connections++;
+        let buffer = "";
+        let handshakeSeen = false;
+        socket.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          let newlineIndex = buffer.indexOf("\n");
+          while (newlineIndex !== -1) {
+            const line = buffer.slice(0, newlineIndex);
+            buffer = buffer.slice(newlineIndex + 1);
+            newlineIndex = buffer.indexOf("\n");
+            if (line.trim() === "") continue;
+            if (!handshakeSeen) {
+              handshakeSeen = true;
+              socket.write(`${JSON.stringify({ ack: "refused" })}\n`);
+              socket.end();
+              return;
+            }
+          }
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+
+      // Three delays = four attempts in total; the forwarder must give up
+      // after that, silently and without throwing.
+      const exitCode = await runForwarder(
+        ["claude-code", "Stop"],
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_FORWARDER_STOP_RETRY_DELAYS_MS: "10,20,30",
+        },
+        "{}",
+      );
+      expect(exitCode).toBe(0);
+      expect(connections).toBe(4);
+    });
+
+    it("leaves every other hook fire-and-forget", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-forwarder-"));
+      const socketPath = path.join(dir, "hooks.sock");
+
+      let connections = 0;
+      const server = net.createServer((socket) => {
+        connections++;
+        // Never answers — a Notification must not wait for an answer.
+        socket.on("data", () => {});
+      });
+      await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+
+      const exitCode = await runForwarder(
+        ["claude-code", "Notification"],
+        {
+          MULLION_HOOK_SOCKET: socketPath,
+          MULLION_HOOK_TOKEN: "tok-123",
+          MULLION_FORWARDER_STOP_RETRY_DELAYS_MS: "10,20,30",
+        },
+        JSON.stringify({ message: "Waiting for review" }),
+      );
+      expect(exitCode).toBe(0);
+      expect(connections).toBe(1);
     });
   });
 });

@@ -7,7 +7,12 @@ import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { AgentInstallInstructions } from "../../AgentInstallInstructions.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
-import { deriveHostStatus, type PingState } from "../../hostStatus.js";
+import {
+  deriveHostStatus,
+  legacyAgentLabels,
+  legacyAgentTitle,
+  type PingState,
+} from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
@@ -22,7 +27,7 @@ import {
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
 import { PairDesktopSection } from "./PairDesktopSection.js";
-import { HostHeartbeatSetting } from "../RuntimeSettings.js";
+import { HostHeartbeatSetting, HostStaleAfterSetting } from "../RuntimeSettings.js";
 
 // Issue #647 / roadmap 7.8 — separate from ServerInfoSection's own
 // UPDATE_STATUS_POLL_MS (2000ms), which only gates the primary's own
@@ -87,6 +92,51 @@ function HostCapabilitiesLine({ host }: { host: Host }) {
 }
 
 /**
+ * Issue #3156 — the environment a session on this host starts with: whether the
+ * interactive-shell PATH recovery worked, the shell, and the PATH entries.
+ * Collapsed by default; a fallback shows a warning chip naming the reason, and
+ * null (an older agent) reads "not reported".
+ */
+function HostSessionEnvDetail({ host }: { host: Host }) {
+  const env = host.sessionEnv;
+  if (env === undefined) return null;
+  return (
+    <details data-testid={`host-session-env-${host.id}`} style={{ marginTop: 2 }}>
+      <summary style={{ cursor: "pointer" }}>
+        Session environment
+        {env === null && " — not reported"}
+        {env?.interactiveResolve === "fallback" && (
+          <span
+            data-testid={`host-session-env-warning-${host.id}`}
+            style={{ color: "var(--y)", marginLeft: 6 }}
+            title="The interactive shell's PATH could not be recovered, so sessions on this host get only the service PATH."
+          >
+            ⚠ PATH recovery fell back{env.reason ? `: ${env.reason}` : ""}
+          </span>
+        )}
+      </summary>
+      {env && (
+        <div>
+          <div>
+            Interactive resolve: {env.interactiveResolve}
+            {env.reason ? ` (${env.reason})` : ""} · shell: {env.shell ?? "none"}
+          </div>
+          <div>PATH:</div>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {env.path.map((entry, i) => (
+              <li key={`${i}:${entry}`}>
+                <code>{entry}</code>
+              </li>
+            ))}
+          </ul>
+          {env.recoveredKeys.length > 0 && <div>Recovered: {env.recoveredKeys.join(", ")}</div>}
+        </div>
+      )}
+    </details>
+  );
+}
+
+/**
  * Issue #2248 — protocol version, incompatibility and missing operations. The
  * remedy for both is the row's existing Update action. Null renders nothing
  * (not negotiated yet).
@@ -111,6 +161,13 @@ function HostProtocolLine({ host }: { host: Host }) {
       {parts.join(" · ")}
     </span>
   );
+}
+
+// Issue #3091 — a host that connects out needs no stored address, so it may be
+// cleared; one without a live machine identity (none, revoked or expired) is
+// reached only by it. The server enforces the same rule.
+function canClearAddress(host: Host): boolean {
+  return host.hasLiveMachineIdentity === true;
 }
 
 export function HostsSection() {
@@ -151,12 +208,23 @@ export function HostsSection() {
   // Issue #2582 — the server flags a newer enrolled row as a probable
   // duplicate of older offline, session-free ones. The older rows are the
   // ones offered for removal; nothing is ever removed automatically.
-  const staleHostIds = new Set(hosts.flatMap((h) => h.possibleDuplicateOf ?? []));
+  const duplicateHostIds = new Set(hosts.flatMap((h) => h.possibleDuplicateOf ?? []));
+  const staleHosts = hosts.filter((host) => host.id !== LOCAL_HOST_ID && host.stale);
+  const [now, setNow] = useState(Date.now);
+  const [selectedStaleIds, setSelectedStaleIds] = useState<string[]>([]);
+  const [removingStale, setRemovingStale] = useState(false);
+  const [remainingStale, setRemainingStale] = useState<Host[]>([]);
   const hostNameById = new Map(hosts.map((h) => [h.id, h.name]));
+  // The primary's own version, reported on its "local" row (Issue #2969).
+  const primaryVersion = hosts.find((h) => h.id === LOCAL_HOST_ID)?.mullionVersion ?? null;
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   // A freshly rotated token, shown once (the DB only keeps it encrypted).
-  const [rotated, setRotated] = useState<{ name: string; token: string } | null>(null);
+  const [rotated, setRotated] = useState<{
+    name: string;
+    token: string;
+    liveIdentity: boolean;
+  } | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
   const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingState>>({});
@@ -176,6 +244,17 @@ export function HostsSection() {
   const [updateInfo, setUpdateInfo] = useState<Record<string, HostUpdateStatus>>({});
   const [applyingUpdate, setApplyingUpdate] = useState<Record<string, boolean>>({});
   const [applyError, setApplyError] = useState<Record<string, string>>({});
+  const [updateForcePrompt, setUpdateForcePrompt] = useState<{
+    hostId: string;
+    hostName: string;
+    message: string;
+    tasks: Array<{
+      id: number;
+      issueNumber: number | null;
+      projectName: string;
+      status: string;
+    }>;
+  } | null>(null);
 
   // The local host is a row in the `hosts` table too (migration 0008 seeds
   // it), so it is filtered out of the REMOTE list below — but its row is
@@ -258,16 +337,17 @@ export function HostsSection() {
     { enabled: applyingHostIds.length > 0, immediate: false },
   );
 
-  const applyHostUpdate = (hostId: string) => {
+  const applyHostUpdate = (hostId: string, force = false) => {
     setApplyError((prev) => {
       if (!(hostId in prev)) return prev;
       const next = { ...prev };
       delete next[hostId];
       return next;
     });
+    setUpdateForcePrompt((prev) => (prev?.hostId === hostId ? null : prev));
     setApplyingUpdate((prev) => ({ ...prev, [hostId]: true }));
     api
-      .applyHostUpdate(hostId)
+      .applyHostUpdate(hostId, force ? { force: true } : undefined)
       .then((status) => {
         setUpdateInfo((prev) =>
           prev[hostId] ? { ...prev, [hostId]: { ...prev[hostId], status } } : prev,
@@ -275,6 +355,39 @@ export function HostsSection() {
       })
       .catch((err: unknown) => {
         setApplyingUpdate((prev) => ({ ...prev, [hostId]: false }));
+        if (
+          !force &&
+          err instanceof ApiError &&
+          err.statusCode === 409 &&
+          Array.isArray(err.body?.tasks)
+        ) {
+          const blockedTasks = err.body.tasks.filter(
+            (
+              t,
+            ): t is {
+              id: number;
+              issueNumber: number | null;
+              projectName: string;
+              status: string;
+            } =>
+              typeof t === "object" &&
+              t !== null &&
+              typeof (t as Record<string, unknown>).id === "number" &&
+              typeof (t as Record<string, unknown>).projectName === "string" &&
+              typeof (t as Record<string, unknown>).status === "string",
+          );
+          if (blockedTasks.length > 0) {
+            const hostName = hosts.find((h) => h.id === hostId)?.name ?? hostId;
+            const message = typeof err.body.error === "string" ? err.body.error : err.message;
+            setUpdateForcePrompt({
+              hostId,
+              hostName,
+              message,
+              tasks: blockedTasks,
+            });
+            return;
+          }
+        }
         setApplyError((prev) => ({
           ...prev,
           [hostId]: err instanceof ApiError ? err.message : "Could not start the update",
@@ -295,10 +408,14 @@ export function HostsSection() {
   // #246) actually updates while this section stays open, instead of only
   // on mount/after a host mutation — matching #246's "continuously-updated
   // indicator" ask, not just a one-shot fetch.
-  usePolling(() => void refreshHosts(), LIVE_REFRESH_INTERVAL_MS, {
-    pauseWhenHidden: true,
-    deps: [refreshHosts],
-  });
+  usePolling(
+    () => {
+      setNow(Date.now());
+      void refreshHosts();
+    },
+    LIVE_REFRESH_INTERVAL_MS,
+    { pauseWhenHidden: true, deps: [refreshHosts] },
+  );
 
   // Snapshotting host.lastCheckedAt when the click *begins* (not when it
   // resolves) is what deriveHostStatus compares against later — see its
@@ -325,9 +442,12 @@ export function HostsSection() {
       );
   };
 
-  const handleDelete = (host: Host) => {
+  const handleDelete = async (host: Host): Promise<"deleted" | "conflict" | "error"> => {
     setDeleteError(null);
-    void deleteHost(host.id).catch((err: unknown) => {
+    try {
+      await deleteHost(host.id);
+      return "deleted";
+    } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       // 409 is src/routes/hosts.ts's HostHasProjectsError (still owns
       // projects) — branching on the status code rather than matching the
@@ -336,10 +456,28 @@ export function HostsSection() {
       // 404) surfaces as a plain inline error instead.
       if (err instanceof ApiError && err.statusCode === 409) {
         setCascadePrompt({ id: host.id, message });
+        return "conflict";
       } else {
         setDeleteError(message);
       }
-    });
+      return "error";
+    }
+  };
+
+  // Stop at a conflict so every project-owning host gets the existing prompt.
+  const removeStaleHosts = async (queue: Host[]) => {
+    setRemovingStale(true);
+    for (const [index, host] of queue.entries()) {
+      const result = await handleDelete(host);
+      if (result !== "deleted") {
+        setRemainingStale(result === "conflict" ? queue.slice(index + 1) : []);
+        setRemovingStale(false);
+        return;
+      }
+      setSelectedStaleIds((ids) => ids.filter((id) => id !== host.id));
+    }
+    setRemainingStale([]);
+    setRemovingStale(false);
   };
 
   const handleRevoke = (host: Host) => {
@@ -359,19 +497,39 @@ export function HostsSection() {
   const handleRotate = (host: Host) => {
     setRotateError(null);
     rotateHostToken(host.id)
-      .then((token) => setRotated({ name: host.name, token }))
+      .then((token) =>
+        setRotated({ name: host.name, token, liveIdentity: host.hasLiveMachineIdentity === true }),
+      )
       .catch((err: unknown) =>
         setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
       );
+  };
+
+  // Rotate and discard: the old token dies, the new one is never rendered or
+  // kept. Only offered for a host with a live machine identity (it renews on
+  // that, so it does not need the value).
+  const handleRotateDiscard = (host: Host) => {
+    setRotateError(null);
+    rotateHostToken(host.id).catch((err: unknown) =>
+      setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
+    );
   };
 
   const confirmCascadeDelete = () => {
     if (!cascadePrompt) return;
     const { id } = cascadePrompt;
     setCascadePrompt(null);
-    void deleteHost(id, { cascade: true }).catch((err: unknown) => {
-      setDeleteError(err instanceof Error ? err.message : String(err));
-    });
+    setRemovingStale(true);
+    void deleteHost(id, { cascade: true })
+      .then(() => {
+        setSelectedStaleIds((ids) => ids.filter((selected) => selected !== id));
+        return removeStaleHosts(remainingStale);
+      })
+      .catch((err: unknown) => {
+        setDeleteError(err instanceof Error ? err.message : String(err));
+        setRemainingStale([]);
+        setRemovingStale(false);
+      });
   };
 
   return (
@@ -444,6 +602,19 @@ export function HostsSection() {
                 title={host.name}
                 subtitle={
                   <>
+                    {host.stale && host.lastSeenAt && (
+                      <>
+                        <span style={{ color: "var(--y)" }}>
+                          Not seen for{" "}
+                          {Math.max(
+                            0,
+                            Math.floor((now - Date.parse(host.lastSeenAt)) / 86_400_000),
+                          )}{" "}
+                          days
+                        </span>
+                        {" · "}
+                      </>
+                    )}
                     {host.baseUrl ??
                       (host.health === "online"
                         ? "connected over the outbound channel"
@@ -452,6 +623,17 @@ export function HostsSection() {
                           : host.hasMachineIdentity
                             ? "outbound only — waiting for the agent to connect"
                             : "waiting for the agent to register")}
+                    {host.legacyAgent && (
+                      <>
+                        {" · "}
+                        <span
+                          style={{ color: "var(--y)" }}
+                          title={legacyAgentTitle(host, primaryVersion)}
+                        >
+                          {legacyAgentLabels(host).long}
+                        </span>
+                      </>
+                    )}
                     {host.unclaimed && (
                       <>
                         {" · "}
@@ -479,6 +661,7 @@ export function HostsSection() {
                     {" · "}
                     <HostCapabilitiesLine host={host} />
                     <HostProtocolLine host={host} />
+                    <HostSessionEnvDetail host={host} />
                     {(host.leakedBrowsers ?? 0) > 0 && (
                       <>
                         {" · "}
@@ -634,16 +817,36 @@ export function HostsSection() {
                           ? []
                           : [
                               {
-                                // Replaces the host's token. The running agent is
-                                // locked out until its .env carries the new one,
-                                // hence the arm-then-confirm click.
+                                // Replaces the host's token. Without a live
+                                // machine identity the running agent is locked
+                                // out until its .env carries the new one; with
+                                // one it keeps renewing, and the new token is
+                                // only needed to register again. Arm-then-confirm
+                                // either way.
                                 key: "rotate",
                                 label: "Rotate token",
-                                armLabel: "Click again to rotate",
+                                armLabel:
+                                  host.hasLiveMachineIdentity === true
+                                    ? "Click again to rotate (agent unaffected)"
+                                    : "Click again to rotate",
                                 icon: <GearIcon size={14} style={{ color: "var(--muted)" }} />,
                                 confirm: true,
                                 onClick: () => handleRotate(host),
                               },
+                              ...(host.hasLiveMachineIdentity === true
+                                ? [
+                                    {
+                                      key: "rotate-discard",
+                                      label: "Rotate token and discard it",
+                                      armLabel: "Click again to rotate (token not shown)",
+                                      icon: (
+                                        <GearIcon size={14} style={{ color: "var(--muted)" }} />
+                                      ),
+                                      confirm: true,
+                                      onClick: () => handleRotateDiscard(host),
+                                    },
+                                  ]
+                                : []),
                             ]),
                         // Issue #2568 — only a host that holds a machine identity
                         // has one to revoke.
@@ -664,7 +867,10 @@ export function HostsSection() {
                           : []),
                         {
                           key: "delete",
-                          label: staleHostIds.has(host.id) ? "Remove stale host" : "Delete host",
+                          label:
+                            host.stale || duplicateHostIds.has(host.id)
+                              ? "Remove stale host"
+                              : "Delete host",
                           armLabel: "Click again to delete",
                           icon: <CloseIcon size={14} />,
                           danger: true,
@@ -680,6 +886,42 @@ export function HostsSection() {
           })}
       </StyledList>
 
+      {staleHosts.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <GroupHeading
+            title="Remove stale hosts"
+            desc="These hosts have been offline for a long time and have no active sessions. Select the hosts you want to remove."
+          />
+          {staleHosts.map((host) => (
+            <label key={host.id} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+              <input
+                type="checkbox"
+                checked={selectedStaleIds.includes(host.id)}
+                disabled={removingStale || !!cascadePrompt}
+                onChange={(event) =>
+                  setSelectedStaleIds((ids) =>
+                    event.target.checked ? [...ids, host.id] : ids.filter((id) => id !== host.id),
+                  )
+                }
+              />
+              {host.name}
+            </label>
+          ))}
+          <SecondaryButton
+            disabled={
+              removingStale ||
+              !!cascadePrompt ||
+              !staleHosts.some((host) => selectedStaleIds.includes(host.id))
+            }
+            onClick={() =>
+              void removeStaleHosts(staleHosts.filter((host) => selectedStaleIds.includes(host.id)))
+            }
+          >
+            {removingStale ? "Removing…" : "Remove selected hosts"}
+          </SecondaryButton>
+        </div>
+      )}
+
       {cascadePrompt && (
         <div className="settings-cascade-warning">
           <span>{cascadePrompt.message}</span>
@@ -687,7 +929,35 @@ export function HostsSection() {
             <SecondaryButton onClick={confirmCascadeDelete}>
               Delete host and its projects
             </SecondaryButton>
-            <SecondaryButton onClick={() => setCascadePrompt(null)}>Cancel</SecondaryButton>
+            <SecondaryButton
+              onClick={() => {
+                setCascadePrompt(null);
+                setRemainingStale([]);
+              }}
+            >
+              Cancel
+            </SecondaryButton>
+          </div>
+        </div>
+      )}
+      {updateForcePrompt && (
+        <div className="settings-cascade-warning" data-testid="update-force-prompt">
+          <span>
+            {updateForcePrompt.hostName}: {updateForcePrompt.message}
+          </span>
+          <ul style={{ margin: "4px 0", paddingLeft: 18 }}>
+            {updateForcePrompt.tasks.map((t) => (
+              <li key={t.id}>
+                {t.issueNumber !== null ? `#${t.issueNumber}` : `Task ${t.id}`} · {t.projectName} (
+                {t.status})
+              </li>
+            ))}
+          </ul>
+          <div style={{ display: "flex", gap: 8 }}>
+            <SecondaryButton onClick={() => applyHostUpdate(updateForcePrompt.hostId, true)}>
+              Update anyway
+            </SecondaryButton>
+            <SecondaryButton onClick={() => setUpdateForcePrompt(null)}>Cancel</SecondaryButton>
           </div>
         </div>
       )}
@@ -730,11 +1000,17 @@ export function HostsSection() {
           initialName={editing.name}
           initialBaseUrl={editing.baseUrl ?? ""}
           hasToken={editing.hasToken}
+          canClearBaseUrl={canClearAddress(editing)}
           onClose={() => setEditing(null)}
           onSave={(name, baseUrl, token) =>
             updateHost(editing.id, {
               name,
-              ...(baseUrl ? { baseUrl } : {}),
+              // An emptied address on a host with an identity is a clear (#3091).
+              ...(baseUrl
+                ? { baseUrl }
+                : editing.baseUrl && canClearAddress(editing)
+                  ? { baseUrl: null }
+                  : {}),
               ...(token ? { token } : {}),
             })
           }
@@ -745,6 +1021,7 @@ export function HostsSection() {
           kind="rotate"
           token={rotated.token}
           hostName={rotated.name}
+          agentUnaffected={rotated.liveIdentity}
           primaryUrl={window.location.origin}
           onClose={() => setRotated(null)}
         />
@@ -759,6 +1036,7 @@ export function HostsSection() {
 
       <div style={{ marginTop: 16 }}>
         <HostHeartbeatSetting />
+        <HostStaleAfterSetting />
       </div>
 
       <div style={{ marginTop: 28 }}>

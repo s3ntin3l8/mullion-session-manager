@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
 import {
   HostBusyError,
   HostRequestError,
@@ -81,8 +81,9 @@ describe("preview proxy: busy and over-limit agent channel", () => {
         payload: { kind: "project", projectId },
       });
       const slug = preview.json().slug as string;
+      const hostId = host.json().id as string;
       const spy = vi
-        .spyOn(RemoteHostClient.prototype, "openPreviewHttp")
+        .spyOn(getRemoteHostClient(app, hostId).previews, "http")
         .mockRejectedValue(makeErr());
 
       const res = await app.inject({
