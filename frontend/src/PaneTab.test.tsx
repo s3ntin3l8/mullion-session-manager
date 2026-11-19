@@ -319,6 +319,17 @@ describe("kill session cascade confirmation (issue #196 5.6)", () => {
 });
 
 describe("PaneTab", () => {
+  it("keeps the full title on hover and the actions present for a very long title", () => {
+    const longTitle = "x".repeat(150);
+    const base = makeProps();
+    render(<PaneTab {...base} api={{ ...base.api, title: longTitle }} />);
+    expect(screen.getByText(longTitle)).toHaveAttribute(
+      "title",
+      `${longTitle} — double-click to rename`,
+    );
+    expect(screen.getByRole("button", { name: "Close pane" })).toBeInTheDocument();
+  });
+
   it("shows the setup-recipe badge on a session whose recipe ran (#2245)", () => {
     session = { ...session, setupStatus: "failed" };
     render(<PaneTab {...makeProps()} />);

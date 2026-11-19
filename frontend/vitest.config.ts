@@ -65,6 +65,7 @@ export default defineConfig({
         /styles\/sidebar-kit\.css/,
         /styles\/github-pr\.css/,
         /styles\/task-board\.css/,
+        /styles\/terminal\.css/,
       ],
     },
     maxWorkers,

@@ -10,9 +10,11 @@
      long title text could blow past the action buttons (the prior comment
      below called this out as "still not ideal"). Anchoring the actions in
      their own column guarantees they're always at the right edge, and
-     `1fr` on the left column means the title ellipsizes into whatever's
-     left instead of overflowing into the actions. */
-  grid-template-columns: 1fr auto;
+     `minmax(0, 1fr)` on the left column means the title ellipsizes into
+     whatever's left instead of overflowing into the actions. Plain `1fr` is
+     `minmax(auto, 1fr)`, whose track can't shrink below its content's
+     min-content, so a long title grew the track and pushed the actions out. */
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   height: 100%;
@@ -56,6 +58,7 @@
    including close↔kebab) — keeps the action cluster visually identical
    to before the grid split. */
 .pane-tab-actions {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
