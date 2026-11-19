@@ -410,9 +410,15 @@ needs:
   agent skips those when it allocates a fresh port, because it keeps no record
   of them across a restart. It answers the live info and the port it holds,
   which the primary persists on the row.
-- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate` and
-  `POST /internal/devices/:id/action` are the live-list, stop/delete and
-  one-shot-action counterparts. The action runs through the same `DeviceDriver`
+- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate`,
+  `POST /internal/devices/:id/action`, `POST /internal/devices/pair` and
+  `GET /internal/devices/discovered` are the live-list, stop/delete,
+  one-shot-action, pairing and mDNS discovery counterparts. On the primary,
+  `POST /api/devices/pair`, `POST /api/devices/pair-and-connect` and
+  `GET /api/devices/discovered?hostId=…` accept an optional `hostId` (default
+  `"local"`): an unknown host or an agent predating those routes answers `400`,
+  an unreachable agent answers `503`, and a `discoveryId` only resolves against
+  the host it was listed from. The action runs through the same `DeviceDriver`
   as a local one, so a driver's 4xx (no live adb connection, unsupported
   action) is forwarded with its own status and message. A device-reason failure
   on an agent (such as a 5xx `DeviceActionError` or a failed teardown) is
@@ -441,10 +447,7 @@ and each registered agent) as `{hostId, name, status, deviceKinds, platforms}`: 
 is cached for 10 s; `features.deviceKinds` in `/api/server-info` still reports
 only the primary's own kinds.
 
-Not covered yet, each tracked on its own issue: pairing and mDNS discovery
-still run on the primary only, so a physical device on an agent host is added
-by its adb address ([#3271](https://github.com/s3ntin3l8/mullion-session-manager/issues/3271));
-AVD and system-image management (`/api/avds`, `/api/system-images`) is
+Not covered yet, each tracked on its own issue: AVD and system-image management (`/api/avds`, `/api/system-images`) is
 primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)), so the
 create form's Host picker offers remote hosts but its AVD list is still the primary's;
 and the panel's socket to an agent reached only over the outbound channel needs a
@@ -722,21 +725,23 @@ the row** (two-phase: if teardown throws it returns 500 and keeps the row,
 marked `killed`, so the deletion never reports success for something still
 half-alive). `POST /api/devices` takes either
 `{avdName, projectId?, name?}` (emulator) or `{kind: "physical", address,
-projectId?, name?}` (physical); `POST /api/devices/pair` takes
-`{pairingAddress, pairingCode}` and creates no row.
+projectId?, name?}` (physical); `POST /api/devices/pair` takes `{pairingAddress, pairingCode, hostId?}` and
+creates no row.
 `POST /api/devices/pair-and-connect` (issue #1378) takes either
-`{discoveryId, pairingCode, connectAddress?, name?}` (drives pair+connect
-from the cached mDNS snapshot returned by `GET /api/devices/discovered`)
-or `{pairingAddress, connectAddress, pairingCode, name?}` (manual fallback
+`{discoveryId, pairingCode, connectAddress?, name?, hostId?}` (drives pair+connect
+from the cached mDNS snapshot returned by `GET /api/devices/discovered` for that
+same `hostId` — a `discoveryId` only resolves against the host it was listed from)
+or `{pairingAddress, connectAddress, pairingCode, name?, hostId?}` (manual fallback
 for networks where mDNS doesn't reach — both ports must be supplied). It
 inserts the row first (sync collision guard → 409 if an active physical
-row already owns the same connect address), then awaits pair() — a wrong
+row on that host already owns the same connect address), then awaits pair() — a wrong
 code rolls the insert back and returns 400 so an immediate retry re-pairs
 instead of hitting 409 — then kicks off connect fire-and-forget and
 returns 201. Connect failures after that surface asynchronously via the
-device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` returns the current mDNS snapshot
+device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` (with optional `?hostId=`) returns the current mDNS snapshot
 (an empty array when `DEVICE_DISCOVERY_ENABLED=false` or nothing has been
-advertised). `PATCH /api/devices/:id`
+advertised; `400` for an unknown or outdated host and `503` when the target agent
+is unreachable). `PATCH /api/devices/:id`
 (issue #1347) takes `{address}` and is **physical-only** (an emulator's
 `serial` is synthesized from its own `port` column, not user-supplied) — it
 rewrites the row's `serial` in place (keeping `id`/`name`/`projectId`/

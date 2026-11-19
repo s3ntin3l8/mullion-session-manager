@@ -32,3 +32,9 @@ export const GIT_CLONE_RATE_LIMIT = { config: { rateLimit: { max: 10, timeWindow
 export const GENERATION_TURN_RATE_LIMIT = {
   config: { rateLimit: { max: 5, timeWindow: "10 minutes" } },
 };
+
+// Dials an arbitrary network address a caller supplies, so keep it on a tight
+// ceiling rather than INTERNAL_RATE_LIMIT's 1000/min.
+export const DEVICE_PAIR_RATE_LIMIT = {
+  config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+};

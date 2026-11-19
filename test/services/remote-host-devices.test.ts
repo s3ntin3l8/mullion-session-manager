@@ -55,17 +55,41 @@ describe("remote-host-devices", () => {
   });
 
   it("leaves the cheap reads on the default timeout", async () => {
+    const discoveredDevice = {
+      id: "Android.local",
+      name: "Pixel 7",
+      host: "192.168.1.23",
+      pairingAddress: "192.168.1.23:41234",
+      connectAddress: "192.168.1.23:37251",
+      discoveredAt: "2026-01-01T00:00:00.000Z",
+    };
     const request = vi
       .fn()
       .mockResolvedValueOnce({ devices: [] })
-      .mockResolvedValueOnce({ deviceKinds: ["physical"], platforms: ["android"] });
+      .mockResolvedValueOnce({ deviceKinds: ["physical"], platforms: ["android"] })
+      .mockResolvedValueOnce({ devices: [discoveredDevice] });
     const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
     await expect(devices.live()).resolves.toEqual([]);
     await expect(devices.kinds()).resolves.toEqual({
       deviceKinds: ["physical"],
       platforms: ["android"],
     });
-    expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1]);
+    await expect(devices.discovered()).resolves.toEqual([discoveredDevice]);
+    expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1, 1]);
+  });
+
+  it("sends pair to /internal/devices/pair with DEVICE_REQUEST_TIMEOUT_MS", async () => {
+    const request = vi.fn().mockResolvedValueOnce({ ok: true });
+    const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
+    await expect(devices.pair("192.168.1.23:41234", "123456")).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledWith(
+      "/internal/devices/pair",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ pairingAddress: "192.168.1.23:41234", pairingCode: "123456" }),
+      }),
+      DEVICE_REQUEST_TIMEOUT_MS,
+    );
   });
 
   it("lists simulators on /internal/simulators with DEVICE_REQUEST_TIMEOUT_MS", async () => {
