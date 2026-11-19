@@ -1757,7 +1757,7 @@ keeps its context; its next turn end sends the task back to review. A worker
 that is blocked on a dialog is refused up front with a 409 — nothing changes
 and nothing is killed, and the human answers the dialog and rejects again. A
 merely busy worker (a stale background shell job never settles) still takes
-the prompt, so Reject stays the escape hatch out of a stranded review. A worker whose host does not answer is left as it was. If the worker's
+the prompt, so Reject stays the escape hatch out of a stranded review. A worker whose host does not answer is left as it was. If the live session's recorded `sessions.model` and the task's current resolved model are both known and differ, live typing is skipped so the old-model worker is terminated and re-seeded (`force: true`) on the right model (a `null` `sessions.model` is treated as unknown and keeps live typing). If the worker's
 agent takes no typed prompt (or the prompt fails after the check passed), it
 is terminated and re-seeded (`force: true`, as the review-feedback
 auto-return does); if its session had already exited, a fresh one is
