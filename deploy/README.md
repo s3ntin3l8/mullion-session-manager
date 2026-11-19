@@ -166,10 +166,11 @@ and no elevation. It needs **Node 26** and **Git for Windows**, and
 under the same detached-`dtach` scope backend an agent's sessions use. The
 enrollment protocol is agent-dials-primary and carries no OS assumption, so
 **a macOS primary with Linux agents** is a valid topology. The
-[Android device panel](../docs/device-panel.md) works on macOS for **physical**
-devices (an Android phone over adb wireless debugging) with
-`DEVICE_ENABLED=true`; **emulators** need a device scope macOS does not have
-yet and answer a 400 saying so (issue #1854).
+[device panel](../docs/device-panel.md) works on macOS for **physical**
+devices (an Android phone over adb wireless debugging), **emulators** (tracked
+via `MarkerDeviceScopeBackend` under `DEVICE_ENABLED=true`), and **iOS
+Simulators** (with `DEVICE_ENABLED=true`, `DEVICE_IOS_ENABLED=true`, and
+`DEVICE_IDB_COMPANION_PATH` — see [the Mac setup steps](#preparing-a-mac-to-build-mobile-tasks)).
 
 **`bwrap` (bubblewrap) — OPTIONAL (issue #1081):** not checked as a hard
 requirement, unlike the binaries above. When `bwrap` is present AND

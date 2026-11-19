@@ -1269,10 +1269,11 @@ topology: the `hosts` table's `local` row simply becomes the Mac, and
 up in the primary's list under the **agent's** host id, and the terminal
 attach proxies to whichever host the session actually lives on.
 
-#### The Android device panel on macOS
+#### The device panel on macOS
 
 The device panel ([`device-panel.md`](device-panel.md)) works on macOS with
-`DEVICE_ENABLED=true`, for both kinds of device:
+`DEVICE_ENABLED=true`, for physical Android phones, Android emulators, and iOS
+Simulators:
 
 - **Physical** devices — an Android phone over adb wireless debugging — need no
   scope (`adb` is the only binary used), including the mDNS scanner that finds
@@ -1282,6 +1283,9 @@ The device panel ([`device-panel.md`](device-panel.md)) works on macOS with
   way a session's dtach master does and are recovered on the next start. The
   scope is chosen on the host that owns the emulator, from its own platform
   (`getDeviceScopeBackend`), like the session scope.
+- **iOS Simulators** require a macOS host with `DEVICE_IOS_ENABLED=true`, the
+  `xcode` capability, and an executable `DEVICE_IDB_COMPANION_PATH` — see
+  [`device-panel.md`](device-panel.md#ios-simulator).
 
 The Linux scope is a `systemd --user` unit; macOS has no equivalent, which is why
 the macOS one is process-based. See
@@ -1324,8 +1328,9 @@ does not report simulator support — update its agent."`. For `platform: "ios"`
 - **When the host is offline.** `GET /api/devices` still succeeds when an agent
   is down and marks its rows `hostUnreachable: true` with `live: null` (the UI
   shows `"unavailable — host unreachable"` and disables Start/Stop). Mutating
-  calls (`start`, `stop`, `delete`, `action`, `/api/simulators?hostId=…`)
-  return `503` (or `502` when the request may have been delivered).
+  calls (`start`, `stop`, `delete`, `action`) answer `503` (or `502` when the
+  request may have been delivered), and the one read that has to reach the host
+  (`GET /api/simulators?hostId=…`) fails the same way.
 
 See [`device-panel.md`](device-panel.md#devices-on-agent-hosts-issue-3200) for
 the internal request shapes, port reservation, and what is not covered yet.

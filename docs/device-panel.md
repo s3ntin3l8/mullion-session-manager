@@ -565,6 +565,7 @@ mullion device tap <id> <x> <y>
 mullion device swipe <id> <x1> <y1> <x2> <y2> [<durationMs>]
 mullion device text <id> <text...>
 mullion device key <id> <androidKeyCode>
+mullion device button <id> <home|lock|side|siri>
 mullion device logcat <id> [--lines <n>] [--filter <expr>]
 mullion device clipboard get <id>
 mullion device clipboard set <id> <text...> [--paste]
@@ -669,7 +670,7 @@ all three) — and `delete_device`/`device delete`, which drops the row
 and the id that identifies its systemd scope with no undo. MCP's device
 surface is narrower than the CLI's: only `list_devices` (`device list`),
 `use_device`/`device_action` (`device screenshot`/`tap`/`swipe`/`text`/
-`key`/`logcat`/`clipboard`), `start_device` (`device start`), `stop_device`
+`key`/`button`/`logcat`/`clipboard`), `start_device` (`device start`), `stop_device`
 (`device stop`), and `delete_device` (`device delete`) exist as MCP tools —
 `device create`, `device pair`, `device pair-and-connect`, `device connect`,
 and `device discovered` have no MCP counterpart; only the CLI and REST
