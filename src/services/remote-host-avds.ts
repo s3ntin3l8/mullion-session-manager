@@ -9,8 +9,11 @@ export interface AvdsClientDeps {
 
 /** `avdmanager list avd` / `list device` have a 15 s agent-side timeout. */
 const AVD_LIST_TIMEOUT_MS = 20_000;
-/** `avdmanager create avd` has a 120 s agent-side timeout. */
-const AVD_CREATE_TIMEOUT_MS = 135_000;
+/** `avdmanager create avd` has a 120 s agent-side timeout plus a 15 s
+ * `avdmanager list avd` when `ramSize`/`dataPartitionSize` is set; leave
+ * margin above that 135 s worst-case budget so the client never aborts a
+ * create that just succeeded on the agent. */
+const AVD_CREATE_TIMEOUT_MS = 150_000;
 
 export function createAvdsClient({ request }: AvdsClientDeps) {
   return {

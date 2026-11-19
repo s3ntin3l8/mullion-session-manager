@@ -455,10 +455,11 @@ agent's `/internal/avds`, `/internal/system-images`, and
 `POST /api/devices` (`kind: "emulator"`) validates `avdName` against a remote
 host's AVD list before inserting a row ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)).
 
-Not covered yet, each tracked on its own issue: installing/uninstalling system
-images and accepting SDK licences (`/api/system-images/available`,
-`/ws/system-image-install`, `/ws/sdk-licenses`) remain primary-only
-([#3299](https://github.com/s3ntin3l8/mullion-session-manager/issues/3299));
+Not covered yet: the Settings create form still lists only the primary's AVDs
+(wiring its Host picker to `hostId` is not yet implemented);
+installing/uninstalling system images and accepting SDK licences
+(`/api/system-images/available`, `/ws/system-image-install`, `/ws/sdk-licenses`)
+remain primary-only ([#3299](https://github.com/s3ntin3l8/mullion-session-manager/issues/3299));
 and the panel's socket to an agent reached only over the outbound channel needs a
 `device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
 

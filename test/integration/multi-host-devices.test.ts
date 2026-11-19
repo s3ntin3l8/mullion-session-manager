@@ -1153,5 +1153,61 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(primary.app.db.select().from(devices).all()).toEqual([]);
       expect(spies.getOrCreate).not.toHaveBeenCalled();
     });
+
+    it("translates a 404 from an older agent on the AVD routes into an actionable 400", async () => {
+      const { createServer } = await import("node:http");
+      const oldAgent = createServer((req, res) => {
+        res.statusCode = 404;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ message: `Route ${req.method}:${req.url} not found` }));
+      });
+      await new Promise<void>((resolve) => oldAgent.listen(0, "127.0.0.1", () => resolve()));
+      const address = oldAgent.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+      const oldHostId = (
+        await primary.app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "old-agent",
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            token: "unused-token",
+          },
+        })
+      ).json().id as string;
+
+      try {
+        for (const url of [
+          `/api/avds?hostId=${encodeURIComponent(oldHostId)}`,
+          `/api/system-images?hostId=${encodeURIComponent(oldHostId)}`,
+          `/api/device-profiles?hostId=${encodeURIComponent(oldHostId)}`,
+        ]) {
+          const res = await primary.app.inject({ method: "GET", url });
+          expect(res.statusCode).toBe(400);
+          expect(res.json().message).toBe(
+            `Host ${oldHostId} does not report AVDs — update its agent.`,
+          );
+        }
+
+        const postRes = await primary.app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            hostId: oldHostId,
+            name: "remote_avd",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_7",
+          },
+        });
+        expect(postRes.statusCode).toBe(400);
+        expect(postRes.json().message).toBe(
+          `Host ${oldHostId} does not report AVDs — update its agent.`,
+        );
+      } finally {
+        await primary.app.inject({ method: "DELETE", url: `/api/hosts/${oldHostId}` });
+        await new Promise<void>((resolve) => oldAgent.close(() => resolve()));
+      }
+    });
   });
 });

@@ -41,7 +41,12 @@ function replyAvdError(reply: FastifyReply, host: AvdHost, err: unknown, what: s
   if (host.isLocal || err instanceof AvdValidationError) {
     return reply.badRequest(err instanceof Error ? err.message : String(err));
   }
-  if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+  if (err instanceof HostRequestError) {
+    if (err.statusCode === 404) {
+      return reply.badRequest(`Host ${host.hostId} does not report AVDs — update its agent.`);
+    }
+    return forwardHostRequestError(reply, err);
+  }
   return replyHostUnreachable(reply, host.hostId, err, what);
 }
 
