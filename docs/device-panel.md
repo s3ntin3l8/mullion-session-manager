@@ -458,14 +458,19 @@ agent's `/internal/avds`, `/internal/system-images`, and
 `/internal/device-profiles` routes (`src/routes/internal-avds.ts`);
 `POST /api/devices` (`kind: "emulator"`) validates `avdName` against a remote
 host's AVD list before inserting a row ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)).
+`GET /api/system-images/available`, `GET /api/sdk-licenses/status`,
+`/ws/system-image-install`, and `/ws/sdk-licenses` also accept an optional
+`hostId` query parameter and dispatch/proxy to the agent's
+`/internal/system-images/available`, `/internal/sdk-licenses/status`,
+`/internal/ws/system-image-install`, and `/internal/ws/sdk-licenses` routes over
+the inbound transport ([#3299](https://github.com/s3ntin3l8/mullion-session-manager/issues/3299)).
 
 Not covered yet: the Settings create form still lists only the primary's AVDs
-(wiring its Host picker to `hostId` is not yet implemented);
-installing/uninstalling system images and accepting SDK licences
-(`/api/system-images/available`, `/ws/system-image-install`, `/ws/sdk-licenses`)
-remain primary-only ([#3299](https://github.com/s3ntin3l8/mullion-session-manager/issues/3299));
-and the panel's socket to an agent reached only over the outbound channel needs a
-`device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
+(wiring its Host picker to `hostId` is not yet implemented); the SDK system
+images list and its licences modal still target the primary — their `?hostId=`
+support is API-only until the panel gains a Host picker; and the panel's
+socket to an agent reached only over the outbound channel needs a `device`
+stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
 
 ### Toolbar and gestures (issue #1419, #3204)
 
@@ -905,3 +910,10 @@ below for you, then retries the failed install once accepted.
   requires without actually running `sdkmanager --licenses`, so the endpoint
   always reports licenses as potentially pending. The `acceptLicenses` call is
   idempotent — a fast no-op when licenses are already accepted.
+
+All four endpoints accept an optional `?hostId=` query parameter (issue
+#3299): for an agent host, the GET routes dispatch through `getAvdHost` and the
+WebSockets proxy over `RemoteHostClient.avds` (`inboundStream`) to
+`/internal/ws/system-image-install` and `/internal/ws/sdk-licenses`. The
+SDK-operation lock is per-host, and a closing browser socket does not cancel an
+in-flight install on the agent (the lock is released when `sdkmanager` exits).

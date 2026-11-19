@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { LocalAvdHost } from "../services/avd-host.js";
+import { attachSdkLicensesSocket, attachSystemImageInstallSocket } from "./avds.js";
 import { AVD_CREATE_SCHEMA, type AvdCreateBody } from "./internal-schemas.js";
 
 /**
@@ -51,4 +52,33 @@ export function registerAvdRoutes(app: FastifyInstance, rateLimit: { config: obj
       }
     },
   );
+
+  app.get("/internal/system-images/available", rateLimit, async (_request, reply) => {
+    try {
+      const systemImages = await local.listAvailableSystemImages();
+      return { systemImages };
+    } catch (err) {
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  app.get("/internal/sdk-licenses/status", rateLimit, async (_request, reply) => {
+    try {
+      return await local.sdkLicensesStatus();
+    } catch (err) {
+      return reply.badRequest(err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  app.get(
+    "/internal/ws/system-image-install",
+    { websocket: true, config: rateLimit.config },
+    (socket) => {
+      attachSystemImageInstallSocket(app, socket);
+    },
+  );
+
+  app.get("/internal/ws/sdk-licenses", { websocket: true, config: rateLimit.config }, (socket) => {
+    attachSdkLicensesSocket(app, socket);
+  });
 }
