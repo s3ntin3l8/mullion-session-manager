@@ -20,6 +20,7 @@ import {
   liveInfoForRows,
   type DeviceHost,
 } from "../services/device-host.js";
+import { getAvdHost } from "../services/avd-host.js";
 import { SimctlError } from "../services/ios-simulators.js";
 import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
@@ -440,6 +441,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       return reply.badRequest("address must not be set for an emulator device");
     }
     if (!avdName) return reply.badRequest("avdName is required");
+
+    if (!host.isLocal) {
+      try {
+        const avds = await getAvdHost(app, hostId).listAvds();
+        if (!avds.includes(avdName)) {
+          return reply.badRequest(`AVD "${avdName}" was not found on host ${hostId}`);
+        }
+      } catch (err) {
+        if (err instanceof HostRequestError && err.statusCode === 404) {
+          return reply.badRequest(`Host ${hostId} does not report AVDs — update its agent.`);
+        }
+        return replyDeviceError(reply, host, err, "checking the host's AVDs");
+      }
+    }
 
     const row = insertDevice(app, {
       kind: "emulator",

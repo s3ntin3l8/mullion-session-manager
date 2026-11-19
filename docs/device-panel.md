@@ -447,9 +447,19 @@ and each registered agent) as `{hostId, name, status, deviceKinds, platforms}`: 
 is cached for 10 s; `features.deviceKinds` in `/api/server-info` still reports
 only the primary's own kinds.
 
-Not covered yet, each tracked on its own issue: AVD and system-image management (`/api/avds`, `/api/system-images`) is
-primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)), so the
-create form's Host picker offers remote hosts but its AVD list is still the primary's;
+`GET /api/avds`, `GET /api/system-images`, `GET /api/device-profiles`, and
+`POST /api/avds` accept an optional `hostId` (query for the GETs, body for
+POST) and dispatch through `getAvdHost` (`src/services/avd-host.ts`) to the
+agent's `/internal/avds`, `/internal/system-images`, and
+`/internal/device-profiles` routes (`src/routes/internal-avds.ts`);
+`POST /api/devices` (`kind: "emulator"`) validates `avdName` against a remote
+host's AVD list before inserting a row ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)).
+
+Not covered yet: the Settings create form still lists only the primary's AVDs
+(wiring its Host picker to `hostId` is not yet implemented);
+installing/uninstalling system images and accepting SDK licences
+(`/api/system-images/available`, `/ws/system-image-install`, `/ws/sdk-licenses`)
+remain primary-only ([#3299](https://github.com/s3ntin3l8/mullion-session-manager/issues/3299));
 and the panel's socket to an agent reached only over the outbound channel needs a
 `device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
 
@@ -778,7 +788,13 @@ route module, `src/routes/avds.ts` (the "one file per route module"
 convention `devices.ts`'s own header documents). **Creating an AVD here
 does not create a `devices` row** — a user still adds a device for it
 afterward via `POST /api/devices {avdName}` (§3 above), the same way
-`kind: "emulator"` has always worked.
+`kind: "emulator"` has always worked. The four endpoints below accept an
+optional `hostId` (`?hostId=` on the GETs, `hostId` in the `POST /api/avds`
+body) and dispatch through `getAvdHost` (`src/services/avd-host.ts`) to the
+agent's `/internal/avds`, `/internal/system-images`, and
+`/internal/device-profiles` routes (`src/routes/internal-avds.ts`), forwarding
+agent refusals via `forwardHostRequestError`, translating an old agent's 404
+into a 400 that names the host, and answering 503 when the host is unreachable.
 
 - **`GET /api/avds`** — `avdmanager list avd`, parsed from its `Name:` lines.
   This is what feeds the "Create an emulator" flow's "Virtual device"

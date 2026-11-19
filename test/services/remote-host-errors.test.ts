@@ -37,6 +37,7 @@ const MUTATING_INTERNAL_POSTS = [
   "/internal/devices/pair",
   "/internal/devices/:id/terminate",
   "/internal/devices/:id/action",
+  "/internal/avds",
   "/internal/updates/apply",
   "/internal/git-pull",
   "/internal/git-checkout",

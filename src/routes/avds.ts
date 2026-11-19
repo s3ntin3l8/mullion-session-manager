@@ -1,20 +1,18 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import {
-  createAvd,
-  listAvds,
-  listDeviceProfiles,
-  listInstalledSystemImages,
   listAvailableSystemImages,
   installSystemImage,
   uninstallSystemImage,
   acceptLicenses,
   licensesMayBePending,
-  normalizeAvdHardware,
-  avdConfigRoots,
-  AvdCreatedError,
+  listInstalledSystemImages,
 } from "../services/avd-manager.js";
 import type { AvailableSystemImage } from "../services/avd-manager.js";
+import { AvdValidationError, getAvdHost, type AvdHost } from "../services/avd-host.js";
+import { getHostRow, LOCAL_HOST_ID } from "../services/host-registry.js";
+import { HostRequestError } from "../services/remote-host-client.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 
 // AVD (Android Virtual Device) provisioning — the counterpart to
 // routes/devices.ts (which only RUNS an AVD that already exists on the
@@ -24,21 +22,8 @@ import type { AvailableSystemImage } from "../services/avd-manager.js";
 // here doesn't create a `devices` row; the user still adds a device for it
 // afterward via the existing `POST /api/devices {avdName}`.
 
-// AVD name, as accepted by `avdmanager create avd -n`. Deliberately an
-// allowlist matching avdmanager's own accepted charset (alphanumerics,
-// dots, underscores, hyphens), not a "reject metacharacters" denylist.
-//
-// CodeQL (js/polynomial-redos) — an earlier version of this combined the
-// charset check and the "at least one alphanumeric" (Hermes review, keeps a
-// bare "." or ".." from passing) into a SINGLE regex with two overlapping
-// `[A-Za-z0-9._-]*` groups around a middle character — classic catastrophic
-// backtracking on user-controlled input (e.g. many "0"s followed by one
-// invalid character). Two independent, single-pass regexes below achieve
-// the same validation with no ambiguity for the engine to backtrack over.
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
-
 interface CreateAvdBody {
+  hostId?: string;
   name?: string;
   systemImage?: string;
   deviceProfile?: string;
@@ -47,38 +32,47 @@ interface CreateAvdBody {
   dataPartitionSize?: string;
 }
 
+function resolveAvdHostId(app: FastifyInstance, requested: string | undefined): string | null {
+  if (!requested || requested === LOCAL_HOST_ID) return LOCAL_HOST_ID;
+  return getHostRow(app, requested) ? requested : null;
+}
+
+function replyAvdError(reply: FastifyReply, host: AvdHost, err: unknown, what: string) {
+  if (host.isLocal || err instanceof AvdValidationError) {
+    return reply.badRequest(err instanceof Error ? err.message : String(err));
+  }
+  if (err instanceof HostRequestError) {
+    if (err.statusCode === 404) {
+      return reply.badRequest(`Host ${host.hostId} does not report AVDs — update its agent.`);
+    }
+    return forwardHostRequestError(reply, err);
+  }
+  return replyHostUnreachable(reply, host.hostId, err, what);
+}
+
 export async function avdsRoute(app: FastifyInstance): Promise<void> {
-  app.get("/api/avds", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
-    }
-    if (!app.config.DEVICE_AVDMANAGER_PATH) {
-      return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
-    }
-    // Self-review (mullion-reviewer) — an exec failure (a misconfigured
-    // path, ENOENT, or the timeout path) used to fall through uncaught to a
-    // generic 500, unlike every other misconfiguration case in this file,
-    // which produces an actionable 400. Same fix applied to the sibling GET
-    // handlers below and to the POST handler's own listDeviceProfiles call.
+  app.get<{ Querystring: { hostId?: string } }>("/api/avds", async (request, reply) => {
+    const hostId = resolveAvdHostId(app, request.query?.hostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+    const host = getAvdHost(app, hostId);
     try {
-      const avds = await listAvds(app.config.DEVICE_AVDMANAGER_PATH);
+      const avds = await host.listAvds();
       return { avds };
     } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      return replyAvdError(reply, host, err, "listing AVDs");
     }
   });
 
-  app.get("/api/system-images", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
+  app.get<{ Querystring: { hostId?: string } }>("/api/system-images", async (request, reply) => {
+    const hostId = resolveAvdHostId(app, request.query?.hostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+    const host = getAvdHost(app, hostId);
+    try {
+      const systemImages = await host.listSystemImages();
+      return { systemImages };
+    } catch (err) {
+      return replyAvdError(reply, host, err, "listing system images");
     }
-    if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-      return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
-    }
-    // listInstalledSystemImages is pure fs (no exec) and never throws — see
-    // its own safeReaddir() comment — so no try/catch is needed here.
-    const systemImages = listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT);
-    return { systemImages };
   });
 
   // Not in the original plan's own route list, but needed by it anyway:
@@ -87,93 +81,30 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
   // frontend form needs somewhere to source its device-profile picker from
   // — duplicating a second hardcoded list would drift from whatever
   // `avdmanager list device` actually reports on this host.
-  app.get("/api/device-profiles", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
-    }
-    if (!app.config.DEVICE_AVDMANAGER_PATH) {
-      return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
-    }
+  app.get<{ Querystring: { hostId?: string } }>("/api/device-profiles", async (request, reply) => {
+    const hostId = resolveAvdHostId(app, request.query?.hostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+    const host = getAvdHost(app, hostId);
     try {
-      const deviceProfiles = await listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH);
+      const deviceProfiles = await host.listDeviceProfiles();
       return { deviceProfiles };
     } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      return replyAvdError(reply, host, err, "listing device profiles");
     }
   });
 
   app.post<{ Body: CreateAvdBody }>("/api/avds", async (request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
-    }
-    if (!app.config.DEVICE_AVDMANAGER_PATH) {
-      return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
-    }
-    if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-      return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
-    }
-
-    const { name, systemImage, deviceProfile } = request.body ?? {};
-    if (!name || !AVD_NAME_PATTERN.test(name) || !AVD_NAME_HAS_ALPHANUMERIC.test(name)) {
-      return reply.badRequest(
-        "name is required and may only contain letters, digits, '.', '_', and '-'",
-      );
-    }
-
-    // Allowlisted against the exact set this host's own SDK/avdmanager just
-    // reported, not regex-validated — strictly stronger, and free (this
-    // data is already being fetched to populate the frontend picker that
-    // produced these values in the first place). Fetched in parallel: two
-    // independent listings, not a data dependency between them.
-    let installedImages;
-    let deviceProfiles;
+    const { hostId: requestedHostId, ...avdInput } = request.body ?? {};
+    const hostId = resolveAvdHostId(app, requestedHostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
+    const host = getAvdHost(app, hostId);
     try {
-      [installedImages, deviceProfiles] = await Promise.all([
-        listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT),
-        listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH),
-      ]);
+      const result = await host.createAvd(avdInput);
+      reply.code(201);
+      return result;
     } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      return replyAvdError(reply, host, err, "creating the AVD");
     }
-    if (!systemImage || !installedImages.some((img) => img.packagePath === systemImage)) {
-      return reply.badRequest("systemImage must be one of the host's installed system images");
-    }
-    if (!deviceProfile || !deviceProfiles.includes(deviceProfile)) {
-      return reply.badRequest("deviceProfile must be one of the host's known device profiles");
-    }
-
-    // Optional hardware. Empty/absent leaves avdmanager's own defaults.
-    // Invalid sizes fail before createAvd so a bad SD-card string never
-    // reaches the binary, and a bad RAM string never leaves a half-patched
-    // AVD behind.
-    const hardware = normalizeAvdHardware(request.body ?? {});
-    if (!hardware.ok) return reply.badRequest(hardware.message);
-
-    try {
-      // Do not spread `hardware.value` into this object. CodeQL treats that
-      // spread as tainting every property, including `avdmanagerPath`, which
-      // is the execFile executable (js/command-line-injection). The three
-      // size fields are copied by name so the path stays the config value.
-      await createAvd({
-        avdmanagerPath: app.config.DEVICE_AVDMANAGER_PATH,
-        name,
-        systemImage,
-        deviceProfile,
-        sdcardSize: hardware.value.sdcardSize,
-        ramSizeMb: hardware.value.ramSizeMb,
-        dataPartitionSize: hardware.value.dataPartitionSize,
-        configRoots: avdConfigRoots(),
-      });
-    } catch (err) {
-      if (err instanceof AvdCreatedError) {
-        reply.code(201);
-        return { name, warning: err.message };
-      }
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
-    }
-
-    reply.code(201);
-    return { name };
   });
 
   // ---------------------------------------------------------------------------
