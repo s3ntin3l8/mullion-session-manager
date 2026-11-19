@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.3.65](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.64...v0.3.65) (2026-11-19)
+
+
+### Features
+
+* **devices:** add an iOS Simulator from Settings → Devices ([dc5d405](https://github.com/s3ntin3l8/mullion-session-manager/commit/dc5d405e5e5a13af9b36372ce5a92e06727fbbe7))
+* **devices:** add devices.platform and devices.udid ([#3308](https://github.com/s3ntin3l8/mullion-session-manager/issues/3308)) ([c6b2bb1](https://github.com/s3ntin3l8/mullion-session-manager/commit/c6b2bb1a4e0ce5e3d42066c57826a616b26a8b1b))
+* **devices:** enable iOS Simulator devices — create, placement and manager wiring ([874bf68](https://github.com/s3ntin3l8/mullion-session-manager/commit/874bf68ca10b179faed11c9e6adbaaa810248591))
+* **devices:** gate the iOS Simulator on host capability and add its config ([d5366b6](https://github.com/s3ntin3l8/mullion-session-manager/commit/d5366b6f6fa7bf5a28bb34990994e737a4265207))
+* **devices:** host picker and unreachable state in Settings → Devices ([c40a90c](https://github.com/s3ntin3l8/mullion-session-manager/commit/c40a90c6a4fb5400f0a467e44736af19a1d3d285))
+* **devices:** idb companion process and gRPC client for the iOS driver ([d43222c](https://github.com/s3ntin3l8/mullion-session-manager/commit/d43222c7b535715adac86a45d231120b68234c4e))
+* **devices:** install system images and accept SDK licences on agent hosts ([92a0cf1](https://github.com/s3ntin3l8/mullion-session-manager/commit/92a0cf195009088239a15b5f96b2c9b366868255))
+* **devices:** iOS input profile and platform-aware toolbar in the device panel ([a799f4f](https://github.com/s3ntin3l8/mullion-session-manager/commit/a799f4f704beb5ae06737203a08da7f3f0b12a5c))
+* **devices:** iOS Simulator driver — simctl lifecycle, screenshot, logs and clipboard ([b548264](https://github.com/s3ntin3l8/mullion-session-manager/commit/b54826483e37090a792eabec048df0f10de807ce))
+* **devices:** iOS Simulator input through idb ([20b2cef](https://github.com/s3ntin3l8/mullion-session-manager/commit/20b2cef4fb7ccda92ef510687326f6ed05586408))
+* **devices:** iOS Simulator video through idb ([48bd7bd](https://github.com/s3ntin3l8/mullion-session-manager/commit/48bd7bdb1c1a03c81c08df57bada405c3dd6cfcd))
+* **devices:** iOS-aware mullion device verbs — logs, button and platform fields ([038ff4f](https://github.com/s3ntin3l8/mullion-session-manager/commit/038ff4f7d6e0770b4a81439888ee7eac5519f60d))
+* **devices:** list and create AVDs on agent hosts ([2637529](https://github.com/s3ntin3l8/mullion-session-manager/commit/2637529dcb85fdff8d55ebb2701f1a56420c3d3c))
+* **devices:** list iOS simulators on the primary and agent hosts ([bd7515c](https://github.com/s3ntin3l8/mullion-session-manager/commit/bd7515c9f6e84d112b43b203e4b0331304989eb4))
+* **devices:** pair and discover Android phones on agent hosts ([b22c35e](https://github.com/s3ntin3l8/mullion-session-manager/commit/b22c35ea09f81feedb8db511d69d99527ddf12d7))
+* **devices:** per-host device kinds endpoint (GET /api/devices/hosts) ([14b803c](https://github.com/s3ntin3l8/mullion-session-manager/commit/14b803cfc9227fdf21925f45481e1ee73357a358))
+* **devices:** run devices on agent hosts — route device REST, WebSocket and actions by hostId ([#3291](https://github.com/s3ntin3l8/mullion-session-manager/issues/3291)) ([32f2c40](https://github.com/s3ntin3l8/mullion-session-manager/commit/32f2c40b568c15e98d49d700d738375d33636f67))
+* **devices:** serve the device panel socket over the outbound agent channel ([1ff4848](https://github.com/s3ntin3l8/mullion-session-manager/commit/1ff48486105abbdbbe21f2fe4e860b8f0acbcb9b))
+* **tasks:** nudge, then fail early, a worker whose turn is in flight but silent ([677dee2](https://github.com/s3ntin3l8/mullion-session-manager/commit/677dee2e2e23546d1175a46d31eb7fece3b6c8fc))
+* **tasks:** park a rate-limited worker until the provider reset, capped, for Codex and agy ([#3269](https://github.com/s3ntin3l8/mullion-session-manager/issues/3269)) ([eec6193](https://github.com/s3ntin3l8/mullion-session-manager/commit/eec61936abdd3f267bc22b57d761f2c949e839a6))
+
+
+### Bug Fixes
+
+* **devices:** forward an agent's device-action and teardown failures instead of answering unreachable ([96a9725](https://github.com/s3ntin3l8/mullion-session-manager/commit/96a9725d276c5b8da0e0f9ff134e03f2a9195523))
+* **devices:** recover a remote emulator's port when the spawn response is lost ([a87a924](https://github.com/s3ntin3l8/mullion-session-manager/commit/a87a9247d4a0de4c4e7b2acfabef4bea26726548))
+* **hooks:** capture Claude Code rate-limit StopFailure and parse reset time ([#3367](https://github.com/s3ntin3l8/mullion-session-manager/issues/3367)) ([e6a43fa](https://github.com/s3ntin3l8/mullion-session-manager/commit/e6a43faf9cc3a8ad26c7a2398a3b34a3c38c9d84))
+* **settings:** a timed-out agent probe no longer reads as "not found on PATH" ([#3362](https://github.com/s3ntin3l8/mullion-session-manager/issues/3362)) ([af21bbc](https://github.com/s3ntin3l8/mullion-session-manager/commit/af21bbc6e72292c2c6e4b86ad1daf0db5b38346c))
+* **tasks:** a long task title in the session pane header runs behind the x and … buttons ([824580a](https://github.com/s3ntin3l8/mullion-session-manager/commit/824580a338097b0ec4d7defc4be14259a4a313ad))
+* **tasks:** a review rejected for a stale anchor still posts its verdict as the reviewer App ([#3369](https://github.com/s3ntin3l8/mullion-session-manager/issues/3369)) ([23af617](https://github.com/s3ntin3l8/mullion-session-manager/commit/23af6177c2f0468bf9f6134715ddf1744523d88a))
+* **tasks:** a worker can declare a red CI check unfixable from its PR, and the park names the check ([#3306](https://github.com/s3ntin3l8/mullion-session-manager/issues/3306)) ([61ffbf4](https://github.com/s3ntin3l8/mullion-session-manager/commit/61ffbf4c364ac2c2132b38f43b1cf8887feace4b))
+* **tasks:** clear ciHoldNote wherever needsHumanReason is cleared ([7cab934](https://github.com/s3ntin3l8/mullion-session-manager/commit/7cab9344a20db87e50910d060b37daeb26d5a8e1))
+* **tasks:** flag a task whose review is still inconclusive after its automatic re-arm ([3979d6a](https://github.com/s3ntin3l8/mullion-session-manager/commit/3979d6aae3cfdbcd6da555442cb91e5685ea8365))
+* **tasks:** flag a worker that never starts a turn as needing a human ([8b96a8f](https://github.com/s3ntin3l8/mullion-session-manager/commit/8b96a8fa96e1588b4cacf4699bfc102be718fe37))
+* **tasks:** hold a codex task while Codex's /hooks trust is pending ([59538e1](https://github.com/s3ntin3l8/mullion-session-manager/commit/59538e1c1ea5b4faaf2e33ad89f8f865c9c9fb7b))
+* **tasks:** hold a Hermes review while the worktree head is not on the pull request ([#3383](https://github.com/s3ntin3l8/mullion-session-manager/issues/3383)) ([5a93b50](https://github.com/s3ntin3l8/mullion-session-manager/commit/5a93b50c3a94efe0bc39cf1a4e564c89ac2c64ae))
+* **tasks:** neutralise issue numbers and mentions in CI-hold PR comments ([cb689c1](https://github.com/s3ntin3l8/mullion-session-manager/commit/cb689c1ecd5a6235a13cf2d1c5650b8075680921))
+* **tasks:** re-seed live reject worker when its model mismatches ([a0bd0fa](https://github.com/s3ntin3l8/mullion-session-manager/commit/a0bd0fa16ab91bcb42286e0142d932109074f37f))
+* **tasks:** rebase a conflicting PR before dispatching its review ([c98f065](https://github.com/s3ntin3l8/mullion-session-manager/commit/c98f0651117f9b62a2d470b6565e77b36b574001))
+* **tasks:** use a failed Hermes run's reply and tell the reviewer its turn budget ([3ad936f](https://github.com/s3ntin3l8/mullion-session-manager/commit/3ad936f861434dce3493c96caf59cdb581697b33))
+* **uiux:** project picker dropdown is unreadable in dark mode ([ea0d834](https://github.com/s3ntin3l8/mullion-session-manager/commit/ea0d8342569d6c27ade378ed7cbcc2a26bd52e42))
+
 ## [0.3.64](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.63...v0.3.64) (2026-11-17)
 
 
