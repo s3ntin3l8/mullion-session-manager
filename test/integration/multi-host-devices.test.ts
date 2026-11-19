@@ -7,6 +7,7 @@ import net from "node:net";
 import crypto from "node:crypto";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket } from "ws";
+import { eq } from "drizzle-orm";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { warmSqliteBinding } from "../helpers/app.js";
@@ -247,6 +248,10 @@ describe("devices on an agent host (issue #3200)", () => {
     vi.spyOn(agent.app.device, "list").mockImplementation(() =>
       [...live.values()].map((l) => l.info),
     );
+    vi.spyOn(agent.app.device, "get").mockImplementation((id: string) => {
+      const entry = live.get(id);
+      return entry ? ({ toInfo: () => entry.info, port: entry.port } as never) : undefined;
+    });
     vi.spyOn(agent.app.device, "getDriver").mockImplementation((id: string) =>
       live.has(id) ? (driver as never) : undefined,
     );
@@ -733,6 +738,29 @@ describe("devices on an agent host (issue #3200)", () => {
         expect.objectContaining({ id: String(id), kind: "emulator", port: 5554 }),
       ]);
       expect(getDeviceRow(primary.app, id)?.port).toBe(5554);
+    });
+
+    it("recovers a port lost from the spawn response on the next list, and sends it after an agent restart", async () => {
+      const { id } = (await createDevice()).json();
+      expect(getDeviceRow(primary.app, id)?.port).toBe(5554);
+
+      // Simulate a lost spawn response leaving the primary's row at port = null.
+      primary.app.db.update(devices).set({ port: null }).where(eq(devices.id, id)).run();
+      expect(getDeviceRow(primary.app, id)?.port).toBeNull();
+
+      // The next listing reconciles the port from GET /internal/devices/live.
+      const list = await primary.app.inject({ method: "GET", url: "/api/devices" });
+      expect(list.statusCode).toBe(200);
+      expect(getDeviceRow(primary.app, id)?.port).toBe(5554);
+
+      // After an agent restart, a later spawn sends the recovered port in the spec.
+      live.clear();
+      spies.getOrCreate.mockClear();
+      const res = await primary.app.inject({ method: "POST", url: `/api/devices/${id}/start` });
+      expect(res.statusCode).toBe(200);
+      expect(getOrCreateCalls()).toEqual([
+        expect.objectContaining({ id: String(id), kind: "emulator", port: 5554 }),
+      ]);
     });
   });
 

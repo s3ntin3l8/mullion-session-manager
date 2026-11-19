@@ -65,11 +65,11 @@ describe("remote-host-devices", () => {
     };
     const request = vi
       .fn()
-      .mockResolvedValueOnce({ devices: [] })
+      .mockResolvedValueOnce({ devices: [], ports: { "7": 5554 } })
       .mockResolvedValueOnce({ deviceKinds: ["physical"], platforms: ["android"] })
       .mockResolvedValueOnce({ devices: [discoveredDevice] });
     const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
-    await expect(devices.live()).resolves.toEqual([]);
+    await expect(devices.live()).resolves.toEqual({ devices: [], ports: { "7": 5554 } });
     await expect(devices.kinds()).resolves.toEqual({
       deviceKinds: ["physical"],
       platforms: ["android"],

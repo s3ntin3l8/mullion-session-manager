@@ -15,7 +15,7 @@ import { performDeviceAction } from "./device-drivers/actions.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { HostRequestError } from "./remote-host-errors.js";
-import type { DeviceSpawnSpec } from "./device-wire.js";
+import type { DeviceSpawnSpec, LiveDevicesResponse } from "./device-wire.js";
 import type { DiscoveredDevice } from "./device-discovery.js";
 import { listIosSimulators, type IosSimulator } from "./ios-simulators.js";
 
@@ -218,6 +218,12 @@ class RemoteDeviceHost implements DeviceHost {
     // The agent has no database: the port its emulator holds is persisted here,
     // from the answer, so a later spawn (after an agent restart) can reattach.
     if (row.kind === "emulator" && res.port !== null && res.port !== row.port) {
+      if (row.port !== null) {
+        this.app.log.warn(
+          { deviceId: row.id, hostId: this.hostId, persistedPort: row.port, livePort: res.port },
+          "remote emulator spawn returned a different port than persisted",
+        );
+      }
       setDevicePort(this.app, row.id, res.port);
     }
     return res;
@@ -235,8 +241,8 @@ class RemoteDeviceHost implements DeviceHost {
   }
 
   async info(id: number): Promise<DeviceInfo | undefined> {
-    const live = await this.client.devices.live();
-    return live.find((d) => d.id === String(id));
+    const { devices } = await this.client.devices.live();
+    return devices.find((d) => d.id === String(id));
   }
 
   async action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
@@ -319,17 +325,39 @@ export async function liveInfoForRows(
   }
   await Promise.all(
     [...remoteHosts].map(async (hostId) => {
-      let live: DeviceInfo[] | null = null;
+      let snapshot: LiveDevicesResponse | null = null;
       try {
-        live = await getRemoteHostClient(app, hostId).devices.live();
+        snapshot = await getRemoteHostClient(app, hostId).devices.live();
       } catch (err) {
         app.log.warn({ err, hostId }, "device list: host did not answer");
       }
       for (const row of rows) {
         if (row.hostId !== hostId) continue;
+        if (snapshot?.ports && row.kind === "emulator" && row.platform !== "ios") {
+          const livePort = snapshot.ports[String(row.id)];
+          if (
+            typeof livePort === "number" &&
+            Number.isInteger(livePort) &&
+            livePort >= 1 &&
+            livePort <= 65535
+          ) {
+            if (row.port === null) {
+              setDevicePort(app, row.id, livePort);
+              app.log.info(
+                { deviceId: row.id, hostId, port: livePort },
+                "device list: recovered a remote emulator port",
+              );
+            } else if (row.port !== livePort) {
+              app.log.warn(
+                { deviceId: row.id, hostId, persistedPort: row.port, livePort },
+                "device list: remote emulator live port differs from persisted port",
+              );
+            }
+          }
+        }
         out.set(row.id, {
-          live: live?.find((d) => d.id === String(row.id)),
-          unreachable: live === null,
+          live: snapshot?.devices.find((d) => d.id === String(row.id)),
+          unreachable: snapshot === null,
         });
       }
     }),
