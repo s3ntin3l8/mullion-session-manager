@@ -9,7 +9,7 @@ import type { SessionInfo } from "./pty-manager.js";
 import { killSession } from "./session-lifecycle.js";
 import { sweepTaskSessions } from "./task-orphan-sessions.js";
 import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
-import { worktreeAheadOfPr } from "./task-worktree-ahead.js";
+import { holdForUnpushedHead, setBounded } from "./task-unpushed-hold.js";
 import {
   healUntrackedLocalSession,
   TASK_REVIEW_STATUS,
@@ -79,7 +79,6 @@ import {
   syncTaskTransition,
   computeTaskDiffStat,
   postReviewFindingsComment,
-  recordGithubSyncError,
   type PendingReviewPost,
 } from "./task-github-sync.js";
 import { resolveMullionOwnThreadsIfClean } from "./task-own-threads.js";
@@ -536,18 +535,9 @@ const HERMES_STATE_MAX_ENTRIES = 500;
 const hermesGonePolls = new Map<string, number>();
 const hermesDispatchFailures = new Map<number, number>();
 
-/** FIFO-bounded insert: past the cap, the oldest key makes room for a new one. */
-function setBounded<K, V>(map: Map<K, V>, key: K, value: V): void {
-  if (!map.has(key) && map.size >= HERMES_STATE_MAX_ENTRIES) {
-    const oldest = map.keys().next();
-    if (!oldest.done) map.delete(oldest.value);
-  }
-  map.set(key, value);
-}
-
 function bumpBounded<K>(map: Map<K, number>, key: K): number {
   const next = (map.get(key) ?? 0) + 1;
-  setBounded(map, key, next);
+  setBounded(map, key, next, HERMES_STATE_MAX_ENTRIES);
   return next;
 }
 
@@ -572,68 +562,6 @@ async function ingestHermesInconclusive(
     reviewedHeadSha: row.task.reviewRunHeadSha ?? undefined,
     cleanupFindingsFile: async () => {},
   });
-}
-
-// Pushes tried for one worktree tip before a hold on it is given up. A push that
-// can never succeed (a dirty tree left by the worker's last turn, a host that
-// cannot push) must not park a task in `reviewing`: after this many the review
-// goes ahead on the PR head, as it did before the hold existed. The workflow
-// approval gate is exempt, since a human is the only thing that can clear it.
-const UNPUSHED_HEAD_MAX_PUSHES = 3;
-// Per task, process-local like the other retry ledgers: a restart just restarts the count.
-const unpushedHeadState = new Map<number, { tip: string; pushes: number; gated: boolean }>();
-
-/**
- * True while the task's branch holds commits its pull request does not (the
- * worktree is strictly ahead of the PR head), so a remote review would read
- * the old head. Each call that finds this also retries the push, on the
- * draft-PR retry backoff, so an approval or a fixed credential is picked up
- * without waiting for the task to leave `reviewing`. A worktree that is
- * behind or diverged from the PR, or whose tip cannot be read, never holds:
- * the push is a force-with-lease and must not run in those cases.
- */
-async function holdForUnpushedHead(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  project: typeof projects.$inferSelect,
-  prHeadSha: string,
-  now: number,
-): Promise<boolean> {
-  const { ahead, tip } = await worktreeAheadOfPr(app, task, prHeadSha);
-  if (!ahead || tip === null) {
-    unpushedHeadState.delete(task.id);
-    return false;
-  }
-  let state = unpushedHeadState.get(task.id);
-  if (state?.tip !== tip) {
-    state = { tip, pushes: 0, gated: false };
-    setBounded(unpushedHeadState, task.id, state);
-    app.log.info(
-      { taskId: task.id, tip, prHeadSha },
-      "task reconcile: holding the review — the worktree is ahead of the pull request",
-    );
-  }
-  if (!state.gated && state.pushes >= UNPUSHED_HEAD_MAX_PUSHES) {
-    app.log.warn(
-      { taskId: task.id, tip, prHeadSha, pushes: state.pushes },
-      "task reconcile: the worktree's commits could not be pushed — reviewing the pull request's head as it is",
-    );
-    // A dirty-tree refusal records no sync error of its own, so say it here: the
-    // card would otherwise read "reviewing" with nothing showing the PR is stale.
-    recordGithubSyncError(
-      app,
-      task.id,
-      `The branch's latest commits could not be pushed after ${state.pushes} attempts, so the review ran on the pull request's earlier head. Clean the worktree or fix the push, then re-review.`,
-    );
-    return false;
-  }
-  if (draftPrRetryBackoff.shouldAttempt(task.id, now)) {
-    draftPrRetryBackoff.record(task.id, now);
-    const failure = await maybeOpenDraftPR(app, task, project);
-    state.gated = failure === "workflow-approval-required";
-    if (!state.gated) state.pushes++;
-  }
-  return true;
 }
 
 /**
@@ -741,7 +669,12 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
         // reached it (a workflow-approval hold, a failed push) would be
         // reviewed as the old head and the round reported as "no progress".
         // Hold, retrying the push, until the PR carries the worktree's head.
-        if (await holdForUnpushedHead(app, task, project, headSha, now)) {
+        if (
+          await holdForUnpushedHead(app, task, headSha, now, {
+            backoff: draftPrRetryBackoff,
+            push: () => maybeOpenDraftPR(app, task, project),
+          })
+        ) {
           releaseClaim();
           return;
         }
