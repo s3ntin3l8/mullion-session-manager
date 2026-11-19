@@ -11,6 +11,7 @@ import { useDashboardStore } from "../store/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { makeProject } from "../test/fixtures.js";
 import { ProjectSettingsHost } from "./ProjectSettingsDialog.js";
+import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 
 // The editors stand in as a draft <input> that reports its dirty state the
 // way AgentRulesPanel and ProjectBriefingPanel do, so the dialog's own draft
@@ -327,5 +328,86 @@ describe("Project settings draft protection (#3406)", () => {
 
     expect(dialog()).toHaveAccessibleName("Project settings — other");
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("Keep editing hands focus back to the dialog, not the page", async () => {
+    const user = userEvent.setup();
+    render(<ProjectSettingsHost />);
+    openFor(5, "agent-rules");
+    await user.type(screen.getByLabelText("agent-rules draft"), "wip");
+    await user.click(screen.getByRole("button", { name: "Close project settings" }));
+
+    await user.click(screen.getByRole("button", { name: "Keep editing" }));
+
+    expect(screen.getByRole("button", { name: "Close project settings" })).toHaveFocus();
+  });
+
+  it("Dock edits are protected too", async () => {
+    const user = userEvent.setup();
+    render(<ProjectSettingsHost />);
+    openFor(5, "dock");
+    await user.type(screen.getByLabelText("dock draft"), "wip");
+
+    await user.click(screen.getByRole("button", { name: "Close project settings" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Unsaved changes in Dock.");
+  });
+});
+
+describe("Project settings on the phone (#3406)", () => {
+  beforeEach(() => resetPhoneBackStackForTests());
+  afterEach(() => resetPhoneBackStackForTests());
+
+  const back = () =>
+    act(() => window.dispatchEvent(new PopStateEvent("popstate", { state: null })));
+
+  it("back over a draft asks, and never lets a later back leave the app", async () => {
+    const user = userEvent.setup();
+    render(<ProjectSettingsHost phone />);
+    openFor(5, "agent-rules");
+    await user.type(screen.getByLabelText("agent-rules draft"), "wip");
+
+    back(); // the section back to the list
+    expect(screen.queryByRole("alert")).toBeNull();
+    back(); // the dialog: asks first
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    back(); // dismisses the question, still in the dialog
+    expect(screen.queryByRole("alert")).toBeNull();
+    back(); // and asks again, rather than finding no entry left
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(dialog()).toBeInTheDocument();
+    expect(screen.getByLabelText("agent-rules draft")).toHaveValue("wip");
+  });
+
+  it("back with nothing unsaved closes the dialog", () => {
+    render(<ProjectSettingsHost phone />);
+    openFor(5, "agent-rules");
+
+    back();
+    back();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("Project settings for a project that is gone (#3406)", () => {
+  it("closes once the project list no longer has it", () => {
+    useDashboardStore.setState({ projectsLoaded: true, projectsError: null });
+    render(<ProjectSettingsHost />);
+    openFor(5, "agent-rules");
+    expect(dialog()).toBeInTheDocument();
+
+    act(() => useDashboardStore.setState({ projects: [PROJECTS[1]] }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(useDashboardStore.getState().projectSettings).toBeNull();
+  });
+
+  it("stays open while the project list has not loaded", () => {
+    useDashboardStore.setState({ projects: [], projectsLoaded: false });
+    render(<ProjectSettingsHost />);
+    openFor(5, "agent-rules");
+
+    expect(dialog()).toBeInTheDocument();
   });
 });

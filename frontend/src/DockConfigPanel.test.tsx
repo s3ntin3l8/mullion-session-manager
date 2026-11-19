@@ -438,3 +438,36 @@ describe("DockConfigPanel", () => {
     });
   });
 });
+
+// #3406 — the Project settings dialog asks before closing over unsaved Dock
+// edits, so the panel reports them.
+describe("DockConfigPanel dirty reporting", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reports unsaved monitor edits, and clears once saved", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch({
+        get: () => jsonResponse(200, makeResult([])),
+        put: (body) =>
+          jsonResponse(200, makeResult((body as { controls: DockControlInput[] }).controls)),
+      }),
+    );
+    const onDirtyChange = vi.fn();
+    const user = userEvent.setup();
+    render(<DockConfigPanel params={{ projectId: 1 }} onDirtyChange={onDirtyChange} />);
+    await screen.findByText("No monitors configured yet.");
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+
+    await user.click(screen.getByText("Add monitor"));
+    await user.type(screen.getByPlaceholderText("dev-server"), "dev-server");
+    await user.type(screen.getByPlaceholderText("Dev server"), "Dev server");
+    await user.type(screen.getByPlaceholderText("npm run dev"), "make dev");
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+
+    await user.click(screen.getByText("Save"));
+    await waitFor(() => expect(onDirtyChange).toHaveBeenLastCalledWith(false));
+  });
+});

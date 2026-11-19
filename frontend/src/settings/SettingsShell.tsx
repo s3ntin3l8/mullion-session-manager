@@ -44,6 +44,11 @@ export interface SettingsShellProps<Id extends string> {
   children: ReactNode;
 }
 
+function PhoneBackEntry({ active, onBack }: { active: boolean; onBack: () => void }) {
+  usePhoneBackStack(active, onBack);
+  return null;
+}
+
 // The modal frame Settings and Project settings share (#3406): a nav rail and
 // a content pane in a centered modal, a drill-down on the phone. Owns the
 // focus trap, the phone back stack and the drill-down's focus moves; the
@@ -72,11 +77,19 @@ export function SettingsShell<Id extends string>({
   // breakpoint the CSS that reads this never applies, so the side-by-side
   // layout is untouched whatever its value. A deep link starts on content.
   const [mobileNavOpen, setMobileNavOpen] = useState(!startOnContent);
-  // Both registered here, in this order, so the stack is [dialog, section
-  // content] — effects run child-first, so registering the dialog's own entry
-  // from App would land it ABOVE the section entry. Back pops the section to
-  // the list first, then closes the dialog.
-  usePhoneBackStack(phone || backStack, onClose);
+  // Stack order is [dialog, section content]: back pops the section to the
+  // list first, then closes the dialog. Registered here rather than from App,
+  // whose effects run after this component's and would land ABOVE.
+  // The dialog's own entry is a keyed child (registered before the hook below,
+  // since child effects run first). Back pops it before calling onClose, and an
+  // onClose that refuses (Project settings asking over an unsaved draft) would
+  // leave the dialog with no entry, so the next back would leave the app. A
+  // new key after every back re-registers it while the dialog stays open.
+  const [backKey, setBackKey] = useState(0);
+  const onBack = () => {
+    onClose();
+    setBackKey((k) => k + 1);
+  };
   usePhoneBackStack(phone && !mobileNavOpen, () => setMobileNavOpen(true));
 
   const select = (id: Id) => {
@@ -120,6 +133,7 @@ export function SettingsShell<Id extends string>({
 
   return (
     <div className="settings-backdrop" onClick={onClose}>
+      <PhoneBackEntry key={backKey} active={phone || backStack} onBack={onBack} />
       <div
         ref={modalRef}
         className="settings-modal"

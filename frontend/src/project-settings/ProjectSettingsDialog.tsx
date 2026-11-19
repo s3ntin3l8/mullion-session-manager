@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import { AgentRulesPanel } from "../AgentRulesPanel.js";
 import { DockConfigPanel } from "../DockConfigPanel.js";
@@ -83,6 +83,38 @@ function SectionBody({
   );
 }
 
+// Asks before leaving over an unsaved draft. "Keep editing" unmounts the
+// focused button, which would drop focus to <body>, outside the modal's Tab
+// trap: its cleanup hands focus to the dialog's close button instead.
+function LeaveBanner({
+  text,
+  onKeep,
+  onDiscard,
+}: {
+  text: string;
+  onKeep: () => void;
+  onDiscard: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const modal = ref.current?.closest(".settings-modal");
+    return () => {
+      if (modal?.isConnected) modal.querySelector<HTMLElement>(".settings-modal-close")?.focus();
+    };
+  }, []);
+  return (
+    <div ref={ref} className="project-settings-leave" role="alert">
+      <span>{text}</span>
+      <Button size="sm" variant="ghost" onClick={onKeep} autoFocus>
+        Keep editing
+      </Button>
+      <Button size="sm" variant="danger" onClick={onDiscard}>
+        Discard
+      </Button>
+    </div>
+  );
+}
+
 // #3406 — one project's editors in a full-size dialog with Settings' own
 // frame (SettingsShell). Mounted by ProjectSettingsHost only while open and
 // keyed by project, so its editors never carry one project's draft into
@@ -159,19 +191,13 @@ export function ProjectSettingsDialog({
       backStack={backStack}
       banner={
         leave && (
-          <div className="project-settings-leave" role="alert">
-            <span>
-              {`Unsaved changes in ${dirtyNames || "this project"}. ${
-                leave.next ? "Discard them and switch project?" : "Discard them and close?"
-              }`}
-            </span>
-            <Button size="sm" variant="ghost" onClick={cancelLeave} autoFocus>
-              Keep editing
-            </Button>
-            <Button size="sm" variant="danger" onClick={confirmLeave}>
-              Discard
-            </Button>
-          </div>
+          <LeaveBanner
+            text={`Unsaved changes in ${dirtyNames || "this project"}. ${
+              leave.next ? "Discard them and switch project?" : "Discard them and close?"
+            }`}
+            onKeep={cancelLeave}
+            onDiscard={confirmLeave}
+          />
         )
       }
     >
@@ -199,7 +225,27 @@ export function ProjectSettingsHost({
   backStack?: boolean;
 }) {
   const target = useDashboardStore((s) => s.projectSettings);
-  if (!target) return null;
+  // A project deleted or merged away while its dialog is open: nothing left to
+  // save, so it closes outright. Gated on a successful load, as
+  // useCloseStaleProjectPanels is, or every dialog would close before
+  // GET /api/projects resolves.
+  const gone = useDashboardStore(
+    (s) =>
+      s.projectSettings !== null &&
+      s.projectsLoaded &&
+      s.projectsError === null &&
+      !s.projects.some((p) => p.id === s.projectSettings!.projectId),
+  );
+  useEffect(() => {
+    if (gone) {
+      useDashboardStore.setState({
+        projectSettings: null,
+        projectSettingsLeave: null,
+        projectSettingsDirty: false,
+      });
+    }
+  }, [gone]);
+  if (!target || gone) return null;
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 60 }}>
       <ProjectSettingsDialog
