@@ -101,6 +101,7 @@ function Harness({ surface }: { surface: "palette" | "sidebar" }) {
             onOpenSkills: o.onOpenSkills,
             onOpenTasks: vi.fn(),
             onOpenDevice: vi.fn(),
+            onOpenRailBrowser: vi.fn(),
           }}
         />
       )}
