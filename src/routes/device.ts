@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
-import { STATUS_CODES } from "node:http";
+import { IncomingMessage, STATUS_CODES } from "node:http";
 import { getDeviceRow, type DeviceRow } from "../services/device-store.js";
 import { getDeviceHost } from "../services/device-host.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -28,9 +28,22 @@ export type { AttachDeviceParams } from "../services/device-attach.js";
 /** How long the primary waits for an agent's device socket to open. */
 export const REMOTE_DEVICE_OPEN_TIMEOUT_MS = 15_000;
 
+/** How long the proxy waits for a refusal's BODY before it reports the
+ *  refusal without it. The body rides the same response as the status, so it
+ *  is normally there already; the bound is for an agent that stalls. */
+export const REFUSAL_BODY_TIMEOUT_MS = 2_000;
+
+/** The most of a refusal body the proxy reads: the agent's reason is one
+ *  short message, and a refusal body is not trusted to be small. */
+const REFUSAL_BODY_MAX_BYTES = 4 * 1024;
+
+/** The most of an agent's reason the panel is shown. */
+const REFUSAL_REASON_MAX_CHARS = 500;
+
 /** The shape of the response a refusal carries. A real HTTP response (the
  *  inbound transport) and the channel's own stub (services/channel-socket.ts)
- *  both answer with a status; only the second one carries a reason. */
+ *  both answer with a status; the stub carries the agent's reason in the
+ *  status message, the HTTP one in its body. */
 interface RefusalResponse {
   statusCode?: number;
   statusMessage?: string;
@@ -39,21 +52,84 @@ interface RefusalResponse {
 /**
  * Why the agent refused the device socket, in the panel's words.
  *
- * Over the outbound channel the refusal carries the agent's OWN reason — the
- * one its device gating produced ("Device panel is disabled — set
- * DEVICE_ENABLED=true.", "kind must be emulator or physical"). An HTTP
- * refusal carries only the status phrase ("Bad Request"), which tells the
- * user nothing they can act on, so it is dropped. A 404 is the one status
- * that means something on either transport: the agent does not know the
- * device socket at all, so it is too old.
+ * The agent's OWN reason is preferred — the one its device gating produced
+ * ("Device panel is disabled — set DEVICE_ENABLED=true.", "kind must be
+ * emulator or physical"). It rides the accept head's message over the
+ * outbound channel and the refusal's BODY over the inbound transport. The
+ * HTTP status phrase ("Bad Request") is only a fallback: it tells the user
+ * nothing they can act on, so it is dropped. A 404 is the one status that
+ * means something on either transport: the agent does not know the device
+ * socket at all, so it is too old.
  */
-function refusalMessage(hostId: string, res: RefusalResponse): string {
+function refusalMessage(hostId: string, res: RefusalResponse, reason: string | null): string {
   if (res.statusCode === 404) {
     return `Host ${hostId} does not support the device socket — update its agent`;
   }
-  const reason = (res.statusMessage ?? "").trim();
-  const usable = reason && reason !== STATUS_CODES[res.statusCode ?? 0] ? reason : "";
-  return `Host ${hostId} did not accept the device socket${usable ? `: ${usable}` : ""}`;
+  const agentReason = (reason ?? "").trim();
+  const statusPhrase = (res.statusMessage ?? "").trim();
+  let usable = agentReason;
+  if (usable === "" && statusPhrase !== "" && statusPhrase !== STATUS_CODES[res.statusCode ?? 0]) {
+    usable = statusPhrase;
+  }
+  return `Host ${hostId} did not accept the device socket${usable === "" ? "" : `: ${usable}`}`;
+}
+
+/**
+ * The `message` of a Fastify refusal body, or null when it carries none.
+ *
+ * A refusal answers `{"statusCode":400,"error":"Bad Request","message":"…"}`,
+ * so the agent's reason is there. A body that is not JSON, or that has no
+ * message, is no reason: the panel is told the refusal, not a guess.
+ */
+function parseRefusalReason(body: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const message = (parsed as { message?: unknown }).message;
+  if (typeof message !== "string") return null;
+  const trimmed = message.trim();
+  if (trimmed === "") return null;
+  return trimmed.length > REFUSAL_REASON_MAX_CHARS
+    ? `${trimmed.slice(0, REFUSAL_REASON_MAX_CHARS)}…`
+    : trimmed;
+}
+
+/**
+ * The reason a refusal carries in its BODY, if it has one.
+ *
+ * `ws` hands the response over unread (a listener for 'unexpected-response'
+ * OWNS the refusal), so the proxy can read the agent's reason out of it — the
+ * same text the channel's accept head carries in its message. The channel's
+ * own stub (services/channel-socket.ts) is not an HTTP response and has no
+ * body: its reason is in the status message.
+ *
+ * A body that never arrives is bounded: the refusal is reported without it.
+ */
+function readRefusalReason(res: IncomingMessage): Promise<string | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = (reason: string | null): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(reason);
+    };
+    const timer = setTimeout(() => finish(null), REFUSAL_BODY_TIMEOUT_MS);
+    timer.unref();
+    res.on("data", (chunk: Buffer) => {
+      if (size >= REFUSAL_BODY_MAX_BYTES) return;
+      chunks.push(chunk);
+      size += chunk.length;
+    });
+    res.on("end", () => finish(parseRefusalReason(Buffer.concat(chunks).toString("utf8"))));
+    res.on("error", () => finish(null));
+  });
 }
 
 /**
@@ -202,23 +278,35 @@ export async function proxyToRemoteDevice(
     refused = true;
     clearTimeout(openTimer);
     stopStallTimer();
-    const message = refusalMessage(hostId, res);
-    // Tell the panel first: the close below tears the upstream down, and a
-    // close that lands first would leave the panel with a bare disconnect.
-    fail(message);
-    // ws aborts its own handshake ONLY when nothing listens for
-    // 'unexpected-response': a listener OWNS the refusal, so the upgrade
-    // request and its socket have to be torn down here. Left alone they stay
-    // open until the agent's keep-alive timeout (72 s by default) — one per
-    // refused panel open. The channel's own stub has no `destroy`.
-    (res as { destroy?: () => void }).destroy?.();
-    // And the upstream must not stay in CONNECTING: either side closing
-    // closes the other.
-    closeUpstream();
-    app.log.warn(
-      { hostId, deviceId, status: res.statusCode, message },
-      "remote device ws upstream refused the socket",
-    );
+    const report = (reason: string | null): void => {
+      const message = refusalMessage(hostId, res, reason);
+      // Tell the panel first: the close below tears the upstream down, and a
+      // close that lands first would leave the panel with a bare disconnect.
+      fail(message);
+      // ws aborts its own handshake ONLY when nothing listens for
+      // 'unexpected-response': a listener OWNS the refusal, so the upgrade
+      // request and its socket have to be torn down here. Left alone they stay
+      // open until the agent's keep-alive timeout (72 s by default) — one per
+      // refused panel open. The channel's own stub has no `destroy`.
+      (res as { destroy?: () => void }).destroy?.();
+      // And the upstream must not stay in CONNECTING: either side closing
+      // closes the other.
+      closeUpstream();
+      app.log.warn(
+        { hostId, deviceId, status: res.statusCode, message },
+        "remote device ws upstream refused the socket",
+      );
+    };
+    // The channel's own stub is not an HTTP response: it carries the agent's
+    // reason in the status message and has no body to read.
+    if (!(res instanceof IncomingMessage)) {
+      report(null);
+      return;
+    }
+    // An HTTP refusal carries the agent's reason in its BODY, so it is read
+    // before the panel is told. A body that never arrives is bounded: the
+    // refusal is reported without it.
+    void readRefusalReason(res).then(report, () => report(null));
   });
   upstream.on("message", (data, isBinary) => {
     if (deviceSocket.readyState !== deviceSocket.OPEN) return;

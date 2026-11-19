@@ -170,7 +170,10 @@ attach query validation is shared, not copied.
   `DEVICE_VIDEO_MAX_SIZE` (1280) frames are far below the bound; a much
   larger `DEVICE_VIDEO_MAX_SIZE` can produce an IDR past it. A refusal is
   reported to the panel with the agent's own reason (the panel gate's
-  message, `kind must be emulator or physical`, …); an agent that predates
+  message, `kind must be emulator or physical`, …): over the channel it rides
+  the accept head's message, and over the inbound transport the refusal's
+  body, which the primary reads before it reports (a body that never arrives
+  is bounded, and the refusal is reported without it). An agent that predates
   the `device` kind answers `404`, which the primary reports as an agent
   that needs an update.
 
