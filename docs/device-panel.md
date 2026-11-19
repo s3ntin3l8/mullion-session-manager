@@ -466,9 +466,11 @@ host's AVD list before inserting a row ([#3272](https://github.com/s3ntin3l8/mul
 the inbound transport ([#3299](https://github.com/s3ntin3l8/mullion-session-manager/issues/3299)).
 
 Not covered yet: the Settings create form still lists only the primary's AVDs
-(wiring its Host picker to `hostId` is not yet implemented);
-and the panel's socket to an agent reached only over the outbound channel needs a
-`device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
+(wiring its Host picker to `hostId` is not yet implemented); the SDK system
+images list and its licences modal still target the primary — their `?hostId=`
+support is API-only until the panel gains a Host picker; and the panel's
+socket to an agent reached only over the outbound channel needs a `device`
+stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
 
 ### Toolbar and gestures (issue #1419, #3204)
 

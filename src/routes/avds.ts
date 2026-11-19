@@ -146,6 +146,22 @@ export function proxyToRemoteAvdSocket(
     app.log.error({ err, hostId }, "remote AVD ws upstream error");
     fail(`Host ${hostId} did not accept the AVD socket`);
   });
+  upstream.once("unexpected-response", (_req, res) => {
+    clearTimeout(openTimer);
+    pendingMessages.length = 0;
+    res.resume?.();
+    if (res.statusCode === 404) {
+      app.log.warn({ hostId, statusCode: res.statusCode }, "remote AVD ws route missing on agent");
+      fail(`Host ${hostId} does not report AVDs — update its agent.`);
+    } else {
+      app.log.warn(
+        { hostId, statusCode: res.statusCode },
+        "remote AVD ws upstream rejected upgrade",
+      );
+      fail(`Host ${hostId} did not accept the AVD socket`);
+    }
+    closeUpstream();
+  });
   upstream.on("message", (data, isBinary) => {
     if (browserSocket.readyState !== browserSocket.OPEN) return;
     browserSocket.send(data, { binary: isBinary });

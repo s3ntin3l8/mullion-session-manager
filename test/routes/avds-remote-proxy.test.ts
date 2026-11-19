@@ -109,4 +109,47 @@ describe("proxyToRemoteAvdSocket", () => {
     browser.close();
     expect(upstream.closeSpy).toHaveBeenCalled();
   });
+
+  it("reports an outdated agent when upstream answers unexpected-response 404", () => {
+    const app = fakeApp();
+    proxyToRemoteAvdSocket(
+      app,
+      browser as unknown as WebSocket,
+      "agent-1",
+      () => upstream as unknown as NodeWebSocket,
+    );
+
+    const resume = vi.fn();
+    upstream.emit("unexpected-response", {}, { statusCode: 404, resume });
+
+    expect(resume).toHaveBeenCalled();
+    expect(browser.sendSpy).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "error",
+        message: "Host agent-1 does not report AVDs — update its agent.",
+      }),
+    );
+    expect(browser.closeSpy).toHaveBeenCalled();
+    expect(upstream.closeSpy).toHaveBeenCalled();
+    expect(app.log.error).not.toHaveBeenCalled();
+  });
+
+  it("reports generic socket refusal when upstream answers non-404 unexpected-response", () => {
+    const app = fakeApp();
+    proxyToRemoteAvdSocket(
+      app,
+      browser as unknown as WebSocket,
+      "agent-1",
+      () => upstream as unknown as NodeWebSocket,
+    );
+
+    upstream.emit("unexpected-response", {}, { statusCode: 502, resume: vi.fn() });
+
+    expect(browser.sendSpy).toHaveBeenCalledWith(
+      JSON.stringify({ type: "error", message: "Host agent-1 did not accept the AVD socket" }),
+    );
+    expect(browser.closeSpy).toHaveBeenCalled();
+    expect(upstream.closeSpy).toHaveBeenCalled();
+    expect(app.log.warn).toHaveBeenCalled();
+  });
 });
