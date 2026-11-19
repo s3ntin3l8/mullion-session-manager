@@ -39,7 +39,8 @@ vi.mock("../../src/services/github.js", (io) => mockGithubFactory(io));
 
 const { buildApp } = await import("../../src/app.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
-const { WORKER_STALL_MS, NUDGE_TURN_GRACE_MS } = await import("../../src/services/task-nudge.js");
+const { WORKER_STALL_MS, NUDGE_TURN_GRACE_MS, MAX_WORKER_NUDGES } =
+  await import("../../src/services/task-nudge.js");
 const { registerTaskTransitionListener } = await import("../../src/services/task-state.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
@@ -199,6 +200,35 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
 
     const row = await getTask(app, taskId);
     expect(row.status).toBe("in_progress");
+    expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("never nudges or fails a worker with active subagents (subagentCount > 0)", async () => {
+    const app = await buildApp();
+    const { taskId } = await createSessionAndTask(app, "in_progress");
+    app.db
+      .update(tasks)
+      .set({ claimedAt: new Date(Date.now() - 70 * 60_000) })
+      .where(eq(tasks.id, taskId))
+      .run();
+
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
+          lastActivityAt: Date.now() - (WORKER_STALL_MS + 60_000),
+          subagentCount: 1,
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("in_progress");
+    expect(row.nudgeCount).toBe(0);
     expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
 
     await app.close();
@@ -397,6 +427,81 @@ describe("reconcileTasks — stalled in-flight worker nudge & early fail", () =>
     expect(transitions.filter((t) => t.taskId === taskId)).toEqual([
       { taskId, to: "failed", via: "budget-exceeded" },
     ]);
+
+    await app.close();
+  });
+
+  it("leaves the budget as backstop when MAX_WORKER_NUDGES was spent on continuation nudges (lastStallNudgedAt null)", async () => {
+    const app = await buildApp();
+    const { taskId } = await createSessionAndTask(app, "in_progress");
+    app.db
+      .update(tasks)
+      .set({
+        claimedAt: new Date(Date.now() - 70 * 60_000),
+        nudgeCount: MAX_WORKER_NUDGES,
+        lastNudgedAt: new Date(Date.now() - 20 * 60_000),
+        lastStallNudgedAt: null,
+      })
+      .where(eq(tasks.id, taskId))
+      .run();
+
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
+          lastActivityAt: Date.now() - (WORKER_STALL_MS + 60_000),
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("in_progress");
+    expect(row.nudgeCount).toBe(MAX_WORKER_NUDGES);
+    expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+
+    await app.close();
+  });
+
+  it("fails early when MAX_WORKER_NUDGES is exhausted and a stall nudge already landed in this spell", async () => {
+    const app = await buildApp();
+    vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+    const transitions: Array<{ taskId: number; to: string; via: string }> = [];
+    registerTaskTransitionListener((_app, p) => {
+      transitions.push({ taskId: p.taskId, to: p.to, via: p.via });
+    });
+
+    const { taskId } = await createSessionAndTask(app, "in_progress");
+    const claimedAt = new Date(Date.now() - 105 * 60_000);
+    const stallNudgedAt = new Date(Date.now() - 55 * 60_000);
+    app.db
+      .update(tasks)
+      .set({
+        claimedAt,
+        nudgeCount: MAX_WORKER_NUDGES,
+        lastNudgedAt: stallNudgedAt,
+        lastStallNudgedAt: stallNudgedAt,
+      })
+      .where(eq(tasks.id, taskId))
+      .run();
+
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      toInfo: () =>
+        fakeInfo({
+          agentTurnInFlight: false,
+          lastTurnEndedAt: null,
+          lastActivityAt: Date.now() - (WORKER_STALL_MS + 60_000),
+        }),
+    } as never);
+
+    await reconcileTasks(app);
+
+    const row = await getTask(app, taskId);
+    expect(row.status).toBe("failed");
+    expect(row.failureReason).toMatch(/^worker stalled: no output for \d+ minutes$/);
+    expect(mockPromptLiveTaskWorker).not.toHaveBeenCalled();
+    expect(transitions).toContainEqual({ taskId, to: "failed", via: "worker-stalled" });
 
     await app.close();
   });

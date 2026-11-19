@@ -317,7 +317,10 @@ export async function nudgeStalledWorker(
 
   const sent = nudgesThisSpell(task);
   if (sent >= MAX_WORKER_NUDGES) {
-    return { action: "fail", silentMinutes };
+    // Only fail early on an exhausted budget if a stall nudge was already
+    // sent in this spell; a worker that spent its budget on earlier turn-end
+    // continuations still gets the wall-clock budget as its backstop.
+    return stallNudgedAt !== null ? { action: "fail", silentMinutes } : { action: "none" };
   }
 
   if (!isTaskRowStillInProgress(app, task)) {
