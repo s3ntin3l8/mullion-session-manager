@@ -145,6 +145,17 @@ export function neutraliseDecisionLine(line: string): string {
     .replaceAll("]", "\\]");
 }
 
+/**
+ * Neutralises untrusted free text (CI check names, CI-hold worker reasons)
+ * for a GitHub markdown PR comment: runs `neutraliseDecisionLine` (mentions,
+ * HTML, markdown links/images) and inserts a zero-width space after `#` before
+ * digits so bare `#123` and `owner/repo#123` references do not auto-link or
+ * emit cross-reference events.
+ */
+export function neutraliseCiHoldCommentText(text: string): string {
+  return neutraliseDecisionLine(text).replace(/#(?=\d)/g, "#\u200B");
+}
+
 /** The PR-description section for `decisions`, or `""` when there are none.
  * Wrapped in markers so a refresh can replace exactly this section. */
 export function renderWorkerDecisionsSection(decisions: string[]): string {

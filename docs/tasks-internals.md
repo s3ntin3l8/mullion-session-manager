@@ -1780,7 +1780,11 @@ neutralised (`neutraliseDecisionLine` in `task-decisions.ts`): `@` mentions have
 a zero-width space inserted after the `@` so GitHub users are not notified,
 `<!--` and `-->` markers are escaped alongside HTML tags so lines cannot close
 the section early or render raw HTML, and markdown link/image brackets are
-escaped to render as plain text. The reviewer agent receives the raw (redacted)
+escaped to render as plain text. CI-hold and CI-round-cap PR comments go through
+`neutraliseCiHoldCommentText` (also in `task-decisions.ts`), which additionally
+inserts a zero-width space after `#` before digits so bare `#N` and
+`owner/repo#N` in check names or worker reasons do not auto-link or emit
+cross-reference events. The reviewer agent receives the raw (redacted)
 decisions, so it can judge exactly what the worker wrote.
 `applyWorkerDecisionsSection` matches in passes, and the last complete block
 wins (the issue body is prepended, so ours is last): first the start marker
@@ -2621,9 +2625,11 @@ tells it not to push a workaround or disable the check. On the next sweep
 same backend → `/internal/task-ci-unfixable` path as the re-review request; the
 route validates `headSha` as a 40-char lowercase hex SHA) BEFORE any rerun and
 parks at once with `needsHumanReason: "ci-unfixable"`. The worker's text is
-flattened to one line, run through `redactSecrets`, capped at 500 characters and
-neutralised (`neutraliseDecisionLine`) before it reaches `ciHoldNote` or the PR
-comment. A host that is unreachable or busy holds the tick; any other read error
+flattened to one line, run through `redactSecrets`, and capped at 500 characters
+before it is stored in `ciHoldNote` (kept raw for plain-text board display), and
+check names plus the reason are neutralised (`neutraliseCiHoldCommentText`,
+including breaking `#<digits>` auto-links) when building the PR comment. A host
+that is unreachable or busy holds the tick; any other read error
 (an older peer build with no route) reads as "no declaration" and the rerun path
 runs. The park is shown on the card and the drawer even while the task holds an
 approval (a CI fix keeps it), which the round-cap line never was.

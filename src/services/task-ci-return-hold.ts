@@ -9,7 +9,7 @@ import { isHostTransientError } from "./remote-host-errors.js";
 import { redactSecrets } from "./scaffold-failure.js";
 import { resolveBackend } from "./session-backend.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
-import { neutraliseDecisionLine } from "./task-decisions.js";
+import { neutraliseCiHoldCommentText } from "./task-decisions.js";
 import { postReviewFindingsComment } from "./task-github-sync.js";
 
 // A red check on a head the worker was ALREADY sent back for means it came back
@@ -34,7 +34,7 @@ const MAX_UNFIXABLE_REASON_CHARS = 500;
  * A worker's free-text reason, made safe to store and show: one line, secrets
  * redacted, capped. It is shown as plain text by the board (React escapes it),
  * so it is NOT markup-escaped here; the PR comment, which GitHub renders as
- * markdown, escapes it (`neutraliseDecisionLine`) where it is built.
+ * markdown, escapes it (`neutraliseCiHoldCommentText`) where it is built.
  */
 export function sanitiseCiUnfixableReason(raw: string): string {
   const oneLine = redactSecrets(raw.replace(/\s+/g, " ").trim());
@@ -83,16 +83,6 @@ async function readUnfixableDeclaration(
     );
     return null;
   }
-}
-
-/**
- * Neutralises a check name or worker reason for a GitHub markdown PR comment:
- * runs `neutraliseDecisionLine` (mentions, HTML, markdown links/images) and
- * inserts a zero-width space after `#` before digits so bare `#123` and
- * `owner/repo#123` references do not auto-link or emit cross-reference events.
- */
-function neutraliseCiHoldCommentText(text: string): string {
-  return neutraliseDecisionLine(text).replace(/#(?=\d)/g, "#\u200B");
 }
 
 /**

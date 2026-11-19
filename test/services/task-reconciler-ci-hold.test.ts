@@ -655,36 +655,36 @@ describe("red CI on a head the worker was already returned for", () => {
 
       await app.close();
     });
+  });
 
-    it("neutralises #N, owner/repo#N and @user in check names when holdRedCiWithoutProgress parks ci-still-red", async () => {
-      const app = await buildApp();
-      const taskId = await createCandidate(app, {
-        ciReturnHeadSha: HEAD_SHA,
-        ciRerunCount: 2,
-      });
-      const task = getTask(app, taskId);
-      const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
-
-      await holdRedCiWithoutProgress(
-        app,
-        task,
-        project,
-        { headSha: HEAD_SHA, repoRef: { owner: "o", repo: "r" }, failedRunIds: [4242] },
-        [{ name: "build #42 / upstream/repo#99 (@maintainer)" }],
-      );
-
-      const row = getTask(app, taskId);
-      expect(row.needsHumanReason).toBe("ci-still-red");
-      expect(row.ciHoldNote).toBe("build #42 / upstream/repo#99 (@maintainer)");
-      expect(row.ciHoldNote).not.toContain("\u200B");
-
-      expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
-      const body = mockCreatePullRequestReview.mock.calls[0][4].body as string;
-      expect(body).not.toMatch(/#\d/);
-      expect(body).not.toMatch(/@[a-zA-Z0-9_/-]/);
-      expect(body).toContain("build #\u200B42 / upstream/repo#\u200B99 (@\u200Bmaintainer)");
-
-      await app.close();
+  it("neutralises #N, owner/repo#N and @user in check names when holdRedCiWithoutProgress parks ci-still-red", async () => {
+    const app = await buildApp();
+    const taskId = await createCandidate(app, {
+      ciReturnHeadSha: HEAD_SHA,
+      ciRerunCount: 2,
     });
+    const task = getTask(app, taskId);
+    const project = app.db.select().from(projects).where(eq(projects.id, task.projectId)).get()!;
+
+    await holdRedCiWithoutProgress(
+      app,
+      task,
+      project,
+      { headSha: HEAD_SHA, repoRef: { owner: "o", repo: "r" }, failedRunIds: [4242] },
+      [{ name: "build #42 / upstream/repo#99 (@maintainer)" }],
+    );
+
+    const row = getTask(app, taskId);
+    expect(row.needsHumanReason).toBe("ci-still-red");
+    expect(row.ciHoldNote).toBe("build #42 / upstream/repo#99 (@maintainer)");
+    expect(row.ciHoldNote).not.toContain("\u200B");
+
+    expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+    const body = mockCreatePullRequestReview.mock.calls[0][4].body as string;
+    expect(body).not.toMatch(/#\d/);
+    expect(body).not.toMatch(/@[a-zA-Z0-9_/-]/);
+    expect(body).toContain("build #\u200B42 / upstream/repo#\u200B99 (@\u200Bmaintainer)");
+
+    await app.close();
   });
 });

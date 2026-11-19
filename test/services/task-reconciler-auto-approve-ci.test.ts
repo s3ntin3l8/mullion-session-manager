@@ -382,6 +382,28 @@ describe("reconcileTasks — auto-approve red required CI (#755)", () => {
       await app.close();
     });
 
+    it("neutralises #N, owner/repo#N and @user in check names on the cap-reached comment", async () => {
+      const app = await buildApp();
+      await createRedCiCandidate(app, {
+        autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+      mockFetchCheckRunsForHead.mockResolvedValue(
+        checkRun("Deploy #42 / org/repo#99 by @release-bot", "failure"),
+      );
+
+      await reconcileTasks(app);
+
+      expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+      const body = mockCreatePullRequestReview.mock.calls[0][4].body as string;
+      expect(body).not.toMatch(/#\d/);
+      expect(body).not.toMatch(/@[a-zA-Z0-9_/-]/);
+      expect(body).toContain("Deploy #\u200B42 / org/repo#\u200B99 by @\u200Brelease-bot");
+
+      await app.close();
+    });
+
     // Note: `ciCapCommentedRounds`'s dedup ALSO covers a LATER tick, once
     // `autoApproveRetryState`'s own ~30s-to-30min backoff has elapsed and
     // this task becomes eligible for another attempt — that direction
