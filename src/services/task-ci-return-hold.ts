@@ -86,6 +86,16 @@ async function readUnfixableDeclaration(
 }
 
 /**
+ * Neutralises a check name or worker reason for a GitHub markdown PR comment:
+ * runs `neutraliseDecisionLine` (mentions, HTML, markdown links/images) and
+ * inserts a zero-width space after `#` before digits so bare `#123` and
+ * `owner/repo#123` references do not auto-link or emit cross-reference events.
+ */
+function neutraliseCiHoldCommentText(text: string): string {
+  return neutraliseDecisionLine(text).replace(/#(?=\d)/g, "#\u200B");
+}
+
+/**
  * Park a task whose red check no further automatic step will clear, for a human.
  * `ci-unfixable`: the worker said so. `ci-still-red`: it pushed nothing and the
  * reruns did not clear it. Set BEFORE the post, CAS'd on the task still
@@ -135,11 +145,11 @@ async function parkRedCiForHuman(
   );
   const required = requiredClause(park.mergeableState);
   // The comment is markdown GitHub renders and the check names and the worker's
-  // text are not ours: neutralise mentions and markup in both.
-  const safeNames = neutraliseDecisionLine(names);
+  // text are not ours: neutralise mentions, issue/PR auto-links and markup in both.
+  const safeNames = neutraliseCiHoldCommentText(names);
   const body =
     park.reason === "ci-unfixable"
-      ? `The worker was sent back for a failing CI check on this task's PR (${safeNames}) and reported that no change to this PR can fix it: "${neutraliseDecisionLine(park.workerReason ?? "")}".${required} Mullion has stopped re-running it. A human can approve the task and use "Merge anyway" if the check is not required, or fix the cause on the base branch and update this branch (which re-arms the task).`
+      ? `The worker was sent back for a failing CI check on this task's PR (${safeNames}) and reported that no change to this PR can fix it: "${neutraliseCiHoldCommentText(park.workerReason ?? "")}".${required} Mullion has stopped re-running it. A human can approve the task and use "Merge anyway" if the check is not required, or fix the cause on the base branch and update this branch (which re-arms the task).`
       : `A CI check is still failing on this task's PR (${safeNames}). The worker was sent back for this exact commit and pushed nothing, and re-running the failed jobs did not clear it.${required} The automatic loop has stopped; a human needs to re-run the check or push a fix.`;
   await postReviewFindingsComment(app, task, project, { body });
 }
