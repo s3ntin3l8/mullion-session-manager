@@ -793,7 +793,15 @@ list once per Mac, in this order, as the user the agent runs as.
 4. **At least one simulator runtime.** `xcodebuild -downloadPlatform iOS`;
    verify with `xcrun simctl list runtimes` (at least one `iOS` line that is
    not `unavailable`).
-5. **Homebrew tools on the session PATH.** The launchd agent has a minimal
+5. **`idb_companion` (only for the iOS Simulator device panel).** Install
+   Facebook's `idb_companion` via Homebrew (`brew install facebook/fb/idb-companion`;
+   verify with `which idb_companion` — `/opt/homebrew/bin/idb_companion` on
+   Apple Silicon, `/usr/local/bin/idb_companion` on Intel). In the install's
+   `.env`, set `DEVICE_ENABLED=true`, `DEVICE_IOS_ENABLED=true`, and
+   `DEVICE_IDB_COMPANION_PATH` to that absolute path (no `PATH` fallback), then
+   restart the Mac's launchd job (`launchctl kickstart -k gui/$UID/com.mullion.<role>`).
+   See [`docs/device-panel.md`](../docs/device-panel.md#ios-simulator).
+6. **Homebrew tools on the session PATH.** The launchd agent has a minimal
    `PATH` (see "The PATH" above), and sessions get theirs by running
    `$SHELL -lc` and merging in the `PATH` resolved from your interactive shell
    (`~/.zprofile` / `~/.zshrc`; see
@@ -803,7 +811,7 @@ list once per Mac, in this order, as the user the agent runs as.
    CocoaPods — are "command not found" in a session even though they work in
    your own terminal. The usual fix is `eval "$(/opt/homebrew/bin/brew shellenv)"`
    in `~/.zprofile`.
-6. **Android (only if tasks build Android).** Install the SDK and NDK, then:
+7. **Android (only if tasks build Android).** Install the SDK and NDK, then:
    - `ANDROID_HOME` (the SDK root) and `ANDROID_NDK_HOME` — along with
      `ANDROID_SDK_ROOT` and `JAVA_HOME`, the default `SESSION_ENV_RECOVER_KEYS`
      list (`ANDROID_HOME,ANDROID_SDK_ROOT,ANDROID_NDK_HOME,JAVA_HOME`) — are
