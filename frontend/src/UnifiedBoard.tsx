@@ -538,9 +538,7 @@ export function UnifiedBoard({
             Clear the epic filter
           </button>
         )}
-        {(filters.agents.length > 0 ||
-          filters.hosts.length > 0 ||
-          filters.text.trim() !== "") && (
+        {(filters.agents.length > 0 || filters.hosts.length > 0 || filters.text.trim() !== "") && (
           <button
             type="button"
             className="tasks-panel-empty-hint-clear"

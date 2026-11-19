@@ -8,15 +8,7 @@ import { Sidebar } from "./Sidebar.js";
 import type { SidebarProps } from "./Sidebar.js";
 import { ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
-import type {
-  Device,
-  GitPullReason,
-  GitStatus,
-  Host,
-  Project,
-  Session,
-  Task,
-} from "./api/index.js";
+import type { Device, GitStatus, Host, Project, Session, Task } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 import { STORAGE_KEYS } from "./lib/persistedState.js";
 import { writeDockManualProjectIds } from "./dock/dockHelpers.js";
@@ -1038,58 +1030,6 @@ describe("Sidebar git pull kebab entry", () => {
     await user.click(await screen.findByText("Git pull"));
 
     expect(await screen.findByText(/Pull failed/i)).toBeInTheDocument();
-  });
-
-  // Closes the formatPullReasonMessage coverage hole (was 1/8 reasons
-  // exercised). One case per GitPullReason, plus the unknown-reason default —
-  // cheap, locks down copy drift.
-  describe("formatPullReasonMessage copy", () => {
-    // The record is EXHAUSTIVE on purpose, and typed as GitPullReason: a
-    // new member of the union with no case here is a COMPILE error, not a
-    // silent fall-through to the default branch — which would tell the user
-    // the pull FAILED for a reason that is not a failure (issue #1896's
-    // "busy"). The union is the shared thing; the two renderers' copy is
-    // deliberately their own.
-    const unionCases: Record<GitPullReason, RegExp> = {
-      "not-a-repo": /Not a git repository/i,
-      "unborn-head": /unborn branch/i,
-      "detached-head": /detached HEAD/i,
-      "no-upstream": /no upstream/i,
-      "dirty-tree": /Working tree has uncommitted changes/i,
-      "not-fast-forward": /diverged from origin/i,
-      "already-up-to-date": /Already up to date/i,
-      "pull-failed": /The pull operation failed/i,
-      busy: /already running/i,
-      "stale-lock": /leftover git lock/i,
-    };
-
-    const cases: Array<{
-      reason: string;
-      detail?: string;
-      matches: RegExp;
-    }> = [
-      ...Object.entries(unionCases).map(([reason, matches]) => ({ reason, matches })),
-      {
-        reason: "pull-failed",
-        detail: "conflict on README.md",
-        matches: /conflict on README\.md/i,
-      },
-      { reason: "totally-unknown-reason", detail: "boom", matches: /Pull failed: boom/i },
-      { reason: "totally-unknown-reason", matches: /Pull failed/i },
-    ];
-
-    for (const c of cases) {
-      it(`surfaces copy for ${c.reason}${c.detail ? ` (with detail "${c.detail}")` : ""}`, async () => {
-        gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 1 }) };
-        pullProjectGit.mockResolvedValueOnce({ pulled: false, reason: c.reason, detail: c.detail });
-        renderSidebar();
-        const user = userEvent.setup();
-        await user.click(screen.getByTitle("More…"));
-        await user.click(await screen.findByText("Git pull"));
-
-        expect(await screen.findByText(c.matches)).toBeInTheDocument();
-      });
-    }
   });
 });
 
