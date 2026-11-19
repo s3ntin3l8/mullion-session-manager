@@ -753,7 +753,7 @@ existingName, existingHostId }` when the new `cwd` (or a `hostCwds` entry) is al
   `MERGE_LIVE_TASK_CONFLICT` (a live task for the same issue in both projects) and
   `MERGE_SAME_PROJECT`.
 - Browser-local state may still name the deleted project (dock pins, the active project, the
-  collapsed flags) and a saved layout may hold its `project-hub-<id>` / `file-editor-<id>` panels.
+  collapsed flags) and a saved layout may hold its `file-editor-<id>` panels (or a retired `project-hub-<id>` one).
   The backend never parses a layout, so the dock ignores unknown ids and the app closes such
   panels once the project list has loaded.
 

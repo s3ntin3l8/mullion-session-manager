@@ -18,6 +18,8 @@ const openRightSidebarView = vi.fn();
 const startDevice = vi.fn();
 const requestPreviewPicker = vi.fn();
 const openRailBrowserPreview = vi.fn();
+const openProjectSettings = vi.fn();
+const openProjectSkills = vi.fn();
 // The band the preview openers read at the moment of opening (#3372). An
 // explicit "desktop" needs no matchMedia; atBand() below stubs it for "auto".
 let layoutMode: "auto" | "desktop" = "desktop";
@@ -38,6 +40,8 @@ function storeState() {
     startDevice,
     requestPreviewPicker,
     openRailBrowserPreview,
+    openProjectSettings,
+    openProjectSkills,
     settings: { layoutMode },
   };
 }
@@ -112,6 +116,8 @@ beforeEach(() => {
   setActiveWorkspaceId.mockClear();
   setViewMode.mockClear();
   openRightSidebarView.mockClear();
+  openProjectSettings.mockClear();
+  openProjectSkills.mockClear();
   startDevice.mockReset();
   startDevice.mockResolvedValue(undefined);
 });
@@ -605,41 +611,36 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(openRightSidebarView).toHaveBeenCalledWith("git", 1);
   });
 
-  // Agent Rules / Briefing / Scaffold / Dock / Skills are tabs of one Project
-  // panel now — every legacy opener must land on `project-hub-<id>` with its
-  // own tab, not open a panel of the old kind.
+  // #3406 — the four editors open the Project settings dialog on their
+  // section, Skills the sidebar's Project view. None needs dockview or leaves
+  // the current mode, so they work from Tasks mode and on the phone.
   it.each([
     ["onOpenAgentRules", "agent-rules"],
     ["onOpenProjectBriefing", "briefing"],
     ["onOpenProjectSetup", "scaffold"],
     ["onOpenDockConfig", "dock"],
-    ["onOpenSkills", "skills"],
-  ] as const)("%s opens the Project panel on its %s tab", (fnName, tab) => {
+  ] as const)("%s opens Project settings on its %s section", (fnName, section) => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
 
     (result.current[fnName] as (projectId: number) => void)(1);
 
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "project-hub-1",
-        component: "project-hub",
-        title: "Project: project-alpha",
-        params: { projectId: 1, tab },
-      }),
-    );
+    expect(openProjectSettings.mock.calls[0].slice(0, 2)).toEqual([1, section]);
+    expect(api.addPanel).not.toHaveBeenCalled();
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 
-  it("opens preview management through the normal navigation path and leaves Task view", () => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
+  it("onOpenDockConfig carries the Previews view through", () => {
+    const { result } = setup({ dockviewApi: null });
     result.current.onOpenDockConfig(1, "previews");
-    expect(setViewMode).toHaveBeenCalledWith("list");
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ projectId: 1, tab: "dock", dockView: "previews" }),
-      }),
-    );
+    expect(openProjectSettings).toHaveBeenCalledWith(1, "dock", "previews");
+  });
+
+  it("onOpenSkills opens the sidebar's Project view on Skills, without a dockview", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenSkills(1);
+    expect(openProjectSkills).toHaveBeenCalledWith(1);
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 
   it("offers preview selection without changing the current task or monitor state", () => {
@@ -647,37 +648,6 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     result.current.onOpenPreviewTargets(1);
     expect(requestPreviewPicker).toHaveBeenCalledWith(1);
     expect(setViewMode).not.toHaveBeenCalled();
-  });
-
-  it("onOpenProjectHub without a tab opens the panel with no tab preference", () => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
-
-    result.current.onOpenProjectHub(1);
-
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "project-hub-1", params: { projectId: 1, tab: undefined } }),
-    );
-  });
-
-  it("onOpenProjectHub re-targets an already-open panel instead of adding a second", () => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
-    result.current.onOpenProjectHub(1, "dock");
-
-    result.current.onOpenProjectHub(1, "skills");
-
-    expect(api.addPanel).toHaveBeenCalledTimes(1);
-    const panel = api.getPanel("project-hub-1")!;
-    expect(panel.api.updateParameters).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: 1, tab: "skills", rev: expect.any(Number) }),
-    );
-    expect(panel.api.setActive).toHaveBeenCalled();
-  });
-
-  it("onOpenProjectHub no-ops when dockviewApi is null", () => {
-    const { result } = setup({ dockviewApi: null });
-    expect(() => result.current.onOpenProjectHub(1)).not.toThrow();
   });
 
   it("onOpenFile opens an editor-only panel per file and focuses it on a repeat", () => {
@@ -768,7 +738,7 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(githubCall).toHaveProperty("floating", { width: 720, height: 460 });
   });
 
-  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+  it.each(["onOpenBrowser"] as const)(
     "%s no-ops when dockviewApi is null",
     (fnName) => {
       const { result } = setup({ dockviewApi: null });
@@ -881,7 +851,7 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
-  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+  it.each(["onOpenBrowser"] as const)(
     "%s resets viewMode to list before opening",
     (fnName) => {
       const api = mockDockviewApi();
@@ -891,7 +861,7 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
     },
   );
 
-  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+  it.each(["onOpenBrowser"] as const)(
     "%s does NOT reset viewMode when dockviewApi is null (a true no-op)",
     (fnName) => {
       const { result } = setup({ dockviewApi: null });

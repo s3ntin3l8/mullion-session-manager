@@ -14,7 +14,6 @@ import { initialPaneTitle } from "./paneTitle.js";
 import { sessionPaneTitle } from "./lib/sessionDisplay.js";
 import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
-import type { ProjectHubTab } from "./ProjectHubPanel.js";
 import { browserAgentTitle } from "./lib/browserTitles.js";
 import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 
@@ -26,9 +25,12 @@ import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 export function handleGlobalEscape(actions: {
   clearPalette: () => void;
   closeSettings: () => void;
+  // Asks rather than closes over an unsaved draft (#3406).
+  closeProjectSettings: () => void;
 }): void {
   actions.clearPalette();
   actions.closeSettings();
+  actions.closeProjectSettings();
 }
 
 // Issue #1189 — same "extracted here so it's directly unit-testable"
@@ -864,11 +866,11 @@ type PanelPlacement =
  * The two differences are the point of the extraction (issue #2410) — they
  * are spelled out here rather than left to each caller's own copy:
  *
- *  - `retargetParams`: three of the openers (openProjectHubPanel,
- *    openFileEditorPanel, openExternalFilePanel) re-target an ALREADY-OPEN
+ *  - `retargetParams`: two of the openers (openFileEditorPanel,
+ *    openExternalFilePanel) re-target an ALREADY-OPEN
  *    panel through `updateParameters` — a fresh `rev`, so the panel switches
  *    to what was just asked for instead of showing its previous target. The
- *    other eight leave the open panel exactly as it is.
+ *    others leave the open panel exactly as it is.
  *  - `applyDesktopPositioning`: the project-panel opener applies the tier
  *    positioning only conditionally — phone always (phonePositioning's own
  *    float-avoidance, issue #1452), desktop and tablet only when the panel's
@@ -1187,31 +1189,6 @@ function nextRev(): number {
   return revCounter;
 }
 
-/** Opens (or focuses and re-targets) the project's tabbed Project panel on
- * `tab` — a fresh `rev` makes an already-open panel switch to that tab. */
-export function openProjectHubPanel(
-  api: DockviewApi,
-  projectId: number,
-  projects: { id: number; name: string | null }[],
-  layout: LayoutContext,
-  tab?: ProjectHubTab,
-  dockView?: "previews",
-): void {
-  const project = projects.find((p) => p.id === projectId);
-  openOrFocusPanel(
-    api,
-    `project-hub-${projectId}`,
-    {
-      component: "project-hub",
-      title: project ? `Project: ${project.name}` : "Project",
-      params: { projectId, tab, dockView },
-      // A fresh rev makes an already-open panel switch to that tab.
-      retargetParams: { projectId, tab, dockView, rev: nextRev() },
-    },
-    layout,
-  );
-}
-
 /** Opens the project's file editor on `target.path` — focusing the existing
  * panel and re-targeting it (a fresh `rev` makes the panel reopen the same
  * path even if it was navigated away from meanwhile) rather than opening a
@@ -1419,21 +1396,21 @@ const LEGACY_PANEL_IDS = ["tasks"] as const;
 // registered in panels/registry.tsx.
 const LEGACY_PANEL_KINDS = ["git", "github"] as const;
 
-// The five per-project setup panels that now live as tabs of one
-// `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component
-// kinds stay registered (panels/registry.tsx renders the hub on the matching
-// tab) so a saved layout can never throw on restore; migrateLegacyProjectPanels
-// below is the self-heal half that converts any found in a live dockview.
-const LEGACY_PROJECT_PANEL_KINDS: Record<string, ProjectHubTab> = {
-  "agent-rules": "agent-rules",
-  "project-briefing": "briefing",
-  "project-setup": "scaffold",
-  "dock-config": "dock",
-  skills: "skills",
-};
-
-const LEGACY_PROJECT_PANEL_ID_RE =
-  /^(agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
+// The retired Project panel (`project-hub-<projectId>`) and the five
+// single-purpose panels it once replaced (#3406: its editors are the Project
+// settings dialog now, Skills a drill-in of the sidebar's Project view). Swept
+// by kind like LEGACY_PANEL_KINDS, but silently: a dialog opening on a
+// workspace switch would be a surprise. Kept apart from LEGACY_PANEL_KINDS,
+// whose sweep reports each panel to the caller. Every kind stays registered in
+// panels/registry.tsx (ProjectPanelRedirect.tsx).
+const RETIRED_PROJECT_PANEL_KINDS: readonly string[] = [
+  "project-hub",
+  "agent-rules",
+  "project-briefing",
+  "project-setup",
+  "dock-config",
+  "skills",
+];
 
 const PROJECT_PANEL_ID_RE =
   /^(?:project-hub|file-editor|agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
@@ -1453,38 +1430,6 @@ export function staleProjectPanelIds(
     const match = PROJECT_PANEL_ID_RE.exec(id);
     return match !== null && !projectIds.includes(parseInt(match[1], 10));
   });
-}
-
-// Replaces each legacy per-project setup panel with the project's hub panel,
-// in the same group (`within`); several legacy panels of one project merge
-// into one hub (the first one found picks the tab). Matches on the panel id
-// (`<kind>-<projectId>`, openOrFocusProjectPanel's scheme) rather than a
-// component-name field. Returns true if anything changed, so the caller
-// persists the cleaned layout — same contract as closeLegacyPanels.
-export function migrateLegacyProjectPanels(
-  api: DockviewApi,
-  projects: { id: number; name: string | null }[] = [],
-): boolean {
-  let changed = false;
-  for (const panel of [...api.panels]) {
-    const match = LEGACY_PROJECT_PANEL_ID_RE.exec(panel.id);
-    if (!match) continue;
-    const projectId = Number(match[2]);
-    const hubId = `project-hub-${projectId}`;
-    if (!api.getPanel(hubId)) {
-      const project = projects.find((p) => p.id === projectId);
-      api.addPanel({
-        id: hubId,
-        component: "project-hub",
-        title: project?.name ? `Project: ${project.name}` : "Project",
-        params: { projectId, tab: LEGACY_PROJECT_PANEL_KINDS[match[1]] },
-        position: { referencePanel: panel.id, direction: "within" },
-      });
-    }
-    panel.api.close();
-    changed = true;
-  }
-  return changed;
 }
 
 // Returns true if it closed anything, so the caller (App.tsx's restore
@@ -1509,6 +1454,9 @@ export function closeLegacyPanels(
       panel.api.close();
       closed = true;
       onRetiredPanel?.(kind, projectId);
+    } else if (RETIRED_PROJECT_PANEL_KINDS.includes(kind)) {
+      panel.api.close();
+      closed = true;
     }
   }
   for (const id of LEGACY_PANEL_IDS) {

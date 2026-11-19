@@ -131,6 +131,7 @@ export function useGlobalShortcuts({
         handleGlobalEscape({
           clearPalette: () => setPalette((p) => ({ ...p, open: false })),
           closeSettings: () => setSettingsOpen(false),
+          closeProjectSettings: () => useDashboardStore.getState().requestCloseProjectSettings(),
         });
       }
     };

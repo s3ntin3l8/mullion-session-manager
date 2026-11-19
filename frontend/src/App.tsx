@@ -29,6 +29,7 @@ import { PhoneModeBar } from "./PhoneModeBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
 import { SessionLauncherHost } from "./launchers/SessionLauncher.js";
+import { ProjectSettingsHost } from "./project-settings/ProjectSettingsDialog.js";
 import { launchIntoWorkspace } from "./lib/launchIntoWorkspace.js";
 import type { SettingsSection } from "./Settings.js";
 import { SettingsLoadingFallback } from "./SettingsLoadingFallback.js";
@@ -1721,6 +1722,7 @@ export function App() {
           onOpenTasks={onOpenTasks}
         />
       )}
+      <ProjectSettingsHost phone={isMobile} backStack={compact} />
       {settingsOpen && (
         // ErrorBoundary's fallback (.crashed-pane, styles.css) has no
         // positioning of its own — it depends entirely on its parent. .app

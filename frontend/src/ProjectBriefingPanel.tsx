@@ -418,13 +418,23 @@ function ToolingFieldEditor({
 //
 // Fetched once on open, never polled — same "these change rarely" precedent
 // as AgentRulesPanel/Source Control's own fetch-once posture.
-export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelParams }) {
+export function ProjectBriefingPanel({
+  params,
+  onDirtyChange,
+}: {
+  params: ProjectBriefingPanelParams;
+  // Same contract as AgentRulesPanel's (#3406).
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const [tooling, setTooling] = useState<
     { briefing: string | null; skill: string | null; reviewerAgent: string | null } | undefined
   >(undefined);
   const [loadError, setLoadError] = useState(false);
   const [activeField, setActiveField] = useState<ToolingFieldKey>("briefing");
   const [activeFieldDirty, setActiveFieldDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange?.(activeFieldDirty);
+  }, [activeFieldDirty, onDirtyChange]);
 
   // Issue #884 — per-project override of the two global session-injection
   // settings. Read from the project list already in the store (same

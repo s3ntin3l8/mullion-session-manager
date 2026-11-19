@@ -5,8 +5,7 @@ import { TerminalPane } from "../TerminalPane.js";
 import type { TerminalPaneParams } from "../TerminalPane.js";
 import { GitHubPanelRedirect } from "../GitHubPanelRedirect.js";
 import { GitPanelRedirect } from "../GitPanelRedirect.js";
-import { ProjectHubPanel } from "../ProjectHubPanel.js";
-import type { ProjectHubPanelParams, ProjectHubTab } from "../ProjectHubPanel.js";
+import { ProjectPanelRedirect } from "../ProjectPanelRedirect.js";
 import type { BrowserHostComponent, BrowserHostParams } from "../BrowserPaneHost.js";
 import type { FileEditorPanelParams } from "../FileEditorPanel.js";
 import type { ExternalFilePanelParams } from "../ExternalFilePanel.js";
@@ -393,38 +392,30 @@ function GitPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number
   );
 }
 
-// The tabbed Project panel hosting Agent Rules / Briefing / Scaffold / Dock /
-// Skills. Hand-written (not makePanelWrapper) because it persists the user's
-// tab choice back into the panel's params, which needs dockview's own `api`.
-function ProjectHubPanelWrapper(props: IDockviewPanelProps<ProjectHubPanelParams>) {
+// The Project panel (`project-hub`) and the five single-purpose panels it
+// replaced are retired (#3406): the editors are the Project settings dialog
+// and Skills a drill-in of the sidebar's Project view. Every kind stays
+// registered so a saved workspace layout that still names one doesn't throw on
+// restore (an unregistered kind makes fromJSON wipe the whole layout);
+// panelUtils.ts's closeLegacyPanels sweeps them before they can mount, and the
+// stub's button opens the dialog if one is ever seen. Never delete these keys.
+function ProjectPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number }>) {
   const [resetKey, resetPanel] = useResetKey();
+  const openProjectSettings = useDashboardStore((s) => s.openProjectSettings);
+  const projectId = props.params?.projectId;
+  const { api, containerApi } = props;
+  const onOpen = useCallback(() => {
+    if (projectId != null) openProjectSettings(projectId, "agent-rules");
+    // Closed through the container so a panel the restore sweep already
+    // removed is a no-op rather than a throw.
+    containerApi.getPanel(api.id)?.api.close();
+  }, [openProjectSettings, projectId, api, containerApi]);
   return (
     <ErrorBoundary onReset={resetPanel}>
-      <ProjectHubPanel
-        key={resetKey}
-        params={props.params}
-        onTabChange={(tab) => props.api.updateParameters({ ...props.params, tab })}
-      />
+      <ProjectPanelRedirect key={resetKey} onOpen={onOpen} />
     </ErrorBoundary>
   );
 }
-
-// Agent Rules / Briefing / Scaffold / Dock / Skills used to be five panel
-// kinds of their own. They stay registered — rendering the hub on the
-// matching tab — so a saved workspace layout that still names one doesn't
-// throw on restore (an unregistered kind makes fromJSON wipe the whole
-// layout); the restore effect's migrateLegacyProjectPanels then converts
-// them to a real `project-hub` panel. Never delete these keys.
-function makeLegacyHubWrapper(tab: ProjectHubTab) {
-  return makePanelWrapper<{ projectId: number }>(function LegacyHubPanel({ params }) {
-    return <ProjectHubPanel params={{ projectId: params.projectId, tab }} />;
-  });
-}
-const AgentRulesPanelWrapper = makeLegacyHubWrapper("agent-rules");
-const ProjectBriefingPanelWrapper = makeLegacyHubWrapper("briefing");
-const ProjectSetupPanelWrapper = makeLegacyHubWrapper("scaffold");
-const DockConfigPanelWrapper = makeLegacyHubWrapper("dock");
-const SkillsPanelWrapper = makeLegacyHubWrapper("skills");
 
 // Lazy because it pulls in CodeMirror (the only place in the app that does);
 // hand-written for the same reason as the Browser wrapper below — it needs
@@ -642,14 +633,14 @@ export const components = {
   terminal: TerminalPanelWrapper,
   github: GitHubPanelRedirectWrapper,
   git: GitPanelRedirectWrapper,
-  "agent-rules": AgentRulesPanelWrapper,
+  "agent-rules": ProjectPanelRedirectWrapper,
   "file-editor": FileEditorPanelWrapper,
   "external-file": ExternalFilePanelWrapper,
-  "project-hub": ProjectHubPanelWrapper,
-  "project-briefing": ProjectBriefingPanelWrapper,
-  "project-setup": ProjectSetupPanelWrapper,
-  "dock-config": DockConfigPanelWrapper,
-  skills: SkillsPanelWrapper,
+  "project-hub": ProjectPanelRedirectWrapper,
+  "project-briefing": ProjectPanelRedirectWrapper,
+  "project-setup": ProjectPanelRedirectWrapper,
+  "dock-config": ProjectPanelRedirectWrapper,
+  skills: ProjectPanelRedirectWrapper,
   browser: BrowserPanelWrapper,
   browserPane: BrowserPaneWrapper,
   device: DevicePaneWrapper,
