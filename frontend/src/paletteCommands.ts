@@ -445,19 +445,26 @@ export function buildPaletteCommands({
   {
     const agentBrowser = open.agentBrowser;
     const session = activeSession;
-    const agent = agentBrowser && session && browserFeature ? () => agentBrowser(session) : null;
-    if (agent || projectId !== null) {
+    const browser: Pick<PaletteCommand, "id" | "title" | "icon" | "keywords" | "placement"> = {
+      id: "browser",
+      title: "Browser",
+      icon: GlobeIcon,
+      keywords: ["browser", "preview", "web"],
+      placement: "top",
+    };
+    if (agentBrowser && session && browserFeature) {
       commands.push({
-        id: "browser",
-        movesFocus: !agent,
-        title: "Browser",
-        subtitle: agent
-          ? "The browser this session's agent drives"
-          : "Open a preview of this project",
-        icon: GlobeIcon,
-        keywords: ["browser", "preview", "web"],
-        placement: "top",
-        run: agent ?? (() => open.browser(projectId as number)),
+        ...browser,
+        subtitle: "The browser this session's agent drives",
+        run: () => agentBrowser(session),
+      });
+    } else if (projectId !== null) {
+      const id = projectId;
+      commands.push({
+        ...browser,
+        movesFocus: true,
+        subtitle: "Open a preview of this project",
+        run: () => open.browser(id),
       });
     }
   }

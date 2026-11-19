@@ -25,6 +25,7 @@ import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import type { PaletteEntry } from "./hooks/useCommandSearch.js";
 import {
   PALETTE_CREATE_IDS,
+  PALETTE_GO_TO_IDS,
   buildPaletteCommands,
   searchPaletteCommands,
 } from "./paletteCommands.js";
@@ -1090,11 +1091,14 @@ export function CommandPalette({
                 so they don't compete with actual command results. */}
             {query.trim() === "" && (
               <>
-                {(["Create", "Go to"] as const).map((label) => {
-                  const rows = blankCommands.filter(
-                    (c) =>
-                      (PALETTE_CREATE_IDS as readonly string[]).includes(c.id) ===
-                      (label === "Create"),
+                {(
+                  [
+                    ["Create", PALETTE_CREATE_IDS],
+                    ["Go to", PALETTE_GO_TO_IDS],
+                  ] as const
+                ).map(([label, ids]) => {
+                  const rows = blankCommands.filter((c) =>
+                    (ids as readonly string[]).includes(c.id),
                   );
                   if (rows.length === 0) return null;
                   return (
