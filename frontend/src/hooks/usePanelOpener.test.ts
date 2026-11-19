@@ -552,23 +552,40 @@ describe("usePanelOpener — onOpenRailBrowser (#3403)", () => {
 // branching itself is panelUtils.test.ts's concern (openOrFocusProjectPanel
 // is exercised for real, not mocked, here).
 describe("usePanelOpener — project-scoped panel kinds", () => {
-  it.each([
-    ["onOpenGitHub", "github", "GitHub: project-alpha"],
-    ["onOpenBrowser", "browser", "Browser · Preview: project-alpha"],
-  ] as const)("%s opens a %s-<projectId> panel titled %s", (fnName, kind, title) => {
+  it.each([["onOpenBrowser", "browser", "Browser · Preview: project-alpha"]] as const)(
+    "%s opens a %s-<projectId> panel titled %s",
+    (fnName, kind, title) => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+
+      (result.current[fnName] as (projectId: number) => void)(1);
+
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: `${kind}-1`,
+          component: kind,
+          title,
+          params: { projectId: 1 },
+        }),
+      );
+    },
+  );
+
+  it("onOpenGitHub opens the GitHub sidebar view, adding no dock panel", () => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
 
-    (result.current[fnName] as (projectId: number) => void)(1);
+    result.current.onOpenGitHub(1);
 
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: `${kind}-1`,
-        component: kind,
-        title,
-        params: { projectId: 1 },
-      }),
-    );
+    expect(openRightSidebarView).toHaveBeenCalledWith("github", 1);
+    expect(api.addPanel).not.toHaveBeenCalled();
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  it("onOpenGitHub works without a dockviewApi (the sidebar needs none)", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenGitHub(1);
+    expect(openRightSidebarView).toHaveBeenCalledWith("github", 1);
   });
 
   it("onOpenGit opens the Source Control sidebar view, not a dock panel", () => {
@@ -736,31 +753,28 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
   });
 
-  it("every other panel kind DOES apply desktop positioning with a tiled panel present", () => {
+  it("Agent Rules (a project panel kind) DOES apply desktop positioning with a tiled panel present", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
     const { result } = setup({ dockviewApi: api });
 
-    result.current.onOpenGitHub(1);
+    result.current.onOpenAgentRules(1);
 
     const githubCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call) => call[0].id === "github-1",
+      (call) => call[0].id === "project-hub-1",
     )![0];
     // An explicit size, not dockview's own cramped 300x300 default — see
     // panelUtils.ts's desktopPositioning/DEFAULT_FLOATING_PANEL_SIZE.
     expect(githubCall).toHaveProperty("floating", { width: 720, height: 460 });
   });
 
-  it.each([
-    "onOpenGitHub",
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s no-ops when dockviewApi is null", (fnName) => {
-    const { result } = setup({ dockviewApi: null });
-    expect(() => (result.current[fnName] as (projectId: number) => void)(1)).not.toThrow();
-  });
+  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+    "%s no-ops when dockviewApi is null",
+    (fnName) => {
+      const { result } = setup({ dockviewApi: null });
+      expect(() => (result.current[fnName] as (projectId: number) => void)(1)).not.toThrow();
+    },
+  );
 });
 
 describe("usePanelOpener — onOpenTasks", () => {
@@ -867,30 +881,24 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
-  it.each([
-    "onOpenGitHub",
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s resets viewMode to list before opening", (fnName) => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
-    (result.current[fnName] as (projectId: number) => void)(1);
-    expect(setViewMode).toHaveBeenCalledWith("list");
-  });
+  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+    "%s resets viewMode to list before opening",
+    (fnName) => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      (result.current[fnName] as (projectId: number) => void)(1);
+      expect(setViewMode).toHaveBeenCalledWith("list");
+    },
+  );
 
-  it.each([
-    "onOpenGitHub",
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s does NOT reset viewMode when dockviewApi is null (a true no-op)", (fnName) => {
-    const { result } = setup({ dockviewApi: null });
-    (result.current[fnName] as (projectId: number) => void)(1);
-    expect(setViewMode).not.toHaveBeenCalled();
-  });
+  it.each(["onOpenAgentRules", "onOpenDockConfig", "onOpenSkills", "onOpenBrowser"] as const)(
+    "%s does NOT reset viewMode when dockviewApi is null (a true no-op)",
+    (fnName) => {
+      const { result } = setup({ dockviewApi: null });
+      (result.current[fnName] as (projectId: number) => void)(1);
+      expect(setViewMode).not.toHaveBeenCalled();
+    },
+  );
 
   it("onOpenBrowserUrl resets viewMode to list before opening", () => {
     const api = mockDockviewApi();

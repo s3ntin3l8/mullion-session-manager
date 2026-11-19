@@ -21,7 +21,7 @@ export function DockGithubRow({
     <button
       className="dock-github-row"
       onClick={onOpen}
-      title={`Open GitHub panel for ${githubStatus.repo.owner}/${githubStatus.repo.repo}`}
+      title={`Open GitHub for ${githubStatus.repo.owner}/${githubStatus.repo.repo}`}
     >
       <GitHubIcon size={13} />
       <span className="dock-github-repo">

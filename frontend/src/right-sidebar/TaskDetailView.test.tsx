@@ -153,7 +153,6 @@ describe("TaskDetailView keyboard access in the real right sidebar", () => {
   // finds nothing there. These tests use the DOM shape the app really has.
   const actions = {
     onOpenGit: vi.fn(),
-    onOpenGitHub: vi.fn(),
     onOpenFileEditor: vi.fn(),
     onOpenFile: vi.fn(),
     onOpenAgentRules: vi.fn(),

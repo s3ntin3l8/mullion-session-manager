@@ -1,5 +1,4 @@
 import type { SettingsSection } from "./settings/settingsSections.js";
-import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import type { ComponentType, CSSProperties } from "react";
 import {
   BotIcon,
@@ -40,11 +39,12 @@ export interface PaletteCommand {
   // Matched alongside `title` (never `subtitle`) — kept conservative so a
   // command never outranks a launcher for a name like "claude".
   keywords: string[];
-  // Where it shows on an empty query: the top-level Commands list, or
-  // the "Project ›" drill-in list.
-  // `search` rows (one per PR / branch, plus the typed-number ones) are never
-  // listed on an empty query — they would bury the fixed commands — and are
-  // only found by typing.
+  // Where it shows on an empty query. The rule: the default list is the
+  // create actions and the top-level destinations, the same on every layout
+  // tier (`top`, in the order of TOP_ORDER); the "Project ›" drill-in holds
+  // the project's own editors (`project`); anything parameterised or rare
+  // (one row per PR / branch / URL, GitHub, Devices, Hosts, …) is `search`:
+  // never listed on an empty query, only found by typing.
   placement: "top" | "project" | "search";
   // Set when the command's effect cannot be seen on this device — the Dock
   // on a touch-only or phone-tier device (issue #1881). The row carries the
@@ -118,7 +118,6 @@ export interface PaletteCommandOpeners {
 }
 
 export interface PaletteCommandContext {
-  layoutTier: LayoutTier;
   projectId: number | null;
   projectName: string | null;
   favoriteUrls: { id: number | string; url: string; label: string }[];
@@ -128,6 +127,9 @@ export interface PaletteCommandContext {
   // phone tier — so this is the shared predicate's answer, not a pointer
   // test; see lib/dockAvailability.ts.
   dockUnavailable: DockUnavailableReason | null;
+  // False when the server's browser feature is off, so the "Browser" row falls
+  // back to the project's preview targets. Defaults to on.
+  browserFeature?: boolean;
   // The session whose pane is active, if any. The timeline command is the
   // pane menu's "View timeline" for that session, so it is omitted when
   // there isn't one — the menu only offers the item on a session pane.
@@ -141,13 +143,18 @@ export interface PaletteCommandContext {
   branches?: string[];
 }
 
+// The empty-query list: two groups, in this order. `id`s of the `top` rows.
+export const PALETTE_CREATE_IDS = ["new-session", "new-workspace"] as const;
+export const PALETTE_GO_TO_IDS = ["task-board", "browser", "project", "settings"] as const;
+const TOP_ORDER: readonly string[] = [...PALETTE_CREATE_IDS, ...PALETTE_GO_TO_IDS];
+
 export function buildPaletteCommands({
-  layoutTier,
   projectId,
   projectName,
   favoriteUrls,
   open,
   dockUnavailable,
+  browserFeature = true,
   activeSession,
   activeSessionTitleContext,
   prs = [],
@@ -181,7 +188,7 @@ export function buildPaletteCommands({
         subtitle: "Open issues, pull requests, and status",
         icon: GitHubIcon,
         keywords: ["github", "issues", "pull requests", "prs", "ci"],
-        placement: "top",
+        placement: "search",
         run: () => open.github(id),
       },
       {
@@ -287,7 +294,7 @@ export function buildPaletteCommands({
         subtitle: "Choose a preview target for this project",
         icon: GlobeIcon,
         keywords: ["preview", "preview browser", "open preview browser", "dev server", "browser"],
-        placement: dockUnavailable ? "top" : "search",
+        placement: "search",
         run: () => open.browser(id),
       },
       // Both deep-link into the right sidebar, so they are omitted where
@@ -350,7 +357,7 @@ export function buildPaletteCommands({
         subtitle: u.url,
         icon: GlobeIcon,
         keywords: [u.label, u.url, "preview", `preview: ${u.label}`],
-        placement: "top",
+        placement: "search",
         run: () => open.browserUrl(id, u.url, u.label),
       })),
     );
@@ -429,6 +436,37 @@ export function buildPaletteCommands({
     });
   }
 
+  // The default list's one Browser row: the session's own browser when there
+  // is an active session and the server's browser feature is on, otherwise
+  // the project's preview targets. Both open the rail's Browser view below
+  // 1100px (CommandPalette routes them).
+  {
+    const agentBrowser = open.agentBrowser;
+    const session = activeSession;
+    const browser: Pick<PaletteCommand, "id" | "title" | "icon" | "keywords" | "placement"> = {
+      id: "browser",
+      title: "Browser",
+      icon: GlobeIcon,
+      keywords: ["browser", "preview", "web"],
+      placement: "top",
+    };
+    if (agentBrowser && session && browserFeature) {
+      commands.push({
+        ...browser,
+        subtitle: "The browser this session's agent drives",
+        run: () => agentBrowser(session),
+      });
+    } else if (projectId !== null) {
+      const id = projectId;
+      commands.push({
+        ...browser,
+        movesFocus: true,
+        subtitle: "Open a preview of this project",
+        run: () => open.browser(id),
+      });
+    }
+  }
+
   if (open.devices) {
     const openDevices = open.devices;
     commands.push({
@@ -466,7 +504,7 @@ export function buildPaletteCommands({
       subtitle: "Open settings",
       icon: GearIcon,
       keywords: ["settings", "preferences"],
-      placement: layoutTier === "phone" ? "top" : "search",
+      placement: "top",
       run: openSettings,
     });
   }
@@ -503,15 +541,15 @@ export function buildPaletteCommands({
     });
   }
 
-  // Within each placement the row order is the title, except that "New
-  // session…" leads. Callers render one group per placement, so sorting the
-  // whole list sorts each group.
-  commands.sort((a, b) =>
-    a.id === "new-session"
-      ? -1
-      : b.id === "new-session"
-        ? 1
-        : a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
+  // The default list's order is declared, not derived from titles. Rows of
+  // the other placements keep the title order (the "Project ›" drill-in list).
+  const rank = (c: PaletteCommand) => {
+    const at = TOP_ORDER.indexOf(c.id);
+    return c.placement === "top" && at >= 0 ? at : TOP_ORDER.length;
+  };
+  commands.sort(
+    (a, b) =>
+      rank(a) - rank(b) || a.title.localeCompare(b.title, undefined, { sensitivity: "base" }),
   );
 
   return commands;

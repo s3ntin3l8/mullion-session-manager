@@ -59,7 +59,6 @@ const status = (over: Partial<GitHubStatus> = {}): GitHubStatus => ({
 
 const actions = {
   onOpenGit: vi.fn(),
-  onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
   onOpenAgentRules: vi.fn(),
@@ -216,13 +215,12 @@ describe("GitHubSidebarView", () => {
     expect(screen.queryByText("PR title 1")).toBeNull();
   });
 
-  it("the toolbar button opens the full panel for this project", async () => {
+  it("has no pop-out to a grid panel (the sidebar is the one home)", async () => {
     const user = userEvent.setup();
     renderView();
 
     await user.click(screen.getByRole("button", { name: "More actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Open GitHub panel" }));
-    expect(actions.onOpenGitHub).toHaveBeenCalledWith(4);
+    expect(screen.queryByRole("menuitem", { name: /GitHub panel/ })).toBeNull();
   });
 
   it("the ⋯ menu opens the repo on GitHub", async () => {

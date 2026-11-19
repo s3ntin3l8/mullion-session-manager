@@ -14,8 +14,8 @@ const REFRESH_MAX_MS = 5000;
 
 // The real GitHub panel, embedded — one source of truth for PRs, checks,
 // issues and releases. Refresh is the one primary action; the GitHub link for
-// whatever is showing and pop-out to a full dock panel sit behind the ⋯ menu.
-export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps) {
+// whatever is showing sits behind the ⋯ menu.
+export function GitHubSidebarView({ projectId }: RightSidebarViewProps) {
   const [link, setLink] = useState<{ url: string; label: string } | null>(null);
   // What the panel's PR section shows, which leaves the release PR out.
   // Keyed by project: this view is not remounted on a project switch, and the
@@ -80,11 +80,6 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
             onClick: () => {
               if (link) window.open(link.url, "_blank", "noopener,noreferrer");
             },
-          },
-          {
-            key: "open-panel",
-            label: "Open GitHub panel",
-            onClick: () => actions.onOpenGitHub(projectId),
           },
         ]}
       />

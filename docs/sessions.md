@@ -24,6 +24,13 @@ it:
   entry preselected and **Launch** focused,
   so Enter launches it. The one exception is the search-only "Open session on
   branch …", which starts the default agent on that branch directly.
+  On an empty query the palette lists the same rows on every layout tier, in
+  two groups: **Create** (New session…, New workspace) and **Go to** (Task
+  board, Browser, Project ›, Settings). Browser opens the active session's
+  agent browser, or the project's preview targets when there is no session
+  pane (or the server's browser feature is off). Everything parameterised or
+  rare (GitHub, a PR, a branch, a saved preview URL, Devices, Hosts, …) is
+  found by typing.
 
 ## The launcher
 

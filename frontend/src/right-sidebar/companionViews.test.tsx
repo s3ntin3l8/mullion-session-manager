@@ -27,7 +27,6 @@ vi.mock("./DockSidebarView.js", () => ({
 const PROJECT = { id: 1, name: "demo", cwd: "/x/demo", hostId: "local" } as Project;
 const actions = {
   onOpenGit: vi.fn(),
-  onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
   onOpenAgentRules: vi.fn(),

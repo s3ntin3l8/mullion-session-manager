@@ -1,6 +1,6 @@
 import type { SettingsSection } from "./settings/settingsSections.js";
 import type { LayoutTier } from "./lib/layoutTierTypes.js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session } from "./api/index.js";
@@ -23,7 +23,12 @@ import {
 } from "./launchers/useSessionLaunch.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import type { PaletteEntry } from "./hooks/useCommandSearch.js";
-import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
+import {
+  PALETTE_CREATE_IDS,
+  PALETTE_GO_TO_IDS,
+  buildPaletteCommands,
+  searchPaletteCommands,
+} from "./paletteCommands.js";
 import type { PaletteCommand } from "./paletteCommands.js";
 import { describeError } from "./lib/describeError.js";
 import { projectHostCount } from "./lib/hostBadge.js";
@@ -33,6 +38,7 @@ import { TextInput } from "./ui/primitives.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useDismissExit } from "./hooks/usePresence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
+import { useServerInfo } from "./settings/useServerInfo.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
 import { agentBrowserIsRailView, useCurrentLayoutBand } from "./right-sidebar/viewBands.js";
 import {
@@ -505,11 +511,11 @@ export function CommandPalette({
   // lists the `top` ones and drills into the `project` ones; a typed query
   // searches them all (useCommandSearch).
   const layoutBand = useCurrentLayoutBand();
+  const serverInfo = useServerInfo();
   const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const activeSession =
     sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed") ?? null;
   const commands = buildPaletteCommands({
-    layoutTier,
     projectId: effectiveProjectId,
     projectName: projects.find((p) => p.id === effectiveProjectId)?.name ?? null,
     favoriteUrls:
@@ -521,6 +527,8 @@ export function CommandPalette({
     // both, and a phone-tier window with a fine pointer is not a case where
     // the Dock is available (issue #1881).
     dockUnavailable: dockUnavailableReason(layoutTier, isCoarsePointer),
+    // Unknown (not loaded yet) counts as on, like the rail's Browser view.
+    browserFeature: serverInfo == null || !!serverInfo.features?.browser,
     activeSession,
     activeSessionTitleContext: activeSession ? titleContexts.get(activeSession.id) : undefined,
     prs: projectPrs?.map((pr) => ({ number: pr.number, title: pr.title })),
@@ -1082,16 +1090,34 @@ export function CommandPalette({
                 so they don't compete with actual command results. */}
             {query.trim() === "" && (
               <>
-                <div className="cmd-palette-group-label">Commands</div>
-                {blankCommands.map((command, i) => (
-                  <CommandRow
-                    key={command.id}
-                    command={command}
-                    selected={i === navIndex}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => activateCommand(command)}
-                  />
-                ))}
+                {(
+                  [
+                    ["Create", PALETTE_CREATE_IDS],
+                    ["Go to", PALETTE_GO_TO_IDS],
+                  ] as const
+                ).map(([label, ids]) => {
+                  const rows = blankCommands.filter((c) =>
+                    (ids as readonly string[]).includes(c.id),
+                  );
+                  if (rows.length === 0) return null;
+                  return (
+                    <Fragment key={label}>
+                      <div className="cmd-palette-group-label">{label}</div>
+                      {rows.map((command) => {
+                        const i = blankCommands.indexOf(command);
+                        return (
+                          <CommandRow
+                            key={command.id}
+                            command={command}
+                            selected={i === navIndex}
+                            onMouseEnter={() => setSelectedIndex(i)}
+                            onClick={() => activateCommand(command)}
+                          />
+                        );
+                      })}
+                    </Fragment>
+                  );
+                })}
               </>
             )}
             {/* U2 — shown above the Launchers list whenever there's at

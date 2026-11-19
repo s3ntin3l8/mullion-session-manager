@@ -1135,7 +1135,6 @@ export function App() {
   const rightSidebarActions = useMemo(
     () => ({
       onOpenGit,
-      onOpenGitHub,
       onOpenFileEditor,
       onOpenFile,
       onOpenAgentRules,
@@ -1149,7 +1148,6 @@ export function App() {
     }),
     [
       onOpenGit,
-      onOpenGitHub,
       onOpenFileEditor,
       onOpenFile,
       onOpenAgentRules,

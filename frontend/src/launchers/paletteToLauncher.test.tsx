@@ -81,6 +81,7 @@ beforeEach(() => {
     "GET /api/opencode/models": empty,
     "GET /api/mcode/models": empty,
     "GET /api/sessions": empty,
+    "GET /api/server-info": () => jsonResponse(200, { features: { browser: true } }),
     "POST /api/sessions": ({ init }) => {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       created.push(body);

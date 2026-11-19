@@ -3,8 +3,7 @@ import type { ComponentType, FunctionComponent } from "react";
 import type { DockviewPanelApi, IDockviewPanelProps } from "dockview-react";
 import { TerminalPane } from "../TerminalPane.js";
 import type { TerminalPaneParams } from "../TerminalPane.js";
-import { GitHubPanel } from "../GitHubPanel.js";
-import type { GitHubPanelParams } from "../GitHubPanel.js";
+import { GitHubPanelRedirect } from "../GitHubPanelRedirect.js";
 import { GitPanelRedirect } from "../GitPanelRedirect.js";
 import { ProjectHubPanel } from "../ProjectHubPanel.js";
 import type { ProjectHubPanelParams, ProjectHubTab } from "../ProjectHubPanel.js";
@@ -351,11 +350,23 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   );
 }
 
-// A crash here is much lower-stakes than a terminal pane (a static status
-// fetch, not a live WS/xterm connection), but wrapped the same way for the
-// same reason: one project's GitHub panel misbehaving shouldn't blank the
-// whole dashboard.
-const GitHubPanelWrapper = makePanelWrapper<GitHubPanelParams>(GitHubPanel);
+// The grid GitHub panel is retired (the right sidebar's GitHub view is the one
+// home); same contract as GitPanelRedirectWrapper below. Never delete this key.
+function GitHubPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number }>) {
+  const [resetKey, resetPanel] = useResetKey();
+  const openRightSidebarView = useDashboardStore((s) => s.openRightSidebarView);
+  const projectId = props.params?.projectId;
+  const { api, containerApi } = props;
+  const onOpen = useCallback(() => {
+    openRightSidebarView("github", projectId);
+    containerApi.getPanel(api.id)?.api.close();
+  }, [openRightSidebarView, projectId, api, containerApi]);
+  return (
+    <ErrorBoundary onReset={resetPanel}>
+      <GitHubPanelRedirect key={resetKey} onOpen={onOpen} />
+    </ErrorBoundary>
+  );
+}
 
 // The dock Git panel is retired (Source Control is a right-sidebar view now);
 // this keeps the `git` kind registered so a saved workspace layout that still
@@ -629,7 +640,7 @@ function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
 // eslint-disable-next-line react-refresh/only-export-components
 export const components = {
   terminal: TerminalPanelWrapper,
-  github: GitHubPanelWrapper,
+  github: GitHubPanelRedirectWrapper,
   git: GitPanelRedirectWrapper,
   "agent-rules": AgentRulesPanelWrapper,
   "file-editor": FileEditorPanelWrapper,

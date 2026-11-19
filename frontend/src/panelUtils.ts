@@ -322,7 +322,7 @@ export function presentNewPanel(
 // stopped responding" (issue: small panes/floating windows ignoring
 // input). 720x460 clears 40x10 with margin at every allowed fontSize.
 // Applied to every panel kind opened via desktopPositioning below, not
-// just terminal ones — a GitHub/timeline/task-detail panel squeezed into
+// just terminal ones — a timeline/task-detail panel squeezed into
 // 300x300 is unusable too, even though only a terminal pane is actually
 // broken by it.
 const DEFAULT_FLOATING_PANEL_SIZE = { width: 720, height: 460 };
@@ -1117,25 +1117,25 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task, layout: Layout
 }
 
 // PR 34h of the hook-extraction series — App.tsx used to declare six
-// near-identical `onOpen*` callbacks inline (GitHub, Git, Agent Rules, Dock
-// Config, Skills, Browser), each opening (or focusing) a single project-
+// near-identical `onOpen*` callbacks inline (Git, Agent Rules, Dock
+// Config, Skills, Browser, and formerly GitHub), each opening (or focusing) a single project-
 // scoped tooling panel: same open-or-focus-by-`<kind>-<projectId>` shape as
 // openSessionPanel/openTimelinePanel/openBrowserPanePanel/openTaskDetailPanel
 // above, just keyed by project id instead of session/task id, and with a
 // project-derived title instead of a session/task-derived one. Generalized
 // here (usePanelOpener.ts, hooks/usePanelOpener.ts, wraps each call in its
-// own useCallback) rather than six separate copies.
+// own useCallback) rather than separate copies.
 export interface ProjectPanelKindConfig {
   // Both the dockview panel-id prefix (`<kind>-<projectId>`) and the
   // registered `component` name in panels/registry.tsx — identical for
-  // every one of these six panel kinds today, so one field covers both.
+  // every one of these panel kinds today, so one field covers both.
   kind: string;
   // Prefixed to the matching project's name for the panel's title (e.g.
-  // "GitHub" -> "GitHub: my-project"), and used verbatim as the title when
+  // "Skills" -> "Skills: my-project"), and used verbatim as the title when
   // no matching project is found (deleted project, or a stale/racing
-  // lookup) — every one of the six original callbacks used the identical
-  // label for both cases (e.g. onOpenGitHub: `GitHub: ${project.name}` /
-  // "GitHub"), so a single field covers both rather than two.
+  // lookup) — every one of the original callbacks used the identical
+  // label for both cases (e.g. onOpenBrowser's "Browser" prefix), so a
+  // single field covers both rather than two.
   titleLabel: string;
   // Whether to apply tier-based positioning (positioningForTier above) when
   // creating a NEW panel, on desktop and tablet. True for every kind except
@@ -1414,10 +1414,10 @@ const LEGACY_PANEL_IDS = ["tasks"] as const;
 
 // Component kinds whose panels are swept by *kind* rather than by fixed id,
 // because their ids are per project (`git-<projectId>`, the retired dock Git
-// panel — Source Control now lives in the right sidebar; see
-// GitPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
+// panel and the retired GitHub grid panel — both live in the right
+// sidebar now; see GitPanelRedirect.tsx / GitHubPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
 // registered in panels/registry.tsx.
-const LEGACY_PANEL_KINDS = ["git"] as const;
+const LEGACY_PANEL_KINDS = ["git", "github"] as const;
 
 // The five per-project setup panels that now live as tabs of one
 // `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component

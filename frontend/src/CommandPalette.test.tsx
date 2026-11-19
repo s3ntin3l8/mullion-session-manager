@@ -57,7 +57,7 @@ describe("CommandPalette -> Integrations section", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens the GitHub panel for the current project", async () => {
+  it("finds GitHub by typing and opens the sidebar view for the current project", async () => {
     const onOpenGitHub = vi.fn();
     const user = userEvent.setup();
     render(
@@ -82,6 +82,9 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
+    // Not a default row any more: found by typing.
+    expect(screen.queryByText(/^GitHub$/)).toBeNull();
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "github");
     await user.click(await screen.findByText(/^GitHub$/));
     expect(onOpenGitHub).toHaveBeenCalledWith(PROJECT.id);
     expect(screen.queryByText("Git", { exact: true })).toBeNull();
@@ -446,7 +449,7 @@ describe("CommandPalette -> entries open the launcher (#3054)", () => {
 
     const row = screen.getByRole("button", { name: /New session…/ });
     expect(row).toHaveTextContent("Choose an agent, shell or script");
-    expect(screen.getByText("Commands")).toBeInTheDocument();
+    expect(screen.getByText("Create")).toBeInTheDocument();
     expect(screen.queryByText("New session")).toBeNull();
     expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /claude/ })).toBeNull();
@@ -1069,7 +1072,8 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     const user = userEvent.setup();
     const { unmount } = renderPalette();
-    await user.click(await screen.findByText("GitHub"));
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "github");
+    await user.click(await screen.findByText(/^GitHub$/));
 
     unmount();
     expect(trigger).toHaveFocus();
@@ -2463,7 +2467,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     renderPalette(openers());
 
     expect(await screen.findByText("Project: mullion")).toBeTruthy();
-    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
     expect(screen.queryByText("Git", { exact: true })).toBeNull();
     expect(screen.queryByText("Open browser: preview…", { exact: true })).toBeNull();
     expect(screen.queryByText("GitHub settings")).toBeNull();
@@ -2623,12 +2627,12 @@ describe("CommandPalette -> Project drill-in and command search", () => {
 
     await user.click(await screen.findByText("Project: mullion"));
     await user.keyboard("{Escape}");
-    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("New workspace")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
 
     await user.click(screen.getByText("Project: mullion"));
     await user.keyboard("{Backspace}");
-    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("New workspace")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -2727,17 +2731,42 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
   });
 
-  it("labels the empty list Commands only, and has no New session or Navigate group", async () => {
+  it("labels the empty list Create and Go to, and has no New session or Navigate group", async () => {
     renderPalette(openers());
 
     expect(await screen.findByRole("button", { name: /New session…/ })).toBeTruthy();
-    expect(screen.getByText("Commands")).toBeTruthy();
-    expect(document.querySelectorAll(".cmd-palette-group-label")).toHaveLength(1);
+    expect(screen.getByText("Create")).toBeTruthy();
+    expect(screen.getByText("Go to")).toBeTruthy();
+    expect(document.querySelectorAll(".cmd-palette-group-label")).toHaveLength(2);
     expect(screen.queryByText("New session")).toBeNull();
     expect(screen.queryByText("Navigate")).toBeNull();
     expect(screen.queryByText("Matching commands")).toBeNull();
     expect(screen.queryByText("Integrations")).toBeNull();
   });
+
+  it.each(["phone", "tablet", "desktop"] as const)(
+    "lists the same default rows, in the same two groups, on %s",
+    async (layoutTier) => {
+      renderPalette(openers(), { layoutTier, onOpenSettings: vi.fn() });
+
+      await screen.findByRole("button", { name: /New session…/ });
+      const rows = Array.from(
+        document.querySelectorAll(".cmd-palette-group-label, .cmd-palette-list button"),
+      ).map((el) =>
+        el.classList.contains("cmd-palette-group-label")
+          ? `# ${el.textContent}`
+          : (
+              el.querySelector(".cmd-palette-title, .cmd-palette-row-title")?.textContent ??
+              el.textContent ??
+              ""
+            ).trim(),
+      );
+      const text = rows.join("|");
+      expect(text).toMatch(
+        /^# Create\|New session….*\|New workspace.*\|# Go to\|Task board.*\|Browser.*\|Project: mullion.*\|Settings/,
+      );
+    },
+  );
 
   it("opens Devices, Hosts, and Settings through the same callbacks the rest of the UI uses", async () => {
     const onOpenDevices = vi.fn();
@@ -2948,12 +2977,12 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       expect(createWorkspace).not.toHaveBeenCalled();
 
       await user.keyboard("{Escape}");
-      expect(screen.getByText("GitHub")).toBeTruthy();
+      expect(screen.getByText("New workspace")).toBeTruthy();
       expect(onClose).not.toHaveBeenCalled();
 
       await user.click(screen.getByText("New workspace"));
       await user.keyboard("{Backspace}");
-      expect(screen.getByText("GitHub")).toBeTruthy();
+      expect(screen.getByText("New workspace")).toBeTruthy();
       expect(onClose).not.toHaveBeenCalled();
 
       await user.click(screen.getByText("New workspace"));
@@ -3058,14 +3087,14 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(o, { onOpenSettings, layoutTier: "phone" });
 
-    // The Commands rows are the whole arrow list. ArrowDown stops on the
-    // last row (Task board), so one ArrowUp from there is Settings.
+    // The default rows are the whole arrow list. ArrowDown stops on the
+    // last row (Settings); one ArrowUp from there is Project, Enter on Settings runs it.
     await screen.findByRole("button", { name: /New session…/ });
     expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
     await user.click(screen.getByPlaceholderText(/Run a command/));
     await user.keyboard("{ArrowDown>12/}");
-    expect(screen.getByRole("button", { name: /Task board/ })).toHaveClass("selected");
-    await user.keyboard("{ArrowUp}{Enter}");
+    expect(screen.getByRole("button", { name: /^Settings/ })).toHaveClass("selected");
+    await user.keyboard("{Enter}");
 
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(o.onOpenTasks).not.toHaveBeenCalled();
@@ -3083,11 +3112,10 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenSettings: vi.fn(), layoutTier: "phone" });
 
-    // Same walk as the arrow-key test: down to the last row (Task board),
-    // then one up to Settings.
+    // Same walk as the arrow-key test: down to the last row, Settings.
     await screen.findByRole("button", { name: /New session…/ });
     await user.click(screen.getByPlaceholderText(/Run a command/));
-    await user.keyboard("{ArrowDown>12/}{ArrowUp}");
+    await user.keyboard("{ArrowDown>12/}");
 
     const footer = screen.getByText("navigate").closest(".cmd-palette-footer");
     expect(footer).toBeTruthy();

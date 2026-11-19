@@ -432,6 +432,26 @@ describe("GitPanelRedirectWrapper — the retired dock Git panel", () => {
   });
 });
 
+describe("GitHubPanelRedirectWrapper — the retired grid GitHub panel", () => {
+  it("opens the GitHub sidebar view for the saved panel's project and closes itself", async () => {
+    resetStore();
+    const close = vi.fn();
+    const containerApi = { getPanel: vi.fn(() => ({ api: { close } })) };
+    const props = {
+      params: { projectId: 7 },
+      api: { id: "github-7" },
+      containerApi,
+    } as unknown as IDockviewPanelProps<{ projectId?: number }>;
+    render(<components.github {...props} />);
+    await userEvent.click(screen.getByRole("button", { name: /open github/i }));
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarView).toBe("github");
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(containerApi.getPanel).toHaveBeenCalledWith("github-7");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
 // React 19's lazyInitializer (react/cjs/react.production.js) latches a
 // rejected dynamic import forever — the SAME lazy() payload re-throws the
 // identical cached error on every subsequent render, with zero new network
