@@ -413,7 +413,11 @@ needs:
 - `GET /internal/devices/live`, `POST /internal/devices/:id/terminate`,
   `POST /internal/devices/:id/action`, `POST /internal/devices/pair` and
   `GET /internal/devices/discovered` are the live-list, stop/delete,
-  one-shot-action, pairing and mDNS discovery counterparts. On the primary,
+  one-shot-action, pairing and mDNS discovery counterparts.
+  `GET /internal/devices/live` also carries each emulator's port in an optional
+  `ports` map (absent from an agent that predates it); while listing, the
+  primary backfills a null `devices.port` from it and logs instead of
+  overwriting when the persisted port differs. On the primary,
   `POST /api/devices/pair`, `POST /api/devices/pair-and-connect` and
   `GET /api/devices/discovered?hostId=…` accept an optional `hostId` (default
   `"local"`): an unknown host or an agent predating those routes answers `400`,

@@ -65,19 +65,17 @@ describe("remote-host-devices", () => {
     };
     const request = vi
       .fn()
-      .mockResolvedValueOnce({ devices: [] })
       .mockResolvedValueOnce({ devices: [], ports: { "7": 5554 } })
       .mockResolvedValueOnce({ deviceKinds: ["physical"], platforms: ["android"] })
       .mockResolvedValueOnce({ devices: [discoveredDevice] });
     const devices = createDevicesClient({ request, openInbound: unusedOpenInbound });
-    await expect(devices.live()).resolves.toEqual([]);
-    await expect(devices.liveWithPorts()).resolves.toEqual({ devices: [], ports: { "7": 5554 } });
+    await expect(devices.live()).resolves.toEqual({ devices: [], ports: { "7": 5554 } });
     await expect(devices.kinds()).resolves.toEqual({
       deviceKinds: ["physical"],
       platforms: ["android"],
     });
     await expect(devices.discovered()).resolves.toEqual([discoveredDevice]);
-    expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1, 1, 1]);
+    expect(request.mock.calls.map((c) => c.length)).toEqual([1, 1, 1]);
   });
 
   it("sends pair to /internal/devices/pair with DEVICE_REQUEST_TIMEOUT_MS", async () => {

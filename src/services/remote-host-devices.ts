@@ -3,7 +3,6 @@ import { HostRequestError } from "./remote-host-errors.js";
 import type {
   DeviceAction,
   DeviceActionResult,
-  DeviceInfo,
   DeviceKind,
   DevicePlatform,
 } from "./device-drivers/types.js";
@@ -93,11 +92,7 @@ export function createDevicesClient({ request, openInbound }: DevicesClientDeps)
       return request("/internal/devices", jsonPost(spec), DEVICE_REQUEST_TIMEOUT_MS);
     },
 
-    async live(): Promise<DeviceInfo[]> {
-      return (await request<LiveDevicesResponse>("/internal/devices/live")).devices;
-    },
-
-    liveWithPorts(): Promise<LiveDevicesResponse> {
+    live(): Promise<LiveDevicesResponse> {
       return request<LiveDevicesResponse>("/internal/devices/live");
     },
 

@@ -33,7 +33,6 @@ const devices = {
   kinds: vi.fn(),
   spawn: vi.fn(),
   live: vi.fn(),
-  liveWithPorts: vi.fn(),
   terminate: vi.fn(),
   action: vi.fn(),
   pair: vi.fn(),
@@ -179,7 +178,7 @@ describe("DeviceHost", () => {
     const remote = getDeviceHost(app, host(app, "mac"));
     client.devices.terminate.mockResolvedValue(undefined);
     client.devices.action.mockResolvedValue({ ok: true });
-    client.devices.live.mockResolvedValue([info(7)]);
+    client.devices.live.mockResolvedValue({ devices: [info(7)] });
 
     await remote.terminate(7, "emulator");
     expect(client.devices.terminate).toHaveBeenCalledWith("7", "emulator");
@@ -207,15 +206,15 @@ describe("DeviceHost", () => {
     const a2 = emulator(app, mac);
     const b1 = emulator(app, host(app, "down"));
     const localRow = emulator(app, "local");
-    client.devices.liveWithPorts.mockImplementation(async () => {
-      if (client.devices.liveWithPorts.mock.calls.length === 2) throw new Error("ECONNREFUSED");
+    client.devices.live.mockImplementation(async () => {
+      if (client.devices.live.mock.calls.length === 2) throw new Error("ECONNREFUSED");
       return { devices: [info(a1.id)] };
     });
     // Both hosts share one fake client, so make the first call "mac" and the second "down".
     const rows = [a1, a2, b1, localRow].map((r) => getDeviceRow(app, r.id)!);
     const lives = await liveInfoForRows(app, rows);
 
-    expect(client.devices.liveWithPorts).toHaveBeenCalledTimes(2);
+    expect(client.devices.live).toHaveBeenCalledTimes(2);
     expect(lives.get(a1.id)).toEqual({ live: info(a1.id), unreachable: false });
     expect(lives.get(a2.id)).toEqual({ live: undefined, unreachable: false });
     expect(lives.get(b1.id)).toEqual({ live: undefined, unreachable: true });
@@ -229,8 +228,9 @@ describe("DeviceHost", () => {
     const missing = emulator(app, mac);
     const mismatch = emulator(app, mac);
     setDevicePort(app, mismatch.id, 5556);
+    const infoSpy = vi.spyOn(app.log, "info");
     const warnSpy = vi.spyOn(app.log, "warn");
-    client.devices.liveWithPorts.mockResolvedValue({
+    client.devices.live.mockResolvedValue({
       devices: [info(missing.id), info(mismatch.id)],
       ports: { [String(missing.id)]: 5554, [String(mismatch.id)]: 5558 },
     });
@@ -239,6 +239,14 @@ describe("DeviceHost", () => {
 
     expect(getDeviceRow(app, missing.id)!.port).toBe(5554);
     expect(getDeviceRow(app, mismatch.id)!.port).toBe(5556);
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: missing.id,
+        hostId: mac,
+        port: 5554,
+      }),
+      "device list: recovered a remote emulator port",
+    );
     expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         deviceId: mismatch.id,

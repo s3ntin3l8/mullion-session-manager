@@ -241,8 +241,8 @@ class RemoteDeviceHost implements DeviceHost {
   }
 
   async info(id: number): Promise<DeviceInfo | undefined> {
-    const live = await this.client.devices.live();
-    return live.find((d) => d.id === String(id));
+    const { devices } = await this.client.devices.live();
+    return devices.find((d) => d.id === String(id));
   }
 
   async action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
@@ -327,7 +327,7 @@ export async function liveInfoForRows(
     [...remoteHosts].map(async (hostId) => {
       let snapshot: LiveDevicesResponse | null = null;
       try {
-        snapshot = await getRemoteHostClient(app, hostId).devices.liveWithPorts();
+        snapshot = await getRemoteHostClient(app, hostId).devices.live();
       } catch (err) {
         app.log.warn({ err, hostId }, "device list: host did not answer");
       }
@@ -343,6 +343,10 @@ export async function liveInfoForRows(
           ) {
             if (row.port === null) {
               setDevicePort(app, row.id, livePort);
+              app.log.info(
+                { deviceId: row.id, hostId, port: livePort },
+                "device list: recovered a remote emulator port",
+              );
             } else if (row.port !== livePort) {
               app.log.warn(
                 { deviceId: row.id, hostId, persistedPort: row.port, livePort },
