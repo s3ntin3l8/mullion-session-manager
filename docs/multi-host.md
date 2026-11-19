@@ -1325,6 +1325,10 @@ does not report simulator support — update its agent."`. For `platform: "ios"`
   frames down and JSON control messages up. When the browser socket backs up
   (`bufferedAmount`), the proxy drops delta data frames, waits for a keyframe,
   and sends `{"type":"requestKeyframe"}` upstream (retrying on a stall timer).
+  The socket rides the host's outbound agent channel as the `device` stream
+  (#3273) when the host negotiated `channel-streams`, and the agent's
+  advertised address otherwise; before #3273 a host reachable only over the
+  channel could not serve it at all.
 - **When the host is offline.** `GET /api/devices` still succeeds when an agent
   is down and marks its rows `hostUnreachable: true` with `live: null` (the UI
   shows `"unavailable — host unreachable"` and disables Start/Stop). Mutating

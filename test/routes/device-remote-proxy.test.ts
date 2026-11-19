@@ -273,6 +273,102 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
       expect(browser.closeSpy).toHaveBeenCalled();
     });
 
+    it("a refusal tears the upgrade request down instead of leaving it open (#3273)", async () => {
+      // ws aborts its own handshake ONLY when nothing listens for
+      // 'unexpected-response': a listener owns the refusal, so the request and
+      // its socket must be destroyed here. Left alone they stay open until the
+      // agent's keep-alive timeout (72 s), one per refused panel open.
+      const destroy = vi.fn();
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, { statusCode: 400, destroy });
+      expect(destroy).toHaveBeenCalled();
+      // And the upstream must not stay in CONNECTING: either side closing
+      // closes the other.
+      expect(upstream.closeSpy).toHaveBeenCalled();
+      expect(upstream.readyState).toBe(MockSocket.CLOSED);
+    });
+
+    it("a refusal carries the reason the agent gave (#3273)", async () => {
+      // Over the outbound channel the refusal carries the agent's OWN reason —
+      // the one its device gating produced.
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 400,
+          statusMessage: "Device panel is disabled — set DEVICE_ENABLED=true.",
+        },
+      );
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message:
+          "Host agent-1 did not accept the device socket: Device panel is disabled — set DEVICE_ENABLED=true.",
+      });
+    });
+
+    it("an HTTP refusal's status phrase is not a reason, but a 404 names the old agent (#3273)", async () => {
+      // The inbound transport answers with the plain HTTP reason phrase, which
+      // tells the user nothing they can act on.
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 400,
+          statusMessage: "Bad Request",
+        },
+      );
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket",
+      });
+
+      // A 404 means the agent does not know the device socket at all: it is
+      // too old, and the panel says so.
+      const browser2 = new MockSocket();
+      const upstream2 = new MockSocket();
+      upstream2.readyState = MockSocket.CONNECTING;
+      openSocket.mockReturnValue(upstream2);
+      await proxyToRemoteDevice(fakeApp(), browser2 as unknown as WebSocket, ROW);
+      upstream2.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 404,
+          statusMessage: "unknown stream",
+        },
+      );
+      expect(JSON.parse(browser2.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 does not support the device socket — update its agent",
+      });
+    });
+
+    it("reports a refusal once: the teardown error that follows is not a second failure", async () => {
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 400,
+          statusMessage: "kind must be emulator or physical",
+        },
+      );
+      // Closing the upstream makes ws emit an error of its own; the refusal
+      // was already reported, with the agent's reason.
+      upstream.emit(
+        "error",
+        new Error("WebSocket was closed before the connection was established"),
+      );
+      const frames = browser.sendSpy.mock.calls.filter(([d]) => typeof d === "string");
+      expect(frames).toHaveLength(1);
+      expect(JSON.parse(frames[0]![0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket: kind must be emulator or physical",
+      });
+    });
+
     it("tolerates a browser socket error without throwing", async () => {
       await start();
       expect(() => browser.emit("error", new Error("reset"))).not.toThrow();

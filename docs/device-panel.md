@@ -432,11 +432,14 @@ needs:
   primary's `/ws/device/:id` proxies to it (`proxyToRemoteDevice`): it first
   runs the same get-or-create over REST, then relays control messages up and
   frames down. Binary frames pass through unchanged and the agent keeps the
-  keyframe gating for its own socket. The one thing the agent cannot see is
-  this hop's backlog: when the _browser_ socket is backed up the proxy drops
-  the frame, holds every delta until a keyframe has gone out, and sends the
-  agent `{"type":"requestKeyframe"}` (an H.264 delta cannot be dropped the way a
-  browser pane's JPEG can).
+  keyframe gating for its own socket. The socket rides the outbound agent
+  channel as the `device` stream (#3273) when the host negotiated
+  `channel-streams`, and the agent's advertised address otherwise; before
+  #3273 a host reachable only over the channel could not serve it at all. The
+  one thing the agent cannot see is this hop's backlog: when the _browser_
+  socket is backed up the proxy drops the frame, holds every delta until a
+  keyframe has gone out, and sends the agent `{"type":"requestKeyframe"}` (an
+  H.264 delta cannot be dropped the way a browser pane's JPEG can).
 
 A host that is down does not fail the list: `GET /api/devices` marks its rows
 `hostUnreachable: true` with `live: null` (Settings → Devices and the sidebar read

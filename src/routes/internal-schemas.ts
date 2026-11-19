@@ -70,7 +70,7 @@ export const DEVICE_SPAWN_SCHEMA = {
   additionalProperties: false,
   required: ["id", "kind", "avdName", "serial", "label", "port", "reservedPorts"],
   properties: {
-    id: { type: "string", pattern: "^[0-9]{1,18}$" },
+    id: { type: "string", pattern: DEVICE_ID_PATTERN },
     kind: DEVICE_KIND_SCHEMA,
     avdName: { type: ["string", "null"], maxLength: 256 },
     serial: { type: ["string", "null"], maxLength: 256 },

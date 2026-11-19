@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
+import { STATUS_CODES } from "node:http";
 import { getDeviceRow, type DeviceRow } from "../services/device-store.js";
 import { getDeviceHost } from "../services/device-host.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -26,6 +27,34 @@ export type { AttachDeviceParams } from "../services/device-attach.js";
 
 /** How long the primary waits for an agent's device socket to open. */
 export const REMOTE_DEVICE_OPEN_TIMEOUT_MS = 15_000;
+
+/** The shape of the response a refusal carries. A real HTTP response (the
+ *  inbound transport) and the channel's own stub (services/channel-socket.ts)
+ *  both answer with a status; only the second one carries a reason. */
+interface RefusalResponse {
+  statusCode?: number;
+  statusMessage?: string;
+}
+
+/**
+ * Why the agent refused the device socket, in the panel's words.
+ *
+ * Over the outbound channel the refusal carries the agent's OWN reason — the
+ * one its device gating produced ("Device panel is disabled — set
+ * DEVICE_ENABLED=true.", "kind must be emulator or physical"). An HTTP
+ * refusal carries only the status phrase ("Bad Request"), which tells the
+ * user nothing they can act on, so it is dropped. A 404 is the one status
+ * that means something on either transport: the agent does not know the
+ * device socket at all, so it is too old.
+ */
+function refusalMessage(hostId: string, res: RefusalResponse): string {
+  if (res.statusCode === 404) {
+    return `Host ${hostId} does not support the device socket — update its agent`;
+  }
+  const reason = (res.statusMessage ?? "").trim();
+  const usable = reason && reason !== STATUS_CODES[res.statusCode ?? 0] ? reason : "";
+  return `Host ${hostId} did not accept the device socket${usable ? `: ${usable}` : ""}`;
+}
 
 /**
  * Relays the device panel's socket to the agent that runs the device (#3200),
@@ -141,6 +170,10 @@ export async function proxyToRemoteDevice(
     stallTimer.unref();
   };
 
+  /** Set once the agent refused the socket: the refusal is reported once, with
+   *  the agent's own reason, and the teardown that follows is not an error. */
+  let refused = false;
+
   upstream.on("open", () => {
     clearTimeout(openTimer);
     if (deviceSocket.readyState !== deviceSocket.OPEN) closeUpstream();
@@ -153,6 +186,9 @@ export async function proxyToRemoteDevice(
   upstream.on("error", (err) => {
     clearTimeout(openTimer);
     stopStallTimer();
+    // A refusal is its own event, reported below with the agent's reason; the
+    // error that follows it is only the teardown of a socket we closed.
+    if (refused) return;
     app.log.error({ err, hostId, deviceId }, "remote device ws upstream error");
     // Say why, instead of a bare disconnect (a refused upgrade lands here).
     fail(`Host ${hostId} did not accept the device socket`);
@@ -163,13 +199,26 @@ export async function proxyToRemoteDevice(
   // panel would see a bare disconnect over the channel where the inbound
   // transport says why.
   upstream.on("unexpected-response", (_req, res) => {
+    refused = true;
     clearTimeout(openTimer);
     stopStallTimer();
+    const message = refusalMessage(hostId, res);
+    // Tell the panel first: the close below tears the upstream down, and a
+    // close that lands first would leave the panel with a bare disconnect.
+    fail(message);
+    // ws aborts its own handshake ONLY when nothing listens for
+    // 'unexpected-response': a listener OWNS the refusal, so the upgrade
+    // request and its socket have to be torn down here. Left alone they stay
+    // open until the agent's keep-alive timeout (72 s by default) — one per
+    // refused panel open. The channel's own stub has no `destroy`.
+    (res as { destroy?: () => void }).destroy?.();
+    // And the upstream must not stay in CONNECTING: either side closing
+    // closes the other.
+    closeUpstream();
     app.log.warn(
-      { hostId, deviceId, status: res.statusCode },
+      { hostId, deviceId, status: res.statusCode, message },
       "remote device ws upstream refused the socket",
     );
-    fail(`Host ${hostId} did not accept the device socket`);
   });
   upstream.on("message", (data, isBinary) => {
     if (deviceSocket.readyState !== deviceSocket.OPEN) return;

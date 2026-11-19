@@ -162,7 +162,17 @@ attach query validation is shared, not copied.
   kind/platform/port checks) and the same attach, so a device is accepted or
   refused identically on either transport; a refusal is a `400`, like the
   inbound route's. The stream counts against the normal stream cap, not the
-  preview-WebSocket one.
+  preview-WebSocket one. One difference from the inbound socket: a frame
+  crosses the channel as one message, so it is bounded by
+  `AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES` (1 MiB) — a frame past that fails
+  the stream, where the inbound socket (dialled with `capPayload: false`, so
+  `ws`'s own 100 MiB default applies) took it. At the default
+  `DEVICE_VIDEO_MAX_SIZE` (1280) frames are far below the bound; a much
+  larger `DEVICE_VIDEO_MAX_SIZE` can produce an IDR past it. A refusal is
+  reported to the panel with the agent's own reason (the panel gate's
+  message, `kind must be emulator or physical`, …); an agent that predates
+  the `device` kind answers `404`, which the primary reports as an agent
+  that needs an update.
 
 - **Authorization.** The channel is bound to one host id by its machine
   credential, so a stream can only reach (or come from) that host. Per-session
