@@ -665,6 +665,8 @@
   font-weight: 600;
   color: var(--fg);
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .task-status-badge {
   font-size: 0.625rem;
