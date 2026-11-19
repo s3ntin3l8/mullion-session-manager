@@ -49,6 +49,17 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
       return device;
     },
 
+    createIosDevice: async (udid, name, hostId) => {
+      const device = await api.createDevice({
+        platform: "ios",
+        udid,
+        ...(name ? { name } : {}),
+        ...(hostId ? { hostId } : {}),
+      });
+      refreshAfterMutation();
+      return device;
+    },
+
     // Passthrough, deliberately NOT stored — the scan results are only ever
     // read by PairDeviceDialog while it's open, never by the sidebar.
     listDiscovered: () => api.listDiscoveredDevices(),

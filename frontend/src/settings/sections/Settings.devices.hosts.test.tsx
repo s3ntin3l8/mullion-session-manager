@@ -29,11 +29,41 @@ const device = (over: Partial<Device>): Device => ({
   ...over,
 });
 const FOUR_HOSTS: DeviceHostEntry[] = [
-  { hostId: "local", name: "Primary", status: "ok", deviceKinds: ["emulator", "physical"] },
-  { hostId: "h-mac", name: "Mac mini", status: "ok", deviceKinds: ["emulator"] },
-  { hostId: "h-phone", name: "Phone rack", status: "ok", deviceKinds: ["physical"] },
-  { hostId: "h-old", name: "Old agent", status: "unsupported", deviceKinds: [] },
-  { hostId: "h-down", name: "Down box", status: "unreachable", deviceKinds: [] },
+  {
+    hostId: "local",
+    name: "Primary",
+    status: "ok",
+    deviceKinds: ["emulator", "physical"],
+    platforms: ["android"],
+  },
+  {
+    hostId: "h-mac",
+    name: "Mac mini",
+    status: "ok",
+    deviceKinds: ["emulator"],
+    platforms: ["android"],
+  },
+  {
+    hostId: "h-phone",
+    name: "Phone rack",
+    status: "ok",
+    deviceKinds: ["physical"],
+    platforms: ["android"],
+  },
+  {
+    hostId: "h-old",
+    name: "Old agent",
+    status: "unsupported",
+    deviceKinds: [],
+    platforms: [],
+  },
+  {
+    hostId: "h-down",
+    name: "Down box",
+    status: "unreachable",
+    deviceKinds: [],
+    platforms: [],
+  },
 ];
 
 describe("Settings -> Devices host picker", () => {
@@ -75,7 +105,7 @@ describe("Settings -> Devices host picker", () => {
   const openForm = async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await screen.findByDisplayValue("pixel_7");
     return user;
   };
