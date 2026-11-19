@@ -222,6 +222,12 @@ export function DeviceCreateForm({
       return [{ value: h.hostId, label: h.name, disabled: false }];
     });
   }, [deviceHosts, effectiveCreatePlatform, iosHosts]);
+  const singleRemoteIosHost =
+    effectiveCreatePlatform === "ios" &&
+    iosHosts.length === 1 &&
+    iosHosts[0].hostId !== LOCAL_HOST_ID
+      ? iosHosts[0]
+      : null;
   const showHostPicker = hostOptions.length > 1;
   const effectiveHostId =
     effectiveCreatePlatform === "ios"
@@ -387,7 +393,7 @@ export function DeviceCreateForm({
           />
         </Row>
       )}
-      {showHostPicker && (
+      {(showHostPicker || singleRemoteIosHost) && (
         <Row
           label="Host"
           desc={
@@ -396,12 +402,16 @@ export function DeviceCreateForm({
               : "The machine that runs this emulator. The virtual device below is chosen from this machine's list; its name is resolved on the host you pick here."
           }
         >
-          <Dropdown
-            ariaLabel="Host"
-            options={hostOptions}
-            value={effectiveHostId}
-            onChange={setCreateHostId}
-          />
+          {singleRemoteIosHost ? (
+            <div className="settings-readonly-value">{singleRemoteIosHost.name}</div>
+          ) : (
+            <Dropdown
+              ariaLabel="Host"
+              options={hostOptions}
+              value={effectiveHostId}
+              onChange={setCreateHostId}
+            />
+          )}
         </Row>
       )}
       {effectiveCreatePlatform === "ios" ? (
@@ -412,7 +422,14 @@ export function DeviceCreateForm({
             </div>
           )}
           {simulatorsLoaded && simulators.length > 0 && (
-            <Row label="Simulator" desc="An available iOS Simulator on this machine.">
+            <Row
+              label="Simulator"
+              desc={
+                effectiveHostId === LOCAL_HOST_ID
+                  ? "An available iOS Simulator on this machine."
+                  : `An available iOS Simulator on ${iosHosts.find((h) => h.hostId === effectiveHostId)?.name ?? "the selected machine"}.`
+              }
+            >
               <Dropdown
                 options={simulators.map((sim) => {
                   const inUse = activeIosUdids.has(sim.udid);

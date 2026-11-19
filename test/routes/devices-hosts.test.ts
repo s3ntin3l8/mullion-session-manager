@@ -100,17 +100,17 @@ describe("GET /api/devices/hosts", () => {
     });
   });
 
-  it('defaults platforms to ["android"] when an agent omits the field', async () => {
+  it("copies empty platforms when an agent reports no supported platforms", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Older agent", baseUrl: "http://agent:1", token: "t" });
-    kindsByHost.set(host.id, async () => ({ deviceKinds: ["emulator"] }));
+    const host = createHost(app, { name: "Headless agent", baseUrl: "http://agent:1", token: "t" });
+    kindsByHost.set(host.id, async () => ({ deviceKinds: [], platforms: [] }));
     const body: DeviceHostEntry[] = (await get(app)).json();
     expect(body[1]).toEqual({
       hostId: host.id,
-      name: "Older agent",
+      name: "Headless agent",
       status: "ok",
-      deviceKinds: ["emulator"],
-      platforms: ["android"],
+      deviceKinds: [],
+      platforms: [],
     });
   });
 

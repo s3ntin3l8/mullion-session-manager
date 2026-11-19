@@ -105,7 +105,7 @@ describe("Settings -> Devices host picker", () => {
   const openForm = async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await screen.findByDisplayValue("pixel_7");
     return user;
   };

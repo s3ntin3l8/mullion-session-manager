@@ -480,8 +480,8 @@ export function DevicesSection() {
       {emulatorOn && <EmulatorWindowSetting />}
       {emulatorOn && <EmulatorGpuSetting />}
       <GroupHeading
-        title="Android devices"
-        desc="Emulators and phones whose screens you can open in a panel."
+        title="Devices"
+        desc="Emulators, simulators and phones whose screens you can open in a panel."
       />
       {!loaded && <div className="settings-readonly-value">Loading…</div>}
       {loaded && devices.length > 0 && (
@@ -624,7 +624,7 @@ export function DevicesSection() {
         {emulatorOn && (
           <AddButton onClick={() => setCreateOpen((open) => !open)}>
             <PlusIcon size={13} />
-            Create an emulator
+            Create a device
           </AddButton>
         )}
       </div>

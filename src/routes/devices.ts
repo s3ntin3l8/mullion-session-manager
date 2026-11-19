@@ -105,7 +105,7 @@ async function askRemoteKinds(app: FastifyInstance, hostId: string): Promise<Rem
       : {
           status: "ok",
           deviceKinds: support.deviceKinds,
-          platforms: support.platforms ?? ["android"],
+          platforms: support.platforms,
         };
   } catch {
     return { status: "unreachable", deviceKinds: [], platforms: [] };

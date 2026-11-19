@@ -126,7 +126,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     ];
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await screen.findByDisplayValue("pixel_7");
     expect(screen.queryByRole("radio", { name: "iOS Simulator" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ New AVD" })).toBeInTheDocument();
@@ -186,7 +186,7 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
 
     await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
 
@@ -238,7 +238,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
     await screen.findByRole("combobox", { name: "Simulator" });
     await user.click(screen.getByRole("button", { name: "Create" }));
@@ -247,7 +247,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     expect(createBodies[0]).toEqual({ platform: "ios", udid: "SIM-UDID-1" });
     expect(createBodies[0]).not.toHaveProperty("hostId");
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Host" }), "h-mac");
     await waitFor(() => {
@@ -283,7 +283,7 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
     await screen.findByRole("combobox", { name: "Simulator" });
     await user.click(screen.getByRole("button", { name: "Create" }));
@@ -309,9 +309,10 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
 
+    expect(screen.getByText("Mac mini")).toBeVisible();
     expect(
       await screen.findByText("Host h-mac is unreachable while listing iOS simulators"),
     ).toBeVisible();

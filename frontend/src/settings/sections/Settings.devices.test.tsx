@@ -298,7 +298,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     expect(
       await screen.findByText(/Emulators are not supported on this server/),
     ).toBeInTheDocument();
-    expect(screen.queryByText("Create an emulator")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create a device")).not.toBeInTheDocument();
     expect(screen.getByText("Pair a phone or tablet")).toBeInTheDocument();
   });
 
@@ -308,7 +308,7 @@ describe("Settings -> Devices (issue #1326)", () => {
       features: { ...SERVER_INFO_FIXTURE.features, deviceKinds: ["physical", "emulator"] },
     });
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    expect(await screen.findByText("Create an emulator")).toBeInTheDocument();
+    expect(await screen.findByText("Create a device")).toBeInTheDocument();
   });
 
   it("shows the empty state when no device exists", async () => {
@@ -361,7 +361,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -383,7 +383,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await screen.findByDisplayValue("pixel_7"); // wait for the AVD picker to load
     await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -574,7 +574,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await screen.findByDisplayValue("pixel_7");
     expect(screen.queryByRole("button", { name: "Physical" })).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("192.168.1.23:41234")).not.toBeInTheDocument();
@@ -647,7 +647,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     const picker = await screen.findByDisplayValue("pixel_7");
     expect(within(picker).getByText("pixel_6_tablet")).toBeInTheDocument();
   });
@@ -657,7 +657,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     expect(await screen.findByText(/No virtual devices on this machine yet/)).toBeInTheDocument();
     expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
   });
@@ -672,7 +672,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     expect(
       await screen.findByText("DEVICE_AVDMANAGER_PATH is not configured."),
     ).toBeInTheDocument();
@@ -683,7 +683,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
     expect(await screen.findByDisplayValue("API 35 — Google APIs (x86_64)")).toBeInTheDocument();
@@ -695,7 +695,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6"); // wait for device profiles to load
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
@@ -721,7 +721,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_hw");
@@ -746,7 +746,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_bad");
@@ -761,7 +761,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_small");
@@ -778,7 +778,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_hw");
@@ -803,7 +803,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
     await user.type(screen.getByPlaceholderText("Pixel_8_API_35"), "pixel_9_new");
@@ -1336,7 +1336,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("API 35 — Google APIs (x86_64)"); // form loaded, selection = android-35
 
@@ -1385,7 +1385,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("API 35 — Google APIs (x86_64)");
 
@@ -1416,7 +1416,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
     expect(
@@ -1433,7 +1433,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -1457,7 +1457,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -1474,7 +1474,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     deviceProfilesDb = [];
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
 
     expect(await screen.findByText(/No device profiles found/)).toBeInTheDocument();
@@ -1485,7 +1485,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -1502,7 +1502,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -1518,7 +1518,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
@@ -1533,7 +1533,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create an emulator"));
+    await user.click(await screen.findByText("Create a device"));
     await user.click(screen.getByRole("button", { name: "+ New AVD" }));
     await screen.findByDisplayValue("pixel_6");
 
