@@ -1,4 +1,5 @@
 import { checkWorkerStarted, clearStoppedWorkerWarnings } from "./task-worker-start.js";
+import { neutraliseCiHoldCommentText } from "./task-decisions.js";
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { reviewRoundLabel } from "./task-round-label.js";
 import type { FastifyInstance } from "fastify";
@@ -2464,7 +2465,7 @@ async function attemptReturnRedCiToWorker(
     // the diff, so it stays a plain COMMENT regardless of a reviewer App
     // being configured.
     await postReviewFindingsComment(app, task, project, {
-      body: `A CI check is failing on this task's PR (${redChecks.map((c) => c.name).join(", ")}), but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
+      body: `A CI check is failing on this task's PR (${neutraliseCiHoldCommentText(redChecks.map((c) => c.name).join(", "))}), but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });
     return true;
   }
