@@ -3,10 +3,13 @@ import {
   AvdCreatedError,
   avdConfigRoots,
   createAvd,
+  licensesMayBePending,
+  listAvailableSystemImages,
   listAvds,
   listDeviceProfiles,
   listInstalledSystemImages,
   normalizeAvdHardware,
+  type AvailableSystemImage,
   type CreateAvdInput,
   type CreateAvdResult,
   type SystemImage,
@@ -46,13 +49,33 @@ export class AvdValidationError extends Error {
   }
 }
 
+export interface SdkHostState {
+  availableImagesCache: Map<string, [number, AvailableSystemImage[]]>;
+  sdkOperationInProgress: boolean;
+}
+
+const AVAILABLE_IMAGES_CACHE_TTL_MS = 5 * 60 * 1000;
+const sdkHostStates = new WeakMap<FastifyInstance, SdkHostState>();
+
+/** Per-Fastify-instance SDK state (5-min available-images cache + host-global operation lock). */
+export function getSdkHostState(app: FastifyInstance): SdkHostState {
+  let state = sdkHostStates.get(app);
+  if (!state) {
+    state = { availableImagesCache: new Map(), sdkOperationInProgress: false };
+    sdkHostStates.set(app, state);
+  }
+  return state;
+}
+
 export interface AvdHost {
   readonly hostId: string;
   readonly isLocal: boolean;
   listAvds(): Promise<string[]>;
   listSystemImages(): Promise<SystemImage[]>;
+  listAvailableSystemImages(): Promise<AvailableSystemImage[]>;
   listDeviceProfiles(): Promise<string[]>;
   createAvd(input: CreateAvdInput): Promise<CreateAvdResult>;
+  sdkLicensesStatus(): Promise<{ pending: boolean }>;
 }
 
 /**
@@ -84,6 +107,39 @@ export class LocalAvdHost implements AvdHost {
       throw new AvdValidationError("DEVICE_ANDROID_SDK_ROOT is not configured.");
     }
     return listInstalledSystemImages(this.app.config.DEVICE_ANDROID_SDK_ROOT);
+  }
+
+  async listAvailableSystemImages(): Promise<AvailableSystemImage[]> {
+    if (!this.app.deviceEmulatorEnabled) {
+      throw new AvdValidationError(this.app.deviceEmulatorUnavailableMessage);
+    }
+    if (!this.app.config.DEVICE_SDKMANAGER_PATH) {
+      throw new AvdValidationError("DEVICE_SDKMANAGER_PATH is not configured.");
+    }
+    if (!this.app.config.DEVICE_ANDROID_SDK_ROOT) {
+      throw new AvdValidationError("DEVICE_ANDROID_SDK_ROOT is not configured.");
+    }
+
+    const { availableImagesCache } = getSdkHostState(this.app);
+    const cacheKey = `${this.app.config.DEVICE_SDKMANAGER_PATH}:${this.app.config.DEVICE_ANDROID_SDK_ROOT}`;
+    const cached = availableImagesCache.get(cacheKey);
+    if (cached && Date.now() - cached[0] < AVAILABLE_IMAGES_CACHE_TTL_MS) {
+      return cached[1];
+    }
+
+    const systemImages = await listAvailableSystemImages(
+      this.app.config.DEVICE_SDKMANAGER_PATH,
+      this.app.config.DEVICE_ANDROID_SDK_ROOT,
+    );
+    availableImagesCache.set(cacheKey, [Date.now(), systemImages]);
+    return systemImages;
+  }
+
+  async sdkLicensesStatus(): Promise<{ pending: boolean }> {
+    if (!this.app.deviceEmulatorEnabled) {
+      throw new AvdValidationError(this.app.deviceEmulatorUnavailableMessage);
+    }
+    return { pending: licensesMayBePending() };
   }
 
   async listDeviceProfiles(): Promise<string[]> {
@@ -181,6 +237,14 @@ class RemoteAvdHost implements AvdHost {
 
   listSystemImages(): Promise<SystemImage[]> {
     return this.client.avds.systemImages();
+  }
+
+  listAvailableSystemImages(): Promise<AvailableSystemImage[]> {
+    return this.client.avds.availableSystemImages();
+  }
+
+  sdkLicensesStatus(): Promise<{ pending: boolean }> {
+    return this.client.avds.sdkLicensesStatus();
   }
 
   listDeviceProfiles(): Promise<string[]> {

@@ -365,7 +365,10 @@ export class RemoteHostClient {
   private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
 
-  readonly avds: AvdsClient = createAvdsClient({ request: this.boundRequest });
+  readonly avds: AvdsClient = createAvdsClient({
+    request: this.boundRequest,
+    openInbound: (target) => this.inboundStream(target, false),
+  });
 
   readonly devices: DevicesClient = createDevicesClient({
     request: this.boundRequest,
