@@ -1594,20 +1594,23 @@ fleet); the "registered but not eligible" wording exists only in the task's
 the resolved worker agent is `codex` on the local host and
 `getCodexHookTrust()` (`hook-adapters/codex-trust.ts`) returns `"pending"`.
 It follows the `blocked-held` pattern: it writes `"Codex is waiting for /hooks
-trust — open codex once and approve Mullion's hooks"` to `failureReason` and
+trust — open codex once and approve Mullion's hooks"` to `failureReason`,
 sets `dispatchHeld: true` (so a held task does not consume an auto-claim slot
-in `countOccupiedSlots`) only when changed, broadcasts `{ kind: "dispatch" }` on
-`/ws/tasks`, and `task-dispatch.ts` `continue`s past it with no backoff and no
-give-up clock. `"trusted"` and `"not-installed"` dispatch as usual, and a
-throwing lookup fails open (logs a warning and dispatches). Remote placements
-are not gated because a remote host's `~/.codex` cannot be read locally. Once
-trust becomes `"trusted"`, the next sweep clears `failureReason` and
-`dispatchHeld` and dispatches.
+in `countOccupiedSlots`), and nulls `dispatchFailingSince` (so a prior placement
+wait's 6h clock cannot survive the codex wait) only when changed, broadcasts
+`{ kind: "dispatch" }` on `/ws/tasks`, and `task-dispatch.ts` `continue`s past
+it with no backoff and no give-up clock. `"trusted"` and `"not-installed"`
+dispatch as usual, and a throwing lookup fails open (logs a warning and
+dispatches). Remote placements are not gated because a remote host's
+`~/.codex` cannot be read locally. Once trust becomes `"trusted"`, the next
+sweep clears `failureReason`, `dispatchHeld`, and `dispatchFailingSince` and
+dispatches.
 
 **Queued-task failures are bounded** (`#1997`). `release()` (a failed dispatch)
 and `holdClaim` stamp `tasks.dispatchFailingSince` — the start of the current
 run of failures, kept by later attempts (`task.dispatchFailingSince ?? now`),
-cleared when a worker spawns and by `enqueueTask`. It is a column, not the
+cleared when a worker spawns, by `enqueueTask`, and by the codex `/hooks` trust
+hold (both when it takes over and when it clears). It is a column, not the
 in-memory backoff map, so a redeploy does not restart the clock. While the task
 is `claimed`, `failureReason` is therefore "why it is not dispatching yet" (the
 board renders it as such), and `enqueueTask` / a successful dispatch null it.

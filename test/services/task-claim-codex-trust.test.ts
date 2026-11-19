@@ -496,4 +496,96 @@ describe("codex /hooks trust gate at task dispatch", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
+
+  it("clears stale dispatchFailingSince on a pending tick when row already carries CODEX_TRUST_HOLD_DETAIL and dispatchHeld=true", async () => {
+    const { app, cwd, projectId } = await setup("codex");
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        issueNumber: 114,
+        title: "repair stale clock on pending tick",
+        body: "details",
+        status: "ready",
+      })
+      .returning()
+      .all();
+
+    expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+    const priorStamp = new Date(Date.now() - 5.5 * 60 * 60 * 1000);
+    app.db
+      .update(tasks)
+      .set({
+        failureReason: CODEX_TRUST_HOLD_DETAIL,
+        dispatchHeld: true,
+        dispatchFailingSince: priorStamp,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    mockGetCodexHookTrust.mockReturnValue("pending");
+    const held = await dispatchClaimedTask(app, task.id);
+    expect(held).toEqual({
+      ok: false,
+      reason: "codex-trust-held",
+      detail: CODEX_TRUST_HOLD_DETAIL,
+    });
+
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(row.failureReason).toBe(CODEX_TRUST_HOLD_DETAIL);
+    expect(row.dispatchHeld).toBe(true);
+    expect(row.dispatchFailingSince).toBeNull();
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("resets stale dispatchFailingSince in the same tick when codex trust clears and a later step fails", async () => {
+    const { app, cwd, projectId } = await setup("codex");
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        issueNumber: 115,
+        title: "reset stale clock when trust clears",
+        body: "details",
+        status: "ready",
+      })
+      .returning()
+      .all();
+
+    expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+    const priorStamp = new Date(Date.now() - 5.5 * 60 * 60 * 1000);
+    app.db
+      .update(tasks)
+      .set({
+        failureReason: CODEX_TRUST_HOLD_DETAIL,
+        dispatchHeld: true,
+        dispatchFailingSince: priorStamp,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    // Ensure prior tests' maxConcurrent: 1 setting does not trip the cap before worktree creation.
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { taskMaster: { maxConcurrent: 1000 } },
+    });
+
+    // Remove the project checkout so worktree creation fails after codexTrustHold clears.
+    fs.rmSync(cwd, { recursive: true, force: true });
+
+    mockGetCodexHookTrust.mockReturnValue("trusted");
+    const before = Date.now();
+    const failed = await dispatchClaimedTask(app, task.id);
+    expect(failed).toMatchObject({ ok: false, reason: "worktree-failed" });
+
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(row.dispatchHeld).toBe(false);
+    expect(row.dispatchFailingSince).not.toBeNull();
+    expect(Math.abs(row.dispatchFailingSince!.getTime() - before)).toBeLessThan(60_000);
+
+    await app.close();
+  });
 });
