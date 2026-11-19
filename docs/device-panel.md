@@ -793,8 +793,8 @@ optional `hostId` (`?hostId=` on the GETs, `hostId` in the `POST /api/avds`
 body) and dispatch through `getAvdHost` (`src/services/avd-host.ts`) to the
 agent's `/internal/avds`, `/internal/system-images`, and
 `/internal/device-profiles` routes (`src/routes/internal-avds.ts`), forwarding
-agent refusals via `forwardHostRequestError` and answering 503 when the host is
-unreachable.
+agent refusals via `forwardHostRequestError`, translating an old agent's 404
+into a 400 that names the host, and answering 503 when the host is unreachable.
 
 - **`GET /api/avds`** — `avdmanager list avd`, parsed from its `Name:` lines.
   This is what feeds the "Create an emulator" flow's "Virtual device"
