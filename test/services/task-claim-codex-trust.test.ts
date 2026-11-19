@@ -383,4 +383,117 @@ describe("codex /hooks trust gate at task dispatch", () => {
       await app.close();
     }
   });
+
+  it("clears a prior placement-hold dispatchFailingSince when codex trust hold takes over and clears", async () => {
+    const { app, cwd, projectId } = await setup("codex");
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        issueNumber: 111,
+        title: "placement hold then codex trust",
+        body: "details",
+        status: "ready",
+      })
+      .returning()
+      .all();
+
+    expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+
+    // Seed a 5.5h placement hold before codexTrustHold runs.
+    const priorStamp = new Date(Date.now() - 5.5 * 60 * 60 * 1000);
+    app.db
+      .update(tasks)
+      .set({
+        failureReason: "prior placement hold",
+        dispatchHeld: true,
+        dispatchFailingSince: priorStamp,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    mockGetCodexHookTrust.mockReturnValue("pending");
+    const held = await dispatchClaimedTask(app, task.id);
+    expect(held).toMatchObject({ ok: false, reason: "codex-trust-held" });
+
+    const [heldRow] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(heldRow.failureReason).toBe(CODEX_TRUST_HOLD_DETAIL);
+    expect(heldRow.dispatchHeld).toBe(true);
+    expect(heldRow.dispatchFailingSince).toBeNull();
+
+    // Now fill the cap and turn trust to trusted: the cleared row must keep dispatchFailingSince null.
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { taskMaster: { maxConcurrent: 1 } },
+    });
+    const [other] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        issueNumber: 112,
+        title: "running",
+        body: "details",
+        status: "in_progress",
+      })
+      .returning()
+      .all();
+
+    try {
+      mockGetCodexHookTrust.mockReturnValue("trusted");
+      const capped = await dispatchClaimedTask(app, task.id);
+      expect(capped).toMatchObject({ ok: false, reason: "cap" });
+      const [clearedRow] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(clearedRow.failureReason).toBeNull();
+      expect(clearedRow.dispatchHeld).toBe(false);
+      expect(clearedRow.dispatchFailingSince).toBeNull();
+    } finally {
+      app.db.delete(tasks).where(eq(tasks.id, other.id)).run();
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    }
+  });
+
+  it("repairs dispatchHeld=false on a row that already carries CODEX_TRUST_HOLD_DETAIL", async () => {
+    const { app, cwd, projectId } = await setup("codex");
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        issueNumber: 113,
+        title: "repair dispatchHeld",
+        body: "details",
+        status: "ready",
+      })
+      .returning()
+      .all();
+
+    expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+    app.db
+      .update(tasks)
+      .set({
+        failureReason: CODEX_TRUST_HOLD_DETAIL,
+        dispatchHeld: false,
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    const occupiedWithUnheldRow = countOccupiedSlots(app);
+
+    mockGetCodexHookTrust.mockReturnValue("pending");
+    const held = await dispatchClaimedTask(app, task.id);
+    expect(held).toEqual({
+      ok: false,
+      reason: "codex-trust-held",
+      detail: CODEX_TRUST_HOLD_DETAIL,
+    });
+
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(row.dispatchHeld).toBe(true);
+    expect(row.failureReason).toBe(CODEX_TRUST_HOLD_DETAIL);
+    expect(countOccupiedSlots(app)).toBe(occupiedWithUnheldRow - 1);
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
 });

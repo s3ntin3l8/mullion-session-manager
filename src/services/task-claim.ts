@@ -668,7 +668,10 @@ export async function dispatchClaimedTask(
   // wait toward the 6h give-up. Only a HOLD is dropped: the reason of a failed
   // attempt (an unreachable base ref, a worktree git cannot cut) is still the
   // last known truth until a dispatch succeeds.
-  if (task.dispatchHeld && task.failureReason !== CODEX_TRUST_HOLD_DETAIL) {
+  if (task.failureReason === CODEX_TRUST_HOLD_DETAIL) {
+    // codexTrustHold already cleared the hold columns and broadcast the event.
+    failingSince = null;
+  } else if (task.dispatchHeld) {
     const cleared = app.db
       .update(tasks)
       .set({ failureReason: null, dispatchFailingSince: null, dispatchHeld: false })

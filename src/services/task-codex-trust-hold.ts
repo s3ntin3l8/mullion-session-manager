@@ -38,10 +38,18 @@ export function codexTrustHold(
       trust = "trusted";
     }
     if (trust === "pending") {
-      if (task.failureReason !== CODEX_TRUST_HOLD_DETAIL || !task.dispatchHeld) {
+      if (
+        task.failureReason !== CODEX_TRUST_HOLD_DETAIL ||
+        !task.dispatchHeld ||
+        task.dispatchFailingSince !== null
+      ) {
         const written = app.db
           .update(tasks)
-          .set({ failureReason: CODEX_TRUST_HOLD_DETAIL, dispatchHeld: true })
+          .set({
+            failureReason: CODEX_TRUST_HOLD_DETAIL,
+            dispatchHeld: true,
+            dispatchFailingSince: null,
+          })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
           .run();
         if (written.changes > 0) {
@@ -64,7 +72,7 @@ export function codexTrustHold(
   if (task.failureReason === CODEX_TRUST_HOLD_DETAIL) {
     const cleared = app.db
       .update(tasks)
-      .set({ failureReason: null, dispatchHeld: false })
+      .set({ failureReason: null, dispatchHeld: false, dispatchFailingSince: null })
       .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
       .run();
     if (cleared.changes > 0) {
