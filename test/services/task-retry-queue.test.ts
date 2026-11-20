@@ -191,4 +191,31 @@ describe("a retry is queued, then started by the dispatch sweep", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
+
+  it("clears a stale needsHumanReason and ciHoldNote when dispatchQueuedRetry claims the row", async () => {
+    const { app, cwd, id, load } = await setup(96);
+    const cap = app.config as { MULLION_TASK_MAX_CONCURRENT: number };
+    cap.MULLION_TASK_MAX_CONCURRENT = 0;
+
+    expect((await enqueueRetry(app, id)).ok).toBe(true);
+    app.db
+      .update(tasks)
+      .set({
+        needsHumanReason: "ci-unfixable",
+        ciHoldNote: "test-merge — dependency-audit fails on base",
+      })
+      .where(eq(tasks.id, id))
+      .run();
+
+    cap.MULLION_TASK_MAX_CONCURRENT = 1000;
+    expect((await dispatchQueuedRetry(app, id)).ok).toBe(true);
+    expect(load()).toMatchObject({
+      status: "in_progress",
+      needsHumanReason: null,
+      ciHoldNote: null,
+    });
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
 });

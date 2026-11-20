@@ -556,6 +556,8 @@ describe("approve/reject (6.2/#215, promotion added in 6.7/#220)", () => {
         status: "reviewing",
         autoReturnRounds: 2,
         autoReturnCapAnnouncedAt: new Date(),
+        needsHumanReason: "ci-unfixable",
+        ciHoldNote: "test-merge — dependency-audit fails on base",
       })
       .returning()
       .all();
@@ -566,7 +568,12 @@ describe("approve/reject (6.2/#215, promotion added in 6.7/#220)", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ status: "in_progress", autoReturnCapAnnouncedAt: null });
+    expect(res.json()).toMatchObject({
+      status: "in_progress",
+      autoReturnCapAnnouncedAt: null,
+      needsHumanReason: null,
+      ciHoldNote: null,
+    });
 
     await app.close();
   });

@@ -2,10 +2,12 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import crypto from "node:crypto";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket } from "ws";
+import { eq } from "drizzle-orm";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { warmSqliteBinding } from "../helpers/app.js";
@@ -32,8 +34,20 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return mockChildProcessSpawn(actual, { passthrough: ["git"] });
 });
+vi.mock("../../src/services/avd-manager.js", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    listAvds: vi.fn(),
+    listDeviceProfiles: vi.fn(),
+    listInstalledSystemImages: vi.fn(),
+    createAvd: vi.fn(),
+  };
+});
 
 const { buildApp } = await import("../../src/app.js");
+const { listAvds, listDeviceProfiles, listInstalledSystemImages, createAvd } =
+  await import("../../src/services/avd-manager.js");
 
 const AGENT_TOKEN = "device-agent-token";
 const primaryDb = path.join(
@@ -105,6 +119,7 @@ const driver = {
   platform: "android" as const,
   hasLiveControl: true,
   supports: () => true,
+  screenshot: vi.fn(),
   tap: vi.fn(),
   input: vi.fn(),
   requestKeyframe: vi.fn(),
@@ -128,6 +143,7 @@ describe("devices on an agent host (issue #3200)", () => {
     getOrCreate: ReturnType<typeof vi.spyOn>;
     terminate: ReturnType<typeof vi.spyOn>;
     setReservedPorts: ReturnType<typeof vi.spyOn>;
+    pair: ReturnType<typeof vi.spyOn>;
   };
 
   const getOrCreateCalls = () =>
@@ -144,7 +160,13 @@ describe("devices on an agent host (issue #3200)", () => {
     fs.rmSync(primaryDb, { force: true });
     await warmSqliteBinding();
     agent = await buildAndListen(
-      { MULLION_ROLE: "agent", MULLION_AGENT_TOKEN: AGENT_TOKEN, DEVICE_ENABLED: "true" },
+      {
+        MULLION_ROLE: "agent",
+        MULLION_AGENT_TOKEN: AGENT_TOKEN,
+        DEVICE_ENABLED: "true",
+        DEVICE_AVDMANAGER_PATH: "/usr/bin/avdmanager",
+        DEVICE_ANDROID_SDK_ROOT: "/opt/android-sdk",
+      },
       "linux",
     );
     primary = await buildAndListen({ DATABASE_URL: `file:${primaryDb}` });
@@ -165,6 +187,7 @@ describe("devices on an agent host (issue #3200)", () => {
       getOrCreate: vi.spyOn(dev, "getOrCreate"),
       terminate: vi.spyOn(dev, "terminate"),
       setReservedPorts: vi.spyOn(dev, "setReservedPorts"),
+      pair: vi.spyOn(dev, "pair"),
     };
   });
 
@@ -180,6 +203,20 @@ describe("devices on an agent host (issue #3200)", () => {
     live.clear();
     nextPort = 5554;
     videoListeners = [];
+    vi.mocked(listAvds).mockReset().mockResolvedValue(["dev35", "dev36"]);
+    vi.mocked(listDeviceProfiles).mockReset().mockResolvedValue(["pixel_7"]);
+    vi.mocked(listInstalledSystemImages)
+      .mockReset()
+      .mockReturnValue([
+        {
+          packagePath: "system-images;android-35;google_apis;x86_64",
+          apiLevel: "35",
+          tagDisplay: "Google APIs",
+          abi: "x86_64",
+        },
+      ]);
+    vi.mocked(createAvd).mockReset().mockResolvedValue(undefined);
+    driver.screenshot.mockReset().mockResolvedValue(new Uint8Array());
     driver.tap.mockReset().mockResolvedValue(undefined);
     driver.input.mockReset().mockResolvedValue(undefined);
     driver.requestKeyframe.mockReset().mockResolvedValue(undefined);
@@ -207,9 +244,14 @@ describe("devices on an agent host (issue #3200)", () => {
       live.delete(id);
     });
     spies.setReservedPorts.mockReset().mockImplementation(() => {});
+    spies.pair.mockReset().mockResolvedValue(undefined);
     vi.spyOn(agent.app.device, "list").mockImplementation(() =>
       [...live.values()].map((l) => l.info),
     );
+    vi.spyOn(agent.app.device, "get").mockImplementation((id: string) => {
+      const entry = live.get(id);
+      return entry ? ({ toInfo: () => entry.info, port: entry.port } as never) : undefined;
+    });
     vi.spyOn(agent.app.device, "getDriver").mockImplementation((id: string) =>
       live.has(id) ? (driver as never) : undefined,
     );
@@ -276,6 +318,82 @@ describe("devices on an agent host (issue #3200)", () => {
         });
         expect(res.statusCode, query).toBe(400);
       }
+    });
+
+    it("answers 424 with deviceStatus for a 5xx DeviceActionError, keeps 4xx, and leaves unexpected errors as 500", async () => {
+      live.set("1", {
+        port: 5554,
+        info: {
+          id: "1",
+          kind: "emulator",
+          avdName: "dev35",
+          label: null,
+          status: "booting",
+          serial: "emulator-5554",
+          error: null,
+        },
+      });
+      const headers = { authorization: `Bearer ${AGENT_TOKEN}` };
+
+      driver.tap.mockRejectedValueOnce(new DeviceActionError(502, "adb server unreachable"));
+      const r502 = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/action",
+        headers,
+        payload: { action: "tap", x: 1, y: 2 },
+      });
+      expect(r502.statusCode).toBe(424);
+      expect(r502.json()).toEqual({
+        statusCode: 424,
+        error: "Failed Dependency",
+        message: "adb server unreachable",
+        deviceStatus: 502,
+      });
+
+      driver.tap.mockRejectedValueOnce(new DeviceActionError(400, "bad coords"));
+      const r400 = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/action",
+        headers,
+        payload: { action: "tap", x: 1, y: 2 },
+      });
+      expect(r400.statusCode).toBe(400);
+      expect(r400.json().message).toContain("bad coords");
+
+      driver.tap.mockRejectedValueOnce(new Error("boom"));
+      const r500 = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/action",
+        headers,
+        payload: { action: "tap", x: 1, y: 2 },
+      });
+      expect(r500.statusCode).toBe(500);
+    });
+
+    it("answers 424 with deviceStatus 500 when terminate throws, and 204 on success", async () => {
+      const headers = { authorization: `Bearer ${AGENT_TOKEN}` };
+      spies.terminate.mockRejectedValueOnce(new Error("scope stuck"));
+      const fail = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/terminate",
+        headers,
+        payload: { kind: "emulator" },
+      });
+      expect(fail.statusCode).toBe(424);
+      expect(fail.json()).toEqual({
+        statusCode: 424,
+        error: "Failed Dependency",
+        message: "scope stuck",
+        deviceStatus: 500,
+      });
+
+      const ok = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/1/terminate",
+        headers,
+        payload: { kind: "emulator" },
+      });
+      expect(ok.statusCode).toBe(204);
     });
   });
 
@@ -441,21 +559,30 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(res.json().message).toContain("no live adb connection");
     });
 
-    // KNOWN GAP (reported with the PR that added this file): a DeviceActionError
-    // with a 5xx status (the Android driver throws 502 for a dead adb server) is
-    // flattened by RemoteHostTransport.request, which only forwards 4xx as a
-    // HostRequestError and turns any 5xx into HostUnreachableError. The primary
-    // therefore answers 503 "Host ... is unreachable" instead of the agent's 502
-    // and its message, unlike a local device. Update this when that is fixed.
-    it("currently answers 503 (not the agent's 502) for a 5xx DeviceActionError", async () => {
+    it("forwards a 502 from the agent's screenshot driver with its status and message", async () => {
       const { id } = (await createDevice()).json();
-      driver.tap.mockRejectedValueOnce(new DeviceActionError(502, "adb server unreachable"));
+      driver.screenshot.mockRejectedValueOnce(
+        new DeviceActionError(502, "screencap did not return a PNG"),
+      );
+      const res = await primary.app.inject({
+        method: "POST",
+        url: `/api/devices/${id}/action`,
+        payload: { action: "screenshot" },
+      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().message).toContain("screencap did not return a PNG");
+    });
+
+    it("answers 503 unreachable when the agent's action route throws an unexpected error", async () => {
+      const { id } = (await createDevice()).json();
+      driver.tap.mockRejectedValueOnce(new Error("unexpected crash"));
       const res = await primary.app.inject({
         method: "POST",
         url: `/api/devices/${id}/action`,
         payload: { action: "tap", x: 1, y: 2 },
       });
       expect(res.statusCode).toBe(503);
+      expect(res.json().message).toContain("unreachable");
     });
 
     it("answers 400 for a device the agent has no live driver for", async () => {
@@ -506,12 +633,80 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(getDeviceRow(primary.app, id)).toBeUndefined();
     });
 
-    it("DELETE keeps the row when the agent's teardown fails", async () => {
+    it("DELETE answers 500 with the teardown message and keeps the row when the agent's teardown fails", async () => {
       const { id } = (await createDevice()).json();
       spies.terminate.mockRejectedValueOnce(new Error("scope stuck"));
       const res = await primary.app.inject({ method: "DELETE", url: `/api/devices/${id}` });
-      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.statusCode).toBe(500);
+      expect(res.json().message).toContain("scope stuck");
       expect(getDeviceRow(primary.app, id)).toBeDefined();
+    });
+
+    it("POST /stop answers 500 with the teardown message and keeps the row when the agent's teardown fails", async () => {
+      const { id } = (await createDevice()).json();
+      spies.terminate.mockRejectedValueOnce(new Error("scope stuck"));
+      const res = await primary.app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().message).toContain("scope stuck");
+      expect(getDeviceRow(primary.app, id)).toBeDefined();
+    });
+
+    it("falls back to 502/500 with a generic message when an agent 424 has a garbage body or out-of-range deviceStatus", async () => {
+      let nextReply: { body: string } = { body: "not-json" };
+      const stubServer = http.createServer((_req, res) => {
+        res.statusCode = 424;
+        res.setHeader("content-type", "application/json");
+        res.end(nextReply.body);
+      });
+      await new Promise<void>((resolve) => stubServer.listen(0, "127.0.0.1", resolve));
+      const { port } = stubServer.address() as net.AddressInfo;
+      let stubHostId: string | undefined;
+      try {
+        const reg = await primary.app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "bad-424-agent", baseUrl: `http://127.0.0.1:${port}`, token: "t" },
+        });
+        stubHostId = reg.json().id as string;
+        const row = insertDevice(primary.app, {
+          kind: "emulator",
+          avdName: "far",
+          serial: null,
+          projectId: null,
+          name: null,
+          hostId: stubHostId,
+        });
+
+        nextReply = { body: "not-json" };
+        const badAction = await primary.app.inject({
+          method: "POST",
+          url: `/api/devices/${row.id}/action`,
+          payload: { action: "tap", x: 1, y: 2 },
+        });
+        expect(badAction.statusCode).toBe(502);
+        expect(badAction.json().message).toBe(`the device failed on host ${stubHostId}`);
+
+        nextReply = { body: JSON.stringify({ deviceStatus: 200, message: 123 }) };
+        const badTerminate = await primary.app.inject({
+          method: "POST",
+          url: `/api/devices/${row.id}/stop`,
+        });
+        expect(badTerminate.statusCode).toBe(500);
+        expect(badTerminate.json().message).toBe(`the device failed on host ${stubHostId}`);
+
+        const badActionStatus = await primary.app.inject({
+          method: "POST",
+          url: `/api/devices/${row.id}/action`,
+          payload: { action: "tap", x: 1, y: 2 },
+        });
+        expect(badActionStatus.statusCode).toBe(502);
+        expect(badActionStatus.json().message).toBe(`the device failed on host ${stubHostId}`);
+      } finally {
+        if (stubHostId) {
+          await primary.app.inject({ method: "DELETE", url: `/api/hosts/${stubHostId}` });
+        }
+        await new Promise<void>((resolve) => stubServer.close(() => resolve()));
+      }
     });
 
     it("DELETE keeps the row (503) when the agent is unreachable", async () => {
@@ -543,6 +738,29 @@ describe("devices on an agent host (issue #3200)", () => {
         expect.objectContaining({ id: String(id), kind: "emulator", port: 5554 }),
       ]);
       expect(getDeviceRow(primary.app, id)?.port).toBe(5554);
+    });
+
+    it("recovers a port lost from the spawn response on the next list, and sends it after an agent restart", async () => {
+      const { id } = (await createDevice()).json();
+      expect(getDeviceRow(primary.app, id)?.port).toBe(5554);
+
+      // Simulate a lost spawn response leaving the primary's row at port = null.
+      primary.app.db.update(devices).set({ port: null }).where(eq(devices.id, id)).run();
+      expect(getDeviceRow(primary.app, id)?.port).toBeNull();
+
+      // The next listing reconciles the port from GET /internal/devices/live.
+      const list = await primary.app.inject({ method: "GET", url: "/api/devices" });
+      expect(list.statusCode).toBe(200);
+      expect(getDeviceRow(primary.app, id)?.port).toBe(5554);
+
+      // After an agent restart, a later spawn sends the recovered port in the spec.
+      live.clear();
+      spies.getOrCreate.mockClear();
+      const res = await primary.app.inject({ method: "POST", url: `/api/devices/${id}/start` });
+      expect(res.statusCode).toBe(200);
+      expect(getOrCreateCalls()).toEqual([
+        expect.objectContaining({ id: String(id), kind: "emulator", port: 5554 }),
+      ]);
     });
   });
 
@@ -596,6 +814,428 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(messages.map((m) => JSON.parse(m))).toEqual([
         expect.objectContaining({ type: "error", message: expect.stringContaining("Scope dead") }),
       ]);
+    });
+  });
+
+  describe("pairing and discovery on agent hosts (#3271)", () => {
+    const sampleDiscovered = {
+      id: "Pixel-7.local",
+      name: "Pixel 7",
+      host: "192.168.1.23",
+      pairingAddress: "192.168.1.23:41234",
+      connectAddress: "192.168.1.23:37251",
+      discoveredAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    it("requires the agent bearer token on /internal/devices/pair and /discovered and validates addresses", async () => {
+      const anonDiscovered = await agent.app.inject({
+        method: "GET",
+        url: "/internal/devices/discovered",
+      });
+      expect([401, 403]).toContain(anonDiscovered.statusCode);
+
+      const anonPair = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/pair",
+        payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "123456" },
+      });
+      expect([401, 403]).toContain(anonPair.statusCode);
+
+      const badAddr = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/pair",
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        payload: { pairingAddress: "192.168.1.23:99999", pairingCode: "123456" },
+      });
+      expect(badAddr.statusCode).toBe(400);
+
+      const badCode = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices/pair",
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        payload: { pairingAddress: "192.168.1.23:41234", pairingCode: "abcdef" },
+      });
+      expect(badCode.statusCode).toBe(400);
+
+      const badPhysicalSpawn = await agent.app.inject({
+        method: "POST",
+        url: "/internal/devices",
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+        payload: {
+          id: "9",
+          kind: "physical",
+          avdName: null,
+          serial: "bad:1:2",
+          label: null,
+          port: null,
+          reservedPorts: [],
+        },
+      });
+      expect(badPhysicalSpawn.statusCode).toBe(400);
+    });
+
+    it("lists discovered devices on an agent and answers 503 when unreachable", async () => {
+      const discSpy = vi
+        .spyOn(agent.app.deviceDiscovery, "getDiscovered")
+        .mockReturnValue([sampleDiscovered]);
+      try {
+        const res = await primary.app.inject({
+          method: "GET",
+          url: `/api/devices/discovered?hostId=${hostId}`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual([sampleDiscovered]);
+
+        const down = await primary.app.inject({
+          method: "GET",
+          url: `/api/devices/discovered?hostId=${deadHostId}`,
+        });
+        expect(down.statusCode).toBe(503);
+
+        const unknown = await primary.app.inject({
+          method: "GET",
+          url: "/api/devices/discovered?hostId=no-such-host",
+        });
+        expect(unknown.statusCode).toBe(400);
+      } finally {
+        discSpy.mockRestore();
+      }
+    });
+
+    it("routes POST /api/devices/pair to the agent and answers 503 when unreachable", async () => {
+      const res = await primary.app.inject({
+        method: "POST",
+        url: "/api/devices/pair",
+        payload: {
+          pairingAddress: "192.168.1.23:41234",
+          pairingCode: "123456",
+          hostId,
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ ok: true });
+      expect(spies.pair).toHaveBeenCalledWith("192.168.1.23:41234", "123456");
+
+      spies.pair.mockRejectedValueOnce(new Error("wrong code"));
+      const bad = await primary.app.inject({
+        method: "POST",
+        url: "/api/devices/pair",
+        payload: {
+          pairingAddress: "192.168.1.23:41234",
+          pairingCode: "123456",
+          hostId,
+        },
+      });
+      expect(bad.statusCode).toBe(400);
+      expect(bad.json().message).toContain("wrong code");
+
+      const down = await primary.app.inject({
+        method: "POST",
+        url: "/api/devices/pair",
+        payload: {
+          pairingAddress: "192.168.1.23:41234",
+          pairingCode: "123456",
+          hostId: deadHostId,
+        },
+      });
+      expect(down.statusCode).toBe(503);
+    });
+
+    it("routes pair-and-connect to the agent, scopes discoveryId per host, and scopes collision guard per host", async () => {
+      const agentDiscSpy = vi
+        .spyOn(agent.app.deviceDiscovery, "getDiscovered")
+        .mockReturnValue([sampleDiscovered]);
+      const localDiscSpy = vi
+        .spyOn(primary.app.deviceDiscovery, "getById")
+        .mockImplementation((id) =>
+          id === "Local-Phone.local"
+            ? {
+                id: "Local-Phone.local",
+                name: "Local Phone",
+                host: "192.168.1.50",
+                pairingAddress: "192.168.1.50:41234",
+                connectAddress: "192.168.1.50:37251",
+                discoveredAt: "2026-01-01T00:00:00.000Z",
+              }
+            : undefined,
+        );
+      try {
+        // Cross-host discoveryId is refused: primary cannot use agent's discoveryId,
+        // and agent cannot use primary's discoveryId.
+        const agentIdOnPrimary = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: { discoveryId: sampleDiscovered.id, pairingCode: "123456", hostId: "local" },
+        });
+        expect(agentIdOnPrimary.statusCode).toBe(400);
+
+        const primaryIdOnAgent = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: { discoveryId: "Local-Phone.local", pairingCode: "123456", hostId },
+        });
+        expect(primaryIdOnAgent.statusCode).toBe(400);
+        expect(primaryIdOnAgent.json().message).toContain("no longer in the discovery cache");
+
+        // Valid discoveryId on the agent pairs and connects on the agent.
+        const ok = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: { discoveryId: sampleDiscovered.id, pairingCode: "123456", hostId, name: "Lab" },
+        });
+        expect(ok.statusCode).toBe(201);
+        expect(ok.json()).toMatchObject({
+          hostId,
+          kind: "physical",
+          serial: sampleDiscovered.connectAddress,
+          name: "Lab",
+        });
+        expect(spies.pair).toHaveBeenCalledWith(sampleDiscovered.pairingAddress, "123456");
+        expect(getOrCreateCalls()).toEqual([
+          expect.objectContaining({
+            kind: "physical",
+            serial: sampleDiscovered.connectAddress,
+          }),
+        ]);
+
+        // Duplicate connectAddress on the SAME hostId is refused with 409.
+        const dup = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: {
+            pairingAddress: "192.168.1.23:41234",
+            connectAddress: sampleDiscovered.connectAddress,
+            pairingCode: "123456",
+            hostId,
+          },
+        });
+        expect(dup.statusCode).toBe(409);
+
+        // Same connectAddress on a DIFFERENT hostId is allowed (separate LAN).
+        const localRow = insertDevice(primary.app, {
+          kind: "physical",
+          serial: sampleDiscovered.connectAddress,
+          avdName: null,
+          projectId: null,
+          name: "Local same IP",
+          hostId: "local",
+        });
+        expect(localRow.hostId).toBe("local");
+
+        // Unreachable host rolls back the row and answers 503.
+        const beforeCount = primary.app.db.select().from(devices).all().length;
+        const down = await primary.app.inject({
+          method: "POST",
+          url: "/api/devices/pair-and-connect",
+          payload: {
+            pairingAddress: "192.168.1.99:41234",
+            connectAddress: "192.168.1.99:37251",
+            pairingCode: "123456",
+            hostId: deadHostId,
+          },
+        });
+        expect(down.statusCode).toBe(503);
+        expect(primary.app.db.select().from(devices).all()).toHaveLength(beforeCount);
+      } finally {
+        agentDiscSpy.mockRestore();
+        localDiscSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("AVD listing and creation on an agent host (issue #3272)", () => {
+    it("rejects unauthenticated requests to /internal/avds* and /internal/system-images and /internal/device-profiles", async () => {
+      for (const [method, url] of [
+        ["GET", "/internal/avds"],
+        ["GET", "/internal/system-images"],
+        ["GET", "/internal/device-profiles"],
+        ["POST", "/internal/avds"],
+      ] as const) {
+        const res = await agent.app.inject({
+          method,
+          url,
+          ...(method === "POST"
+            ? {
+                payload: {
+                  name: "pixel_test",
+                  systemImage: "system-images;android-35;google_apis;x86_64",
+                  deviceProfile: "pixel_7",
+                },
+              }
+            : {}),
+        });
+        expect(res.statusCode).toBe(401);
+      }
+    });
+
+    it("lists the agent's AVDs, system images, and device profiles via ?hostId=", async () => {
+      vi.mocked(listAvds).mockResolvedValueOnce(["agent_avd_1", "agent_avd_2"]);
+      const avdsRes = await primary.app.inject({
+        method: "GET",
+        url: `/api/avds?hostId=${encodeURIComponent(hostId)}`,
+      });
+      expect(avdsRes.statusCode).toBe(200);
+      expect(avdsRes.json()).toEqual({ avds: ["agent_avd_1", "agent_avd_2"] });
+
+      const imagesRes = await primary.app.inject({
+        method: "GET",
+        url: `/api/system-images?hostId=${encodeURIComponent(hostId)}`,
+      });
+      expect(imagesRes.statusCode).toBe(200);
+      expect(imagesRes.json().systemImages).toEqual([
+        expect.objectContaining({ packagePath: "system-images;android-35;google_apis;x86_64" }),
+      ]);
+
+      const profilesRes = await primary.app.inject({
+        method: "GET",
+        url: `/api/device-profiles?hostId=${encodeURIComponent(hostId)}`,
+      });
+      expect(profilesRes.statusCode).toBe(200);
+      expect(profilesRes.json()).toEqual({ deviceProfiles: ["pixel_7"] });
+    });
+
+    it("creates an AVD on the agent host via POST /api/avds and forwards agent refusals", async () => {
+      const okRes = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId,
+          name: "remote_avd",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+          sdcardSize: "512M",
+        },
+      });
+      expect(okRes.statusCode).toBe(201);
+      expect(okRes.json()).toEqual({ name: "remote_avd" });
+      expect(createAvd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          avdmanagerPath: "/usr/bin/avdmanager",
+          name: "remote_avd",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+          sdcardSize: "512M",
+        }),
+      );
+
+      // Agent allowlists systemImage against its own installed images.
+      const badImageRes = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId,
+          name: "remote_avd_2",
+          systemImage: "system-images;android-99;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+        },
+      });
+      expect(badImageRes.statusCode).toBe(400);
+      expect(badImageRes.json().message).toContain("installed system images");
+
+      // Agent allowlists deviceProfile against its own known profiles.
+      const badProfileRes = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId,
+          name: "remote_avd_3",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "no_such_profile",
+        },
+      });
+      expect(badProfileRes.statusCode).toBe(400);
+      expect(badProfileRes.json().message).toContain("known device profiles");
+    });
+
+    it("answers 503 (not 500) when the agent host is unreachable, and 400 for an unknown hostId", async () => {
+      const deadGet = await primary.app.inject({
+        method: "GET",
+        url: `/api/avds?hostId=${encodeURIComponent(deadHostId)}`,
+      });
+      expect(deadGet.statusCode).toBe(503);
+
+      const deadPost = await primary.app.inject({
+        method: "POST",
+        url: "/api/avds",
+        payload: {
+          hostId: deadHostId,
+          name: "remote_avd",
+          systemImage: "system-images;android-35;google_apis;x86_64",
+          deviceProfile: "pixel_7",
+        },
+      });
+      expect(deadPost.statusCode).toBe(503);
+
+      const unknownGet = await primary.app.inject({
+        method: "GET",
+        url: "/api/avds?hostId=no-such-host",
+      });
+      expect(unknownGet.statusCode).toBe(400);
+    });
+
+    it("refuses POST /api/devices with 400 naming the host and inserts no row when the agent lacks the AVD", async () => {
+      const res = await createDevice({ avdName: "missing_on_agent" });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain(hostId);
+      expect(res.json().message).toContain("missing_on_agent");
+      expect(primary.app.db.select().from(devices).all()).toEqual([]);
+      expect(spies.getOrCreate).not.toHaveBeenCalled();
+    });
+
+    it("translates a 404 from an older agent on the AVD routes into an actionable 400", async () => {
+      const { createServer } = await import("node:http");
+      const oldAgent = createServer((req, res) => {
+        res.statusCode = 404;
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ message: `Route ${req.method}:${req.url} not found` }));
+      });
+      await new Promise<void>((resolve) => oldAgent.listen(0, "127.0.0.1", () => resolve()));
+      const address = oldAgent.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP address");
+
+      const oldHostId = (
+        await primary.app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: {
+            name: "old-agent",
+            baseUrl: `http://127.0.0.1:${address.port}`,
+            token: "unused-token",
+          },
+        })
+      ).json().id as string;
+
+      try {
+        for (const url of [
+          `/api/avds?hostId=${encodeURIComponent(oldHostId)}`,
+          `/api/system-images?hostId=${encodeURIComponent(oldHostId)}`,
+          `/api/device-profiles?hostId=${encodeURIComponent(oldHostId)}`,
+        ]) {
+          const res = await primary.app.inject({ method: "GET", url });
+          expect(res.statusCode).toBe(400);
+          expect(res.json().message).toBe(
+            `Host ${oldHostId} does not report AVDs — update its agent.`,
+          );
+        }
+
+        const postRes = await primary.app.inject({
+          method: "POST",
+          url: "/api/avds",
+          payload: {
+            hostId: oldHostId,
+            name: "remote_avd",
+            systemImage: "system-images;android-35;google_apis;x86_64",
+            deviceProfile: "pixel_7",
+          },
+        });
+        expect(postRes.statusCode).toBe(400);
+        expect(postRes.json().message).toBe(
+          `Host ${oldHostId} does not report AVDs — update its agent.`,
+        );
+      } finally {
+        await primary.app.inject({ method: "DELETE", url: `/api/hosts/${oldHostId}` });
+        await new Promise<void>((resolve) => oldAgent.close(() => resolve()));
+      }
     });
   });
 });

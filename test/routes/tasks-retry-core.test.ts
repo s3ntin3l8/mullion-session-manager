@@ -98,6 +98,42 @@ describe("POST /api/tasks/:id/retry (#483)", () => {
     await app.close();
   });
 
+  it("clears a stale needsHumanReason and ciHoldNote on retry and claim dispatch", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProjectWithGitRepo(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 81);
+    app.db
+      .update(tasks)
+      .set({
+        autoReturnCapAnnouncedAt: new Date(),
+        needsHumanReason: "ci-unfixable",
+        ciHoldNote: "test-merge — dependency-audit fails on base",
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+
+    const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({
+      autoReturnCapAnnouncedAt: null,
+      needsHumanReason: null,
+      ciHoldNote: null,
+    });
+
+    await waitForTaskRunning(app, task.id);
+    const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+    expect(check.json()).toMatchObject({
+      status: "in_progress",
+      autoReturnCapAnnouncedAt: null,
+      needsHumanReason: null,
+      ciHoldNote: null,
+    });
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("409s a task that isn't failed", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();

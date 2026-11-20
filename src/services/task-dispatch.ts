@@ -188,6 +188,13 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // not this task's fault, and no room left either way.
       return;
     }
+    if (outcome.reason === "codex-trust-held") {
+      // Issue #3341 — waiting for local Codex `/hooks` trust. `continue`,
+      // never `return`: it holds no slot and must not delay a later task.
+      // No backoff and no give-up clock: it records no transition, and
+      // applies to both fresh claims and queued retries.
+      continue;
+    }
     if (outcome.reason === "retry-waiting") {
       // Issue #3194 — a retry waiting for a HOST: the preserved branch lives
       // on its original host, so failing the task after 6h would free

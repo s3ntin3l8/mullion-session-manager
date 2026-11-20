@@ -317,7 +317,10 @@ waiting for a free concurrency slot. It never holds a session; see the
 - **`* → failed`** fires automatically on session exit (a `claimed`/
   `in_progress` task whose session dies is failed, not left pointing at a
   dead session forever), on exceeding the per-task time budget (see Safety
-  envelope below), or on the no-commits case the `* → reviewing` bullet
+  envelope below), on a mid-turn stall (`worker stalled: no output for <N> minutes`
+  when a live worker produces no output for 45 minutes and stays silent 10 minutes
+  after a stall nudge — [`tasks-internals.md`](tasks-internals.md#continuation-nudge)),
+  or on the no-commits case the `* → reviewing` bullet
   above describes — `failureReason: "agent ended its turn with no commits on
 <branch>"`. Before that failure, a live, idle worker gets up to two
   continuation nudges — one short message typed into its session saying

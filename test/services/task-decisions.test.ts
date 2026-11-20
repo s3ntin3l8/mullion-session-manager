@@ -4,6 +4,7 @@ import {
   MAX_DECISION_LINE_LENGTH,
   applyWorkerDecisionsSection,
   extractDeclaredDecisions,
+  neutraliseCiHoldCommentText,
   neutraliseDecisionLine,
   renderWorkerDecisionsSection,
 } from "../../src/services/task-decisions.js";
@@ -94,6 +95,16 @@ describe("worker decisions PR section", () => {
     expect(safe).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(safe).toContain("\\[link\\](https://example.com)");
     expect(safe).toContain("!\\[img\\](https://example.com/p.png)");
+  });
+
+  it("neutralises #N, owner/repo#N and @user in CI-hold comment text", () => {
+    const raw = "Deploy #42 / org/repo#99 by @release-bot <b>x</b> [ref](https://example.com)";
+    const safe = neutraliseCiHoldCommentText(raw);
+    expect(safe).not.toMatch(/#\d/);
+    expect(safe).not.toMatch(/@[a-zA-Z0-9_/-]/);
+    expect(safe).toContain("Deploy #\u200B42 / org/repo#\u200B99 by @\u200Brelease-bot");
+    expect(safe).toContain("&lt;b&gt;x&lt;/b&gt;");
+    expect(safe).toContain("\\[ref\\](https://example.com)");
   });
 
   it("renders harmless lines with mentions, markers, HTML and markdown links, and refresh replaces only the section", () => {

@@ -1447,6 +1447,7 @@ export const tasks = sqliteTable(
     // `claimedAt`, which retires an older spell's count without a reset write.
     nudgeCount: integer("nudge_count").notNull().default(0),
     lastNudgedAt: integer("last_nudged_at", { mode: "timestamp" }),
+    lastStallNudgedAt: integer("last_stall_nudged_at", { mode: "timestamp" }),
     // #758 — set when an auto-rebase worker is spawned, read back on the
     // next merge-sweep tick to decide "is an attempt already in flight" —
     // NOT session-exited detection, because a Task Master worker is told to

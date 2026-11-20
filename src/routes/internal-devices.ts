@@ -1,10 +1,14 @@
-import type { FastifyInstance } from "fastify";
-import { attachSocketToDevice } from "./device.js";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import { attachSocketToDevice } from "../services/device-attach.js";
+import { deviceQueryError, deviceStreamParams } from "../services/internal-streams.js";
+import { DEVICE_PAIR_RATE_LIMIT } from "./internal-rate-limits.js";
 import {
   DEVICE_ID_PARAMS_SCHEMA,
+  DEVICE_PAIR_SCHEMA,
   DEVICE_SPAWN_SCHEMA,
   DEVICE_TERMINATE_SCHEMA,
 } from "./internal-schemas.js";
+import { isValidDeviceAddress, isValidPairingCode } from "../services/device-address.js";
 import {
   iosSimulatorAvailable,
   localDeviceKinds,
@@ -16,15 +20,29 @@ import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceKind, DevicePlatform } from "../services/device-drivers/types.js";
 import type {
   DeviceKindsResponse,
+  DevicePairRequest,
+  DevicePairResponse,
   DeviceSpawnSpec,
   DeviceWsQuery,
+  DiscoveredDevicesResponse,
   LiveDevicesResponse,
   SimulatorsResponse,
   SpawnDeviceResponse,
 } from "../services/device-wire.js";
 
-function isDeviceKind(value: unknown): value is DeviceKind {
-  return value === "emulator" || value === "physical";
+/**
+ * Answers a deliberate device/teardown failure with 424 Failed Dependency so
+ * RemoteHostTransport forwards it instead of flattening a 5xx into
+ * HostUnreachableError; the primary's RemoteDeviceHost maps it back to the
+ * original status and message.
+ */
+function replyFailedDependency(reply: FastifyReply, message: string, deviceStatus: number) {
+  return reply.code(424).send({
+    statusCode: 424,
+    error: "Failed Dependency",
+    message,
+    deviceStatus,
+  });
 }
 
 /**
@@ -83,6 +101,13 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
             : app.devicePanelUnavailableMessage,
         );
       }
+      if (
+        spec.platform !== "ios" &&
+        spec.kind === "physical" &&
+        !isValidDeviceAddress(spec.serial)
+      ) {
+        return reply.badRequest("serial must be host:port (e.g. 192.168.1.23:37251)");
+      }
       app.device.setReservedPorts(spec.reservedPorts);
       try {
         const device = await app.device.getOrCreate({
@@ -101,9 +126,48 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
     },
   );
 
-  app.get<{ Reply: LiveDevicesResponse }>("/internal/devices/live", rateLimit, async () => ({
-    devices: app.device.list(),
-  }));
+  app.get<{ Reply: LiveDevicesResponse }>("/internal/devices/live", rateLimit, async () => {
+    const devices = app.device.list();
+    const ports: Record<string, number> = {};
+    for (const d of devices) {
+      const port = app.device.get(d.id)?.port ?? null;
+      if (port !== null) ports[d.id] = port;
+    }
+    return { devices, ports };
+  });
+
+  app.get<{ Reply: DiscoveredDevicesResponse }>(
+    "/internal/devices/discovered",
+    rateLimit,
+    async () => ({
+      devices: app.bootDeviceDiscoveryEnabled ? app.deviceDiscovery.getDiscovered() : [],
+    }),
+  );
+
+  // Dials an arbitrary network address a caller supplies: same full-scope-only
+  // blast-radius reasoning as the primary's `device.pair` control-socket op,
+  // and gated behind the agent bearer token here. Both address and code are
+  // re-validated on the agent because `adb pair` builds the adb service string.
+  app.post<{ Body: DevicePairRequest; Reply: DevicePairResponse }>(
+    "/internal/devices/pair",
+    { ...DEVICE_PAIR_RATE_LIMIT, schema: { body: DEVICE_PAIR_SCHEMA } },
+    async (request, reply) => {
+      if (!app.devicePanelEnabled) return reply.badRequest(app.devicePanelUnavailableMessage);
+      const { pairingAddress, pairingCode } = request.body;
+      if (!isValidDeviceAddress(pairingAddress)) {
+        return reply.badRequest("pairingAddress must be host:port (e.g. 192.168.1.23:41234)");
+      }
+      if (!isValidPairingCode(pairingCode)) {
+        return reply.badRequest("pairingCode must be the 6-digit code shown on the device");
+      }
+      try {
+        await app.device.pair(pairingAddress, pairingCode);
+      } catch (err) {
+        return reply.badRequest(err instanceof Error ? err.message : String(err));
+      }
+      return { ok: true };
+    },
+  );
 
   // Same teardown the primary's own stop/delete runs locally. Not gated on
   // DEVICE_ENABLED: tearing a device down must keep working while the panel is
@@ -115,12 +179,18 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
       schema: { params: DEVICE_ID_PARAMS_SCHEMA, body: DEVICE_TERMINATE_SCHEMA },
     },
     async (request, reply) => {
-      // Deliberately not caught: a failed teardown must reach the primary, which
-      // keeps the row as the only handle to a possibly-surviving scope.
+      // A failed teardown is answered 424 (rather than 500, which
+      // RemoteHostTransport turns into HostUnreachableError) so the primary
+      // forwards 500 + message and keeps the row as the only handle to a
+      // possibly-surviving scope.
       const { kind, platform } = request.body;
-      await (platform === "ios"
-        ? app.device.terminate(request.params.id, kind, platform)
-        : app.device.terminate(request.params.id, kind));
+      try {
+        await (platform === "ios"
+          ? app.device.terminate(request.params.id, kind, platform)
+          : app.device.terminate(request.params.id, kind));
+      } catch (err) {
+        return replyFailedDependency(reply, err instanceof Error ? err.message : String(err), 500);
+      }
       reply.code(204);
     },
   );
@@ -146,6 +216,9 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
         return await performDeviceAction(driver, request.body);
       } catch (err) {
         if (err instanceof DeviceActionError) {
+          if (err.statusCode >= 500) {
+            return replyFailedDependency(reply, err.message, err.statusCode);
+          }
           return reply.send(app.httpErrors.createError(err.statusCode, err.message));
         }
         throw err;
@@ -156,6 +229,8 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
   // The agent's half of the device panel's video/input socket. The primary's
   // proxy (routes/device.ts) relays frames both ways; the keyframe gating and
   // the backpressure drop live in attachSocketToDevice, so they stay agent-side.
+  // The gating below is the device socket's own (services/internal-streams.ts),
+  // shared with the `device` stream over the outbound channel (#3273).
   app.get<{ Params: { id: string }; Querystring: DeviceWsQuery }>(
     "/internal/ws/device/:id",
     {
@@ -163,43 +238,20 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
       config: rateLimit.config,
       schema: { params: DEVICE_ID_PARAMS_SCHEMA },
       preValidation: async (request, reply) => {
-        const { kind } = request.query;
-        if (!isDeviceKind(kind)) return reply.badRequest("kind must be emulator or physical");
-        const { platform } = request.query;
-        if (platform !== undefined && platform !== "android" && platform !== "ios") {
-          return reply.badRequest("platform must be android or ios");
-        }
-        if (platform === "ios") {
-          if (!(await iosSimulatorAvailable(app))) {
-            return reply.badRequest("iOS Simulator is not available on this host");
-          }
-          if (!request.query.udid) return reply.badRequest("udid is required for an ios device");
-        } else if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
-          return reply.badRequest(
-            kind === "emulator"
-              ? app.deviceEmulatorUnavailableMessage
-              : app.devicePanelUnavailableMessage,
-          );
-        }
-        const { port } = request.query;
-        // The same 1-65535 the spawn schema bounds the port to.
-        if (port !== undefined && !(/^[0-9]{1,5}$/.test(port) && +port >= 1 && +port <= 65535)) {
-          return reply.badRequest("port must be a number from 1 to 65535");
-        }
+        const error = await deviceQueryError(
+          app,
+          request.query as Record<string, string | undefined>,
+          request.params.id,
+        );
+        if (error !== null) return reply.badRequest(error);
       },
     },
     (socket, req) => {
-      const { kind, avdName, serial, label, port, platform, udid } = req.query;
-      void attachSocketToDevice(app, socket, {
-        deviceId: Number(req.params.id),
-        kind,
-        avdName: avdName ?? null,
-        serial: serial ?? null,
-        label: label ?? null,
-        port: port === undefined ? null : Number(port),
-        platform,
-        udid: udid ?? null,
-      });
+      void attachSocketToDevice(
+        app,
+        socket,
+        deviceStreamParams(req.query as Record<string, string | undefined>, req.params.id),
+      );
     },
   );
 }

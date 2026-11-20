@@ -1,4 +1,5 @@
 import { checkWorkerStarted, clearStoppedWorkerWarnings } from "./task-worker-start.js";
+import { neutraliseCiHoldCommentText } from "./task-decisions.js";
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { reviewRoundLabel } from "./task-round-label.js";
 import type { FastifyInstance } from "fastify";
@@ -35,6 +36,7 @@ import { resolveCommitsPastBase } from "./commits-past-base.js";
 // #2416 — one throttle policy for the reconciler's "this state is stuck"
 // warnings, instead of a copy per lookup.
 import { killDiags, gateFailOrNudge, removeFailedTaskWorktree } from "./task-gate-failure.js";
+import { nudgeStalledWorker } from "./task-nudge.js";
 import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
@@ -128,6 +130,7 @@ import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-ap
 import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
 import {
   CLEARED_MERGE_ERROR,
+  CLEARED_NEEDS_HUMAN,
   mergeRecordedSet,
   describeBlockingThreads,
   type MergeBlockedThreads,
@@ -2462,7 +2465,7 @@ async function attemptReturnRedCiToWorker(
     // the diff, so it stays a plain COMMENT regardless of a reviewer App
     // being configured.
     await postReviewFindingsComment(app, task, project, {
-      body: `A CI check is failing on this task's PR (${redChecks.map((c) => c.name).join(", ")}), but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
+      body: `A CI check is failing on this task's PR (${neutraliseCiHoldCommentText(redChecks.map((c) => c.name).join(", "))}), but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });
     return true;
   }
@@ -3543,7 +3546,7 @@ export async function autoReturnTask(
       // it explicitly anyway so this write is the one place that can never
       // leave a stale announcement behind if that invariant ever slips.
       autoReturnCapAnnouncedAt: null,
-      needsHumanReason: null,
+      ...CLEARED_NEEDS_HUMAN,
       // Issue #1357 — this is a fresh worker spell (a new session, per
       // reseedTaskIfSessionExited's force:true just below), same reasoning
       // as reject's own claimedAt reset (routes/tasks.ts): leaving the
@@ -3617,6 +3620,7 @@ export async function autoReturnTask(
         // null, though every designed caller already had it null here.
         autoReturnCapAnnouncedAt: task.autoReturnCapAnnouncedAt,
         needsHumanReason: task.needsHumanReason,
+        ciHoldNote: task.ciHoldNote,
         // Issue #1357 — claimedAt rolls back too: a failed re-seed means no
         // new spell actually started, so the clock the budget check reads
         // must not have moved either. Same "roll back together" reasoning
@@ -4488,7 +4492,7 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
       .update(tasks)
       .set({
         autoReturnCapAnnouncedAt: null,
-        needsHumanReason: null,
+        ...CLEARED_NEEDS_HUMAN,
         reviewSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
@@ -4515,6 +4519,71 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
       });
     }
   }
+}
+
+/**
+ * Shared failure-cleanup path for active (`claimed` / `in_progress`) tasks
+ * failed by the reconciler (`budget-exceeded` or `worker-stalled`). Captures
+ * diagnostics before killing the session, transitions the row via CAS, records
+ * the transition, syncs GitHub, and removes a clean failed worktree.
+ */
+async function failActiveTaskWithDiagnostics(
+  app: FastifyInstance,
+  params: {
+    task: typeof tasks.$inferSelect;
+    session: typeof sessions.$inferSelect;
+    project: typeof projects.$inferSelect;
+    hostId: string;
+    backend: SessionBackend;
+    now: Date;
+    failureReason: string;
+    via: "budget-exceeded" | "worker-stalled";
+    context: Record<string, unknown>;
+    label: string;
+  },
+): Promise<void> {
+  const { task, session, project, hostId, backend, now, failureReason, via, context, label } =
+    params;
+  // The scrollback dies with the PTY, so read it before the kill.
+  // Best-effort and bounded: null on any failure or timeout.
+  const diagnostics = await killDiags(app, task, session, backend, now);
+  const updated = app.db
+    .update(tasks)
+    .set({
+      status: "failed",
+      failureReason,
+      failureDiagnostics: diagnostics,
+      completedAt: now,
+    })
+    .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["claimed", "in_progress"])))
+    .run();
+  if (updated.changes === 0) return;
+  recordTaskTransition(app, {
+    taskId: task.id,
+    projectId: project.id,
+    // Narrowed by the WHERE clause above (`inArray(..., ["claimed", "in_progress"])`).
+    from: task.status as "claimed" | "in_progress",
+    to: "failed",
+    via,
+    context,
+  });
+  // killSession, not a bare backend.terminate — same reasoning as failReviewingGate:
+  // this task just left claimed/in_progress for good, and a bare terminate would
+  // leave the session "active" until the 30s reconciler notices, never "killed."
+  await killSession(app, session.id).catch((err) => {
+    app.log.warn(
+      { err, taskId: task.id, sessionId: session.id },
+      `task reconcile: failed to kill ${label} session`,
+    );
+  });
+  await syncTaskTransition(
+    app,
+    { ...task, status: "failed", failureReason, failureDiagnostics: diagnostics, completedAt: now },
+    project,
+    "failed",
+  );
+  // 6.8/#283 — best-effort; a dirty tree is left in place for inspection.
+  await removeFailedTaskWorktree(app, task, project, hostId, `${label} failure`);
 }
 
 /**
@@ -4546,7 +4615,10 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
  *  - flips it to "failed" (and terminates the session) once
  *    MULLION_TASK_BUDGET_MINUTES has elapsed since claimedAt, regardless of
  *    what the session is doing — the budget is a hard backstop, not a
- *    negotiation with the agent's own judgment.
+ *    negotiation with the agent's own judgment — or early (`via:
+ *    "worker-stalled"`) when `nudgeStalledWorker` sees an open mid-turn
+ *    worker stay silent past `WORKER_STALL_MS` and then past
+ *    `NUDGE_TURN_GRACE_MS` after a stall nudge.
  *  - on entering "reviewing" (either path above), opens a draft PR
  *    (maybeOpenDraftPR above — best-effort, never blocks the transition)
  *    and spawns the configured review agent if one is set (see
@@ -4744,61 +4816,18 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               !salvage &&
               !isTaskInRateLimitGrace(task, resolvedTaskMaster.rateLimitGraceMinutes)
             ) {
-              // The scrollback dies with the PTY, so read it before the kill.
-              // Best-effort and bounded: null on any failure or timeout.
-              const budgetDiagnostics = await killDiags(app, task, session, backend, now);
-              const updated = app.db
-                .update(tasks)
-                .set({
-                  status: "failed",
-                  failureReason,
-                  failureDiagnostics: budgetDiagnostics,
-                  completedAt: now,
-                })
-                .where(
-                  and(eq(tasks.id, task.id), inArray(tasks.status, ["claimed", "in_progress"])),
-                )
-                .run();
-              if (updated.changes > 0) {
-                recordTaskTransition(app, {
-                  taskId: task.id,
-                  projectId: project.id,
-                  // Narrowed by the WHERE clause above (`inArray(..., ["claimed", "in_progress"])`).
-                  from: task.status as "claimed" | "in_progress",
-                  to: "failed",
-                  via: "budget-exceeded",
-                  context: { sessionId: session.id, budgetMinutes },
-                });
-                // killSession, not a bare backend.terminate — same reasoning
-                // as failReviewingGate's identical swap above: this task
-                // just left claimed/in_progress for good, and a bare
-                // terminate would leave the session "active" until the 30s
-                // reconciler notices, never "killed."
-                await killSession(app, session.id).catch((err) => {
-                  app.log.warn(
-                    { err, taskId: task.id, sessionId: session.id },
-                    "task reconcile: failed to kill over-budget session",
-                  );
-                });
-                await syncTaskTransition(
-                  app,
-                  {
-                    ...task,
-                    status: "failed",
-                    failureReason,
-                    failureDiagnostics: budgetDiagnostics,
-                    completedAt: now,
-                  },
-                  project,
-                  "failed",
-                );
-                // 6.8/#283 — best-effort; a dirty tree is left in place for
-                // inspection rather than retried forever (see
-                // removeWorktreeIfClean's own doc comment on why "dirty" is
-                // the only real refusal condition it has).
-                // (removeFailedTaskWorktree itself no-ops without a worktreePath.)
-                await removeFailedTaskWorktree(app, task, project, hostId, "budget failure");
-              }
+              await failActiveTaskWithDiagnostics(app, {
+                task,
+                session,
+                project,
+                hostId,
+                backend,
+                now,
+                failureReason,
+                via: "budget-exceeded",
+                context: { sessionId: session.id, budgetMinutes },
+                label: "over-budget",
+              });
               continue;
             }
           }
@@ -4831,6 +4860,27 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // worktree cleanup); this pass must not race it with a conflicting
           // write, so it just leaves an exited-session task alone.
           if (await repairExited(app, hostId, task.id, session, derived.status)) continue;
+
+          // Nudge, then fail early, a worker whose turn is in flight with no
+          // output past WORKER_STALL_MS (and no outstanding background job or
+          // rate-limit grace).
+          const stall = await nudgeStalledWorker(app, task, info, now);
+          if (stall.action === "nudged") continue;
+          if (stall.action === "fail") {
+            await failActiveTaskWithDiagnostics(app, {
+              task,
+              session,
+              project,
+              hostId,
+              backend,
+              now,
+              failureReason: `worker stalled: no output for ${stall.silentMinutes} minutes`,
+              via: "worker-stalled",
+              context: { sessionId: session.id, silentMinutes: stall.silentMinutes },
+              label: "stalled",
+            });
+            continue;
+          }
 
           // A "claimed" task's own reconciliation (both "-> reviewing" on a
           // fast-finishing first turn, and "-> in_progress" on any other
@@ -5188,7 +5238,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // design), so any prior announcement is stale the instant
                 // this lands, same as the sibling session-id fields above.
                 autoReturnCapAnnouncedAt: null,
-                needsHumanReason: null,
+                ...CLEARED_NEEDS_HUMAN,
                 // The round is over either way: its stored seed prompt must not
                 // outlive it and be replayed into an unrelated round.
                 suggestionsSeedPrompt: null,

@@ -9,7 +9,7 @@ import { isHostTransientError } from "./remote-host-errors.js";
 import { redactSecrets } from "./scaffold-failure.js";
 import { resolveBackend } from "./session-backend.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
-import { neutraliseDecisionLine } from "./task-decisions.js";
+import { neutraliseCiHoldCommentText } from "./task-decisions.js";
 import { postReviewFindingsComment } from "./task-github-sync.js";
 
 // A red check on a head the worker was ALREADY sent back for means it came back
@@ -34,7 +34,7 @@ const MAX_UNFIXABLE_REASON_CHARS = 500;
  * A worker's free-text reason, made safe to store and show: one line, secrets
  * redacted, capped. It is shown as plain text by the board (React escapes it),
  * so it is NOT markup-escaped here; the PR comment, which GitHub renders as
- * markdown, escapes it (`neutraliseDecisionLine`) where it is built.
+ * markdown, escapes it (`neutraliseCiHoldCommentText`) where it is built.
  */
 export function sanitiseCiUnfixableReason(raw: string): string {
   const oneLine = redactSecrets(raw.replace(/\s+/g, " ").trim());
@@ -135,11 +135,11 @@ async function parkRedCiForHuman(
   );
   const required = requiredClause(park.mergeableState);
   // The comment is markdown GitHub renders and the check names and the worker's
-  // text are not ours: neutralise mentions and markup in both.
-  const safeNames = neutraliseDecisionLine(names);
+  // text are not ours: neutralise mentions, issue/PR auto-links and markup in both.
+  const safeNames = neutraliseCiHoldCommentText(names);
   const body =
     park.reason === "ci-unfixable"
-      ? `The worker was sent back for a failing CI check on this task's PR (${safeNames}) and reported that no change to this PR can fix it: "${neutraliseDecisionLine(park.workerReason ?? "")}".${required} Mullion has stopped re-running it. A human can approve the task and use "Merge anyway" if the check is not required, or fix the cause on the base branch and update this branch (which re-arms the task).`
+      ? `The worker was sent back for a failing CI check on this task's PR (${safeNames}) and reported that no change to this PR can fix it: "${neutraliseCiHoldCommentText(park.workerReason ?? "")}".${required} Mullion has stopped re-running it. A human can approve the task and use "Merge anyway" if the check is not required, or fix the cause on the base branch and update this branch (which re-arms the task).`
       : `A CI check is still failing on this task's PR (${safeNames}). The worker was sent back for this exact commit and pushed nothing, and re-running the failed jobs did not clear it.${required} The automatic loop has stopped; a human needs to re-run the check or push a fix.`;
   await postReviewFindingsComment(app, task, project, { body });
 }

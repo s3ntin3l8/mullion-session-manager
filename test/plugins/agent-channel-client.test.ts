@@ -297,6 +297,67 @@ describe("agent channel client (#2450)", () => {
     expect(app.agentChannelStatus.state).toBe("ready");
   });
 
+  it("serves a device stream with the agent's own gating and attach (#3273)", async () => {
+    let peer: WebSocket | undefined;
+    const primary = await startPrimary((_f, ws) => {
+      peer = ws;
+      ready(ws);
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-channel-client-"));
+    dirs.push(dir);
+    await saveAgentIdentity(identityStatePath(dir), {
+      hostId: "host-1",
+      machineCredential: "c".repeat(64),
+    });
+    const app = Fastify();
+    app.decorate("config", {
+      MULLION_ROLE: "agent",
+      MULLION_PRIMARY_URL: primary.url,
+      SESSIONS_DIR: dir,
+    } as never);
+    // The device panel's own gates, and a driver that hands out its frames.
+    app.decorate("devicePanelEnabled", true);
+    app.decorate("deviceEmulatorEnabled", true);
+    app.decorate("devicePanelUnavailableMessage", "Device panel is disabled.");
+    app.decorate("deviceEmulatorUnavailableMessage", "Device panel is disabled.");
+    app.decorate("device", {
+      getOrCreateDriver: vi.fn(async () => ({
+        onVideoPacket: () => () => {},
+        onExit: () => () => {},
+        onClipboard: () => () => {},
+        requestKeyframe: async () => {},
+        hasLiveControl: false,
+        input: async () => {},
+      })),
+    } as never);
+    await app.register(agentChannelClientPlugin);
+    apps.push(app);
+    await app.ready();
+    await waitUntil(() => app.agentChannelStatus.state === "ready");
+
+    // The stand-in primary speaks the mux ("even", as the real one does).
+    const mux = createMuxConnection(peer!, { channelIdParity: "even" });
+
+    // A device the agent's own gating refuses: a 400, like the inbound route.
+    const refused = await mux.openChannel();
+    refused.send(Buffer.from('{"stream":"device","query":{"id":"7","kind":"bogus"}}\n'));
+    const refusal = await new Promise<string>((resolve) =>
+      refused.onData((chunk) => resolve(chunk.toString())),
+    );
+    expect(refusal).toContain('"status":400');
+    expect(refusal).toContain("kind must be emulator or physical");
+
+    // A device it accepts: the attach runs, and the stream is accepted.
+    const accepted = await mux.openChannel();
+    accepted.send(
+      Buffer.from('{"stream":"device","query":{"id":"7","kind":"emulator","avdName":"dev35"}}\n'),
+    );
+    const accept = await new Promise<string>((resolve) =>
+      accepted.onData((chunk) => resolve(chunk.toString())),
+    );
+    expect(accept).toContain('"status":200');
+  });
+
   it("stops dialing on close", async () => {
     const primary = await startPrimary((_f, ws) => ready(ws));
     const app = await startAgent(primary.url);

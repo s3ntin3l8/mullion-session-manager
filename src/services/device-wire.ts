@@ -1,4 +1,5 @@
 import type { DeviceInfo, DeviceKind, DevicePlatform } from "./device-drivers/types.js";
+import type { DiscoveredDevice } from "./device-discovery.js";
 import type { IosSimulator } from "./ios-simulators.js";
 
 // The request/response shapes of the agent's `/internal/devices*` routes
@@ -40,10 +41,26 @@ export interface SpawnDeviceResponse {
 
 export interface LiveDevicesResponse {
   devices: DeviceInfo[];
+  /** Emulator ports keyed by device id. Absent from an agent that predates
+   * the field (#3290). */
+  ports?: Record<string, number>;
 }
 
 export interface SimulatorsResponse {
   simulators: IosSimulator[];
+}
+
+export interface DevicePairRequest {
+  pairingAddress: string;
+  pairingCode: string;
+}
+
+export interface DevicePairResponse {
+  ok: true;
+}
+
+export interface DiscoveredDevicesResponse {
+  devices: DiscoveredDevice[];
 }
 
 export interface DeviceKindsResponse {
@@ -54,8 +71,16 @@ export interface DeviceKindsResponse {
   platforms?: DevicePlatform[];
 }
 
-/** The query of `/internal/ws/device/:id` (every value is a string on the wire). */
-export interface DeviceWsQuery {
+/** The device id a device socket names: the route's path param
+ * (`/internal/ws/device/:id`) and the channel stream's `id` query. One
+ * pattern for both, so the two transports cannot drift on what an id is. */
+export const DEVICE_ID_PATTERN = "^[0-9]{1,18}$";
+
+/** The query of `/internal/ws/device/:id` (every value is a string on the wire).
+ * A type alias, not an interface: it is read as a plain
+ * `Record<string, string | undefined>` (the shape every query on the wire
+ * has), and only an alias carries that implicit index signature. */
+export type DeviceWsQuery = {
   kind: DeviceKind;
   avdName?: string;
   serial?: string;
@@ -64,4 +89,4 @@ export interface DeviceWsQuery {
   /** Absent means "android". */
   platform?: DevicePlatform;
   udid?: string;
-}
+};

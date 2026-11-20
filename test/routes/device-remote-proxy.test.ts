@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
+import { IncomingMessage } from "node:http";
+import { Socket } from "node:net";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import type { DeviceRow } from "../../src/services/device-store.js";
@@ -58,8 +60,12 @@ vi.mock("../../src/services/device-store.js", async (importOriginal) => {
   return { ...actual, getDeviceRow: (...args: unknown[]) => getDeviceRowMock(...args) };
 });
 
-const { proxyToRemoteDevice, attachSocketToDevice, REMOTE_DEVICE_OPEN_TIMEOUT_MS } =
-  await import("../../src/routes/device.js");
+const {
+  proxyToRemoteDevice,
+  attachSocketToDevice,
+  REMOTE_DEVICE_OPEN_TIMEOUT_MS,
+  REFUSAL_BODY_TIMEOUT_MS,
+} = await import("../../src/routes/device.js");
 
 const OVER = 4 * 1024 * 1024 + 1;
 const ROW = {
@@ -75,6 +81,17 @@ const ROW = {
 
 function fakeApp(): FastifyInstance {
   return { log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } } as unknown as FastifyInstance;
+}
+
+/** A real HTTP refusal, as `ws` hands it over: the body is unread. */
+function httpRefusal(body: string): IncomingMessage {
+  const socket = new Socket();
+  const res = new IncomingMessage(socket);
+  res.statusCode = 400;
+  res.statusMessage = "Bad Request";
+  res.push(body);
+  res.push(null);
+  return res;
 }
 
 /** [type][flags][payload]: type 0 = configuration, 1 = data; flags bit0 = keyframe. */
@@ -258,6 +275,195 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
       expect(JSON.parse(browser2.sendSpy.mock.calls[0][0] as string)).toEqual({
         type: "error",
         message: "Host agent-1 did not accept the device socket",
+      });
+    });
+
+    it("a refused socket says why, like a failed upgrade does (#3273)", async () => {
+      // The outbound channel reports a refusal as its own event, not as an
+      // error: the panel must be told, not just disconnected.
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, { statusCode: 400 });
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket",
+      });
+      expect(browser.closeSpy).toHaveBeenCalled();
+    });
+
+    it("a refusal tears the upgrade request down instead of leaving it open (#3273)", async () => {
+      // ws aborts its own handshake ONLY when nothing listens for
+      // 'unexpected-response': a listener owns the refusal, so the request and
+      // its socket must be destroyed here. Left alone they stay open until the
+      // agent's keep-alive timeout (72 s), one per refused panel open.
+      const destroy = vi.fn();
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, { statusCode: 400, destroy });
+      expect(destroy).toHaveBeenCalled();
+      // And the upstream must not stay in CONNECTING: either side closing
+      // closes the other.
+      expect(upstream.closeSpy).toHaveBeenCalled();
+      expect(upstream.readyState).toBe(MockSocket.CLOSED);
+    });
+
+    it("a refusal carries the reason the agent gave (#3273)", async () => {
+      // Over the outbound channel the refusal carries the agent's OWN reason —
+      // the one its device gating produced.
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 400,
+          statusMessage: "Device panel is disabled — set DEVICE_ENABLED=true.",
+        },
+      );
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message:
+          "Host agent-1 did not accept the device socket: Device panel is disabled — set DEVICE_ENABLED=true.",
+      });
+    });
+
+    it("a refusal with no reason of its own falls back to the generic message, but a 404 names the old agent (#3273)", async () => {
+      // The HTTP reason phrase ("Bad Request") tells the user nothing they
+      // can act on, so it is dropped.
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 400,
+          statusMessage: "Bad Request",
+        },
+      );
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket",
+      });
+
+      // A 404 means the agent does not know the device socket at all: it is
+      // too old, and the panel says so.
+      const browser2 = new MockSocket();
+      const upstream2 = new MockSocket();
+      upstream2.readyState = MockSocket.CONNECTING;
+      openSocket.mockReturnValue(upstream2);
+      await proxyToRemoteDevice(fakeApp(), browser2 as unknown as WebSocket, ROW);
+      upstream2.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 404,
+          statusMessage: "unknown stream",
+        },
+      );
+      expect(JSON.parse(browser2.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 does not support the device socket — update its agent",
+      });
+    });
+
+    it("an HTTP refusal's body carries the agent's reason (#3273)", async () => {
+      // The inbound transport answers with Fastify's error body, whose
+      // `message` is the agent's own reason — the same text the channel's
+      // accept head carries in its message.
+      const res = httpRefusal(
+        JSON.stringify({
+          statusCode: 400,
+          error: "Bad Request",
+          message: "Device panel is disabled — set DEVICE_ENABLED=true.",
+        }),
+      );
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, res);
+      await vi.waitFor(() => expect(browser.sendSpy).toHaveBeenCalled());
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message:
+          "Host agent-1 did not accept the device socket: Device panel is disabled — set DEVICE_ENABLED=true.",
+      });
+      // The upgrade request is still torn down, not left open.
+      expect(upstream.closeSpy).toHaveBeenCalled();
+    });
+
+    it("a refusal body that is no reason leaves the generic message (#3273)", async () => {
+      // A body that is not the agent's reason (not JSON, no message) is
+      // dropped: the panel is told the refusal, not a guess.
+      for (const body of ["not json", "{}", '{"message":42}', '{"message":"  "}']) {
+        const panel = new MockSocket();
+        const sock = new MockSocket();
+        sock.readyState = MockSocket.CONNECTING;
+        openSocket.mockReturnValue(sock);
+        await proxyToRemoteDevice(fakeApp(), panel as unknown as WebSocket, ROW);
+        sock.emit("unexpected-response", { method: "GET" }, httpRefusal(body));
+        await vi.waitFor(() => expect(panel.sendSpy).toHaveBeenCalled());
+        expect(JSON.parse(panel.sendSpy.mock.calls[0][0] as string)).toEqual({
+          type: "error",
+          message: "Host agent-1 did not accept the device socket",
+        });
+      }
+    });
+
+    it("a refusal whose body never arrives is still reported (#3273)", async () => {
+      vi.useFakeTimers();
+      // The body rides the same response as the status, so it is normally
+      // there already; an agent that stalls must not leave the panel hanging.
+      const res = new IncomingMessage(new Socket());
+      res.statusCode = 400;
+      res.statusMessage = "Bad Request";
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, res);
+      await vi.advanceTimersByTimeAsync(REFUSAL_BODY_TIMEOUT_MS);
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket",
+      });
+      expect(upstream.closeSpy).toHaveBeenCalled();
+    });
+
+    it("a refusal body that errors is reported without a reason (#3273)", async () => {
+      const res = httpRefusal("{}");
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, res);
+      res.destroy(new Error("socket hang up"));
+      await vi.waitFor(() => expect(browser.sendSpy).toHaveBeenCalled());
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket",
+      });
+    });
+
+    it("a reason too long for the panel is cut (#3273)", async () => {
+      const res = httpRefusal(JSON.stringify({ message: "x".repeat(600) }));
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit("unexpected-response", { method: "GET" }, res);
+      await vi.waitFor(() => expect(browser.sendSpy).toHaveBeenCalled());
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message: `Host agent-1 did not accept the device socket: ${"x".repeat(500)}…`,
+      });
+    });
+
+    it("reports a refusal once: the teardown error that follows is not a second failure", async () => {
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      upstream.emit(
+        "unexpected-response",
+        { method: "GET" },
+        {
+          statusCode: 400,
+          statusMessage: "kind must be emulator or physical",
+        },
+      );
+      // Closing the upstream makes ws emit an error of its own; the refusal
+      // was already reported, with the agent's reason.
+      upstream.emit(
+        "error",
+        new Error("WebSocket was closed before the connection was established"),
+      );
+      const frames = browser.sendSpy.mock.calls.filter(([d]) => typeof d === "string");
+      expect(frames).toHaveLength(1);
+      expect(JSON.parse(frames[0]![0] as string)).toEqual({
+        type: "error",
+        message: "Host agent-1 did not accept the device socket: kind must be emulator or physical",
       });
     });
 

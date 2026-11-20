@@ -33,6 +33,7 @@ import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
 import { createBrowserClient, type BrowserClient } from "./remote-host-browser.js";
+import { createAvdsClient, type AvdsClient } from "./remote-host-avds.js";
 import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
 import { createStreamsClient, type StreamsClient } from "./remote-host-streams.js";
 import { createPreviewsClient, type PreviewsClient } from "./remote-host-previews.js";
@@ -364,9 +365,15 @@ export class RemoteHostClient {
   private readonly boundRequest: git.GitRequest = (path, init, timeoutMs) =>
     this.request(path, init, timeoutMs);
 
+  readonly avds: AvdsClient = createAvdsClient({
+    request: this.boundRequest,
+    openInbound: (target) => this.inboundStream(target, false),
+  });
+
   readonly devices: DevicesClient = createDevicesClient({
     request: this.boundRequest,
     openInbound: (target) => this.inboundStream(target, false),
+    openChannel: (kind, identity, query) => this.channelStream(kind, identity, query),
   });
 
   readonly browser: BrowserClient = createBrowserClient({

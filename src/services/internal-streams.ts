@@ -1,6 +1,7 @@
-// The agent-side bodies of `/internal/ws/attach`, `/internal/ws/events` and
-// `/internal/ws/ssh-agent` — shared by the inbound routes (routes/internal.ts)
-// and the streams carried over the outbound channel (#2571,
+// The agent-side bodies of `/internal/ws/attach`, `/internal/ws/events`,
+// `/internal/ws/ssh-agent` and `/internal/ws/device/:id` — shared by the
+// inbound routes (routes/internal.ts, routes/internal-devices.ts) and the
+// streams carried over the outbound channel (#2571,
 // services/agent-channel-streams.ts) so both transports validate and behave
 // identically. The socket may be a real WebSocket or a ChannelSocket.
 //
@@ -19,11 +20,19 @@ import { getPinnedWsAgent } from "./pinned-connect.js";
 import { normalizePreviewDestination, CONFIGURED_PREVIEW_POLICY } from "./preview-targets.js";
 import { attachSocketToSession } from "./session-attach.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./session-events.js";
+import { isDeviceKind, iosSimulatorAvailable } from "./device-kinds.js";
+import { DEVICE_ID_PATTERN } from "./device-wire.js";
+import { attachSocketToDevice, type AttachDeviceParams } from "./device-attach.js";
+import type { DeviceKind, DevicePlatform } from "./device-drivers/types.js";
+import type { SocketLike } from "./socket-channel.js";
 import {
   MAX_SESSION_ENV_ENTRIES,
   MAX_SESSION_ENV_VALUE_LENGTH,
   SESSION_ID_PATTERN,
 } from "./session-limits.js";
+
+/** The device id pattern, compiled once (see device-wire.ts). */
+const DEVICE_ID_RE = new RegExp(DEVICE_ID_PATTERN);
 
 /** Why an attach request must be refused, or null when it is acceptable. The
  * checks `/internal/ws/attach` runs before the upgrade completes. */
@@ -221,4 +230,83 @@ export function acceptConfiguredPreviewStream(
     agent: getPinnedWsAgent(CONFIGURED_PREVIEW_POLICY, url),
   });
   pipeWsFrames(app, socket as unknown as NodeWebSocket, upstream, { kind: "configured-preview" });
+}
+
+// --- the device panel's socket (#3273) -------------------------------------
+
+/**
+ * Why a device socket must be refused, or null: the checks
+ * `/internal/ws/device/:id` runs before its upgrade completes. The inbound
+ * route and the `device` stream over the outbound channel run THIS one, so
+ * the two transports gate a device identically instead of forking the rules.
+ *
+ * `id` is the device the socket names: the inbound route's path param, the
+ * channel stream's `id` query.
+ */
+export async function deviceQueryError(
+  app: FastifyInstance,
+  query: Record<string, string | undefined>,
+  id: string,
+): Promise<string | null> {
+  // The same pattern the route's params schema enforces (internal-schemas.ts),
+  // so a device id means the same thing on both transports.
+  if (!DEVICE_ID_RE.test(id)) return "id must be a number";
+  const { kind } = query;
+  if (!isDeviceKind(kind)) return "kind must be emulator or physical";
+  const { platform } = query;
+  if (platform !== undefined && platform !== "android" && platform !== "ios") {
+    return "platform must be android or ios";
+  }
+  if (platform === "ios") {
+    if (!(await iosSimulatorAvailable(app))) {
+      return "iOS Simulator is not available on this host";
+    }
+    if (!query.udid) return "udid is required for an ios device";
+  } else if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+    return kind === "emulator"
+      ? app.deviceEmulatorUnavailableMessage
+      : app.devicePanelUnavailableMessage;
+  }
+  const { port } = query;
+  // The same 1-65535 the spawn schema bounds the port to.
+  if (port !== undefined && !(/^[0-9]{1,5}$/.test(port) && +port >= 1 && +port <= 65535)) {
+    return "port must be a number from 1 to 65535";
+  }
+  return null;
+}
+
+/**
+ * The attach parameters a device socket carries: the query of
+ * `/internal/ws/device/:id`, with the id the route takes from its path.
+ */
+export function deviceStreamParams(
+  query: Record<string, string | undefined>,
+  id: string,
+): AttachDeviceParams {
+  const platform = query.platform as DevicePlatform | undefined;
+  return {
+    deviceId: Number(id),
+    kind: query.kind as DeviceKind,
+    avdName: query.avdName ?? null,
+    serial: query.serial ?? null,
+    label: query.label ?? null,
+    port: query.port === undefined ? null : Number(query.port),
+    ...(platform !== undefined ? { platform } : {}),
+    udid: query.udid ?? null,
+  };
+}
+
+/**
+ * The agent's half of the device panel's video/input socket, for the
+ * `device` stream over the outbound channel (#3273): the SAME attach the
+ * inbound `/internal/ws/device/:id` route runs, so the keyframe gating and
+ * the backpressure drop stay agent-side on either transport.
+ */
+export function acceptDeviceStream(
+  app: FastifyInstance,
+  socket: SocketLike,
+  query: Record<string, string | undefined>,
+  id: string,
+): void {
+  void attachSocketToDevice(app, socket, deviceStreamParams(query, id));
 }

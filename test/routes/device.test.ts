@@ -213,7 +213,8 @@ describe("device route (/ws/device/:deviceId)", () => {
       const b1 = m1.data as Uint8Array;
       expect(b1[0]).toBe(0); // configuration type byte
       expect(b1[1]).toBe(0); // flags byte
-      expect(b1.slice(2)).toEqual(new Uint8Array([10, 20]));
+      // The frame is a Buffer (a Uint8Array), so compare the bytes themselves.
+      expect([...b1.subarray(2)]).toEqual([10, 20]);
 
       // Test WeakMap cache hit: same packet object
       videoListener!(configPkt);
@@ -230,7 +231,7 @@ describe("device route (/ws/device/:deviceId)", () => {
       const b2 = m2.data as Uint8Array;
       expect(b2[0]).toBe(1); // data type byte
       expect(b2[1]).toBe(1); // keyframe bit
-      expect(b2.slice(2)).toEqual(new Uint8Array([30, 40]));
+      expect([...b2.subarray(2)]).toEqual([30, 40]);
 
       // 3. Backpressure: set bufferedAmount > 4MB
       socket.bufferedAmount = 5 * 1024 * 1024;

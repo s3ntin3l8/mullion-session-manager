@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "2133debe-fd66-45af-9fb9-55c3f5a0454e",
+  "id": "67b6c92a-b7ab-4c76-9686-4802fcbdcf2c",
   "prevId": "39c1dfa4-4137-4bdd-b1e2-94db0abaebd6",
   "tables": {
     "bridges": {
@@ -2517,6 +2517,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "last_stall_nudged_at": {
+          "name": "last_stall_nudged_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "rebase_started_at": {
           "name": "rebase_started_at",
           "type": "integer",
@@ -3109,107 +3116,6 @@
             "id"
           ],
           "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {}
-    },
-    "workspace_pending_opens": {
-      "name": "workspace_pending_opens",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "integer",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": true
-        },
-        "workspace_id": {
-          "name": "workspace_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_id": {
-          "name": "session_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "reference_session_id": {
-          "name": "reference_session_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "workspace_pending_opens_workspace_session_unique": {
-          "name": "workspace_pending_opens_workspace_session_unique",
-          "columns": [
-            "workspace_id",
-            "session_id"
-          ],
-          "isUnique": true
-        },
-        "workspace_pending_opens_session_idx": {
-          "name": "workspace_pending_opens_session_idx",
-          "columns": [
-            "session_id"
-          ],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "workspace_pending_opens_workspace_id_workspaces_id_fk": {
-          "name": "workspace_pending_opens_workspace_id_workspaces_id_fk",
-          "tableFrom": "workspace_pending_opens",
-          "tableTo": "workspaces",
-          "columnsFrom": [
-            "workspace_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workspace_pending_opens_session_id_sessions_id_fk": {
-          "name": "workspace_pending_opens_session_id_sessions_id_fk",
-          "tableFrom": "workspace_pending_opens",
-          "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "workspace_pending_opens_reference_session_id_sessions_id_fk": {
-          "name": "workspace_pending_opens_reference_session_id_sessions_id_fk",
-          "tableFrom": "workspace_pending_opens",
-          "tableTo": "sessions",
-          "columnsFrom": [
-            "reference_session_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
           "onUpdate": "no action"
         }
       },

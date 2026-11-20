@@ -83,4 +83,14 @@ export interface DeviceHostEntry {
   name: string;
   status: "ok" | "unsupported" | "unreachable";
   deviceKinds: DeviceKind[];
+  platforms: DevicePlatform[];
+}
+
+export type IosSimulatorState = "Booted" | "Shutdown";
+
+export interface IosSimulator {
+  udid: string;
+  name: string;
+  runtime: string;
+  state: IosSimulatorState;
 }

@@ -14,7 +14,9 @@ import type { HostDeviceSupport } from "./remote-host-devices.js";
 import { performDeviceAction } from "./device-drivers/actions.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
-import type { DeviceSpawnSpec } from "./device-wire.js";
+import { HostRequestError } from "./remote-host-errors.js";
+import type { DeviceSpawnSpec, LiveDevicesResponse } from "./device-wire.js";
+import type { DiscoveredDevice } from "./device-discovery.js";
 import { listIosSimulators, type IosSimulator } from "./ios-simulators.js";
 
 // The primary's view of "the machine a device runs on" (issue #3200). A device's
@@ -63,6 +65,10 @@ export interface DeviceHost {
   action(id: number, action: DeviceAction): Promise<DeviceActionResult>;
   /** Available iOS simulators on this host, or null when a remote agent predates `/internal/simulators`. */
   simulators(): Promise<IosSimulator[] | null>;
+  /** Pair a physical Android device with this host's adb server. */
+  pair(pairingAddress: string, pairingCode: string): Promise<void>;
+  /** mDNS-discovered Android phones on this host's LAN. */
+  discovered(): Promise<DiscoveredDevice[]>;
 }
 
 class LocalDeviceHost implements DeviceHost {
@@ -122,6 +128,51 @@ class LocalDeviceHost implements DeviceHost {
   simulators(): Promise<IosSimulator[]> {
     return listIosSimulators();
   }
+
+  pair(pairingAddress: string, pairingCode: string): Promise<void> {
+    return this.app.device.pair(pairingAddress, pairingCode);
+  }
+
+  async discovered(): Promise<DiscoveredDevice[]> {
+    if (!this.app.bootDeviceDiscoveryEnabled) return [];
+    return this.app.deviceDiscovery.getDiscovered();
+  }
+}
+
+/**
+ * Unwraps an agent's 424 Failed Dependency response back into a
+ * DeviceActionError with a clamped 5xx status (defaulting to `fallbackStatus`
+ * when `deviceStatus` is missing or not an integer in 500..599) and a string
+ * message (falling back to a generic message if unparseable or non-string).
+ * Any other HostRequestError or HostUnreachableError passes through unchanged.
+ */
+function unwrapDeviceFailure(err: unknown, hostId: string, fallbackStatus: number): unknown {
+  if (!(err instanceof HostRequestError) || err.statusCode !== 424) return err;
+  let status = fallbackStatus;
+  let message = `the device failed on host ${hostId}`;
+  try {
+    const parsed: unknown = JSON.parse(err.body);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const { deviceStatus, message: rawMessage } = parsed as {
+        deviceStatus?: unknown;
+        message?: unknown;
+      };
+      if (
+        typeof deviceStatus === "number" &&
+        Number.isInteger(deviceStatus) &&
+        deviceStatus >= 500 &&
+        deviceStatus <= 599
+      ) {
+        status = deviceStatus;
+      }
+      if (typeof rawMessage === "string") {
+        message = rawMessage;
+      }
+    }
+  } catch {
+    // Unparseable body: keep generic message and fallbackStatus.
+  }
+  return new DeviceActionError(status, message);
 }
 
 class RemoteDeviceHost implements DeviceHost {
@@ -167,29 +218,69 @@ class RemoteDeviceHost implements DeviceHost {
     // The agent has no database: the port its emulator holds is persisted here,
     // from the answer, so a later spawn (after an agent restart) can reattach.
     if (row.kind === "emulator" && res.port !== null && res.port !== row.port) {
+      if (row.port !== null) {
+        this.app.log.warn(
+          { deviceId: row.id, hostId: this.hostId, persistedPort: row.port, livePort: res.port },
+          "remote emulator spawn returned a different port than persisted",
+        );
+      }
       setDevicePort(this.app, row.id, res.port);
     }
     return res;
   }
 
-  terminate(id: number, kind: DeviceKind, platform?: DevicePlatform): Promise<void> {
+  async terminate(id: number, kind: DeviceKind, platform?: DevicePlatform): Promise<void> {
     const devices = this.client.devices;
-    return platform === "ios"
-      ? devices.terminate(String(id), kind, platform)
-      : devices.terminate(String(id), kind);
+    try {
+      await (platform === "ios"
+        ? devices.terminate(String(id), kind, platform)
+        : devices.terminate(String(id), kind));
+    } catch (err) {
+      throw unwrapDeviceFailure(err, this.hostId, 500);
+    }
   }
 
   async info(id: number): Promise<DeviceInfo | undefined> {
-    const live = await this.client.devices.live();
-    return live.find((d) => d.id === String(id));
+    const { devices } = await this.client.devices.live();
+    return devices.find((d) => d.id === String(id));
   }
 
-  action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
-    return this.client.devices.action(String(id), action);
+  async action(id: number, action: DeviceAction): Promise<DeviceActionResult> {
+    try {
+      return await this.client.devices.action(String(id), action);
+    } catch (err) {
+      throw unwrapDeviceFailure(err, this.hostId, 502);
+    }
   }
 
   simulators(): Promise<IosSimulator[] | null> {
     return this.client.devices.simulators();
+  }
+
+  async pair(pairingAddress: string, pairingCode: string): Promise<void> {
+    try {
+      await this.client.devices.pair(pairingAddress, pairingCode);
+    } catch (err) {
+      if (err instanceof HostRequestError && err.statusCode === 404) {
+        throw new DevicePlacementError(
+          `Host ${this.hostId} does not support pairing — update its agent.`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  async discovered(): Promise<DiscoveredDevice[]> {
+    try {
+      return await this.client.devices.discovered();
+    } catch (err) {
+      if (err instanceof HostRequestError && err.statusCode === 404) {
+        throw new DevicePlacementError(
+          `Host ${this.hostId} does not support device discovery — update its agent.`,
+        );
+      }
+      throw err;
+    }
   }
 }
 
@@ -234,17 +325,39 @@ export async function liveInfoForRows(
   }
   await Promise.all(
     [...remoteHosts].map(async (hostId) => {
-      let live: DeviceInfo[] | null = null;
+      let snapshot: LiveDevicesResponse | null = null;
       try {
-        live = await getRemoteHostClient(app, hostId).devices.live();
+        snapshot = await getRemoteHostClient(app, hostId).devices.live();
       } catch (err) {
         app.log.warn({ err, hostId }, "device list: host did not answer");
       }
       for (const row of rows) {
         if (row.hostId !== hostId) continue;
+        if (snapshot?.ports && row.kind === "emulator" && row.platform !== "ios") {
+          const livePort = snapshot.ports[String(row.id)];
+          if (
+            typeof livePort === "number" &&
+            Number.isInteger(livePort) &&
+            livePort >= 1 &&
+            livePort <= 65535
+          ) {
+            if (row.port === null) {
+              setDevicePort(app, row.id, livePort);
+              app.log.info(
+                { deviceId: row.id, hostId, port: livePort },
+                "device list: recovered a remote emulator port",
+              );
+            } else if (row.port !== livePort) {
+              app.log.warn(
+                { deviceId: row.id, hostId, persistedPort: row.port, livePort },
+                "device list: remote emulator live port differs from persisted port",
+              );
+            }
+          }
+        }
         out.set(row.id, {
-          live: live?.find((d) => d.id === String(row.id)),
-          unreachable: live === null,
+          live: snapshot?.devices.find((d) => d.id === String(row.id)),
+          unreachable: snapshot === null,
         });
       }
     }),

@@ -20,12 +20,19 @@ import {
   liveInfoForRows,
   type DeviceHost,
 } from "../services/device-host.js";
+import { getAvdHost } from "../services/avd-host.js";
 import { SimctlError } from "../services/ios-simulators.js";
 import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.js";
-import { iosSimulatorAvailable, localDeviceKinds } from "../services/device-kinds.js";
+import {
+  iosSimulatorAvailable,
+  localDeviceKinds,
+  localDevicePlatforms,
+} from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
+import { isValidDeviceAddress, isValidPairingCode } from "../services/device-address.js";
+import type { DiscoveredDevice } from "../services/device-discovery.js";
 import type { FastifyReply } from "fastify";
 
 // CRUD + one-shot action execution for devices (the `devices` DB table's
@@ -76,9 +83,10 @@ export interface DeviceHostEntry {
   name: string;
   status: "ok" | "unsupported" | "unreachable";
   deviceKinds: DeviceKind[];
+  platforms: DevicePlatform[];
 }
 
-type RemoteKindsAnswer = Pick<DeviceHostEntry, "status" | "deviceKinds">;
+type RemoteKindsAnswer = Pick<DeviceHostEntry, "status" | "deviceKinds" | "platforms">;
 
 // Per app instance, so two apps in one process (tests) never share an answer.
 // The cached value is the in-flight promise: concurrent callers share one
@@ -96,10 +104,14 @@ async function askRemoteKinds(app: FastifyInstance, hostId: string): Promise<Rem
     });
     const support = await Promise.race([getDeviceHost(app, hostId).kinds(), timeout]);
     return support === null
-      ? { status: "unsupported", deviceKinds: [] }
-      : { status: "ok", deviceKinds: support.deviceKinds };
+      ? { status: "unsupported", deviceKinds: [], platforms: [] }
+      : {
+          status: "ok",
+          deviceKinds: support.deviceKinds,
+          platforms: support.platforms,
+        };
   } catch {
-    return { status: "unreachable", deviceKinds: [] };
+    return { status: "unreachable", deviceKinds: [], platforms: [] };
   } finally {
     clearTimeout(timer);
   }
@@ -143,6 +155,7 @@ async function listDeviceHosts(app: FastifyInstance): Promise<DeviceHostEntry[]>
       name: local?.name ?? "Local",
       status: "ok",
       deviceKinds: localDeviceKinds(app),
+      platforms: await localDevicePlatforms(app),
     },
     ...remoteEntries,
   ];
@@ -174,6 +187,9 @@ function toListItem(
  * an agent's own refusal is forwarded with its status; a host that did not
  * answer is 503 (or 502 when the request may have landed). */
 function replyDeviceError(reply: FastifyReply, host: DeviceHost, err: unknown, what: string) {
+  if (err instanceof DeviceActionError) {
+    return reply.send(reply.server.httpErrors.createError(err.statusCode, err.message));
+  }
   if (host.isLocal || err instanceof DevicePlacementError) {
     return reply.badRequest(err instanceof Error ? err.message : String(err));
   }
@@ -282,35 +298,6 @@ async function createIosDevice(
   }
   reply.code(201);
   return toListItem(getDeviceRow(app, row.id) ?? row, spawned.info);
-}
-
-// A physical device's adb TCP address, as both the one-time pairing address
-// (`adb pair <host:port>`) and the ongoing connect address (`adb connect
-// <host:port>`) — Android shows a DIFFERENT port for each, but both are the
-// same "host:port" shape. Validated as an allowlist, not shell-escaped:
-// DeviceManager.pair()/getOrCreate() pass this straight into
-// AdbServerClient.wireless.pair()/connect(), which builds an adb SERVICE
-// STRING (`host:pair:<password>:<address>`), not a shell command — a stray
-// `:` or newline here corrupts that framing, so shellQuoteArg (in
-// services/device-drivers/android.ts, used only for the on-device `adb shell`
-// actions) is the wrong tool for
-// this input.
-const DEVICE_ADDRESS_PATTERN = /^([A-Za-z0-9.-]+):(\d{1,5})$/;
-
-function isValidDeviceAddress(address: unknown): address is string {
-  if (typeof address !== "string") return false;
-  const match = DEVICE_ADDRESS_PATTERN.exec(address);
-  if (!match) return false;
-  const port = Number(match[2]);
-  return port >= 1 && port <= 65535;
-}
-
-// The 6-digit code Android's Wireless debugging screen shows during
-// pairing.
-const PAIRING_CODE_PATTERN = /^\d{6}$/;
-
-function isValidPairingCode(code: unknown): code is string {
-  return typeof code === "string" && PAIRING_CODE_PATTERN.test(code);
 }
 
 interface CreateDeviceBody {
@@ -455,6 +442,20 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     }
     if (!avdName) return reply.badRequest("avdName is required");
 
+    if (!host.isLocal) {
+      try {
+        const avds = await getAvdHost(app, hostId).listAvds();
+        if (!avds.includes(avdName)) {
+          return reply.badRequest(`AVD "${avdName}" was not found on host ${hostId}`);
+        }
+      } catch (err) {
+        if (err instanceof HostRequestError && err.statusCode === 404) {
+          return reply.badRequest(`Host ${hostId} does not report AVDs — update its agent.`);
+        }
+        return replyDeviceError(reply, host, err, "checking the host's AVDs");
+      }
+    }
+
     const row = insertDevice(app, {
       kind: "emulator",
       avdName,
@@ -487,13 +488,16 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   // `POST /api/devices` call (kind: "physical") does the actual `adb
   // connect` afterward. Deliberately off the CRUD resource rather than a
   // sub-route of it, since it doesn't touch one.
-  app.post<{ Body: { pairingAddress?: string; pairingCode?: string } }>(
+  app.post<{ Body: { pairingAddress?: string; pairingCode?: string; hostId?: string } }>(
     "/api/devices/pair",
     async (request, reply) => {
-      if (!app.devicePanelEnabled) {
+      const { pairingAddress, pairingCode, hostId: requestedHostId } = request.body ?? {};
+      const hostId = resolvePlacementHostId(app, requestedHostId, undefined);
+      if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
+      const host = getDeviceHost(app, hostId);
+      if (host.isLocal && !app.devicePanelEnabled) {
         return reply.badRequest(app.devicePanelUnavailableMessage);
       }
-      const { pairingAddress, pairingCode } = request.body ?? {};
       if (!isValidDeviceAddress(pairingAddress)) {
         return reply.badRequest("pairingAddress must be host:port (e.g. 192.168.1.23:41234)");
       }
@@ -501,9 +505,9 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         return reply.badRequest("pairingCode must be the 6-digit code shown on the device");
       }
       try {
-        await app.device.pair(pairingAddress, pairingCode);
+        await host.pair(pairingAddress, pairingCode);
       } catch (err) {
-        return reply.badRequest(err instanceof Error ? err.message : String(err));
+        return replyDeviceError(reply, host, err, "pairing the device");
       }
       reply.code(200);
       return { ok: true };
@@ -533,12 +537,23 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       connectAddress?: string;
       pairingCode?: string;
       name?: string;
+      hostId?: string;
     };
   }>("/api/devices/pair-and-connect", async (request, reply) => {
-    if (!app.devicePanelEnabled) {
+    const {
+      discoveryId,
+      pairingAddress,
+      connectAddress,
+      pairingCode,
+      name,
+      hostId: requestedHostId,
+    } = request.body ?? {};
+    const hostId = resolvePlacementHostId(app, requestedHostId, undefined);
+    if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
+    const host = getDeviceHost(app, hostId);
+    if (host.isLocal && !app.devicePanelEnabled) {
       return reply.badRequest(app.devicePanelUnavailableMessage);
     }
-    const { discoveryId, pairingAddress, connectAddress, pairingCode, name } = request.body ?? {};
 
     if (!isValidPairingCode(pairingCode)) {
       return reply.badRequest("pairingCode must be the 6-digit code shown on the device");
@@ -552,7 +567,16 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     let resolvedConnect: string | undefined;
 
     if (typeof discoveryId === "string" && discoveryId.length > 0) {
-      const cached = app.deviceDiscovery.getById(discoveryId);
+      let cached: DiscoveredDevice | undefined;
+      if (host.isLocal) {
+        cached = app.deviceDiscovery.getById(discoveryId);
+      } else {
+        try {
+          cached = (await host.discovered()).find((d) => d.id === discoveryId);
+        } catch (err) {
+          return replyDeviceError(reply, host, err, "listing discovered devices");
+        }
+      }
       if (!cached) {
         return reply.badRequest(
           `discoveryId ${JSON.stringify(discoveryId)} is no longer in the discovery cache — re-open the picker`,
@@ -567,9 +591,9 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       // framing and corrupt it on the `:` separators. Evict so the next
       // picker open gets a fresh scan rather than the same bad data.
       if (cached.pairingAddress !== undefined && !isValidDeviceAddress(cached.pairingAddress)) {
-        app.deviceDiscovery.evict(discoveryId);
+        if (host.isLocal) app.deviceDiscovery.evict(discoveryId);
         app.log.warn(
-          { discoveryId, pairingAddress: cached.pairingAddress },
+          { discoveryId, pairingAddress: cached.pairingAddress, hostId },
           "discovery cache contained an invalid pairingAddress — evicted",
         );
         return reply.badRequest(
@@ -577,9 +601,9 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         );
       }
       if (cached.connectAddress !== undefined && !isValidDeviceAddress(cached.connectAddress)) {
-        app.deviceDiscovery.evict(discoveryId);
+        if (host.isLocal) app.deviceDiscovery.evict(discoveryId);
         app.log.warn(
-          { discoveryId, connectAddress: cached.connectAddress },
+          { discoveryId, connectAddress: cached.connectAddress, hostId },
           "discovery cache contained an invalid connectAddress — evicted",
         );
         return reply.badRequest(
@@ -630,7 +654,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // no-rollback posture as POST /api/devices), and the collision guard
     // remains airtight because there's still no `await` between check and
     // insert.
-    const existingActive = findActivePhysicalOwner(app, resolvedConnect);
+    const existingActive = findActivePhysicalOwner(app, resolvedConnect, hostId);
     if (existingActive) {
       return reply.conflict(
         `device ${existingActive.id} is already active for address ${resolvedConnect}`,
@@ -643,6 +667,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       avdName: null,
       projectId: null,
       name: name ?? null,
+      hostId,
     });
 
     // Pairing is attempted UNLESS we have evidence the phone is NOT in
@@ -677,7 +702,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       //     from the cache's `pairingAddress`, which was validated by
       //     isValidDeviceAddress above before being assigned.
       try {
-        await app.device.pair(resolvedPairing as string, pairingCode);
+        await host.pair(resolvedPairing as string, pairingCode);
       } catch (err) {
         // Roll back the row we just inserted: a wrong code is the most
         // common failure (typo) and the user will immediately retry —
@@ -690,7 +715,7 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         // row and doesn't reopen the race the insert-before-pair ordering
         // closed.
         deleteDeviceRow(app, row.id);
-        return reply.badRequest(err instanceof Error ? err.message : String(err));
+        return replyDeviceError(reply, host, err, "pairing the device");
       }
     }
 
@@ -700,17 +725,15 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // connectPhysical() settles, so a connect failure never rejects here
     // and must not be reported as 400. Callers get 201 + the row and learn
     // about a failed connect from the device's own `status`/`error`.
-    await app.device.getOrCreate({
-      id: String(row.id),
-      kind: "physical",
-      avdName: null,
-      serial: resolvedConnect,
-      label: row.name,
-      port: null,
-    });
+    let spawned;
+    try {
+      spawned = await host.getOrCreate(row);
+    } catch (err) {
+      return replyDeviceError(reply, host, err, "starting the device");
+    }
 
     reply.code(201);
-    return toListItem(row, app.device.get(String(row.id))?.toInfo());
+    return toListItem(getDeviceRow(app, row.id) ?? row, spawned.info);
   });
 
   app.get("/api/devices", async () => {
@@ -736,10 +759,23 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   // can still render the empty-list UI cleanly. Returned alongside the
   // matching connect address when both are known, so the modal can offer
   // a single-click "Pair & Connect" without re-fetching.
-  app.get("/api/devices/discovered", async () => {
-    if (!app.bootDeviceDiscoveryEnabled) return [];
-    return app.deviceDiscovery.getDiscovered();
-  });
+  app.get<{ Querystring: { hostId?: string } }>(
+    "/api/devices/discovered",
+    async (request, reply) => {
+      const requestedHostId = request.query?.hostId;
+      const hostId =
+        requestedHostId && requestedHostId.length > 0 ? requestedHostId : LOCAL_HOST_ID;
+      if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
+        return reply.badRequest(`Unknown host ${hostId}`);
+      }
+      const host = getDeviceHost(app, hostId);
+      try {
+        return await host.discovered();
+      } catch (err) {
+        return replyDeviceError(reply, host, err, "listing discovered devices");
+      }
+    },
+  );
 
   app.get<{ Querystring: { hostId?: string } }>("/api/simulators", async (request, reply) => {
     const requestedHostId = request.query?.hostId;

@@ -7,6 +7,7 @@ import { discoverTurnStarted } from "./session-turn-start.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { insertSessionEvents } from "./event-history.js";
+import { CLEARED_NEEDS_HUMAN } from "./task-merge-human.js";
 import { registerTaskTransitionListener } from "./task-state.js";
 
 const startedLocalWorkers = new WeakSet<object>();
@@ -18,7 +19,7 @@ registerTaskTransitionListener((app, { taskId, to }) => {
   if (to !== "in_progress") {
     app.db
       .update(tasks)
-      .set({ needsHumanReason: null })
+      .set(CLEARED_NEEDS_HUMAN)
       .where(and(eq(tasks.id, taskId), eq(tasks.needsHumanReason, "worker-not-started")))
       .run();
   }
@@ -28,7 +29,7 @@ registerTaskTransitionListener((app, { taskId, to }) => {
 export function clearStoppedWorkerWarnings(app: FastifyInstance): void {
   app.db
     .update(tasks)
-    .set({ needsHumanReason: null })
+    .set(CLEARED_NEEDS_HUMAN)
     .where(and(ne(tasks.status, "in_progress"), eq(tasks.needsHumanReason, "worker-not-started")))
     .run();
 }
@@ -86,7 +87,7 @@ export async function checkWorkerStarted(
     if (started) {
       const cleared = app.db
         .update(tasks)
-        .set({ needsHumanReason: null })
+        .set(CLEARED_NEEDS_HUMAN)
         .where(
           and(
             eq(tasks.id, task.id),

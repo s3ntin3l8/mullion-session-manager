@@ -1,12 +1,12 @@
-# Android Device Panel
+# Device panel
 
-Mullion can run an Android emulator (or attach to a physical phone over adb)
-on the host and stream its screen into a native dockview panel, alongside
-your terminals — the Android analogue of the [Controllable
-Browser](browser-automation.md). It also exposes a one-shot `mullion device`
-CLI/MCP surface so an agent can screenshot, tap, and read logcat output to
-verify its own UI changes, the same way it already can for the web via
-`mullion browser`.
+Mullion can run an Android emulator, attach to a physical Android phone over
+adb, or boot an iOS Simulator (on macOS) and stream its screen into a native
+dockview panel alongside your terminals — the mobile analogue of the
+[Controllable Browser](browser-automation.md). It also exposes a one-shot
+`mullion device` CLI/MCP surface so an agent can screenshot, tap, press
+buttons, and read logs to verify its own UI changes, the same way it already
+can for the web via `mullion browser`.
 
 Gated by `DEVICE_ENABLED=true` (default off) — this needs real host
 provisioning most deployments won't have: `/dev/kvm` passthrough, an
@@ -22,19 +22,23 @@ or a warning with adb's stderr. A refused connection later reads "adb server
 is not running on 127.0.0.1:<port>" so the expected port is visible.
 
 **Linux and macOS** (issues
-[#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720) and
-[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854),
+[#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720),
+[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854), and
+[#1943](https://github.com/s3ntin3l8/mullion-session-manager/issues/1943),
 roadmap 8.6). What the panel can do is a capability per platform _and_ device
 kind (`DEVICE_PLATFORM_CAPABILITIES` in `src/services/device-manager.ts`):
 
-| Platform | Physical (adb wireless) | Emulator |
-| -------- | ----------------------- | -------- |
-| Linux    | yes                     | yes      |
-| macOS    | yes                     | yes      |
-| Windows  | no                      | no       |
+| Platform | Physical (adb wireless) | Emulator | iOS Simulator |
+| -------- | ----------------------- | -------- | ------------- |
+| Linux    | yes                     | yes      | no            |
+| macOS    | yes                     | yes      | yes           |
+| Windows  | no                      | no       | no            |
 
 A **physical** device needs no scope at all — Mullion talks to the adb server
 over TCP and pushes the scrcpy server jar, so it only needs `adb` on the host.
+An **iOS Simulator** is supervised by CoreSimulator itself, so it has no
+`ScopeBackend` either (its runtime gate is `iosSimulatorAvailable()` in
+`src/services/device-kinds.ts` — see [iOS Simulator](#ios-simulator) below).
 An **emulator** runs in a _device scope_, supplied per platform behind the
 `ScopeBackend` seam (`getDeviceScopeBackend`, `src/services/scope/`):
 
@@ -82,6 +86,46 @@ On macOS the emulator binary is `~/Library/Android/sdk/emulator/emulator`
 or installing a system image additionally needs the SDK's command-line tools
 (`avdmanager`, `sdkmanager`); without them those routes report so and existing
 AVDs still run.
+
+### iOS Simulator
+
+The iOS Simulator driver (`src/services/device-drivers/ios-simulator.ts`,
+[#1943](https://github.com/s3ntin3l8/mullion-session-manager/issues/1943)) runs
+on macOS hosts when all of the following hold (`iosSimulatorAvailable()` in
+`src/services/device-kinds.ts`):
+
+- **macOS host** (`process.platform === "darwin"`), with `DEVICE_ENABLED=true`
+  so the device panel itself is active.
+- **`DEVICE_IOS_ENABLED=true`** (default `false`).
+- **`xcode` host capability** (`src/services/host-capabilities.ts`): full
+  Xcode selected (`xcrun --find simctl`), first-launch setup complete
+  (`xcodebuild -checkFirstLaunchStatus`), and at least one iOS simulator
+  runtime available (`xcrun simctl list runtimes available -j`). iOS Simulator
+  is **not** a separate placement capability — it reuses `xcode` and is
+  reported via `features.devicePlatforms` (`"ios"`) and
+  `GET /internal/devices/kinds`'s `platforms` list.
+- **`DEVICE_IDB_COMPANION_PATH`** (empty by default, no `PATH` fallback)
+  pointing to an executable `idb_companion` binary (see
+  [`deploy/README.md`](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks)
+  for `brew install facebook/fb/idb-companion`).
+
+**How it works (`simctl` + `idb_companion`).** `xcrun simctl` handles simulator
+lifecycle (`boot`, `bootstatus -b`, `shutdown` — `stop()` shuts the simulator
+down only if this Mullion process booted it, and never deletes or erases it),
+screenshots (`simctl io <udid> screenshot --type=png -`), logs (`simctl spawn
+<udid> log show --last 5m --style compact`), and clipboard (`pbcopy`/`pbpaste`).
+Live H.264 video and HID input come from `idb_companion` over gRPC
+(`@grpc/grpc-js`, one companion process per device), which is restarted after
+every simulator boot because its HID connection goes stale across a reboot.
+
+**Video behaviour.** `idb_companion`'s `video_stream` opens with
+`format: "H264"`, `fps: 30`, and `key_frame_rate: 0` (idb's default GOP
+interval — keyframes arrive roughly every 4 s). `IosSimulatorDriver` buffers
+the active GOP (`GopBuffer`) so a newly attached panel receives configuration
+(SPS/PPS) and an IDR immediately. Because `idb_companion` has no on-demand
+force-keyframe control, `requestKeyframe()` restarts the `video_stream` (which
+opens with fresh SPS/PPS/IDR), throttled to at most once per 5 s
+(`KEYFRAME_RESTART_MIN_INTERVAL_MS`).
 
 ### Stream tuning
 
@@ -148,8 +192,8 @@ deliberately a **separate** implementation from `PtyManager`/
 `session-process.ts`, not a generalization of them (see
 `src/services/device-process.ts`'s own header for why).
 
-- **`devices` table** (`src/db/schema.ts`) — one row per Android device
-  Mullion manages, either kind. `kind: "emulator"` rows work as described
+- **`devices` table** (`src/db/schema.ts`) — one row per device
+  Mullion manages (Android or iOS). `kind: "emulator"` rows work as described
   below; `kind: "physical"` rows (a phone connected over adb **wireless
   debugging**) get a row too, keyed on `serial` (the adb TCP address)
   instead of `avdName`/`port` — every route, the WS panel, the CLI, and MCP
@@ -368,20 +412,40 @@ needs:
   agent skips those when it allocates a fresh port, because it keeps no record
   of them across a restart. It answers the live info and the port it holds,
   which the primary persists on the row.
-- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate` and
-  `POST /internal/devices/:id/action` are the live-list, stop/delete and
-  one-shot-action counterparts. The action runs through the same `DeviceDriver`
+- `GET /internal/devices/live`, `POST /internal/devices/:id/terminate`,
+  `POST /internal/devices/:id/action`, `POST /internal/devices/pair` and
+  `GET /internal/devices/discovered` are the live-list, stop/delete,
+  one-shot-action, pairing and mDNS discovery counterparts.
+  `GET /internal/devices/live` also carries each emulator's port in an optional
+  `ports` map (absent from an agent that predates it); while listing, the
+  primary backfills a null `devices.port` from it and logs instead of
+  overwriting when the persisted port differs. On the primary,
+  `POST /api/devices/pair`, `POST /api/devices/pair-and-connect` and
+  `GET /api/devices/discovered?hostId=…` accept an optional `hostId` (default
+  `"local"`): an unknown host or an agent predating those routes answers `400`,
+  an unreachable agent answers `503`, and a `discoveryId` only resolves against
+  the host it was listed from. The action runs through the same `DeviceDriver`
   as a local one, so a driver's 4xx (no live adb connection, unsupported
-  action) is forwarded with its own status and message.
+  action) is forwarded with its own status and message. A device-reason failure
+  on an agent (such as a 5xx `DeviceActionError` or a failed teardown) is
+  answered with 424 by the agent and mapped back on the primary, so it keeps its
+  status and message instead of reading as unreachable.
 - `/internal/ws/device/:id` is the agent half of the panel's socket. The
   primary's `/ws/device/:id` proxies to it (`proxyToRemoteDevice`): it first
   runs the same get-or-create over REST, then relays control messages up and
   frames down. Binary frames pass through unchanged and the agent keeps the
-  keyframe gating for its own socket. The one thing the agent cannot see is
-  this hop's backlog: when the _browser_ socket is backed up the proxy drops
-  the frame, holds every delta until a keyframe has gone out, and sends the
-  agent `{"type":"requestKeyframe"}` (an H.264 delta cannot be dropped the way a
-  browser pane's JPEG can).
+  keyframe gating for its own socket. The socket rides the outbound agent
+  channel as the `device` stream (#3273) when the host negotiated
+  `channel-streams`, and the agent's advertised address otherwise; before
+  #3273 a host reachable only over the channel could not serve it at all. A
+  refusal is reported to the panel with the agent's own reason (the panel
+  gate's message, `kind must be emulator or physical`, …) on either transport;
+  an agent that predates the device socket answers `404`, which the panel
+  reports as an agent that needs an update. The one thing the agent cannot
+  see is this hop's backlog: when the _browser_ socket is backed up the proxy
+  drops the frame, holds every delta until a keyframe has gone out, and sends
+  the agent `{"type":"requestKeyframe"}` (an H.264 delta cannot be dropped the
+  way a browser pane's JPEG can).
 
 A host that is down does not fail the list: `GET /api/devices` marks its rows
 `hostUnreachable: true` with `live: null` (Settings → Devices and the sidebar read
@@ -390,37 +454,57 @@ disabled), and a mutating call answers 503 (or 502 when the request may have
 been delivered), like every other forwarded host call.
 
 `GET /api/devices/hosts` lists the hosts that could hold a device (the primary
-and each registered agent) as `{hostId, name, status, deviceKinds}`: `status` is
+and each registered agent) as `{hostId, name, status, deviceKinds, platforms}`: `status` is
 `ok`, `unsupported` (an agent that predates the kinds route) or `unreachable`
 (it did not answer within 5 s, or answered with an error). Each agent is asked in parallel and its answer
 is cached for 10 s; `features.deviceKinds` in `/api/server-info` still reports
 only the primary's own kinds.
 
-Not covered yet, each tracked on its own issue: pairing and mDNS discovery
-still run on the primary only, so a physical device on an agent host is added
-by its adb address ([#3271](https://github.com/s3ntin3l8/mullion-session-manager/issues/3271));
-AVD and system-image management (`/api/avds`, `/api/system-images`) is
-primary-only ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)), so the
-create form's Host picker offers remote hosts but its AVD list is still the primary's;
-and the panel's socket to an agent reached only over the outbound channel needs a
-`device` stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
+`GET /api/avds`, `GET /api/system-images`, `GET /api/device-profiles`, and
+`POST /api/avds` accept an optional `hostId` (query for the GETs, body for
+POST) and dispatch through `getAvdHost` (`src/services/avd-host.ts`) to the
+agent's `/internal/avds`, `/internal/system-images`, and
+`/internal/device-profiles` routes (`src/routes/internal-avds.ts`);
+`POST /api/devices` (`kind: "emulator"`) validates `avdName` against a remote
+host's AVD list before inserting a row ([#3272](https://github.com/s3ntin3l8/mullion-session-manager/issues/3272)).
+`GET /api/system-images/available`, `GET /api/sdk-licenses/status`,
+`/ws/system-image-install`, and `/ws/sdk-licenses` also accept an optional
+`hostId` query parameter and dispatch/proxy to the agent's
+`/internal/system-images/available`, `/internal/sdk-licenses/status`,
+`/internal/ws/system-image-install`, and `/internal/ws/sdk-licenses` routes over
+the inbound transport ([#3299](https://github.com/s3ntin3l8/mullion-session-manager/issues/3299)).
 
-### Toolbar and gestures (issue #1419)
+Not covered yet: the Settings create form still lists only the primary's AVDs
+(wiring its Host picker to `hostId` is not yet implemented); the SDK system
+images list and its licences modal still target the primary — their `?hostId=`
+support is API-only until the panel gains a Host picker; and the panel's
+socket to an agent reached only over the outbound channel needs a `device`
+stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues/3273)).
 
-`DevicePane.tsx` carries a toolbar (`role="toolbar"`) above the video, in
-three groups: **Navigation** (Back, Home, Recent apps — Home/Recent apps are
-`keyEvent`s, `KEYCODE_HOME`/`KEYCODE_APP_SWITCH`; Back sends the dedicated
-`back` message), **Device buttons** (Power, Volume down, Volume up, all
-`keyEvent`s), and **Display** (Rotate — sends `rotate`, see the wire
-protocol above; Download screenshot and, where supported, Copy screenshot to
-clipboard — see "Clipboard and screenshots in the panel" below; and
-Show/hide device frame, a purely client-side toggle with no live-device
-effect that wraps the canvas in a phone-shaped chrome, persisted per browser
-via `localStorage`). Every button except the frame toggle is disabled while
-the socket isn't `open` or the device is stopped/removed — the frame toggle
-has no live-device dependency, so it stays clickable regardless. Every
-button swallows its own `pointerdown` so clicking it never also fires a
-canvas gesture underneath it.
+### Toolbar and gestures (issue #1419, #3204)
+
+`DevicePane.tsx` carries a platform-aware toolbar (`role="toolbar"`,
+`aria-label="iOS device controls"` or `"Android device controls"`) above the
+video:
+
+- **Android** — **Navigation** (Back sends `back`; Home and Recent apps send
+  `keyEvent`s `KEYCODE_HOME`/`KEYCODE_APP_SWITCH`), **Device buttons** (Power,
+  Volume down, Volume up, all `keyEvent`s), and **Display** (Rotate — sends
+  `rotate`; Download screenshot; Copy screenshot to clipboard where supported;
+  and Show/hide device frame).
+- **iOS** — **Device buttons** (`Home` -> `{type:"button", button:"home"}`,
+  `Lock` -> `{type:"button", button:"lock"}`) and **Display** (Download
+  screenshot, Copy screenshot to clipboard where supported, and Show/hide
+  device frame). Android-only Back, Recent apps, Power, Volume, and Rotate
+  buttons are omitted.
+
+The frame toggle is a purely client-side toggle with no live-device effect that
+wraps the canvas in a phone-shaped chrome, persisted per browser via
+`localStorage`. Every button except the frame toggle is disabled while the
+socket isn't `open` or the device is stopped/removed — the frame toggle has no
+live-device dependency, so it stays clickable regardless. Every button swallows
+its own `pointerdown` so clicking it never also fires a canvas gesture
+underneath it.
 
 Pointer/touch input on the canvas itself sends a real drag, not just a
 single tap: `pointerdown` starts a touch (`touchDown`), `pointermove` while
@@ -441,32 +525,42 @@ copied in a Mullion terminal (or anywhere on your machine) pastes into the
 device and vice versa.
 
 - **Host → device.** Ctrl/Cmd+V in the focused panel reads the browser's
-  `paste` event and sends a `{type:"clipboard", text}` WS message. The route
-  calls scrcpy `SET_CLIPBOARD` with `paste: true` (sequence `0`, so it never
-  waits for an ACK), which handles Unicode — unlike the `text` inject path.
-  Empty text and anything over scrcpy's ~256 KiB limit is dropped. Because it
-  uses the `paste` event, it needs no clipboard permission and works over
-  plain HTTP.
-- **Device → host.** Text the device copies arrives on scrcpy's clipboard
-  stream, which `Device` drains for the life of the session (an undrained
-  stream stalls scrcpy's device-message loop) and forwards to each attached
-  panel as `{type:"clipboard", text}`. The focused panel writes it with
+  `paste` event and sends a `{type:"clipboard", text}` WS message. On Android,
+  the route calls scrcpy `SET_CLIPBOARD` with `paste: true` (sequence `0`, so
+  it never waits for an ACK), which handles Unicode — unlike the `text` inject
+  path. On iOS, the driver runs `xcrun simctl pbcopy <udid>` and sends a
+  Cmd+V HID chord (`cmdVToHidEvents()`). Empty text and anything over the
+  ~256 KiB limit (`CLIPBOARD_MAX_BYTES`) is dropped. Because it uses the `paste`
+  event, it needs no clipboard permission and works over plain HTTP.
+- **Device → host.** On Android, text the device copies arrives on scrcpy's
+  clipboard stream, which `Device` drains for the life of the session (an
+  undrained stream stalls scrcpy's device-message loop) and forwards to each
+  attached panel as `{type:"clipboard", text}`. The focused panel writes it with
   `navigator.clipboard.writeText`; unfocused tabs ignore it, and failures are
   silent. It is live-only: a reconnecting or second panel is **never** sent
   the last value, since that would overwrite whatever you copied since.
-- **Chords.** Ctrl/Cmd+C and +X send the device's `KEYCODE_COPY` / `KEYCODE_CUT`
-  (no `metaState`). Any other single alphanumeric Ctrl/Cmd chord (Ctrl+A
-  select-all, Ctrl+Z undo, Ctrl+Shift+Z redo, Ctrl+1..9, ...) maps to the AOSP
-  `KEYCODE_*` for that letter/digit and forwards it with the Ctrl `metaState`
-  bit set (both `ctrlKey` and `metaKey`/Cmd map to the same Android Ctrl bits
-  — there's no separate "Cmd" concept on the device); a non-alphanumeric
-  chord (e.g. Ctrl+/) is still swallowed rather than typed as a letter. AltGr
-  characters (`@`, `{`, `€`, ...) still type normally. Arrow keys, Tab,
-  Delete, Escape, Home and End are also forwarded as `keyEvent`s (not typed),
-  each carrying Shift's `metaState` bit when held — so Shift+ArrowLeft/Right
-  extends a selection alongside Ctrl+A. Backspace and Enter are forwarded the
-  same way but deliberately never carry a Shift bit, since Shift+Enter means
-  something different (newline vs. send) in many apps.
+- **Keyboard input (Android).** Ctrl/Cmd+C and +X send the device's
+  `KEYCODE_COPY` / `KEYCODE_CUT` (no `metaState`). Any other single alphanumeric
+  Ctrl/Cmd chord (Ctrl+A select-all, Ctrl+Z undo, Ctrl+Shift+Z redo,
+  Ctrl+1..9, ...) maps to the AOSP `KEYCODE_*` for that letter/digit and
+  forwards it with the Ctrl `metaState` bit set (both `ctrlKey` and
+  `metaKey`/Cmd map to the same Android Ctrl bits — there's no separate "Cmd"
+  concept on the device); a non-alphanumeric chord (e.g. Ctrl+/) is still
+  swallowed rather than typed as a letter. AltGr characters (`@`, `{`, `€`, ...)
+  still type normally. Arrow keys, Tab, Delete, Escape, Home and End are also
+  forwarded as `keyEvent`s (not typed), each carrying Shift's `metaState` bit
+  when held — so Shift+ArrowLeft/Right extends a selection alongside Ctrl+A.
+  Backspace and Enter are forwarded the same way but deliberately never carry a
+  Shift bit, since Shift+Enter means something different (newline vs. send) in
+  many apps.
+- **Keyboard input (iOS).** Ctrl/Cmd chords are swallowed (except Ctrl/Cmd+V,
+  which leaves the native `paste` event intact). Printable keys that require
+  Shift, CapsLock, Alt/Option, AltGraph, or have no unshifted HID usage go
+  through `{type:"text", text: event.key}` (expanded via `textToHidEvents`).
+  Unshifted hardware keys and non-printable keys (Enter, Escape, Backspace,
+  Tab, arrows, ...) go through `{type:"hidKey", usage, action}`
+  (`frontend/src/deviceHidKeyMap.ts`), wrapping Left Shift (`0xe1`) when Shift
+  is held and releasing any active HID keys on `keyup`, blur, or unmount.
 - **Toolbar.** The screenshot button downloads a PNG. The adjacent **Copy
   screenshot to clipboard** button puts the same PNG on the clipboard
   instead; it only appears in a secure context (HTTPS or localhost) with
@@ -505,6 +599,7 @@ mullion device tap <id> <x> <y>
 mullion device swipe <id> <x1> <y1> <x2> <y2> [<durationMs>]
 mullion device text <id> <text...>
 mullion device key <id> <androidKeyCode>
+mullion device button <id> <home|lock|side|siri>
 mullion device logcat <id> [--lines <n>] [--filter <expr>]
 mullion device clipboard get <id>
 mullion device clipboard set <id> <text...> [--paste]
@@ -609,7 +704,7 @@ all three) — and `delete_device`/`device delete`, which drops the row
 and the id that identifies its systemd scope with no undo. MCP's device
 surface is narrower than the CLI's: only `list_devices` (`device list`),
 `use_device`/`device_action` (`device screenshot`/`tap`/`swipe`/`text`/
-`key`/`logcat`/`clipboard`), `start_device` (`device start`), `stop_device`
+`key`/`button`/`logcat`/`clipboard`), `start_device` (`device start`), `stop_device`
 (`device stop`), and `delete_device` (`device delete`) exist as MCP tools —
 `device create`, `device pair`, `device pair-and-connect`, `device connect`,
 and `device discovered` have no MCP counterpart; only the CLI and REST
@@ -617,21 +712,24 @@ expose them.
 
 ## 3. REST API
 
-`src/routes/devices.ts` — `GET/POST /api/devices`, `GET /api/devices/hosts`, `POST /api/devices/pair`,
+`src/routes/devices.ts` — `GET/POST /api/devices`, `GET /api/devices/hosts`,
+`GET /api/simulators` (`?hostId=`), `POST /api/devices/pair`,
 `POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
 `GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/start`,
 `POST /api/devices/:id/stop`, `POST /api/devices/:id/action` (body:
-`{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"logcat"|"clipboard", ...}`
-— `clipboard` additionally carries `{op: "get"}` or
+`{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"button"|"logcat"|"clipboard", ...}`
+— `button` takes `{button: "home"|"lock"|"side"|"siri"}` on iOS and answers
+400 on Android; `clipboard` additionally carries `{op: "get"}` or
 `{op: "set", text, paste?}` — same shape the CLI/MCP surface forwards).
 Every device carries a `platform` (`"android"`, the default, or `"ios"`) and a
 `udid` (an iOS Simulator's identifier, null for Android); `kind`, `avdName`,
 `serial` and `port` stay Android-shaped. `POST /api/devices` takes each
 platform's own fields only: a non-null `udid` is refused for an Android device, and
-`kind: "physical"`, `avdName` and `address` are refused for an iOS one. An iOS
-device answers 400 "not supported yet" until its driver exists
-([#1943](https://github.com/s3ntin3l8/mullion-session-manager/issues/1943)), and
-an agent refuses an iOS spawn the same way. Rows from before the columns existed
+`kind: "physical"`, `avdName` and `address` are refused for an iOS one. For
+`platform: "ios"`, `POST /api/devices` checks that the target host reports
+`"ios"` in its `platforms` (and that the `udid` exists in that host's
+`/api/simulators` / `/internal/simulators` list), and rejects a duplicate
+active row for the same `udid` with 409. Rows from before the columns existed
 read back as `android`.
 Lifecycle: `POST /:id/start` flips a stopped row
 back to `active` and runs `getOrCreate()` so something is actually running
@@ -655,21 +753,23 @@ the row** (two-phase: if teardown throws it returns 500 and keeps the row,
 marked `killed`, so the deletion never reports success for something still
 half-alive). `POST /api/devices` takes either
 `{avdName, projectId?, name?}` (emulator) or `{kind: "physical", address,
-projectId?, name?}` (physical); `POST /api/devices/pair` takes
-`{pairingAddress, pairingCode}` and creates no row.
+projectId?, name?}` (physical); `POST /api/devices/pair` takes `{pairingAddress, pairingCode, hostId?}` and
+creates no row.
 `POST /api/devices/pair-and-connect` (issue #1378) takes either
-`{discoveryId, pairingCode, connectAddress?, name?}` (drives pair+connect
-from the cached mDNS snapshot returned by `GET /api/devices/discovered`)
-or `{pairingAddress, connectAddress, pairingCode, name?}` (manual fallback
+`{discoveryId, pairingCode, connectAddress?, name?, hostId?}` (drives pair+connect
+from the cached mDNS snapshot returned by `GET /api/devices/discovered` for that
+same `hostId` — a `discoveryId` only resolves against the host it was listed from)
+or `{pairingAddress, connectAddress, pairingCode, name?, hostId?}` (manual fallback
 for networks where mDNS doesn't reach — both ports must be supplied). It
 inserts the row first (sync collision guard → 409 if an active physical
-row already owns the same connect address), then awaits pair() — a wrong
+row on that host already owns the same connect address), then awaits pair() — a wrong
 code rolls the insert back and returns 400 so an immediate retry re-pairs
 instead of hitting 409 — then kicks off connect fire-and-forget and
 returns 201. Connect failures after that surface asynchronously via the
-device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` returns the current mDNS snapshot
+device's own `status`/`error`, not as a 400 from this endpoint. `GET /api/devices/discovered` (with optional `?hostId=`) returns the current mDNS snapshot
 (an empty array when `DEVICE_DISCOVERY_ENABLED=false` or nothing has been
-advertised). `PATCH /api/devices/:id`
+advertised; `400` for an unknown or outdated host and `503` when the target agent
+is unreachable). `PATCH /api/devices/:id`
 (issue #1347) takes `{address}` and is **physical-only** (an emulator's
 `serial` is synthesized from its own `port` column, not user-supplied) — it
 rewrites the row's `serial` in place (keeping `id`/`name`/`projectId`/
@@ -706,7 +806,13 @@ route module, `src/routes/avds.ts` (the "one file per route module"
 convention `devices.ts`'s own header documents). **Creating an AVD here
 does not create a `devices` row** — a user still adds a device for it
 afterward via `POST /api/devices {avdName}` (§3 above), the same way
-`kind: "emulator"` has always worked.
+`kind: "emulator"` has always worked. The four endpoints below accept an
+optional `hostId` (`?hostId=` on the GETs, `hostId` in the `POST /api/avds`
+body) and dispatch through `getAvdHost` (`src/services/avd-host.ts`) to the
+agent's `/internal/avds`, `/internal/system-images`, and
+`/internal/device-profiles` routes (`src/routes/internal-avds.ts`), forwarding
+agent refusals via `forwardHostRequestError`, translating an old agent's 404
+into a 400 that names the host, and answering 503 when the host is unreachable.
 
 - **`GET /api/avds`** — `avdmanager list avd`, parsed from its `Name:` lines.
   This is what feeds the "Create an emulator" flow's "Virtual device"
@@ -813,3 +919,10 @@ below for you, then retries the failed install once accepted.
   requires without actually running `sdkmanager --licenses`, so the endpoint
   always reports licenses as potentially pending. The `acceptLicenses` call is
   idempotent — a fast no-op when licenses are already accepted.
+
+All four endpoints accept an optional `?hostId=` query parameter (issue
+#3299): for an agent host, the GET routes dispatch through `getAvdHost` and the
+WebSockets proxy over `RemoteHostClient.avds` (`inboundStream`) to
+`/internal/ws/system-image-install` and `/internal/ws/sdk-licenses`. The
+SDK-operation lock is per-host, and a closing browser socket does not cancel an
+in-flight install on the agent (the lock is released when `sdkmanager` exits).

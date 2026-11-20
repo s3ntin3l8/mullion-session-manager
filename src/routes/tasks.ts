@@ -1500,7 +1500,7 @@ export async function tasksRoute(app: FastifyInstance) {
           // Clearing it here, same write, means the board stops claiming
           // "needs a human" the instant a human has, in fact, acted.
           autoReturnCapAnnouncedAt: null,
-          needsHumanReason: null,
+          ...mergeHuman.CLEARED_NEEDS_HUMAN,
           // A human sent it back to a worker that may well rebase this time:
           // a spent auto-rebase budget must not outlive that, or the next
           // conflict could never be auto-rebased again.
@@ -1676,7 +1676,7 @@ export async function tasksRoute(app: FastifyInstance) {
         inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + spendsRearm,
         // The retry answers a "review ended without a verdict" flag.
         ...(existing.needsHumanReason === "review-inconclusive"
-          ? { needsHumanReason: null, autoReturnCapAnnouncedAt: null }
+          ? { ...mergeHuman.CLEARED_NEEDS_HUMAN, autoReturnCapAnnouncedAt: null }
           : {}),
         // Part of a Hermes dispatch's idempotency key: a human re-review at the same head
         // keeps round, rearms and head, so without a fresh entry time the second click

@@ -4,6 +4,13 @@ import type { DeviceKind, DevicePlatform } from "./device-drivers/types.js";
 import { isDeviceKindSupported } from "./device-manager.js";
 import { getCachedCapabilities } from "./host-capabilities.js";
 
+/** The two kinds a device can be — an emulator or a physical device. The
+ * guard every device route and every device wire shape uses, so "emulator" /
+ * "physical" is spelled in one place. */
+export function isDeviceKind(value: unknown): value is DeviceKind {
+  return value === "emulator" || value === "physical";
+}
+
 /** The device kinds this host can run right now: what `features.deviceKinds`
  * reports for the primary's own host, and what a primary reads before it places
  * a device here. Empty when the panel is off. */

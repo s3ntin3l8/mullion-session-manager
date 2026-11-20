@@ -522,6 +522,23 @@ done, so `failReviewingGate` (`task-gate-failure.ts`) first asks
   naming the outstanding job's description so it can check or kill a stuck wait
   loop; if it cannot be typed into or stays behind the same job, it is left
   alone until a new turn ends and the budget remains the backstop.
+- A worker whose turn is still open in the current `in_progress` spell
+  (`agentTurnInFlight === true` or no `lastTurnEndedAt` since `claimedAt` /
+  `lastNudgedAt`, because `agentTurnInFlight` caps at 15 minutes) with no entry
+  in `outstandingBackgroundTasks` (note: only Claude-shaped `Stop` /
+  `SubagentStop` payloads populate this list, and `beginAgentTurn` clears it at
+  turn start), no active subagents (`subagentCount === 0`), not in rate-limit
+  grace, and no PTY output (`lastActivityAt`) for at least `WORKER_STALL_MS`
+  (45 minutes) is handled by `nudgeStalledWorker` (`task-nudge.ts`) from the
+  `in_progress` sweep in `reconcileTasks`: on the first stall (sharing
+  `MAX_WORKER_NUDGES` and the fresh-row guard, and recording
+  `lastStallNudgedAt`), it types a short continuation prompt; if no real output
+  arrives past the nudge's own TUI-redraw echo window (`NUDGE_ECHO_WINDOW_MS`,
+  15 seconds) and `NUDGE_TURN_GRACE_MS` (10 minutes) elapses past
+  `max(lastStallNudgedAt, lastActivityAt)` (or it hits `MAX_WORKER_NUDGES` on a
+  later stall), the reconciler fails it early with `worker stalled: no output
+for <N> minutes` and `via: "worker-stalled"` through the same
+  diagnostics/kill/sync/worktree-cleanup path as the budget.
 
 ## The agent's contract
 
@@ -1589,10 +1606,28 @@ would start up to an hour late. `resolveTargetHost`'s `detail` is unchanged
 fleet); the "registered but not eligible" wording exists only in the task's
 `failureReason`.
 
+**Codex `/hooks` trust hold** (`#3341`): `dispatchClaimedTask` and
+`dispatchQueuedRetry` also hold a task in `claimed` (`codex-trust-held`) when
+the resolved worker agent is `codex` on the local host and
+`getCodexHookTrust()` (`hook-adapters/codex-trust.ts`) returns `"pending"`.
+It follows the `blocked-held` pattern: it writes `"Codex is waiting for /hooks
+trust — open codex once and approve Mullion's hooks"` to `failureReason`,
+sets `dispatchHeld: true` (so a held task does not consume an auto-claim slot
+in `countOccupiedSlots`), and nulls `dispatchFailingSince` (so a prior placement
+wait's 6h clock cannot survive the codex wait) only when changed, broadcasts
+`{ kind: "dispatch" }` on `/ws/tasks`, and `task-dispatch.ts` `continue`s past
+it with no backoff and no give-up clock. `"trusted"` and `"not-installed"`
+dispatch as usual, and a throwing lookup fails open (logs a warning and
+dispatches). Remote placements are not gated because a remote host's
+`~/.codex` cannot be read locally. Once trust becomes `"trusted"`, the next
+sweep clears `failureReason`, `dispatchHeld`, and `dispatchFailingSince` and
+dispatches.
+
 **Queued-task failures are bounded** (`#1997`). `release()` (a failed dispatch)
 and `holdClaim` stamp `tasks.dispatchFailingSince` — the start of the current
 run of failures, kept by later attempts (`task.dispatchFailingSince ?? now`),
-cleared when a worker spawns and by `enqueueTask`. It is a column, not the
+cleared when a worker spawns, by `enqueueTask`, and by the codex `/hooks` trust
+hold (both when it takes over and when it clears). It is a column, not the
 in-memory backoff map, so a redeploy does not restart the clock. While the task
 is `claimed`, `failureReason` is therefore "why it is not dispatching yet" (the
 board renders it as such), and `enqueueTask` / a successful dispatch null it.
@@ -1745,7 +1780,11 @@ neutralised (`neutraliseDecisionLine` in `task-decisions.ts`): `@` mentions have
 a zero-width space inserted after the `@` so GitHub users are not notified,
 `<!--` and `-->` markers are escaped alongside HTML tags so lines cannot close
 the section early or render raw HTML, and markdown link/image brackets are
-escaped to render as plain text. The reviewer agent receives the raw (redacted)
+escaped to render as plain text. CI-hold and CI-round-cap PR comments go through
+`neutraliseCiHoldCommentText` (also in `task-decisions.ts`), which additionally
+inserts a zero-width space after `#` before digits so bare `#N` and
+`owner/repo#N` in check names or worker reasons do not auto-link or emit
+cross-reference events. The reviewer agent receives the raw (redacted)
 decisions, so it can judge exactly what the worker wrote.
 `applyWorkerDecisionsSection` matches in passes, and the last complete block
 wins (the issue body is prepended, so ours is last): first the start marker
@@ -2586,9 +2625,11 @@ tells it not to push a workaround or disable the check. On the next sweep
 same backend → `/internal/task-ci-unfixable` path as the re-review request; the
 route validates `headSha` as a 40-char lowercase hex SHA) BEFORE any rerun and
 parks at once with `needsHumanReason: "ci-unfixable"`. The worker's text is
-flattened to one line, run through `redactSecrets`, capped at 500 characters and
-neutralised (`neutraliseDecisionLine`) before it reaches `ciHoldNote` or the PR
-comment. A host that is unreachable or busy holds the tick; any other read error
+flattened to one line, run through `redactSecrets`, and capped at 500 characters
+before it is stored in `ciHoldNote` (kept raw for plain-text board display), and
+check names plus the reason are neutralised (`neutraliseCiHoldCommentText`,
+including breaking `#<digits>` auto-links) when building the PR comment. A host
+that is unreachable or busy holds the tick; any other read error
 (an older peer build with no route) reads as "no declaration" and the rerun path
 runs. The park is shown on the card and the drawer even while the task holds an
 approval (a CI fix keeps it), which the round-cap line never was.

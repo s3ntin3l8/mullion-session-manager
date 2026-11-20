@@ -9,8 +9,13 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { getDeviceHost, liveInfoForRows } from "../../src/services/device-host.js";
-import { getDeviceRow, insertDevice } from "../../src/services/device-store.js";
+import {
+  DevicePlacementError,
+  getDeviceHost,
+  liveInfoForRows,
+} from "../../src/services/device-host.js";
+import { HostRequestError } from "../../src/services/remote-host-errors.js";
+import { getDeviceRow, insertDevice, setDevicePort } from "../../src/services/device-store.js";
 import { createHost } from "../../src/services/host-registry.js";
 import type { DeviceInfo } from "../../src/services/device-drivers/types.js";
 
@@ -30,6 +35,8 @@ const devices = {
   live: vi.fn(),
   terminate: vi.fn(),
   action: vi.fn(),
+  pair: vi.fn(),
+  discovered: vi.fn(),
 };
 const client = { devices };
 vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
@@ -171,7 +178,7 @@ describe("DeviceHost", () => {
     const remote = getDeviceHost(app, host(app, "mac"));
     client.devices.terminate.mockResolvedValue(undefined);
     client.devices.action.mockResolvedValue({ ok: true });
-    client.devices.live.mockResolvedValue([info(7)]);
+    client.devices.live.mockResolvedValue({ devices: [info(7)] });
 
     await remote.terminate(7, "emulator");
     expect(client.devices.terminate).toHaveBeenCalledWith("7", "emulator");
@@ -201,7 +208,7 @@ describe("DeviceHost", () => {
     const localRow = emulator(app, "local");
     client.devices.live.mockImplementation(async () => {
       if (client.devices.live.mock.calls.length === 2) throw new Error("ECONNREFUSED");
-      return [info(a1.id)];
+      return { devices: [info(a1.id)] };
     });
     // Both hosts share one fake client, so make the first call "mac" and the second "down".
     const rows = [a1, a2, b1, localRow].map((r) => getDeviceRow(app, r.id)!);
@@ -212,5 +219,113 @@ describe("DeviceHost", () => {
     expect(lives.get(a2.id)).toEqual({ live: undefined, unreachable: false });
     expect(lives.get(b1.id)).toEqual({ live: undefined, unreachable: true });
     expect(lives.get(localRow.id)).toEqual({ live: undefined, unreachable: false });
+    expect(getDeviceRow(app, a1.id)!.port).toBeNull();
+  });
+
+  it("backfills a null remote emulator port from liveInfoForRows and logs without overwriting a different persisted port", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const missing = emulator(app, mac);
+    const mismatch = emulator(app, mac);
+    setDevicePort(app, mismatch.id, 5556);
+    const infoSpy = vi.spyOn(app.log, "info");
+    const warnSpy = vi.spyOn(app.log, "warn");
+    client.devices.live.mockResolvedValue({
+      devices: [info(missing.id), info(mismatch.id)],
+      ports: { [String(missing.id)]: 5554, [String(mismatch.id)]: 5558 },
+    });
+
+    await liveInfoForRows(app, [getDeviceRow(app, missing.id)!, getDeviceRow(app, mismatch.id)!]);
+
+    expect(getDeviceRow(app, missing.id)!.port).toBe(5554);
+    expect(getDeviceRow(app, mismatch.id)!.port).toBe(5556);
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: missing.id,
+        hostId: mac,
+        port: 5554,
+      }),
+      "device list: recovered a remote emulator port",
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: mismatch.id,
+        hostId: mac,
+        persistedPort: 5556,
+        livePort: 5558,
+      }),
+      expect.stringContaining("differs from persisted port"),
+    );
+  });
+
+  it("logs when a remote spawn returns a different port than persisted", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const row = emulator(app, mac);
+    setDevicePort(app, row.id, 5554);
+    const warnSpy = vi.spyOn(app.log, "warn");
+    client.devices.spawn.mockResolvedValue({ info: info(row.id), port: 5556 });
+
+    await getDeviceHost(app, mac).getOrCreate(getDeviceRow(app, row.id)!);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceId: row.id,
+        hostId: mac,
+        persistedPort: 5554,
+        livePort: 5556,
+      }),
+      expect.stringContaining("different port than persisted"),
+    );
+    expect(getDeviceRow(app, row.id)!.port).toBe(5556);
+  });
+
+  it("routes pair and discovered to the remote client or local manager", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const remote = getDeviceHost(app, mac);
+    const sample = [
+      {
+        id: "Android.local",
+        name: "Pixel 7",
+        host: "192.168.1.23",
+        pairingAddress: "192.168.1.23:41234",
+        connectAddress: "192.168.1.23:37251",
+        discoveredAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    client.devices.pair.mockResolvedValue(undefined);
+    client.devices.discovered.mockResolvedValue(sample);
+
+    await remote.pair("192.168.1.23:41234", "123456");
+    expect(client.devices.pair).toHaveBeenCalledWith("192.168.1.23:41234", "123456");
+    await expect(remote.discovered()).resolves.toEqual(sample);
+
+    const local = getDeviceHost(app, "local");
+    const pairSpy = vi.spyOn(app.device, "pair").mockResolvedValue(undefined);
+    await local.pair("192.168.1.24:41234", "654321");
+    expect(pairSpy).toHaveBeenCalledWith("192.168.1.24:41234", "654321");
+    await expect(local.discovered()).resolves.toEqual([]);
+  });
+
+  it("maps an older agent's 404 on pair() and discovered() to DevicePlacementError", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const mac = host(app, "mac");
+    const remote = getDeviceHost(app, mac);
+
+    client.devices.pair.mockRejectedValue(new HostRequestError(mac, 404, "Not Found"));
+    await expect(remote.pair("192.168.1.23:41234", "123456")).rejects.toThrow(DevicePlacementError);
+    await expect(remote.pair("192.168.1.23:41234", "123456")).rejects.toThrow(/update its agent/);
+
+    client.devices.discovered.mockRejectedValue(new HostRequestError(mac, 404, "Not Found"));
+    await expect(remote.discovered()).rejects.toThrow(DevicePlacementError);
+    await expect(remote.discovered()).rejects.toThrow(/update its agent/);
+
+    // Non-404 errors pass through unchanged so replyDeviceError forwards their status.
+    client.devices.pair.mockRejectedValue(new HostRequestError(mac, 400, "bad code"));
+    await expect(remote.pair("192.168.1.23:41234", "123456")).rejects.toThrow(HostRequestError);
+
+    client.devices.discovered.mockRejectedValue(new HostRequestError(mac, 500, "boom"));
+    await expect(remote.discovered()).rejects.toThrow(HostRequestError);
   });
 });

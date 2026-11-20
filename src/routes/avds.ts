@@ -1,20 +1,23 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
+import type { WebSocket as NodeWebSocket } from "ws";
 import {
-  createAvd,
-  listAvds,
-  listDeviceProfiles,
-  listInstalledSystemImages,
   listAvailableSystemImages,
   installSystemImage,
   uninstallSystemImage,
   acceptLicenses,
-  licensesMayBePending,
-  normalizeAvdHardware,
-  avdConfigRoots,
-  AvdCreatedError,
+  listInstalledSystemImages,
 } from "../services/avd-manager.js";
 import type { AvailableSystemImage } from "../services/avd-manager.js";
+import {
+  AvdValidationError,
+  getAvdHost,
+  getSdkHostState,
+  type AvdHost,
+} from "../services/avd-host.js";
+import { getHostRow, LOCAL_HOST_ID } from "../services/host-registry.js";
+import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 
 // AVD (Android Virtual Device) provisioning — the counterpart to
 // routes/devices.ts (which only RUNS an AVD that already exists on the
@@ -24,21 +27,8 @@ import type { AvailableSystemImage } from "../services/avd-manager.js";
 // here doesn't create a `devices` row; the user still adds a device for it
 // afterward via the existing `POST /api/devices {avdName}`.
 
-// AVD name, as accepted by `avdmanager create avd -n`. Deliberately an
-// allowlist matching avdmanager's own accepted charset (alphanumerics,
-// dots, underscores, hyphens), not a "reject metacharacters" denylist.
-//
-// CodeQL (js/polynomial-redos) — an earlier version of this combined the
-// charset check and the "at least one alphanumeric" (Hermes review, keeps a
-// bare "." or ".." from passing) into a SINGLE regex with two overlapping
-// `[A-Za-z0-9._-]*` groups around a middle character — classic catastrophic
-// backtracking on user-controlled input (e.g. many "0"s followed by one
-// invalid character). Two independent, single-pass regexes below achieve
-// the same validation with no ambiguity for the engine to backtrack over.
-const AVD_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
-const AVD_NAME_HAS_ALPHANUMERIC = /[A-Za-z0-9]/;
-
 interface CreateAvdBody {
+  hostId?: string;
   name?: string;
   systemImage?: string;
   deviceProfile?: string;
@@ -47,38 +37,411 @@ interface CreateAvdBody {
   dataPartitionSize?: string;
 }
 
-export async function avdsRoute(app: FastifyInstance): Promise<void> {
-  app.get("/api/avds", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
+function resolveAvdHostId(app: FastifyInstance, requested: string | undefined): string | null {
+  if (!requested || requested === LOCAL_HOST_ID) return LOCAL_HOST_ID;
+  return getHostRow(app, requested) ? requested : null;
+}
+
+function replyAvdError(reply: FastifyReply, host: AvdHost, err: unknown, what: string) {
+  if (host.isLocal || err instanceof AvdValidationError) {
+    return reply.badRequest(err instanceof Error ? err.message : String(err));
+  }
+  if (err instanceof HostRequestError) {
+    if (err.statusCode === 404) {
+      return reply.badRequest(`Host ${host.hostId} does not report AVDs — update its agent.`);
     }
-    if (!app.config.DEVICE_AVDMANAGER_PATH) {
-      return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
+    return forwardHostRequestError(reply, err);
+  }
+  return replyHostUnreachable(reply, host.hostId, err, what);
+}
+
+export const REMOTE_AVD_OPEN_TIMEOUT_MS = 15_000;
+
+/**
+ * Proxies an SDK operation WebSocket (system-image install/uninstall or
+ * license acceptance) to an agent host. Messages pass through in both
+ * directions, either side closing closes the other, and a stalled or
+ * failed upstream answers `{type:"error", message}` and closes.
+ */
+export function proxyToRemoteAvdSocket(
+  app: FastifyInstance,
+  browserSocket: WebSocket,
+  hostId: string,
+  openUpstream: () => NodeWebSocket,
+): void {
+  const fail = (message: string): void => {
+    if (browserSocket.readyState === browserSocket.OPEN) {
+      browserSocket.send(JSON.stringify({ type: "error", message }));
+      browserSocket.close();
     }
-    // Self-review (mullion-reviewer) — an exec failure (a misconfigured
-    // path, ENOENT, or the timeout path) used to fall through uncaught to a
-    // generic 500, unlike every other misconfiguration case in this file,
-    // which produces an actionable 400. Same fix applied to the sibling GET
-    // handlers below and to the POST handler's own listDeviceProfiles call.
+  };
+
+  let upstream: NodeWebSocket;
+  try {
+    upstream = openUpstream();
+  } catch (err) {
+    app.log.error({ err, hostId }, "failed to open remote AVD WS upstream");
+    fail(`Host ${hostId} is unreachable`);
+    return;
+  }
+
+  const closeUpstream = () => {
+    if (upstream.readyState === upstream.OPEN || upstream.readyState === upstream.CONNECTING) {
+      upstream.close();
+    }
+  };
+  const closeBrowser = () => {
+    if (browserSocket.readyState === browserSocket.OPEN) browserSocket.close();
+  };
+
+  // Buffer messages arriving from the browser while the upstream WS handshake
+  // is still CONNECTING so the initial install/accept-licenses command is not
+  // dropped before the agent connection opens.
+  const pendingMessages: Array<{ data: unknown; isBinary: boolean }> = [];
+
+  browserSocket.on("message", (data, isBinary) => {
+    if (upstream.readyState === upstream.OPEN) {
+      upstream.send(data as Parameters<NodeWebSocket["send"]>[0], { binary: isBinary });
+    } else if (upstream.readyState === upstream.CONNECTING) {
+      pendingMessages.push({ data, isBinary });
+    }
+  });
+  browserSocket.on("close", () => {
+    pendingMessages.length = 0;
+    closeUpstream();
+  });
+  browserSocket.on("error", (err) => {
+    app.log.warn({ err, hostId }, "AVD socket error");
+  });
+
+  const openTimer = setTimeout(() => {
+    app.log.warn({ hostId }, "remote AVD ws upstream did not open in time");
+    pendingMessages.length = 0;
+    fail(`Host ${hostId} did not answer in time`);
+    closeUpstream();
+  }, REMOTE_AVD_OPEN_TIMEOUT_MS);
+  openTimer.unref();
+
+  upstream.on("open", () => {
+    clearTimeout(openTimer);
+    if (browserSocket.readyState !== browserSocket.OPEN) {
+      pendingMessages.length = 0;
+      closeUpstream();
+      return;
+    }
+    for (const msg of pendingMessages) {
+      if (upstream.readyState !== upstream.OPEN) break;
+      upstream.send(msg.data as Parameters<NodeWebSocket["send"]>[0], { binary: msg.isBinary });
+    }
+    pendingMessages.length = 0;
+  });
+  upstream.on("close", () => {
+    clearTimeout(openTimer);
+    pendingMessages.length = 0;
+    closeBrowser();
+  });
+  upstream.on("error", (err) => {
+    clearTimeout(openTimer);
+    pendingMessages.length = 0;
+    app.log.error({ err, hostId }, "remote AVD ws upstream error");
+    fail(`Host ${hostId} did not accept the AVD socket`);
+  });
+  upstream.once("unexpected-response", (_req, res) => {
+    clearTimeout(openTimer);
+    pendingMessages.length = 0;
+    res.resume?.();
+    if (res.statusCode === 404) {
+      app.log.warn({ hostId, statusCode: res.statusCode }, "remote AVD ws route missing on agent");
+      fail(`Host ${hostId} does not report AVDs — update its agent.`);
+    } else {
+      app.log.warn(
+        { hostId, statusCode: res.statusCode },
+        "remote AVD ws upstream rejected upgrade",
+      );
+      fail(`Host ${hostId} did not accept the AVD socket`);
+    }
+    closeUpstream();
+  });
+  upstream.on("message", (data, isBinary) => {
+    if (browserSocket.readyState !== browserSocket.OPEN) return;
+    browserSocket.send(data, { binary: isBinary });
+  });
+}
+
+/**
+ * Handles a `/ws/system-image-install` or `/internal/ws/system-image-install`
+ * WebSocket against this host's own Android SDK.
+ */
+export function attachSystemImageInstallSocket(app: FastifyInstance, socket: WebSocket): void {
+  const state = getSdkHostState(app);
+  let active = false;
+
+  socket.on("message", async (raw) => {
+    if (active) {
+      socket.send(JSON.stringify({ type: "error", message: "Operation already in progress" }));
+      return;
+    }
+
+    let msg: { type?: string; packagePath?: string };
     try {
-      const avds = await listAvds(app.config.DEVICE_AVDMANAGER_PATH);
-      return { avds };
+      msg = JSON.parse(String(raw));
+    } catch {
+      socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+      return;
+    }
+
+    if (msg.type !== "install" && msg.type !== "uninstall") {
+      socket.send(
+        JSON.stringify({ type: "error", message: 'type must be "install" or "uninstall"' }),
+      );
+      return;
+    }
+
+    if (!msg.packagePath || !msg.packagePath.startsWith("system-images;")) {
+      socket.send(JSON.stringify({ type: "error", message: "Invalid packagePath" }));
+      return;
+    }
+
+    // The platform reason FIRST: on a platform the panel does not exist on,
+    // "set DEVICE_ENABLED=true" would be advice that cannot help. Below
+    // that, this socket's original combined message — its own contract,
+    // asserted as such by this file's own tests.
+    if (!app.deviceEmulatorSupported) {
+      socket.send(JSON.stringify({ type: "error", message: app.deviceEmulatorUnavailableMessage }));
+      return;
+    }
+
+    if (!app.config.DEVICE_ENABLED || !app.config.DEVICE_SDKMANAGER_PATH) {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          message: "Device panel is disabled or DEVICE_SDKMANAGER_PATH is not configured",
+        }),
+      );
+      return;
+    }
+
+    if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
+      socket.send(
+        JSON.stringify({ type: "error", message: "DEVICE_ANDROID_SDK_ROOT is not configured" }),
+      );
+      return;
+    }
+
+    // Validate packagePath against the allowlist (installed + available).
+    const installed = listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT);
+    let available: AvailableSystemImage[];
+    try {
+      available = await listAvailableSystemImages(
+        app.config.DEVICE_SDKMANAGER_PATH,
+        app.config.DEVICE_ANDROID_SDK_ROOT,
+      );
+    } catch {
+      available = [];
+    }
+    const allPaths = new Set([
+      ...installed.map((img) => img.packagePath),
+      ...available.map((img) => img.packagePath),
+    ]);
+    if (!allPaths.has(msg.packagePath)) {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          message: "packagePath is not in the installed or available images list",
+        }),
+      );
+      return;
+    }
+
+    // Reject concurrent operations.
+    if (state.sdkOperationInProgress) {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          message: "An SDK operation is already in progress",
+        }),
+      );
+      return;
+    }
+
+    state.sdkOperationInProgress = true;
+    active = true;
+    const onLine = (line: string) => {
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: "progress", message: line }));
+      }
+    };
+
+    try {
+      if (msg.type === "install") {
+        await installSystemImage(
+          app.config.DEVICE_SDKMANAGER_PATH,
+          app.config.DEVICE_ANDROID_SDK_ROOT,
+          msg.packagePath,
+          { onLine },
+        );
+      } else {
+        await uninstallSystemImage(
+          app.config.DEVICE_SDKMANAGER_PATH,
+          app.config.DEVICE_ANDROID_SDK_ROOT,
+          msg.packagePath,
+          { onLine },
+        );
+      }
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: "done" }));
+      }
     } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      if (socket.readyState === socket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "error",
+            message: err instanceof Error ? err.message : String(err),
+            ...(err instanceof Error && "code" in err
+              ? { code: (err as { code?: string }).code }
+              : {}),
+          }),
+        );
+      }
+    } finally {
+      state.sdkOperationInProgress = false;
+      active = false;
+      // Invalidate the available-images cache so the next GET refreshes
+      // from the network — the just-installed/uninstalled image's
+      // `installed` flag would otherwise stay stale for up to 5 min.
+      state.availableImagesCache.clear();
     }
   });
 
-  app.get("/api/system-images", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
+  socket.on("close", () => {
+    active = false;
+  });
+}
+
+/**
+ * Handles a `/ws/sdk-licenses` or `/internal/ws/sdk-licenses` WebSocket
+ * against this host's own Android SDK.
+ */
+export function attachSdkLicensesSocket(app: FastifyInstance, socket: WebSocket): void {
+  const state = getSdkHostState(app);
+  let active = false;
+
+  socket.on("message", async (raw) => {
+    if (active) {
+      socket.send(
+        JSON.stringify({ type: "error", message: "License acceptance already in progress" }),
+      );
+      return;
     }
+
+    let msg: { type?: string };
+    try {
+      msg = JSON.parse(String(raw));
+    } catch {
+      socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
+      return;
+    }
+
+    if (msg.type !== "accept-licenses") {
+      socket.send(JSON.stringify({ type: "error", message: 'type must be "accept-licenses"' }));
+      return;
+    }
+
+    // The platform reason FIRST: on a platform the panel does not exist on,
+    // "set DEVICE_ENABLED=true" would be advice that cannot help. Below
+    // that, this socket's original combined message — its own contract,
+    // asserted as such by this file's own tests.
+    if (!app.deviceEmulatorSupported) {
+      socket.send(JSON.stringify({ type: "error", message: app.deviceEmulatorUnavailableMessage }));
+      return;
+    }
+
+    if (!app.config.DEVICE_ENABLED || !app.config.DEVICE_SDKMANAGER_PATH) {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          message: "Device panel is disabled or DEVICE_SDKMANAGER_PATH is not configured",
+        }),
+      );
+      return;
+    }
+
     if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-      return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
+      socket.send(
+        JSON.stringify({ type: "error", message: "DEVICE_ANDROID_SDK_ROOT is not configured" }),
+      );
+      return;
     }
-    // listInstalledSystemImages is pure fs (no exec) and never throws — see
-    // its own safeReaddir() comment — so no try/catch is needed here.
-    const systemImages = listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT);
-    return { systemImages };
+
+    // Reject concurrent operations.
+    if (state.sdkOperationInProgress) {
+      socket.send(
+        JSON.stringify({
+          type: "error",
+          message: "An SDK operation is already in progress",
+        }),
+      );
+      return;
+    }
+
+    state.sdkOperationInProgress = true;
+    active = true;
+    const onLine = (line: string) => {
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: "progress", message: line }));
+      }
+    };
+
+    try {
+      await acceptLicenses(app.config.DEVICE_SDKMANAGER_PATH, app.config.DEVICE_ANDROID_SDK_ROOT, {
+        onLine,
+      });
+      if (socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: "done" }));
+      }
+    } catch (err) {
+      if (socket.readyState === socket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "error",
+            message: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+    } finally {
+      state.sdkOperationInProgress = false;
+      active = false;
+    }
+  });
+
+  socket.on("close", () => {
+    active = false;
+  });
+}
+
+export async function avdsRoute(app: FastifyInstance): Promise<void> {
+  app.get<{ Querystring: { hostId?: string } }>("/api/avds", async (request, reply) => {
+    const hostId = resolveAvdHostId(app, request.query?.hostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+    const host = getAvdHost(app, hostId);
+    try {
+      const avds = await host.listAvds();
+      return { avds };
+    } catch (err) {
+      return replyAvdError(reply, host, err, "listing AVDs");
+    }
+  });
+
+  app.get<{ Querystring: { hostId?: string } }>("/api/system-images", async (request, reply) => {
+    const hostId = resolveAvdHostId(app, request.query?.hostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+    const host = getAvdHost(app, hostId);
+    try {
+      const systemImages = await host.listSystemImages();
+      return { systemImages };
+    } catch (err) {
+      return replyAvdError(reply, host, err, "listing system images");
+    }
   });
 
   // Not in the original plan's own route list, but needed by it anyway:
@@ -87,404 +450,125 @@ export async function avdsRoute(app: FastifyInstance): Promise<void> {
   // frontend form needs somewhere to source its device-profile picker from
   // — duplicating a second hardcoded list would drift from whatever
   // `avdmanager list device` actually reports on this host.
-  app.get("/api/device-profiles", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
-    }
-    if (!app.config.DEVICE_AVDMANAGER_PATH) {
-      return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
-    }
+  app.get<{ Querystring: { hostId?: string } }>("/api/device-profiles", async (request, reply) => {
+    const hostId = resolveAvdHostId(app, request.query?.hostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+    const host = getAvdHost(app, hostId);
     try {
-      const deviceProfiles = await listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH);
+      const deviceProfiles = await host.listDeviceProfiles();
       return { deviceProfiles };
     } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      return replyAvdError(reply, host, err, "listing device profiles");
     }
   });
 
   app.post<{ Body: CreateAvdBody }>("/api/avds", async (request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
-    }
-    if (!app.config.DEVICE_AVDMANAGER_PATH) {
-      return reply.badRequest("DEVICE_AVDMANAGER_PATH is not configured.");
-    }
-    if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-      return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
-    }
-
-    const { name, systemImage, deviceProfile } = request.body ?? {};
-    if (!name || !AVD_NAME_PATTERN.test(name) || !AVD_NAME_HAS_ALPHANUMERIC.test(name)) {
-      return reply.badRequest(
-        "name is required and may only contain letters, digits, '.', '_', and '-'",
-      );
-    }
-
-    // Allowlisted against the exact set this host's own SDK/avdmanager just
-    // reported, not regex-validated — strictly stronger, and free (this
-    // data is already being fetched to populate the frontend picker that
-    // produced these values in the first place). Fetched in parallel: two
-    // independent listings, not a data dependency between them.
-    let installedImages;
-    let deviceProfiles;
+    const { hostId: requestedHostId, ...avdInput } = request.body ?? {};
+    const hostId = resolveAvdHostId(app, requestedHostId);
+    if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
+    const host = getAvdHost(app, hostId);
     try {
-      [installedImages, deviceProfiles] = await Promise.all([
-        listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT),
-        listDeviceProfiles(app.config.DEVICE_AVDMANAGER_PATH),
-      ]);
+      const result = await host.createAvd(avdInput);
+      reply.code(201);
+      return result;
     } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
+      return replyAvdError(reply, host, err, "creating the AVD");
     }
-    if (!systemImage || !installedImages.some((img) => img.packagePath === systemImage)) {
-      return reply.badRequest("systemImage must be one of the host's installed system images");
-    }
-    if (!deviceProfile || !deviceProfiles.includes(deviceProfile)) {
-      return reply.badRequest("deviceProfile must be one of the host's known device profiles");
-    }
-
-    // Optional hardware. Empty/absent leaves avdmanager's own defaults.
-    // Invalid sizes fail before createAvd so a bad SD-card string never
-    // reaches the binary, and a bad RAM string never leaves a half-patched
-    // AVD behind.
-    const hardware = normalizeAvdHardware(request.body ?? {});
-    if (!hardware.ok) return reply.badRequest(hardware.message);
-
-    try {
-      // Do not spread `hardware.value` into this object. CodeQL treats that
-      // spread as tainting every property, including `avdmanagerPath`, which
-      // is the execFile executable (js/command-line-injection). The three
-      // size fields are copied by name so the path stays the config value.
-      await createAvd({
-        avdmanagerPath: app.config.DEVICE_AVDMANAGER_PATH,
-        name,
-        systemImage,
-        deviceProfile,
-        sdcardSize: hardware.value.sdcardSize,
-        ramSizeMb: hardware.value.ramSizeMb,
-        dataPartitionSize: hardware.value.dataPartitionSize,
-        configRoots: avdConfigRoots(),
-      });
-    } catch (err) {
-      if (err instanceof AvdCreatedError) {
-        reply.code(201);
-        return { name, warning: err.message };
-      }
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
-    }
-
-    reply.code(201);
-    return { name };
   });
 
   // ---------------------------------------------------------------------------
   // Available system images — lists installable images from Google's
-  // repository. Cached in-memory (5-min TTL) to avoid hammering the network.
+  // repository. Cached in-memory (5-min TTL) on the target host.
   // ---------------------------------------------------------------------------
 
-  // Module-level cache for available system images. Keyed by a composite of
-  // sdkmanagerPath + sdkRoot; value is [timestamp, images]. Five-minute TTL.
-  const availableImagesCache = new Map<string, [number, AvailableSystemImage[]]>();
-  const AVAILABLE_IMAGES_CACHE_TTL_MS = 5 * 60 * 1000;
-
-  app.get("/api/system-images/available", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
-    }
-    if (!app.config.DEVICE_SDKMANAGER_PATH) {
-      return reply.badRequest("DEVICE_SDKMANAGER_PATH is not configured.");
-    }
-    if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-      return reply.badRequest("DEVICE_ANDROID_SDK_ROOT is not configured.");
-    }
-
-    const cacheKey = `${app.config.DEVICE_SDKMANAGER_PATH}:${app.config.DEVICE_ANDROID_SDK_ROOT}`;
-    const cached = availableImagesCache.get(cacheKey);
-    if (cached && Date.now() - cached[0] < AVAILABLE_IMAGES_CACHE_TTL_MS) {
-      return { systemImages: cached[1] };
-    }
-
-    try {
-      const systemImages = await listAvailableSystemImages(
-        app.config.DEVICE_SDKMANAGER_PATH,
-        app.config.DEVICE_ANDROID_SDK_ROOT,
-      );
-      availableImagesCache.set(cacheKey, [Date.now(), systemImages]);
-      return { systemImages };
-    } catch (err) {
-      return reply.badRequest(err instanceof Error ? err.message : String(err));
-    }
-  });
+  app.get<{ Querystring: { hostId?: string } }>(
+    "/api/system-images/available",
+    async (request, reply) => {
+      const hostId = resolveAvdHostId(app, request.query?.hostId);
+      if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+      const host = getAvdHost(app, hostId);
+      try {
+        const systemImages = await host.listAvailableSystemImages();
+        return { systemImages };
+      } catch (err) {
+        return replyAvdError(reply, host, err, "listing available system images");
+      }
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // System image install/uninstall — WebSocket endpoint for streaming
   // progress of sdkmanager --install / --uninstall operations.
   // ---------------------------------------------------------------------------
 
-  // Module-level guard: only one SDK operation at a time across all
-  // connected clients. Tracked by a simple boolean since these operations
-  // are global to the host's SDK install.
-  let sdkOperationInProgress = false;
-
-  app.get("/ws/system-image-install", { websocket: true }, (socket: WebSocket) => {
-    let active = false;
-
-    socket.on("message", async (raw) => {
-      if (active) {
-        socket.send(JSON.stringify({ type: "error", message: "Operation already in progress" }));
-        return;
-      }
-
-      let msg: { type?: string; packagePath?: string };
-      try {
-        msg = JSON.parse(String(raw));
-      } catch {
-        socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
-        return;
-      }
-
-      if (msg.type !== "install" && msg.type !== "uninstall") {
-        socket.send(
-          JSON.stringify({ type: "error", message: 'type must be "install" or "uninstall"' }),
-        );
-        return;
-      }
-
-      if (!msg.packagePath || !msg.packagePath.startsWith("system-images;")) {
-        socket.send(JSON.stringify({ type: "error", message: "Invalid packagePath" }));
-        return;
-      }
-
-      // The platform reason FIRST: on a platform the panel does not exist on,
-      // "set DEVICE_ENABLED=true" would be advice that cannot help. Below
-      // that, this socket's original combined message — its own contract,
-      // asserted as such by this file's own tests.
-      if (!app.deviceEmulatorSupported) {
-        socket.send(
-          JSON.stringify({ type: "error", message: app.deviceEmulatorUnavailableMessage }),
-        );
-        return;
-      }
-
-      if (!app.config.DEVICE_ENABLED || !app.config.DEVICE_SDKMANAGER_PATH) {
-        socket.send(
-          JSON.stringify({
-            type: "error",
-            message: "Device panel is disabled or DEVICE_SDKMANAGER_PATH is not configured",
-          }),
-        );
-        return;
-      }
-
-      if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-        socket.send(
-          JSON.stringify({ type: "error", message: "DEVICE_ANDROID_SDK_ROOT is not configured" }),
-        );
-        return;
-      }
-
-      // Validate packagePath against the allowlist (installed + available).
-      const installed = listInstalledSystemImages(app.config.DEVICE_ANDROID_SDK_ROOT);
-      let available: AvailableSystemImage[];
-      try {
-        available = await listAvailableSystemImages(
-          app.config.DEVICE_SDKMANAGER_PATH,
-          app.config.DEVICE_ANDROID_SDK_ROOT,
-        );
-      } catch {
-        available = [];
-      }
-      const allPaths = new Set([
-        ...installed.map((img) => img.packagePath),
-        ...available.map((img) => img.packagePath),
-      ]);
-      if (!allPaths.has(msg.packagePath)) {
-        socket.send(
-          JSON.stringify({
-            type: "error",
-            message: "packagePath is not in the installed or available images list",
-          }),
-        );
-        return;
-      }
-
-      // Reject concurrent operations.
-      if (sdkOperationInProgress) {
-        socket.send(
-          JSON.stringify({
-            type: "error",
-            message: "An SDK operation is already in progress",
-          }),
-        );
-        return;
-      }
-
-      sdkOperationInProgress = true;
-      active = true;
-      const onLine = (line: string) => {
-        if (socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: "progress", message: line }));
-        }
-      };
-
-      try {
-        if (msg.type === "install") {
-          await installSystemImage(
-            app.config.DEVICE_SDKMANAGER_PATH,
-            app.config.DEVICE_ANDROID_SDK_ROOT,
-            msg.packagePath,
-            { onLine },
-          );
-        } else {
-          await uninstallSystemImage(
-            app.config.DEVICE_SDKMANAGER_PATH,
-            app.config.DEVICE_ANDROID_SDK_ROOT,
-            msg.packagePath,
-            { onLine },
-          );
-        }
-        if (socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: "done" }));
-        }
-      } catch (err) {
+  app.get<{ Querystring: { hostId?: string } }>(
+    "/ws/system-image-install",
+    { websocket: true },
+    (socket: WebSocket, request) => {
+      const hostId = resolveAvdHostId(app, request.query?.hostId);
+      if (hostId === null) {
         if (socket.readyState === socket.OPEN) {
           socket.send(
-            JSON.stringify({
-              type: "error",
-              message: err instanceof Error ? err.message : String(err),
-              ...(err instanceof Error && "code" in err
-                ? { code: (err as { code?: string }).code }
-                : {}),
-            }),
+            JSON.stringify({ type: "error", message: `Unknown host ${request.query?.hostId}` }),
           );
+          socket.close();
         }
-      } finally {
-        sdkOperationInProgress = false;
-        active = false;
-        // Invalidate the available-images cache so the next GET refreshes
-        // from the network — the just-installed/uninstalled image's
-        // `installed` flag would otherwise stay stale for up to 5 min.
-        availableImagesCache.clear();
+        return;
       }
-    });
-
-    socket.on("close", () => {
-      active = false;
-    });
-  });
+      if (hostId !== LOCAL_HOST_ID) {
+        proxyToRemoteAvdSocket(app, socket, hostId, () =>
+          getRemoteHostClient(app, hostId).avds.openInstallSocket(),
+        );
+        return;
+      }
+      attachSystemImageInstallSocket(app, socket);
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // SDK license acceptance — WebSocket endpoint for streaming progress of
   // `sdkmanager --licenses`.
   // ---------------------------------------------------------------------------
 
-  app.get("/ws/sdk-licenses", { websocket: true }, (socket: WebSocket) => {
-    let active = false;
-
-    socket.on("message", async (raw) => {
-      if (active) {
-        socket.send(
-          JSON.stringify({ type: "error", message: "License acceptance already in progress" }),
-        );
-        return;
-      }
-
-      let msg: { type?: string };
-      try {
-        msg = JSON.parse(String(raw));
-      } catch {
-        socket.send(JSON.stringify({ type: "error", message: "Invalid JSON" }));
-        return;
-      }
-
-      if (msg.type !== "accept-licenses") {
-        socket.send(JSON.stringify({ type: "error", message: 'type must be "accept-licenses"' }));
-        return;
-      }
-
-      // The platform reason FIRST: on a platform the panel does not exist on,
-      // "set DEVICE_ENABLED=true" would be advice that cannot help. Below
-      // that, this socket's original combined message — its own contract,
-      // asserted as such by this file's own tests.
-      if (!app.deviceEmulatorSupported) {
-        socket.send(
-          JSON.stringify({ type: "error", message: app.deviceEmulatorUnavailableMessage }),
-        );
-        return;
-      }
-
-      if (!app.config.DEVICE_ENABLED || !app.config.DEVICE_SDKMANAGER_PATH) {
-        socket.send(
-          JSON.stringify({
-            type: "error",
-            message: "Device panel is disabled or DEVICE_SDKMANAGER_PATH is not configured",
-          }),
-        );
-        return;
-      }
-
-      if (!app.config.DEVICE_ANDROID_SDK_ROOT) {
-        socket.send(
-          JSON.stringify({ type: "error", message: "DEVICE_ANDROID_SDK_ROOT is not configured" }),
-        );
-        return;
-      }
-
-      // Reject concurrent operations.
-      if (sdkOperationInProgress) {
-        socket.send(
-          JSON.stringify({
-            type: "error",
-            message: "An SDK operation is already in progress",
-          }),
-        );
-        return;
-      }
-
-      sdkOperationInProgress = true;
-      active = true;
-      const onLine = (line: string) => {
-        if (socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: "progress", message: line }));
-        }
-      };
-
-      try {
-        await acceptLicenses(
-          app.config.DEVICE_SDKMANAGER_PATH,
-          app.config.DEVICE_ANDROID_SDK_ROOT,
-          { onLine },
-        );
-        if (socket.readyState === socket.OPEN) {
-          socket.send(JSON.stringify({ type: "done" }));
-        }
-      } catch (err) {
+  app.get<{ Querystring: { hostId?: string } }>(
+    "/ws/sdk-licenses",
+    { websocket: true },
+    (socket: WebSocket, request) => {
+      const hostId = resolveAvdHostId(app, request.query?.hostId);
+      if (hostId === null) {
         if (socket.readyState === socket.OPEN) {
           socket.send(
-            JSON.stringify({
-              type: "error",
-              message: err instanceof Error ? err.message : String(err),
-            }),
+            JSON.stringify({ type: "error", message: `Unknown host ${request.query?.hostId}` }),
           );
+          socket.close();
         }
-      } finally {
-        sdkOperationInProgress = false;
-        active = false;
+        return;
       }
-    });
-
-    socket.on("close", () => {
-      active = false;
-    });
-  });
+      if (hostId !== LOCAL_HOST_ID) {
+        proxyToRemoteAvdSocket(app, socket, hostId, () =>
+          getRemoteHostClient(app, hostId).avds.openLicensesSocket(),
+        );
+        return;
+      }
+      attachSdkLicensesSocket(app, socket);
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // License status — check whether licenses are pending.
   // ---------------------------------------------------------------------------
 
-  app.get("/api/sdk-licenses/status", async (_request, reply) => {
-    if (!app.deviceEmulatorEnabled) {
-      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
-    }
-    return { pending: licensesMayBePending() };
-  });
+  app.get<{ Querystring: { hostId?: string } }>(
+    "/api/sdk-licenses/status",
+    async (request, reply) => {
+      const hostId = resolveAvdHostId(app, request.query?.hostId);
+      if (hostId === null) return reply.badRequest(`Unknown host ${request.query?.hostId}`);
+      const host = getAvdHost(app, hostId);
+      try {
+        return await host.sdkLicensesStatus();
+      } catch (err) {
+        return replyAvdError(reply, host, err, "checking SDK license status");
+      }
+    },
+  );
 }

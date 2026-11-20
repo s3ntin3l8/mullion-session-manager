@@ -23,9 +23,17 @@ export const MAX_WORKER_NUDGES = 2;
 /** How long to wait for a nudged turn to start AND finish before failing anyway. */
 export const NUDGE_TURN_GRACE_MS = 10 * 60_000;
 
+/** How long a mid-turn worker may produce no output before it is nudged as stalled. */
+export const WORKER_STALL_MS = 45 * 60_000;
+
 // Older agent builds omit agentTurnInFlight. Keep their timestamp fallback
 // tolerant of clock skew between a remote worker and this process.
 const CLOCK_SKEW_TOLERANCE_MS = 5_000;
+
+// Typing a stall nudge causes the TUI to echo/redraw the submitted prompt
+// shortly after `lastStallNudgedAt`. Output within this window is treated as
+// the nudge's own echo rather than proof the worker resumed.
+const NUDGE_ECHO_WINDOW_MS = 15_000;
 
 const SHELL_JOB_DESC_MAX_CHARS = 200;
 
@@ -55,13 +63,24 @@ export function buildShellTailNudge(branchName: string | null, jobDescription: s
   );
 }
 
+export function buildStallNudge(branchName: string | null): string {
+  return (
+    `No output has been seen for a while${branchName ? ` on ${branchName}` : ""}, and your turn ` +
+    "is still open. Nobody is available to answer questions. Continue the work the issue asks " +
+    "for, commit your changes, and end your turn — or if something blocks you, say what in one " +
+    "line and end your turn, otherwise this task will fail as stalled."
+  );
+}
+
 type NudgeTask = Pick<
   typeof tasks.$inferSelect,
   | "id"
   | "projectId"
+  | "status"
   | "claimedAt"
   | "nudgeCount"
   | "lastNudgedAt"
+  | "lastStallNudgedAt"
   | "lastRateLimitAt"
   | "branchName"
   | "sessionId"
@@ -80,6 +99,20 @@ type NudgeGuardResult =
   | { action: "wait" }
   | { action: "stop" }
   | { action: "stale_row" };
+
+// `task` is the tick's start-of-tick snapshot and typing cannot be undone:
+// re-read the row so a Reject/Retry that landed meanwhile gets no continuation.
+function isTaskRowStillInProgress(
+  app: FastifyInstance,
+  task: Pick<NudgeTask, "id" | "sessionId">,
+): boolean {
+  const [fresh] = app.db
+    .select({ status: tasks.status, sessionId: tasks.sessionId })
+    .from(tasks)
+    .where(eq(tasks.id, task.id))
+    .all();
+  return Boolean(fresh && fresh.status === "in_progress" && fresh.sessionId === task.sessionId);
+}
 
 function evaluateNudgeGuard(
   app: FastifyInstance,
@@ -111,14 +144,7 @@ function evaluateNudgeGuard(
   }
   if (sent >= MAX_WORKER_NUDGES) return { action: "stop" };
 
-  // `task` is the tick's start-of-tick snapshot and typing cannot be undone:
-  // re-read the row so a Reject/Retry that landed meanwhile gets no continuation.
-  const [fresh] = app.db
-    .select({ status: tasks.status, sessionId: tasks.sessionId })
-    .from(tasks)
-    .where(eq(tasks.id, task.id))
-    .all();
-  if (!fresh || fresh.status !== "in_progress" || fresh.sessionId !== task.sessionId) {
+  if (!isTaskRowStillInProgress(app, task)) {
     return { action: "stale_row" };
   }
 
@@ -132,13 +158,18 @@ async function sendWorkerNudge(
   now: Date,
   message: string,
   label: string,
+  isStall = false,
 ): Promise<boolean> {
   const outcome = await promptLiveTaskWorker(app, task, message, label);
   if (outcome !== "typed") return false;
 
   app.db
     .update(tasks)
-    .set({ nudgeCount: sent + 1, lastNudgedAt: now })
+    .set({
+      nudgeCount: sent + 1,
+      lastNudgedAt: now,
+      ...(isStall ? { lastStallNudgedAt: now } : {}),
+    })
     .where(eq(tasks.id, task.id))
     .run();
   broadcastTaskEvent({ taskId: task.id, projectId: task.projectId, kind: "nudge", ts: Date.now() });
@@ -219,4 +250,97 @@ export async function nudgeShellTailWorker(
     "task shell-tail nudge: worker stuck behind a background shell job with no commits — typed a nudge",
   );
   return true;
+}
+
+export type StallNudgeResult =
+  { action: "none" } | { action: "nudged" } | { action: "fail"; silentMinutes: number };
+
+// `PtyManager.agentTurnInFlight` caps at AGENT_TURN_IN_FLIGHT_MAX_MS (15m),
+// which expires long before WORKER_STALL_MS (45m). Treat the turn as open
+// whenever `agentTurnInFlight` is true OR no `lastTurnEndedAt` has landed
+// in the current in_progress spell (since `claimedAt` / `lastNudgedAt`).
+function isTurnOpenInSpell(
+  info: SessionInfo,
+  task: Pick<NudgeTask, "claimedAt" | "lastNudgedAt">,
+): boolean {
+  if (info.agentTurnInFlight === true) return true;
+  if (info.lastTurnEndedAt === null) return true;
+  const anchorMs = Math.max(task.claimedAt?.getTime() ?? 0, task.lastNudgedAt?.getTime() ?? 0);
+  return anchorMs > 0 && info.lastTurnEndedAt < anchorMs - CLOCK_SKEW_TOLERANCE_MS;
+}
+
+/**
+ * Nudges, and if still silent past `NUDGE_TURN_GRACE_MS` fails, an `in_progress`
+ * worker whose turn is still open in the current spell, has no outstanding
+ * background tasks or active subagents, is not in rate-limit grace, and has
+ * produced no output for at least `WORKER_STALL_MS`.
+ */
+export async function nudgeStalledWorker(
+  app: FastifyInstance,
+  task: NudgeTask,
+  info: SessionInfo | null,
+  now: Date,
+): Promise<StallNudgeResult> {
+  if (
+    task.status !== "in_progress" ||
+    info === null ||
+    info.alive === false ||
+    !isTurnOpenInSpell(info, task) ||
+    info.outstandingBackgroundTasks.length > 0 ||
+    info.subagentCount > 0 ||
+    info.errorState === "api_error" ||
+    info.lastActivityAt === null ||
+    info.lastActivityAt === undefined
+  ) {
+    return { action: "none" };
+  }
+  if (isTaskInRateLimitGrace(task, resolveTaskMasterConfig(app).rateLimitGraceMinutes)) {
+    return { action: "none" };
+  }
+
+  const silentMs = now.getTime() - info.lastActivityAt;
+  const silentMinutes = Math.floor(silentMs / 60_000);
+  const stallNudgedAt =
+    task.lastStallNudgedAt !== null &&
+    task.claimedAt !== null &&
+    task.lastStallNudgedAt.getTime() >= task.claimedAt.getTime()
+      ? task.lastStallNudgedAt.getTime()
+      : null;
+  if (stallNudgedAt !== null && info.lastActivityAt <= stallNudgedAt + NUDGE_ECHO_WINDOW_MS) {
+    const silentSinceNudgeMs = now.getTime() - Math.max(stallNudgedAt, info.lastActivityAt);
+    return silentSinceNudgeMs < NUDGE_TURN_GRACE_MS
+      ? { action: "none" }
+      : { action: "fail", silentMinutes };
+  }
+
+  if (silentMs < WORKER_STALL_MS) return { action: "none" };
+
+  const sent = nudgesThisSpell(task);
+  if (sent >= MAX_WORKER_NUDGES) {
+    // Only fail early on an exhausted budget if a stall nudge was already
+    // sent in this spell; a worker that spent its budget on earlier turn-end
+    // continuations still gets the wall-clock budget as its backstop.
+    return stallNudgedAt !== null ? { action: "fail", silentMinutes } : { action: "none" };
+  }
+
+  if (!isTaskRowStillInProgress(app, task)) {
+    return { action: "none" };
+  }
+
+  const typed = await sendWorkerNudge(
+    app,
+    task,
+    sent,
+    now,
+    buildStallNudge(task.branchName),
+    "task stall nudge",
+    true,
+  );
+  if (!typed) return { action: "none" };
+
+  app.log.info(
+    { taskId: task.id, nudge: sent + 1, max: MAX_WORKER_NUDGES, silentMinutes },
+    "task stall nudge: worker mid-turn with no output — typed a continuation",
+  );
+  return { action: "nudged" };
 }

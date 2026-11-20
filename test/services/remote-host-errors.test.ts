@@ -34,8 +34,10 @@ const MUTATING_INTERNAL_POSTS = [
   // that may have landed (an emulator started, a tap sent), so it is reported
   // as unknown, never as plain unreachable (#3200).
   "/internal/devices",
+  "/internal/devices/pair",
   "/internal/devices/:id/terminate",
   "/internal/devices/:id/action",
+  "/internal/avds",
   "/internal/updates/apply",
   "/internal/git-pull",
   "/internal/git-checkout",
