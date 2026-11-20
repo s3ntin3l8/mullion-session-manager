@@ -2317,5 +2317,5 @@ export async function killSession(
   // reclaim yet, the periodic sweep retries.
   void reclaimSessionWorktree(app, sessionId);
 
-  return updated ?? null;
+  return updated;
 }
