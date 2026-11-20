@@ -1,0 +1,1859 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Tappable companion to mockup.html for #2976: the fold layout (a rail on each half, the board stacking while the sidebar is open, up to two sessions) at real size. mockup.html embeds it for its fold frames. Low fidelity, fictional data, no app code. -->
+    <title>Mullion — Tasks mode: tappable fold prototype</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <style>
+      /* Token values copied from frontend/src/styles/tokens.css (dark theme). No new tokens. */
+      :root {
+        --bg: #0a0a0a;
+        --sidebar: #161617;
+        --chrome: #1c1c1e;
+        --fg: #ededed;
+        --muted: #9b9ba5;
+        --dim: #8a8a94;
+        --g: #5ec27a;
+        --y: #d7b06a;
+        --border: #3b3b41;
+        --border-soft: #2b2b30;
+        --accent-fill: #0a7a53;
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.4 system-ui,
+          sans-serif;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      button {
+        font: inherit;
+        color: inherit;
+        background: none;
+        border: 0;
+        padding: 0;
+        cursor: pointer;
+      }
+
+      /* Options strip: prototype controls, not part of the design. */
+      #opts {
+        flex: none;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        align-items: center;
+        padding: 6px 10px;
+        background: #26210f;
+        border-bottom: 1px solid #5a4a1c;
+        color: var(--y);
+        font-size: 12px;
+      }
+      #opts b {
+        font-weight: 600;
+      }
+      #opts .o {
+        display: inline-flex;
+        border: 1px solid #5a4a1c;
+        border-radius: 7px;
+        overflow: hidden;
+      }
+      #opts .o button {
+        padding: 7px 10px;
+        min-height: 32px;
+      }
+      #opts .o button.on {
+        background: var(--y);
+        color: #111;
+        font-weight: 600;
+      }
+
+      /* Shell */
+      #tb {
+        flex: none;
+        height: 52px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 12px;
+        background: var(--chrome);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .rails #tb {
+        display: none;
+      }
+      .seg {
+        display: inline-flex;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .seg button {
+        padding: 9px 16px;
+        min-height: 44px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .seg button.on {
+        background: var(--accent-fill);
+        color: #fff;
+        font-weight: 600;
+      }
+      .dot {
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        border-radius: 9px;
+        background: var(--y);
+        color: #111;
+        font-size: 11px;
+        font-weight: 700;
+        display: inline-grid;
+        place-items: center;
+      }
+      .grow {
+        flex: 1;
+        min-width: 0;
+      }
+      #body {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+      }
+      .rail {
+        flex: none;
+        width: 48px;
+        background: var(--sidebar);
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+      }
+      #lrail {
+        border-right: 1px solid var(--border-soft);
+        display: none;
+      }
+      .rails #lrail {
+        display: flex;
+      }
+      #rrail {
+        border-left: 1px solid var(--border-soft);
+      }
+      .rail button {
+        min-height: 48px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 1px;
+        color: var(--muted);
+        font-size: 9.5px;
+        position: relative;
+      }
+      .rail button i {
+        font-style: normal;
+        font-size: 17px;
+        line-height: 1;
+      }
+      .rail button.on {
+        color: #fff;
+        box-shadow: inset 3px 0 0 var(--g);
+        background: #202023;
+      }
+      #rrail button.on {
+        box-shadow: inset -3px 0 0 var(--g);
+      }
+      .rail hr {
+        width: 28px;
+        border: 0;
+        border-top: 1px solid var(--border-soft);
+        margin: 6px auto;
+      }
+      .rail .pip {
+        position: absolute;
+        top: 6px;
+        right: 7px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--y);
+      }
+      #main {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      #side {
+        flex: none;
+        width: 0;
+        overflow: hidden;
+        background: var(--sidebar);
+      }
+      /* Half and half: with a rail on each half the seam sits on the hinge. */
+      .open #side {
+        width: calc(50% - 48px);
+        border-left: 1px solid var(--border-soft);
+        overflow-y: auto;
+        padding: 12px;
+      }
+      .open:not(.rails) #side {
+        width: calc(50% - 24px);
+      }
+
+      /* Tasks mode */
+      #filters {
+        flex: none;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .pill {
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 6px 10px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .btn {
+        display: inline-block;
+        background: var(--accent-fill);
+        color: #fff;
+        border-radius: 7px;
+        padding: 11px 16px;
+        font-weight: 600;
+        margin: 0 6px 6px 0;
+      }
+      .btn.ghost {
+        background: none;
+        border: 1px solid var(--border);
+        font-weight: 400;
+      }
+      #board {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        gap: 10px;
+        padding: 10px 12px;
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      .lane {
+        flex: none;
+        width: 216px;
+        display: flex;
+        flex-direction: column;
+        overflow-y: auto;
+      }
+      .lane .hd {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+        padding: 8px 0;
+        text-align: left;
+        min-height: 36px;
+      }
+      .lane .hd .car {
+        display: none;
+      }
+      .lane .hd em {
+        font-style: normal;
+        color: var(--y);
+      }
+      .card {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: var(--chrome);
+        padding: 10px;
+        margin-bottom: 8px;
+      }
+      .card small {
+        display: block;
+        color: var(--dim);
+        margin-top: 3px;
+      }
+      .card .need {
+        display: block;
+        color: var(--y);
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      .card.sel {
+        border-color: var(--g);
+        box-shadow: 0 0 0 1px var(--g);
+      }
+      /* Stacked statuses: one section per status, active ones first. */
+      .stacked #board {
+        display: block;
+        overflow-x: hidden;
+        overflow-y: auto;
+      }
+      .stacked .lane {
+        width: auto;
+        overflow: visible;
+      }
+      .stacked #board {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+      .stacked .lane .hd {
+        border-bottom: 1px solid var(--border-soft);
+        margin: 8px 0;
+        min-height: 44px;
+      }
+      .stacked .lane .hd .car {
+        display: inline;
+      }
+      .stacked .lane.closed .card {
+        display: none;
+      }
+      .stacked .lane[data-k="reviewing"] {
+        order: 1;
+      }
+      .stacked .lane[data-k="progress"] {
+        order: 2;
+      }
+      .stacked .lane[data-k="ready"] {
+        order: 3;
+      }
+      .stacked .lane[data-k="backlog"] {
+        order: 4;
+      }
+      .stacked .lane[data-k="done"] {
+        order: 5;
+      }
+      #adhoc {
+        flex: none;
+        border-top: 1px solid var(--border-soft);
+        padding: 10px 12px;
+        color: var(--muted);
+      }
+
+      /* Workspace mode */
+      #term {
+        flex: 1;
+        min-height: 0;
+        margin: 8px;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 10px;
+        font:
+          14px/1.4 ui-monospace,
+          monospace;
+        color: var(--muted);
+        overflow: hidden;
+        white-space: pre;
+      }
+      #kb {
+        flex: none;
+        height: 52px;
+        display: flex;
+        border-top: 1px solid var(--border-soft);
+        background: var(--chrome);
+      }
+      #kb span {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        border-right: 1px solid var(--border-soft);
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .m-tasks .ws,
+      .m-ws .tk {
+        display: none !important;
+      }
+
+      /* Second session on the right half, while no sidebar view is open. */
+      #pane2 {
+        display: none;
+        flex: none;
+        width: calc(50% - 56px);
+        margin: 8px 8px 8px 0;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 10px;
+        font:
+          14px/1.4 ui-monospace,
+          monospace;
+        color: var(--muted);
+        white-space: pre;
+        overflow: hidden;
+      }
+      .ph {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: system-ui, sans-serif;
+        white-space: normal;
+        margin: -4px -4px 8px;
+      }
+      .ph b {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--fg);
+        font-weight: 500;
+      }
+      .ph button {
+        flex: none;
+        min-height: 36px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .split #pane2 {
+        display: block;
+      }
+      .rail button.wsp i {
+        width: 26px;
+        height: 26px;
+        border: 1.5px solid var(--dim);
+        border-radius: 7px;
+        display: grid;
+        place-items: center;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .rail button.wsp.on {
+        box-shadow: none;
+        background: none;
+      }
+      .rail button.wsp.on i {
+        border-color: var(--g);
+        color: var(--g);
+      }
+      .rail button.grp {
+        min-height: 26px;
+        font-size: 9px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--dim);
+      }
+      .rail {
+        overflow-y: auto;
+        scrollbar-width: none;
+      }
+      #rrail .sess.on {
+        box-shadow: inset -3px 0 0 var(--g);
+      }
+      .rail .gdots {
+        display: flex;
+        gap: 4px;
+        margin-top: 6px;
+        max-width: none;
+        overflow: visible;
+      }
+      .rail button.wsp {
+        padding: 6px 0 8px;
+      }
+      .gdots b {
+        width: 7px;
+        height: 7px;
+        border-radius: 2px;
+        opacity: 0.55;
+        position: relative;
+      }
+      .gdots b.cur {
+        opacity: 1;
+        outline: 1.5px solid #fff;
+        outline-offset: 1px;
+      }
+      .gdots u {
+        position: absolute;
+        top: -4px;
+        right: -4px;
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--g);
+      }
+      .rail button.onr {
+        color: #fff;
+        box-shadow: inset -3px 0 0 var(--g);
+        background: #202023;
+      }
+      .rail button {
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: manipulation;
+      }
+      /* The "+" sheet: covers the half it adds to, rows at touch size. */
+      #body {
+        position: relative;
+      }
+      #sheet {
+        display: none;
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: calc(50% - 48px);
+        background: var(--chrome);
+        overflow-y: auto;
+        z-index: 4;
+        padding: 0 12px 12px;
+      }
+      #sheet.left {
+        left: 48px;
+        border-right: 1px solid var(--border);
+      }
+      #sheet.right {
+        right: 48px;
+        border-left: 1px solid var(--border);
+      }
+      #sheet .sh {
+        display: flex;
+        align-items: center;
+        min-height: 56px;
+        font-size: 16px;
+      }
+      #sheet .sh b {
+        flex: 1;
+      }
+      #sheet .sh button {
+        width: 48px;
+        height: 48px;
+        color: var(--muted);
+      }
+      #sheet .snew {
+        display: block;
+        width: 100%;
+        min-height: 52px;
+        border-radius: 9px;
+        background: var(--accent-fill);
+        color: #fff;
+        font-weight: 600;
+      }
+      #sheet .sfind {
+        margin-top: 10px;
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        color: var(--dim);
+      }
+      #sheet .tabs {
+        display: flex;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        overflow: hidden;
+        margin-bottom: 4px;
+      }
+      #sheet .tabs button {
+        flex: 1;
+        min-height: 48px;
+        color: var(--muted);
+      }
+      #sheet .tabs .on {
+        background: var(--accent-fill);
+        color: #fff;
+        font-weight: 600;
+      }
+      #sheet .where {
+        display: flex;
+        gap: 8px;
+      }
+      #sheet .where button {
+        flex: 1;
+        min-width: 0;
+        min-height: 48px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: left;
+      }
+      #sheet .opt {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        min-height: 52px;
+        text-align: left;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      #sheet .opt span {
+        flex: 1;
+      }
+      #sheet .opt small {
+        display: block;
+        color: var(--dim);
+      }
+      #sheet .sw {
+        width: 40px;
+        height: 24px;
+        border-radius: 12px;
+        border: 1.5px solid var(--dim);
+        position: relative;
+      }
+      #sheet .sw::after {
+        content: "";
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 15px;
+        height: 15px;
+        border-radius: 50%;
+        background: var(--dim);
+      }
+      #sheet .tiles {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+      }
+      #sheet .tile {
+        min-height: 72px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+      }
+      #sheet .tile i {
+        font-style: normal;
+        font-size: 20px;
+      }
+      #sheet .mh i {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 3px;
+        margin-right: 7px;
+      }
+      #sheet .srow span {
+        flex: 1;
+      }
+      #sheet .act {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--g);
+        margin-right: 8px;
+      }
+      #sheet .tile {
+        position: relative;
+      }
+      #sheet .tile.on {
+        border-color: var(--g);
+        box-shadow: 0 0 0 1px var(--g);
+      }
+      #sheet .flag {
+        position: absolute;
+        top: 4px;
+        right: 6px;
+        font-style: normal;
+        font-size: 11px;
+        color: var(--y);
+      }
+      #sheet .sw.on {
+        border-color: var(--g);
+        background: var(--accent-fill);
+      }
+      #sheet .sw.on::after {
+        left: 19px;
+        background: #fff;
+      }
+      #sheet .chev {
+        color: var(--muted);
+        padding: 0 6px;
+      }
+      #sheet .snew {
+        margin-top: 10px;
+      }
+      #sheet .mh {
+        padding: 16px 0 4px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+      }
+      #sheet .srow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        min-height: 56px;
+        text-align: left;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      #sheet .srow i {
+        font-style: normal;
+        font-size: 18px;
+        width: 24px;
+        text-align: center;
+      }
+      #sheet .srow b {
+        display: block;
+        font-weight: 500;
+      }
+      #sheet .srow small {
+        color: var(--dim);
+      }
+      #side.browser {
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .urlbar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--chrome);
+      }
+      .urlbar span {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+      }
+      .urlbar button {
+        width: 44px;
+        height: 44px;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .urlbar b {
+        flex: 1;
+        min-width: 0;
+        font-weight: 400;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 9px 10px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .page {
+        flex: 1;
+        background: #f4f4f1;
+        color: #555;
+        display: grid;
+        place-content: center;
+        text-align: center;
+      }
+      #side.dock {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .dlist {
+        flex: 0 1 auto;
+        overflow-y: auto;
+        max-height: 48%;
+      }
+      .dh {
+        display: flex;
+        align-items: center;
+        min-height: 40px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+      }
+      .dh span {
+        flex: 1;
+      }
+      .dh button {
+        width: 48px;
+        height: 40px;
+        font-size: 18px;
+        color: var(--muted);
+      }
+      .drow {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 52px;
+        text-align: left;
+        padding: 0 8px;
+        border-radius: 8px;
+      }
+      .drow.on {
+        background: #202023;
+        box-shadow: inset 3px 0 0 var(--g);
+      }
+      .drow span {
+        flex: 1;
+        min-width: 0;
+      }
+      .drow small {
+        display: block;
+        color: var(--dim);
+      }
+      .drow em {
+        font-style: normal;
+        font-size: 11px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 2px 6px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .dact {
+        flex: none;
+        padding: 10px 0 4px;
+      }
+      .dlog {
+        flex: 1;
+        min-height: 0;
+        font-size: 12px;
+        margin: 0;
+      }
+      .devscreen {
+        height: 420px;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: #0b0b0c;
+        display: grid;
+        place-content: center;
+        text-align: center;
+        color: var(--muted);
+        margin-bottom: 9px;
+      }
+      /* Motion study (#polish): press feedback, material, depth. */
+      #fxbar {
+        position: fixed;
+        left: 50%;
+        bottom: 64px;
+        transform: translateX(-50%);
+        z-index: 9;
+        display: flex;
+        gap: 6px;
+        padding: 6px;
+        border-radius: 12px;
+        background: #26210fee;
+        border: 1px solid #5a4a1c;
+      }
+      #fxbar button {
+        min-height: 40px;
+        padding: 0 12px;
+        border-radius: 8px;
+        color: var(--y);
+        font-size: 13px;
+      }
+      #fxbar button.on {
+        background: var(--y);
+        color: #111;
+        font-weight: 600;
+      }
+      /* Feedback starts on touch-down, not on release. */
+      .polish .rail button,
+      .polish .card,
+      .polish .tile,
+      .polish .srow,
+      .polish .drow,
+      .polish .opt,
+      .polish .snew,
+      .polish .ph button,
+      .polish .btn {
+        transition:
+          transform 110ms ease-out,
+          background-color 160ms ease-out,
+          border-color 160ms ease-out,
+          box-shadow 160ms ease-out;
+      }
+      .polish .rail button:active,
+      .polish .tile:active,
+      .polish .ph button:active {
+        transform: scale(0.92);
+      }
+      .polish .card:active,
+      .polish .srow:active,
+      .polish .drow:active,
+      .polish .opt:active,
+      .polish .snew:active {
+        transform: scale(0.98);
+        background-color: #26262a;
+      }
+      /* The selected rail entry's bar grows in instead of appearing. */
+      .polish .rail button::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 50%;
+        width: 3px;
+        height: 0;
+        border-radius: 0 3px 3px 0;
+        background: var(--g);
+        transform: translateY(-50%);
+        transition: height 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .polish #rrail button::before {
+        left: auto;
+        right: 0;
+        border-radius: 3px 0 0 3px;
+      }
+      .polish .rail button.on,
+      .polish .rail button.onr {
+        box-shadow: none;
+      }
+      .polish .rail button.on::before,
+      .polish .rail button.onr::before {
+        height: 26px;
+      }
+      .polish .rail button.wsp::before {
+        display: none;
+      }
+      /* A sheet is a translucent layer over the half it covers, with a soft edge of light. */
+      .polish #sheet {
+        background: rgba(28, 28, 30, 0.74);
+        -webkit-backdrop-filter: blur(22px) saturate(160%);
+        backdrop-filter: blur(22px) saturate(160%);
+        box-shadow: 0 0 48px rgba(0, 0, 0, 0.55);
+        will-change: transform;
+        touch-action: pan-y;
+      }
+      .polish #sheet.right {
+        border-left: 1px solid rgba(255, 255, 255, 0.09);
+      }
+      .polish #sheet.left {
+        border-right: 1px solid rgba(255, 255, 255, 0.09);
+      }
+      .polish #sheet .sh {
+        cursor: grab;
+      }
+      /* Selection eases in. */
+      .polish .card.sel {
+        box-shadow:
+          0 0 0 1px var(--g),
+          0 6px 20px rgba(94, 194, 122, 0.14);
+      }
+      .polish .sw,
+      .polish .sw::after {
+        transition: all 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      /* Content fades under the board's filter row instead of meeting a hard line. */
+      .polish #board {
+        -webkit-mask-image: linear-gradient(#0000, #000 14px);
+        mask-image: linear-gradient(#0000, #000 14px);
+      }
+      @media (prefers-reduced-transparency: reduce) {
+        .polish #sheet {
+          background: var(--chrome);
+          -webkit-backdrop-filter: none;
+          backdrop-filter: none;
+        }
+      }
+      #menu {
+        display: none;
+        position: fixed;
+        left: 56px;
+        z-index: 5;
+        background: var(--chrome);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 8px 24px #000a;
+      }
+      #menu {
+        max-height: 80vh;
+        overflow-y: auto;
+      }
+      #menu .mh {
+        padding: 10px 16px 4px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--dim);
+        font-weight: 700;
+      }
+      #menu .mh i {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 3px;
+        margin-right: 7px;
+      }
+      .rail button span:not(.pip) {
+        max-width: 46px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #menu button {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 0 16px;
+        min-height: 44px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      /* Sidebar content */
+      #side h3 {
+        margin: 0 0 10px;
+        font-size: 16px;
+      }
+      .box {
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 9px;
+        margin-bottom: 9px;
+        color: var(--muted);
+      }
+      .box b {
+        color: var(--fg);
+      }
+      .peek {
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        background: #0b0b0c;
+        padding: 8px;
+        font:
+          12px ui-monospace,
+          monospace;
+        color: var(--muted);
+        margin-bottom: 9px;
+      }
+      .row {
+        display: block;
+        width: 100%;
+        text-align: left;
+        padding: 12px 4px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .row small {
+        color: var(--dim);
+        display: block;
+      }
+    </style>
+  </head>
+  <body class="m-tasks">
+    <div id="body">
+      <nav id="lrail" class="rail">
+        <button data-mode="ws"><i>&gt;_</i>Work</button>
+        <button data-mode="tasks" class="on"><i>▦</i>Tasks<span class="pip"></span></button>
+        <hr />
+        <!-- Tasks mode: jump to a status. -->
+        <button class="tk" data-jump="reviewing"><i>2</i>Review<span class="pip"></span></button>
+        <button class="tk" data-jump="progress"><i>2</i>Active</button>
+        <button class="tk" data-jump="ready"><i>2</i>Ready</button>
+        <button class="tk" data-jump="backlog"><i>6</i>Backlog</button>
+        <button class="tk" data-jump="done"><i>2</i>Done<span class="pip"></span></button>
+        <!-- Workspace mode: the workspaces, then the sessions open in the current one. -->
+        <button class="ws wsp on" data-wsp aria-label="Workspace Mullion. Switch workspace">
+          <i style="border-color: #3b82f6; color: #3b82f6">M</i><span>Mullion</span>
+          <span class="gdots"
+            ><b style="background: #3b82f6" class="cur"></b><b style="background: #a16207"></b
+            ><b style="background: #c2410c"><u></u></b><b style="background: #8a8a94"></b
+          ></span>
+        </button>
+        <hr class="ws" />
+        <span id="lsess" class="ws" style="display: contents"></span>
+        <button class="ws" data-add="left"><i>＋</i></button>
+        <span class="grow"></span>
+        <button><i>⌕</i>Cmd</button>
+        <button><i>🔔</i></button>
+        <button><i>⚙</i></button>
+      </nav>
+
+      <main id="main">
+        <div id="filters" class="tk">
+          <span class="pill">All projects ▾</span>
+          <span class="pill" style="color: var(--y); border-color: var(--y)">Needs me 3</span>
+          <span class="grow"></span>
+          <span class="btn" style="margin: 0">+ New</span>
+        </div>
+        <div id="board" class="tk"></div>
+        <div id="adhoc" class="tk">▸ Ad-hoc sessions (no task) · 8 · 3 running · 1 needs you</div>
+        <div id="term" class="ws"></div>
+        <div id="kb" class="ws">
+          <span>Esc</span><span>Tab</span><span>⇧Tab</span><span>Ctrl</span><span>↑</span
+          ><span>↓</span><span>🎤</span><span>⋮</span>
+        </div>
+      </main>
+
+      <div id="pane2" class="ws"></div>
+
+      <aside id="side"></aside>
+      <div id="menu"></div>
+
+      <nav id="rrail" class="rail">
+        <button data-view="tasks"><i>☑</i>Tasks</button>
+        <button data-view="github"><i>⎇</i>GitHub</button>
+        <button data-view="git"><i>±</i>Git</button>
+        <button data-view="files"><i>▤</i>Files</button>
+        <button data-view="device"><i>▯</i>Device</button>
+        <button data-view="browser"><i>◎</i>Browser</button>
+        <button data-view="dock"><i>▤</i>Dock</button>
+        <hr class="ws" />
+        <span id="rsess" class="ws" style="display: contents"></span>
+        <button class="ws" data-add="right"><i>＋</i></button>
+      </nav>
+    </div>
+
+    <script>
+      const LANES = [
+        [
+          "backlog",
+          "Backlog",
+          [
+            ["Add dark mode toggle", "aurora-web"],
+            ["Fix flaky reconciler test", "aurora-web"],
+            ["Document webhook retry", "aurora-web"],
+            ["Trim the session payload", "orbit-api"],
+            ["Upgrade the lint config", "aurora-web"],
+            ["Paginate the audit log", "orbit-api"],
+          ],
+        ],
+        [
+          "ready",
+          "Ready",
+          [
+            ["Speed up orders query with an index", "orbit-api"],
+            ["Document the session cookie lifetime", "aurora-web · #11"],
+          ],
+        ],
+        [
+          "progress",
+          "In progress",
+          [
+            ["Add rate limiting to the login route", "aurora-web · #10 · PR #12"],
+            ["Orders list is slow with >10k rows", "orbit-api · #3 · PR #5"],
+          ],
+        ],
+        [
+          "reviewing",
+          "Reviewing",
+          [
+            ["Cache the session lookup", "aurora-web · PR #17"],
+            ["Fix focus loss in the login form", "aurora-web · #7 · PR #14", "needs your approval"],
+          ],
+        ],
+        [
+          "done",
+          "Done · Failed",
+          [
+            ["Remove the legacy flag", "aurora-web · merged"],
+            ["Migrate the orders table", "orbit-api · failed", "failed, needs a decision"],
+          ],
+        ],
+      ];
+      const $ = (s, r = document) => r.querySelector(s);
+      const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+      const state = {
+        mode: "tasks",
+        rails: true,
+        stack: "open",
+        view: null,
+        task: null,
+        // Which sessions this device shows on each half. Device-local: the workspace's saved
+        // layout (shared with desktop) is not edited.
+        left: "task #7 worker · aurora-web",
+        right: null,
+        // Brainstorm: sessions assigned to the right half are listed in the right rail instead.
+        rs: "right",
+        side: {},
+      };
+      // Panes open in this workspace. A device screen is a pane like a session.
+      const SESS = [
+        ["task #7 worker · aurora-web", "◆", "#7"],
+        ["claude · orbit-api", "✳", "orbit", 1],
+        ["codex · aurora-web", "◇", "aurora"],
+      ];
+      const WSPS = [
+        ["AI Usage", "#3b82f6", ["Mullion", "Runway"]],
+        ["Homelab", "#a16207", ["Landing", "Management", "Space Use"]],
+        ["Personal Finance", "#c2410c", ["Pocket", "Investment Ideas", "Real Estate"]],
+        ["", "#8a8a94", ["branchDAM", "harmonize", "Sanctuary"]],
+      ];
+      const onRight = (s) => state.rs === "right" && state.side[s] === "right";
+      const sessBtn = (x) =>
+        `<button class="ws sess" data-sess="${x[0]}"><i>${x[1]}</i>${x[2]}${x[3] ? '<span class="pip"></span>' : ""}</button>`;
+
+      const board = $("#board");
+      for (const [k, name, cards] of LANES) {
+        const need = cards.some((c) => c[2]);
+        const lane = document.createElement("div");
+        lane.className = "lane" + (k === "backlog" || k === "done" ? " closed" : "");
+        lane.dataset.k = k;
+        lane.innerHTML =
+          `<button class="hd"><span class="car">▾ </span>${name} ${cards.length}${need ? " <em>●</em>" : ""}</button>` +
+          cards
+            .map(
+              (c) =>
+                `<button class="card" data-task="${c[0]}" data-meta="${c[1]}">${c[0]}<small>${c[1]}</small>${
+                  c[2] ? `<span class="need">${c[2]}</span>` : ""
+                }</button>`,
+            )
+            .join("");
+        board.append(lane);
+      }
+
+      function sideHtml() {
+        if (state.view === "device")
+          return `<h3>Devices</h3>
+            <div class="box"><b>Pixel 9 emulator</b> · running <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Stop</span></div>
+            <div class="devscreen">Pixel 9 screen<br><small>live, touch goes to the device</small></div>
+            <div class="box"><b>Pixel Tablet</b> · stopped <span class="btn ghost" style="float:right;padding:6px 10px;margin:-4px 0 0">Start</span></div>`;
+        if (state.view === "browser")
+          return `<div class="urlbar"><span>←</span><span>→</span><span>⟳</span><b>${browserUrl}</b><button data-urls aria-label="Running services and saved pages">▾</button></div>
+            <div class="page">The session's browser<br><small>the page the agent on the left is driving</small></div>`;
+        if (state.view === "dock") {
+          // [id, name, detail, dot colour, image pill]
+          const groups = [
+            [
+              "Commands",
+              "",
+              [
+                ["dev", "dev", "npm run dev · :5173 · running", "var(--g)", ""],
+                ["tests", "tests", "vitest --watch · 1 failing", "var(--y)", ""],
+              ],
+            ],
+            [
+              "Stack · aurora-dev",
+              "stack",
+              [
+                ["api", "api", "running", "var(--g)", "local build"],
+                ["db", "db", "running", "var(--g)", "postgres:16"],
+              ],
+            ],
+            [
+              "Stack · aurora-prod",
+              "stack",
+              [
+                ["web", "web", "running", "var(--g)", "1.4.2 · update"],
+                ["worker", "worker", "exited (1)", "var(--r, #e5575a)", "1.4.2"],
+              ],
+            ],
+          ];
+          const all = groups.flatMap((g) => g[2].map((m) => [...m, g[0], g[1]]));
+          const sel = all.find((m) => m[5] + m[0] === dockSel) || all[0];
+          const isStack = sel[6] === "stack";
+          return (
+            `<h3>Dock · aurora-web</h3><div class="dlist">` +
+            groups
+              .map(
+                (g) =>
+                  `<div class="dh"><span>${g[0]}</span>${g[1] ? `<button data-dockmenu="${g[0]}" aria-label="Stack actions">⋯</button>` : ""}</div>` +
+                  g[2]
+                    .map(
+                      (m) =>
+                        `<button class="drow${g[0] + m[0] === sel[5] + sel[0] ? " on" : ""}" data-dock="${g[0] + m[0]}"><b style="color:${m[3]}">●</b><span>${m[1]}<small>${m[2]}</small></span>${m[4] ? `<em>${m[4]}</em>` : ""}</button>`,
+                    )
+                    .join(""),
+              )
+              .join("") +
+            `</div><div class="dact">` +
+            (isStack
+              ? `<span class="btn ghost">Restart</span><span class="btn ghost">Stop</span><span class="btn ghost">Check for update</span>`
+              : `<span class="btn ghost">Restart</span><span class="btn ghost">Stop</span><span class="btn ghost">Branch ▾</span>`) +
+            `</div><div class="peek dlog">${sel[1]} · log (read only)<br><br>${
+              isStack
+                ? "listening on :8080<br>GET /health 200<br>GET /health 200"
+                : "VITE v6 ready in 412 ms<br>➜ Local: http://localhost:5173/<br>[hmr] update /src/Login.tsx"
+            }</div>`
+          );
+        }
+        if (state.view !== "tasks")
+          return `<h3>${state.view}</h3><div class="box">Placeholder for the ${state.view} view. Tap its rail tab again to close.</div>`;
+        if (!state.task)
+          return (
+            `<h3>Tasks</h3>` +
+            LANES.flatMap((l) => l[2])
+              .map(
+                (c) =>
+                  `<button class="row" data-task="${c[0]}" data-meta="${c[1]}">${c[0]}<small>${c[1]}</small></button>`,
+              )
+              .join("")
+          );
+        return `<h3><button data-back>←</button> ${state.task[0]}</h3>
+          <div class="box"><b>Status</b> · ${state.task[1]}</div>
+          <div><span class="btn">Approve &amp; merge</span><span class="btn ghost">Retry</span></div>
+          <div class="box"><b>Review</b> · verdict approved · round 2</div>
+          <div class="peek">worker session · idle<br>✓ 12 passed · pushed 2 commits</div>
+          <button class="btn ghost" data-open-ws>Open session in Workspace</button>
+          <div class="box" style="margin-top:10px"><b>Details</b> · ${state.task[1]}</div>
+          <div class="box"><b>Timeline</b> · claimed · PR opened · review round 1 · review round 2</div>`;
+      }
+
+      const sheet = document.createElement("div");
+      sheet.id = "sheet";
+      $("#body").append(sheet);
+      // The launcher: the same choices as the desktop launcher, laid out for touch.
+      let dockSel = "";
+      let browserUrl = "localhost:5173/login";
+      let addTab = "new";
+      let agent = "claude";
+      let skipOverride = null;
+      function addSheet(side) {
+        const other = SESS.filter((x) => onRight(x[0]) !== (side === "right"));
+        const act = side === "right" ? "mvr" : "mvl";
+        const row = (x, a) =>
+          `<button class="srow" data-put="${a}|${x[0]}"><i>${x[1]}</i><span><b>${x[0].split(" · ")[0]}</b><small>${x[0].split(" · ")[1] || ""}</small></span></button>`;
+        // [glyph, name, skip-permissions on in settings, models]
+        const AGENTS = [
+          ["✳", "claude", 1, "Default (opusplan)"],
+          ["◇", "codex", 1, "Default (gpt-5)"],
+          ["▮", "opencode", 1, "Default"],
+          ["△", "agy", 1, "Default"],
+          ["π", "pi", 0, "Default"],
+          ["♪", "mcode", 0, "Default"],
+        ];
+        const cur = AGENTS.find((a) => a[1] === agent);
+        const skip = skipOverride ?? !!cur[2];
+        const tile = (a) =>
+          `<button class="tile${a[1] === agent ? " on" : ""}" data-agent="${a[1]}"><i>${a[0]}</i>${a[1]}${
+            a[2] ? '<em class="flag" title="Skips permission prompts (from settings)">⚠</em>' : ""
+          }</button>`;
+        const fresh =
+          `<div class="mh">Where</div>` +
+          `<div class="where"><button data-put="keep|">▣ mullion-session-manager ▾</button><button data-put="keep|">this server ▾</button></div>` +
+          `<button class="opt" data-put="keep|"><span>Isolate in a new worktree</span><i class="sw"></i></button>` +
+          `<div class="mh">Agent</div><div class="tiles">` +
+          AGENTS.map(tile).join("") +
+          `</div>` +
+          `<button class="opt" data-put="keep|"><span>Model<small>${cur[3]}</small></span><b class="chev">▾</b></button>` +
+          `<button class="opt" data-skip><span>Skip permission prompts<small>${
+            skipOverride === null
+              ? cur[2]
+                ? "on in settings for " + agent
+                : "off in settings for " + agent
+              : "overridden for this session"
+          }</small></span><i class="sw${skip ? " on" : ""}"></i></button>` +
+          `<button class="snew" data-put="noop|">Launch ${agent}</button>` +
+          `<div class="mh">Shells and scripts · tap to launch</div>` +
+          [
+            ["bash", "›", ""],
+            ["zsh", "›", ""],
+            ["dev", "›", "npm run dev · package.json"],
+          ]
+            .map(
+              (x) =>
+                `<button class="srow" data-put="noop|"><i>${x[1]}</i><span><b>${x[0]}</b><small>${x[2]}</small></span></button>`,
+            )
+            .join("");
+        const existing =
+          `<div class="sfind">Search sessions…</div>` +
+          (other.length
+            ? `<div class="mh">On the ${side === "right" ? "left" : "right"} half</div>`
+            : "") +
+          other.map((x) => row(x, act)).join("") +
+          `<div class="mh">Mullion · not open</div>` +
+          [
+            ["claude · docs cleanup", "✳"],
+            ["codex · flaky test", "◇"],
+          ]
+            .map((x) => row(x, "noop"))
+            .join("") +
+          `<div class="mh">Runway · not open</div>` +
+          [["claude · importer", "✳"]].map((x) => row(x, "noop")).join("");
+        sheet.innerHTML =
+          `<div class="sh"><b>Add to the ${side} half</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+          `<div class="tabs"><button data-tab="new" class="${addTab === "new" ? "on" : ""}">New session</button><button data-tab="open" class="${addTab === "open" ? "on" : ""}">Open existing</button></div>` +
+          (addTab === "new" ? fresh : existing);
+        sheet.className = side;
+        showSheet();
+      }
+      function wsSheet() {
+        sheet.innerHTML =
+          `<div class="sh"><b>Workspaces</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+          `<div class="sfind">Search workspaces…</div>` +
+          WSPS.map(
+            ([g, c, names]) =>
+              `<div class="mh"><i style="background:${c}"></i>${g || "Ungrouped"}</div>` +
+              names
+                .map(
+                  (n) =>
+                    `<button class="srow" data-pickws="${n}|${c}"><i style="color:${c}">▦</i><span><b>${n}</b></span>${
+                      n === "Runway" || n === "Pocket" ? '<em class="act"></em>' : ""
+                    }</button>`,
+                )
+                .join(""),
+          ).join("") +
+          `<button class="opt" data-put="noop|"><span>＋ New workspace</span></button>`;
+        sheet.className = "left";
+        showSheet();
+      }
+      // ---- Motion study (#polish). Off by default, so the wireframe frames stay plain. ----
+      const fx = {
+        on: false,
+        slow: 1,
+        reduce: matchMedia("(prefers-reduced-motion: reduce)").matches,
+      };
+      // A critically damped spring on translateX. It always starts from where the element is
+      // now and from its current speed, so it can be interrupted or reversed at any moment.
+      function springX(el, to, v0, done) {
+        cancelAnimationFrame(el._raf);
+        let x = el._x ?? 0;
+        let v = v0 ?? el._v ?? 0;
+        let last = performance.now();
+        const k = ((2 * Math.PI) / 0.36) ** 2;
+        const c = 2 * Math.sqrt(k);
+        const step = (now) => {
+          const dt = Math.min(0.032, (now - last) / 1000) / fx.slow;
+          last = now;
+          v += (-k * (x - to) - c * v) * dt;
+          x += v * dt;
+          if (Math.abs(x - to) < 0.5 && Math.abs(v) < 8) {
+            x = to;
+            v = 0;
+          }
+          el._x = x;
+          el._v = v;
+          el.style.transform = x ? `translateX(${x}px)` : "";
+          if (x === to) return done && done();
+          el._raf = requestAnimationFrame(step);
+        };
+        el._raf = requestAnimationFrame(step);
+      }
+      const sheetOut = () => (sheet.className === "left" ? -1 : 1) * (sheet.offsetWidth + 40);
+      function showSheet() {
+        const wasOpen = sheet.style.display === "block" && !sheet._closing;
+        sheet.style.display = "block";
+        sheet._closing = false;
+        if (!fx.on || wasOpen) return;
+        if (fx.reduce) return void sheet.animate([{ opacity: 0 }, { opacity: 1 }], 150);
+        // Enters from the rail it belongs to.
+        sheet._x = sheet._x || sheetOut();
+        springX(sheet, 0);
+      }
+      function hideSheet(v0) {
+        if (sheet.style.display !== "block") return;
+        const gone = () => {
+          sheet.style.display = "none";
+          sheet.style.transform = "";
+          sheet._x = 0;
+          sheet._closing = false;
+        };
+        if (!fx.on || fx.reduce) return gone();
+        // Leaves the way it came.
+        sheet._closing = true;
+        springX(sheet, sheetOut(), v0, gone);
+      }
+      // The sheet follows the finger and can be thrown back to its rail.
+      let drag = null;
+      sheet.addEventListener("pointerdown", (e) => {
+        if (!fx.on || !e.target.closest(".sh") || e.target.closest("button")) return;
+        sheet.setPointerCapture(e.pointerId);
+        cancelAnimationFrame(sheet._raf);
+        drag = { x0: e.clientX - (sheet._x || 0), pts: [[e.clientX, e.timeStamp]] };
+      });
+      sheet.addEventListener("pointermove", (e) => {
+        if (!drag) return;
+        const dir = sheet.className === "left" ? -1 : 1;
+        let x = e.clientX - drag.x0;
+        // Towards its rail it tracks 1:1; the other way it resists.
+        if (x * dir < 0) x = (x * 0.55 * 300) / (300 + 0.55 * Math.abs(x));
+        sheet._x = x;
+        sheet.style.transform = `translateX(${x}px)`;
+        drag.pts.push([e.clientX, e.timeStamp]);
+        if (drag.pts.length > 5) drag.pts.shift();
+      });
+      const endDrag = (e) => {
+        if (!drag) return;
+        const [a, b] = [drag.pts[0], drag.pts[drag.pts.length - 1]];
+        // A finger that paused before lifting has no speed left to hand over.
+        const still = e.timeStamp - b[1] > 80;
+        const v = !still && b[1] > a[1] ? ((b[0] - a[0]) / (b[1] - a[1])) * 1000 : 0;
+        drag = null;
+        const dir = sheet.className === "left" ? -1 : 1;
+        // Decide from where the throw is heading, not from where the finger stopped.
+        const projected = sheet._x + (((v / 1000) * 0.998) / (1 - 0.998)) * 0.25;
+        if (projected * dir > sheet.offsetWidth / 2) hideSheet(v);
+        else springX(sheet, 0, v);
+      };
+      sheet.addEventListener("pointerup", endDrag);
+      sheet.addEventListener("pointercancel", endDrag);
+      const ease = "cubic-bezier(0.2, 0.8, 0.2, 1)";
+      const play = (el, frames, ms) =>
+        fx.on &&
+        el.animate(frames, { duration: (fx.reduce ? 120 : ms * 1.2) * fx.slow, easing: ease });
+      let prev = {};
+
+      function render() {
+        hideSheet();
+        // Before the layout changes: where every card is now.
+        const before = new Map(
+          fx.on && !fx.reduce ? $$(".card").map((c) => [c, c.getBoundingClientRect()]) : [],
+        );
+        const open = !!state.view;
+        const stacked = state.stack === "always" || (state.stack === "open" && open);
+        document.body.className =
+          `m-${state.mode}` +
+          (state.rails ? " rails" : "") +
+          (open ? " open" : "") +
+          (stacked ? " stacked" : "") +
+          (state.mode === "ws" && !open && state.right ? " split" : "") +
+          (fx.on ? " polish" : "");
+        $("#lsess").innerHTML = SESS.filter((x) => !onRight(x[0]))
+          .map(sessBtn)
+          .join("");
+        const rs = SESS.filter((x) => onRight(x[0]));
+        $("#rsess").innerHTML = rs.map(sessBtn).join("");
+        const canSplit = SESS.filter((x) => !onRight(x[0])).length > 1;
+        $("#term").innerHTML =
+          `<div class="ph"><b>${state.left}</b>` +
+          (canSplit ? `<button data-put="mvr|${state.left}">To right ⇥</button>` : "") +
+          `</div>\n> ▯`;
+        $("#pane2").innerHTML =
+          `<div class="ph"><b>${state.right}</b><button data-put="mvl|${state.right}">⇤ To left</button></div>\n> ▯`;
+        $$("[data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === state.mode));
+        $$("#rrail button").forEach((b) => b.classList.toggle("on", b.dataset.view === state.view));
+        $$("#lrail [data-sess]").forEach((b) => {
+          b.classList.toggle("on", b.dataset.sess === state.left);
+          b.classList.toggle("onr", b.dataset.sess === state.right);
+        });
+        $$("#rrail [data-sess]").forEach((b) =>
+          b.classList.toggle("on", !open && b.dataset.sess === state.right),
+        );
+        $$("#opts .o").forEach((o) =>
+          $$("button", o).forEach((b) =>
+            b.classList.toggle(
+              "on",
+              b.dataset.v ===
+                String(o.dataset.opt === "rails" ? +state.rails : state[o.dataset.opt]),
+            ),
+          ),
+        );
+        $$(".card").forEach((c) =>
+          c.classList.toggle("sel", !!state.task && c.dataset.task === state.task[0]),
+        );
+        $("#side").innerHTML = open ? sideHtml() : "";
+        $("#side").className = state.view || "";
+        if (fx.on) {
+          // Cards travel to their new place when the board changes shape.
+          for (const [c, a] of before) {
+            const b = c.getBoundingClientRect();
+            if (!a.width || !b.width) {
+              if (b.width) play(c, [{ opacity: 0 }, { opacity: 1 }], 260);
+              continue;
+            }
+            const dx = a.left - b.left;
+            const dy = a.top - b.top;
+            if (dx || dy || a.width !== b.width)
+              play(
+                c,
+                [
+                  {
+                    transform: `translate(${dx}px, ${dy}px) scaleX(${a.width / b.width})`,
+                    transformOrigin: "0 0",
+                  },
+                  { transform: "none", transformOrigin: "0 0" },
+                ],
+                420,
+              );
+          }
+          const view = state.view + "|" + (state.task ? state.task[0] : "");
+          // The half itself snaps (a terminal must not re-flow every frame); its content arrives.
+          if (open && view !== prev.view)
+            play(
+              $("#side"),
+              [
+                { opacity: 0, transform: "translateY(8px) scale(0.985)" },
+                { opacity: 1, transform: "none" },
+              ],
+              260,
+            );
+          if (state.mode !== prev.mode && prev.mode)
+            play(
+              $("#main"),
+              [
+                { opacity: 0, transform: "scale(0.985)" },
+                { opacity: 1, transform: "none" },
+              ],
+              240,
+            );
+          if (state.right && state.right !== prev.right && !open)
+            play(
+              $("#pane2"),
+              [
+                { opacity: 0, transform: "translateX(16px)" },
+                { opacity: 1, transform: "none" },
+              ],
+              260,
+            );
+          prev = { view, mode: state.mode, right: state.right };
+        }
+        // Keep the tapped card in view when the layout changes under it.
+        const sel = $(".card.sel");
+        if (sel) {
+          sel.closest(".lane").classList.remove("closed");
+          sel.scrollIntoView({ block: "center", inline: "center" });
+        }
+      }
+
+      document.addEventListener("click", (e) => {
+        const t = e.target.closest("button");
+        if (!t) return;
+        if (t.dataset.v !== undefined) {
+          const o = t.parentElement.dataset.opt;
+          state[o] = o === "rails" ? t.dataset.v === "1" : t.dataset.v;
+          if (o === "rs") ((state.right = null), (state.side = {}));
+        } else if (t.dataset.mode) state.mode = t.dataset.mode;
+        else if (t.dataset.view) {
+          // Tapping the open view's tab closes the sidebar.
+          if (state.view === t.dataset.view) ((state.view = null), (state.task = null));
+          else ((state.view = t.dataset.view), (state.task = null));
+        } else if (t.dataset.task) {
+          state.task = [t.dataset.task, t.dataset.meta];
+          state.view = "tasks";
+        } else if (t.dataset.back !== undefined) state.task = null;
+        else if (t.dataset.openWs !== undefined) state.mode = "ws";
+        else if (t.dataset.jump) {
+          const lane = $(`.lane[data-k="${t.dataset.jump}"]`);
+          lane.classList.remove("closed");
+          render();
+          lane.scrollIntoView({ block: "start", inline: "start", behavior: "smooth" });
+          return;
+        } else if (t.dataset.sess) {
+          if (pressed) return void (pressed = false);
+          const s = t.dataset.sess;
+          if (t.closest("#rrail")) {
+            // A session in the right rail behaves like a sidebar tab: tap shows it, tap again hides it.
+            if (state.right === s && !state.view) state.right = null;
+            else ((state.right = s), (state.view = null), (state.task = null));
+          } else if (state.right === s) {
+            // Tapping the session that is on the right half closes the right half.
+            state.right = null;
+          } else state.left = s;
+        } else if (t.dataset.put) {
+          const [act, s] = t.dataset.put.split("|");
+          if (act === "keep") return;
+          if (act === "close") state.right = null;
+          else if (act === "left") {
+            if (state.right === s) state.right = null;
+            state.left = s;
+          } else if (act === "right" && state.left !== s) {
+            ((state.right = s), (state.view = null), (state.task = null));
+          } else if (act === "mvr") {
+            const rest = SESS.map((x) => x[0]).filter((x) => x !== s && !onRight(x));
+            if (rest.length) {
+              state.side[s] = "right";
+              if (state.left === s) state.left = rest[0];
+              ((state.right = s), (state.view = null), (state.task = null));
+            }
+          } else if (act === "mvl") {
+            delete state.side[s];
+            if (state.right === s) state.right = null;
+          }
+          closeMenu();
+        } else if (t.dataset.add) {
+          addSheet(t.dataset.add);
+          return;
+        } else if (t.dataset.urls !== undefined) {
+          // Quick pick: what is running for this project right now, then saved pages.
+          const row = (dot, name, url, sub) =>
+            `<button class="srow" data-goto="${url}"><i style="color:${dot}">●</i><span><b>${name}</b><small>${url}${sub ? " · " + sub : ""}</small></span></button>`;
+          sheet.innerHTML =
+            `<div class="sh"><b>Open in browser</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+            `<div class="mh">Running now · aurora-web</div>` +
+            row("var(--g)", "dev", "localhost:5173", "Dock command") +
+            row("var(--g)", "api", "localhost:8080", "aurora-dev") +
+            row("var(--g)", "web", "localhost:3000", "aurora-prod") +
+            `<div class="mh">Saved for this project</div>` +
+            row("var(--dim)", "Storybook", "localhost:6006", "") +
+            row("var(--dim)", "Staging", "staging.aurora.example", "") +
+            `<div class="mh">Recent</div>` +
+            row("var(--dim)", "Login page", "localhost:5173/login", "");
+          sheet.className = "right";
+          showSheet();
+          return;
+        } else if (t.dataset.goto) {
+          browserUrl = t.dataset.goto;
+        } else if (t.dataset.dock) {
+          dockSel = t.dataset.dock;
+        } else if (t.dataset.dockmenu) {
+          // Stack-wide actions, as a sheet over the right half with rows at touch size.
+          sheet.innerHTML =
+            `<div class="sh"><b>${t.dataset.dockmenu}</b><button data-put="noop|" aria-label="Close">✕</button></div>` +
+            [
+              "Restart stack",
+              "Apply compose changes",
+              "Pull and restart",
+              "Rebuild and restart",
+              "Stop stack",
+            ]
+              .map((x) => `<button class="opt" data-put="noop|"><span>${x}</span></button>`)
+              .join("");
+          sheet.className = "right";
+          showSheet();
+          return;
+        } else if (t.dataset.agent) {
+          // Selecting an agent shows its options; nothing launches until "Launch".
+          agent = t.dataset.agent;
+          skipOverride = null;
+          addSheet(sheet.className);
+          return;
+        } else if (t.dataset.skip !== undefined) {
+          const base = ["claude", "codex", "opencode", "agy"].includes(agent);
+          skipOverride = !(skipOverride ?? base);
+          addSheet(sheet.className);
+          return;
+        } else if (t.dataset.tab) {
+          addTab = t.dataset.tab;
+          addSheet(sheet.className);
+          return;
+        } else if (t.dataset.wsp !== undefined) {
+          wsSheet();
+          return;
+        } else if (t.dataset.pickws) {
+          const [n, c] = t.dataset.pickws.split("|");
+          const chip = $("[data-wsp]");
+          chip.querySelector("i").textContent = n[0];
+          chip.querySelector("i").style.cssText = `border-color:${c};color:${c}`;
+          chip.querySelector("span").textContent = n;
+          $$(".gdots b", chip).forEach((b, i) => b.classList.toggle("cur", WSPS[i][1] === c));
+          hideSheet();
+          closeMenu();
+          return;
+        } else if (t.dataset.new !== undefined) {
+          const items = ["New session", "New task", "New workspace", "New workspace group"];
+          if (state.mode === "tasks") items.unshift(items.splice(1, 1)[0]);
+          menu.innerHTML = items.map((x) => `<button data-put="noop|">${x}</button>`).join("");
+          showMenu(t);
+          return;
+        } else if (t.classList.contains("hd")) {
+          t.parentElement.classList.toggle("closed");
+          return;
+        }
+        render();
+      });
+      // Long press (or right click) on a session in the rail: pick the half it shows on.
+      let pressed = false;
+      let timer = 0;
+      const menu = $("#menu");
+      function closeMenu() {
+        menu.style.display = "none";
+      }
+      function showMenu(b) {
+        const r = b.getBoundingClientRect();
+        const right = r.left > innerWidth / 2;
+        menu.style.left = right ? "auto" : "56px";
+        menu.style.right = right ? "56px" : "auto";
+        menu.style.display = "block";
+        menu.style.top = Math.min(r.top, innerHeight - menu.offsetHeight - 8) + "px";
+      }
+      function openMenu(b) {
+        const s = b.dataset.sess;
+        if (state.rs === "right")
+          menu.innerHTML = onRight(s)
+            ? `<button data-put="mvl|${s}">Move to the left rail</button>`
+            : `<button data-put="mvr|${s}">Move to the right rail</button>`;
+        else
+          menu.innerHTML =
+            `<button data-put="left|${s}">Show on the left half</button>` +
+            `<button data-put="right|${s}">Show on the right half</button>` +
+            (state.right ? `<button data-put="close|">Close the right half</button>` : "");
+        showMenu(b);
+      }
+      document.addEventListener("pointerdown", (e) => {
+        if (!e.target.closest("#menu")) closeMenu();
+        const b = e.target.closest(".rail [data-sess]");
+        if (!b) return;
+        pressed = false;
+        timer = setTimeout(() => {
+          pressed = true;
+          openMenu(b);
+        }, 450);
+      });
+      for (const ev of ["pointerup", "pointercancel"])
+        document.addEventListener(ev, () => clearTimeout(timer));
+      document.addEventListener("contextmenu", (e) => {
+        const b = e.target.closest(".rail [data-sess]");
+        if (!b) return;
+        e.preventDefault();
+        clearTimeout(timer);
+        pressed = false;
+        openMenu(b);
+      });
+
+      // Deep link, used by mockup.html to embed fixed states: #ws&task&split&rsright&view=dock&addsheet&wssheet
+      const flag = (k) => location.hash.slice(1).split("&").includes(k);
+      if (flag("rails")) state.rails = true;
+      if (flag("ws")) state.mode = "ws";
+      const st = location.hash.match(/stack=(\w+)/);
+      if (st) state.stack = st[1];
+      if (flag("split")) state.right = "claude · orbit-api";
+      const vw = location.hash.match(/view=(\w+)/);
+      if (vw) state.view = vw[1];
+      const after = () => {
+        if (flag("addsheet")) addSheet("right");
+        if (flag("wssheet")) wsSheet();
+      };
+      if (flag("rsright")) {
+        state.rs = "right";
+        state.side["claude · orbit-api"] = "right";
+        state.right = "claude · orbit-api";
+      }
+      if (flag("task")) {
+        state.view = "tasks";
+        state.task = ["Fix focus loss in the login form", "aurora-web · #7 · PR #14"];
+      }
+      render();
+      after();
+      // #polish: the motion study, with a bar to switch it off and to slow it down.
+      if (flag("polish")) {
+        fx.on = true;
+        const bar = document.createElement("div");
+        bar.id = "fxbar";
+        bar.innerHTML = `<button data-fx="on" class="on">Motion on</button><button data-fx="slow">Slow ×5</button>`;
+        document.body.append(bar);
+        bar.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const b = e.target.closest("button");
+          if (!b) return;
+          if (b.dataset.fx === "on") fx.on = !fx.on;
+          else fx.slow = fx.slow === 1 ? 5 : 1;
+          b.classList.toggle("on", b.dataset.fx === "on" ? fx.on : fx.slow !== 1);
+          b.textContent = b.dataset.fx === "on" ? (fx.on ? "Motion on" : "Motion off") : "Slow ×5";
+          render();
+        });
+        render();
+      }
+      // #size: show the viewport this device reports, to check real foldables against the design.
+      if (flag("size")) {
+        const s = document.createElement("div");
+        s.style.cssText =
+          "position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);z-index:9;background:#d7b06a;color:#111;padding:14px 18px;border-radius:12px;font:600 20px system-ui;text-align:center";
+        const show = () =>
+          (s.innerHTML = `${innerWidth} × ${innerHeight} CSS px<br><small>pixel ratio ${devicePixelRatio} · half = ${Math.round(innerWidth / 2 - 48)}px</small>`);
+        addEventListener("resize", show);
+        show();
+        document.body.append(s);
+      }
+    </script>
+  </body>
+</html>
