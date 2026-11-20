@@ -103,7 +103,7 @@ describe("ProtocolTrace", () => {
   it("strips control bytes from the whole line, not only from the tags", () => {
     const lines: string[] = [];
     const trace = new ProtocolTrace(
-      "42\n[forged] line",
+      "42\n\u0085\u2028[forged] line",
       0,
       (l) => lines.push(l),
       () => 500,

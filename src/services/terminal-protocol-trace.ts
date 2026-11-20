@@ -42,7 +42,9 @@ export function setProtocolTraceEnabled(value: boolean): void {
 // filtered by COLOR_OSC_IDENTS below, same shape as attention-detect.ts's.
 const OSC_RE = /\x1b\](\d+)(?:;([^\x07\x1b]{0,64}))?(?:\x07|\x1b\\)/g;
 const CSI_RE = /\x1b\[([?>=<]?)([0-9;:]*)([$!]?)([nRcIOpu])/g;
-const CONTROL_BYTES_RE = /[\x00-\x1f\x7f]/g;
+// C0, DEL, C1 (which holds NEL) and the Unicode line/paragraph separators:
+// everything a log reader could take for a line break.
+const CONTROL_BYTES_RE = /[\x00-\x1f\x7f-\x9f\u2028\u2029]/g;
 /* eslint-enable no-control-regex */
 
 // Palette-affecting OSC: 4 (palette entry), 10/11/12 (fg/bg/cursor) and the
@@ -127,6 +129,7 @@ export class ProtocolTrace {
       `+${this.now() - this.startedAt}ms ${tags.join(" ")}${loopMax}`;
     // The tags cannot carry a control byte (describeTerminalProtocol), but the
     // whole line is stripped here so the guarantee holds at the sink itself.
+    // describeOsc keeps its own strip: its tags are an exported contract.
     this.sink(line.replace(CONTROL_BYTES_RE, ""));
   }
 
