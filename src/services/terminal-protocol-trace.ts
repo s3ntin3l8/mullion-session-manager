@@ -122,10 +122,12 @@ export class ProtocolTrace {
     if (this.lines >= PROTOCOL_TRACE_MAX_COLOR_LINES) return;
     if (this.lines >= PROTOCOL_TRACE_MAX_LINES && !color) return;
     this.lines += 1;
-    this.sink(
+    const line =
       `[pty-manager] session ${this.sessionId} protocol ${direction} ` +
-        `+${this.now() - this.startedAt}ms ${tags.join(" ")}${loopMax}`,
-    );
+      `+${this.now() - this.startedAt}ms ${tags.join(" ")}${loopMax}`;
+    // The tags cannot carry a control byte (describeTerminalProtocol), but the
+    // whole line is stripped here so the guarantee holds at the sink itself.
+    this.sink(line.replace(CONTROL_BYTES_RE, ""));
   }
 
   /** " loop-max=Nms" for a session's first 30 s (the startup probes), "" after. */

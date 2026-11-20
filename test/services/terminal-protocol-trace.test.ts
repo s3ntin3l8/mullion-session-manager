@@ -100,6 +100,18 @@ describe("ProtocolTrace", () => {
     ]);
   });
 
+  it("strips control bytes from the whole line, not only from the tags", () => {
+    const lines: string[] = [];
+    const trace = new ProtocolTrace(
+      "42\n[forged] line",
+      0,
+      (l) => lines.push(l),
+      () => 500,
+    );
+    trace.record("from-pty", "\x1b[6n");
+    expect(lines).toEqual(["[pty-manager] session 42[forged] line protocol from-pty +500ms csi6n"]);
+  });
+
   it("stops reporting event-loop stall once the session is past its startup window", () => {
     const { trace, lines, advance } = make();
     advance(31_000);
