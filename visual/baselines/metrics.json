@@ -8,24 +8,14 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
+        "id": "nested-interactive",
         "impact": "serious",
         "nodes": 1
       },
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 5
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 8
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 8
+        "nodes": 42
       }
     ],
     "console": []
@@ -39,24 +29,14 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
+        "id": "nested-interactive",
         "impact": "serious",
         "nodes": 1
       },
       {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 5
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 8
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 8
+        "nodes": 42
       }
     ],
     "console": []
@@ -102,24 +82,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 7
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 44
       }
     ],
     "console": []
@@ -133,24 +98,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 7
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 44
       }
     ],
     "console": []
@@ -164,29 +114,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 2
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 6
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 9
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 44
       }
     ],
     "console": []
@@ -200,29 +130,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 2
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 6
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 9
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 44
       }
     ],
     "console": []
@@ -236,29 +146,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 2
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 6
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 9
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 44
       }
     ],
     "console": []
@@ -272,29 +162,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 2
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 6
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 9
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 44
       }
     ],
     "console": []
@@ -308,29 +178,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 2
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 6
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 9
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 44
       }
     ],
     "console": []
@@ -344,29 +194,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 2
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 6
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 9
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 44
       }
     ],
     "console": []
@@ -380,24 +210,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 7
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 44
       }
     ],
     "console": []
@@ -411,24 +226,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 7
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 44
       }
     ],
     "console": []
@@ -442,24 +242,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 7
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 44
       }
     ],
     "console": []
@@ -473,24 +258,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 7
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 44
       }
     ],
     "console": []
@@ -504,29 +274,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 5
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 27
       }
     ],
     "console": []
@@ -540,29 +290,9 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
-        "id": "heading-order",
-        "impact": "moderate",
-        "nodes": 1
-      },
-      {
-        "id": "label-content-name-mismatch",
-        "impact": "serious",
-        "nodes": 3
-      },
-      {
-        "id": "nested-interactive",
-        "impact": "serious",
-        "nodes": 5
-      },
-      {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 27
       }
     ],
     "console": []
@@ -904,6 +634,70 @@
     "console": []
   },
   "tablet-tasks-board.fold.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 2
+      }
+    ],
+    "console": []
+  },
+  "workspace-picker.desktop.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 14
+      }
+    ],
+    "console": []
+  },
+  "workspace-picker.desktop.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 14
+      }
+    ],
+    "console": []
+  },
+  "workspace-picker.fold.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 2
+      }
+    ],
+    "console": []
+  },
+  "workspace-picker.fold.light.png": {
     "status": 200,
     "overflow": false,
     "unnamed": 0,
