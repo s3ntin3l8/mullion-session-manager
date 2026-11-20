@@ -1,0 +1,522 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { DiscoveredProject } from "../api/index.js";
+import { DEFAULT_SETTINGS } from "../api/index.js";
+import { useDashboardStore } from "../store/index.js";
+import { jsonResponse } from "../test/jsonResponse.js";
+import { mockFetch } from "../test/mockFetch.js";
+import { resetStore } from "../test/resetStore.js";
+import { dropdownOptions, pickDropdownOption } from "../test/dropdown.js";
+import { makeProject } from "../test/fixtures.js";
+import launcherProjectsCss from "../styles/launcher-projects.css?raw";
+import { LauncherProjectPicker, LauncherProjectView } from "./LauncherProjects.js";
+
+// The rule body of the first `selector {…}` block in a stylesheet.
+function rule(css: string, selector: string): string {
+  // vitest.config.ts's css.include must list the stylesheet, or `?raw` is "".
+  if (css === "")
+    throw new Error("stylesheet loaded empty: add it to vitest.config.ts css.include");
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(?:^|\\n)${escaped} \\{([^}]*)\\}`).exec(css);
+  if (!match) throw new Error(`no rule for ${selector}`);
+  return match[1];
+}
+
+// #3212 — the Add/Edit project view sits in the launcher's body, a flex
+// column that scrolls (modals.css's .create-modal-body). jsdom does no layout, so the
+// rules that keep the form at its content height are pinned here; the
+// overlap itself was checked in the demo (see the pull request).
+describe("LauncherProjectView layout (#3212)", () => {
+  it("the view and the form never shrink below their content", () => {
+    for (const selector of [".launcher-project-view", ".embedded-form"]) {
+      const body = rule(launcherProjectsCss, selector);
+      expect(body, selector).toMatch(/flex-shrink:\s*0/);
+      // min-height: 0 is what let the form collapse under the Discover list.
+      expect(body, selector).not.toMatch(/min-height:\s*0/);
+    }
+  });
+
+  it("the form's body takes its content height and does not scroll itself", () => {
+    const body = rule(launcherProjectsCss, ".embedded-form-body");
+    expect(body).toMatch(/flex:\s*none/);
+    expect(body).toMatch(/overflow-y:\s*visible/);
+  });
+});
+
+function repo(name: string, extra: Partial<DiscoveredProject> = {}): DiscoveredProject {
+  return { name, cwd: `/home/x/${name}`, isGitRepo: true, isRegistered: false, ...extra };
+}
+
+// #3244 — the Add project view leads with one row that opens the discovered
+// repositories as their own view.
+// The Project dropdown's "Add project…" (#3245): an action row at the end of
+// the styled list, reached by the pointer and the keyboard, never by
+// typeahead. A coarse pointer keeps the native entry and its key guard
+// (SessionLauncher.test.tsx covers the guard).
+describe("LauncherProjectPicker: Add project… (#3245)", () => {
+  const ALPHA = makeProject({ id: 7, name: "alpha" });
+  const ATLAS = makeProject({ id: 8, name: "atlas" });
+  const MULL = makeProject({ id: 9, name: "mull" });
+
+  function renderPicker(projectId: number | null = MULL.id, coarse = false) {
+    const onChange = vi.fn();
+    const onAddProject = vi.fn();
+    render(
+      <LauncherProjectPicker
+        projectId={projectId}
+        onChange={onChange}
+        coarse={coarse}
+        labelId="where-project"
+        onAddProject={onAddProject}
+        onEditProject={vi.fn()}
+      />,
+    );
+    return { onChange, onAddProject, field: screen.getByRole("combobox", { name: "Project" }) };
+  }
+
+  beforeEach(() => {
+    resetStore({ projects: [ALPHA, ATLAS, MULL], settings: DEFAULT_SETTINGS });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is an action row after the projects, set apart from them", async () => {
+    const user = userEvent.setup();
+    const { field } = renderPicker();
+    await user.click(field);
+    const listbox = screen.getByRole("listbox", { name: "Project" });
+    const rows = within(listbox).getAllByRole("option");
+    expect(rows.map((o) => o.textContent)).toEqual(["alpha", "atlas", "mull", "Add project…"]);
+    const action = rows.at(-1)!;
+    expect(action).toHaveClass("custom-select-action");
+    expect(action).toHaveAttribute("aria-selected", "false");
+    // Not one of the dropdown's values.
+    expect(dropdownOptions(field).map((o) => o.label)).toEqual(["alpha", "atlas", "mull"]);
+  });
+
+  it("opens the Add view by pointer and leaves the selection alone", async () => {
+    const user = userEvent.setup();
+    const { field, onChange, onAddProject } = renderPicker();
+    await user.click(field);
+    await user.click(screen.getByRole("option", { name: "Add project…" }));
+    expect(onAddProject).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("opens the Add view by keyboard from the styled list", async () => {
+    const user = userEvent.setup();
+    const { field, onChange, onAddProject } = renderPicker();
+    field.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(field).toHaveAttribute("aria-expanded", "true");
+    // From the last project, ArrowDown moves onto the action row: the list
+    // is open, so nothing happens until Enter.
+    await user.keyboard("{ArrowDown}");
+    const action = screen.getByRole("option", { name: "Add project…" });
+    expect(field).toHaveAttribute("aria-activedescendant", action.id);
+    expect(onAddProject).not.toHaveBeenCalled();
+    await user.keyboard("{Enter}");
+    expect(onAddProject).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("typeahead never lands on Add project…", () => {
+    const { field, onChange, onAddProject } = renderPicker();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    // "a" opens the list on the first a-project; "a" again cycles to the
+    // next one, then back: never to Add project….
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    const active = () => document.getElementById(field.getAttribute("aria-activedescendant")!);
+    expect(active()).toHaveTextContent("alpha");
+    now.mockReturnValue(1_100);
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    expect(active()).toHaveTextContent("atlas");
+    now.mockReturnValue(1_200);
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    expect(active()).toHaveTextContent("alpha");
+    // "ad" matches only Add project…, so the highlight stays on the
+    // a-project the fresh "a" moved to.
+    now.mockReturnValue(5_000);
+    act(() => {
+      fireEvent.keyDown(field, { key: "a" });
+    });
+    expect(active()).toHaveTextContent("atlas");
+    now.mockReturnValue(5_100);
+    act(() => {
+      fireEvent.keyDown(field, { key: "d" });
+    });
+    expect(active()).toHaveTextContent("atlas");
+    now.mockRestore();
+    act(() => {
+      fireEvent.keyDown(field, { key: "Enter" });
+    });
+    expect(onAddProject).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledWith(ATLAS.id);
+  });
+
+  it("a coarse pointer keeps the native select, whose last entry opens the Add view", () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const { field, onChange, onAddProject } = renderPicker(MULL.id, true);
+    expect(field).toBeInstanceOf(HTMLSelectElement);
+    expect([...(field as HTMLSelectElement).options].map((o) => o.textContent)).toEqual([
+      "alpha",
+      "atlas",
+      "mull",
+      "Add project…",
+    ]);
+    pickDropdownOption(field, "Add project…");
+    expect(onAddProject).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+    expect((field as HTMLSelectElement).value).toBe(String(MULL.id));
+  });
+});
+
+describe("LauncherProjectView: discovered repositories (#3244)", () => {
+  let unexpectedCalls: string[] = [];
+  let discoverCalls = 0;
+  let created: Record<string, unknown>[] = [];
+
+  function stub(found: DiscoveredProject[] | (() => Promise<Response>)) {
+    discoverCalls = 0;
+    created = [];
+    const result = mockFetch({
+      "GET /api/projects/discover": () => {
+        discoverCalls++;
+        return typeof found === "function" ? found() : jsonResponse(200, found);
+      },
+      "POST /api/projects": ({ init }) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        created.push(body);
+        return jsonResponse(201, { id: 77, name: body.name, cwd: body.cwd });
+      },
+      "GET /api/projects": () => jsonResponse(200, []),
+      "GET /api/projects/placement-preview": () => jsonResponse(200, null),
+      "POST /api/projects/:id/host-checkouts": () => jsonResponse(200, {}),
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+  }
+
+  function renderAdd() {
+    const onBack = vi.fn();
+    const onAdded = vi.fn();
+    render(<LauncherProjectView view={{ kind: "add" }} onBack={onBack} onAdded={onAdded} />);
+    return { onBack, onAdded };
+  }
+
+  beforeEach(() => {
+    resetStore({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
+  });
+  afterEach(() => {
+    expect(unexpectedCalls).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it("the row shows the count and the list is not in the Add view", async () => {
+    stub([repo("atlas"), repo("beacon"), repo("done", { isRegistered: true })]);
+    renderAdd();
+    const form = screen.getByRole("group", { name: "Add project" });
+    expect(
+      await within(form).findByRole("button", { name: "Choose from 2 discovered repositories" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("atlas")).toBeNull();
+    expect(screen.queryByText("Discover projects")).toBeNull();
+  });
+
+  it("says so while the scan runs, and one repository is singular", async () => {
+    let release: (r: Response) => void = () => {};
+    stub(() => new Promise<Response>((resolve) => (release = resolve)));
+    renderAdd();
+    expect(screen.getByText("Looking for repositories…")).toBeInTheDocument();
+    release(jsonResponse(200, [repo("atlas")]));
+    expect(
+      await screen.findByRole("button", { name: "Choose from 1 discovered repository" }),
+    ).toBeInTheDocument();
+  });
+
+  it("a fine pointer keeps the path field focused when the row shows (#3287)", async () => {
+    stub([repo("atlas")]);
+    renderAdd();
+    await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+    expect(screen.getByPlaceholderText("~/code/my-project")).toHaveFocus();
+  });
+
+  // #3287 — on a touch device the path field does not take focus (the
+  // keyboard would scroll this row away); the row does, once the scan has
+  // answered, which is after the form has mounted.
+  describe("under a coarse pointer", () => {
+    beforeEach(() => {
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: query === "(pointer: coarse)",
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+    });
+
+    it("the discovered row has focus once it shows, not the path field", async () => {
+      let release: (r: Response) => void = () => {};
+      stub(() => new Promise<Response>((resolve) => (release = resolve)));
+      renderAdd();
+      expect(screen.getByRole("button", { name: "Back" })).toHaveFocus();
+      release(jsonResponse(200, [repo("atlas"), repo("beacon")]));
+      const row = await screen.findByRole("button", {
+        name: "Choose from 2 discovered repositories",
+      });
+      await waitFor(() => expect(row).toHaveFocus());
+      expect(screen.getByPlaceholderText("~/code/my-project")).not.toHaveFocus();
+    });
+
+    it("does not take focus from a field the user went into while the scan ran", async () => {
+      let release: (r: Response) => void = () => {};
+      stub(() => new Promise<Response>((resolve) => (release = resolve)));
+      renderAdd();
+      const field = screen.getByPlaceholderText("~/code/my-project");
+      act(() => field.focus());
+      release(jsonResponse(200, [repo("atlas")]));
+      await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+      expect(field).toHaveFocus();
+    });
+
+    it("does not take focus from a non-text control the user went to", async () => {
+      let release: (r: Response) => void = () => {};
+      stub(() => new Promise<Response>((resolve) => (release = resolve)));
+      renderAdd();
+      const browse = screen.getByRole("button", { name: "Browse…" });
+      act(() => browse.focus());
+      release(jsonResponse(200, [repo("atlas")]));
+      await screen.findByRole("button", { name: "Choose from 1 discovered repository" });
+      expect(browse).toHaveFocus();
+    });
+
+    it("with nothing discovered, focus stays on a control, not a text field", async () => {
+      stub([repo("done", { isRegistered: true })]);
+      renderAdd();
+      expect(await screen.findByText("No repositories found")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Back" })).toHaveFocus();
+    });
+  });
+
+  it("zero results shows the Settings hint instead of the row", async () => {
+    stub([repo("done", { isRegistered: true })]);
+    renderAdd();
+    expect(await screen.findByText("No repositories found")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Configure search roots" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /discovered repositor/ })).toBeNull();
+  });
+
+  it("opens the view, lists the repositories and filters them by name above eight", async () => {
+    const names = [
+      "atlas",
+      "beacon",
+      "comet",
+      "delta",
+      "ember",
+      "fjord",
+      "glade",
+      "harbor",
+      "iris",
+    ];
+    stub(names.map((n) => repo(n)));
+    const user = userEvent.setup();
+    renderAdd();
+    await user.click(
+      await screen.findByRole("button", { name: "Choose from 9 discovered repositories" }),
+    );
+
+    const view = screen.getByRole("group", { name: "Discovered repositories" });
+    expect(screen.queryByRole("group", { name: "Add project" })).toBeNull();
+    const list = within(view).getByRole("list");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(9);
+    expect(within(list).getAllByText("git")).toHaveLength(9);
+    const search = within(view).getByRole("searchbox", { name: "Search repositories" });
+    expect(search).toHaveFocus();
+
+    await user.type(search, "ar");
+    expect(
+      within(list)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual([expect.stringContaining("harbor")]);
+    await user.type(search, "zz");
+    expect(within(list).queryAllByRole("listitem")).toHaveLength(0);
+    expect(within(view).getByText("No repository matches “arzz”.")).toBeInTheDocument();
+    // One scan serves the row and the view.
+    expect(discoverCalls).toBe(1);
+  });
+
+  it("eight or fewer have no search field", async () => {
+    stub([repo("atlas"), repo("beacon")]);
+    const user = userEvent.setup();
+    renderAdd();
+    await user.click(await screen.findByRole("button", { name: /Choose from 2/ }));
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("Add selects the project and returns to the launcher", async () => {
+    stub([repo("atlas"), repo("beacon")]);
+    const user = userEvent.setup();
+    const { onAdded, onBack } = renderAdd();
+    await user.click(await screen.findByRole("button", { name: /Choose from 2/ }));
+    const row = screen.getByText("beacon").closest(".discover-item") as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: "Add" }));
+    await waitFor(() => expect(onAdded).toHaveBeenCalledWith(77));
+    expect(onBack).toHaveBeenCalled();
+    expect(created[0]).toMatchObject({ name: "beacon", cwd: "/home/x/beacon" });
+  });
+
+  it("Back returns to the Add view with the form's values intact", async () => {
+    stub([repo("atlas")]);
+    const user = userEvent.setup();
+    const { onBack } = renderAdd();
+    const name = screen.getByRole("textbox", { name: /Display name/ });
+    await user.type(name, "my-thing");
+    await user.click(await screen.findByRole("button", { name: /Choose from 1/ }));
+    const view = screen.getByRole("group", { name: "Discovered repositories" });
+    await user.click(within(view).getByRole("button", { name: "Back" }));
+
+    expect(screen.queryByRole("group", { name: "Discovered repositories" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: /Display name/ })).toHaveValue("my-thing");
+    const rowButton = screen.getByRole("button", { name: /Choose from 1/ });
+    await waitFor(() => expect(rowButton).toHaveFocus());
+    expect(onBack).not.toHaveBeenCalled();
+    expect(discoverCalls).toBe(1);
+  });
+
+  it("Escape in the discovered view goes back to the form, not out of the launcher", async () => {
+    stub([repo("atlas")]);
+    const user = userEvent.setup();
+    const { onBack } = renderAdd();
+    await user.click(await screen.findByRole("button", { name: /Choose from 1/ }));
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("group", { name: "Add project" })).toBeInTheDocument();
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("attaching the last one says so, and Back focuses the hint that replaced the row", async () => {
+    stub([
+      repo("mirror", {
+        matchedProject: { id: 3, name: "atlas", hostId: "remote-1", reason: "origin" },
+      }),
+    ]);
+    const user = userEvent.setup();
+    renderAdd();
+    await user.click(await screen.findByRole("button", { name: /Choose from 1/ }));
+    await user.click(screen.getByRole("button", { name: "Add as checkout of atlas" }));
+    const view = screen.getByRole("group", { name: "Discovered repositories" });
+    expect(
+      await within(view).findByText("Every discovered repository has been added."),
+    ).toBeInTheDocument();
+    expect(within(view).queryByText("No repositories found")).toBeNull();
+    expect(within(view).getByRole("status")).toHaveFocus();
+
+    await user.click(within(view).getByRole("button", { name: "Back" }));
+    const configure = screen.getByRole("button", { name: "Configure search roots" });
+    await waitFor(() => expect(configure).toHaveFocus());
+  });
+
+  it("a host switch drops a late answer from the old host and clears the search", async () => {
+    const names = [
+      "atlas",
+      "beacon",
+      "comet",
+      "delta",
+      "ember",
+      "fjord",
+      "glade",
+      "harbor",
+      "iris",
+    ];
+    const pending: Record<string, (r: Response) => void> = {};
+    stub(() => Promise.resolve(jsonResponse(200, [])));
+    const result = mockFetch({
+      "GET /api/projects/discover": ({ query }) => {
+        discoverCalls++;
+        const host = query.get("hostId") ?? "local";
+        if (discoverCalls === 1)
+          return jsonResponse(
+            200,
+            names.map((n) => repo(n)),
+          );
+        return new Promise<Response>((resolve) => (pending[host] = resolve));
+      },
+      "GET /api/projects/placement-preview": () => jsonResponse(200, null),
+    });
+    unexpectedCalls = result.unexpectedCalls;
+    vi.stubGlobal("fetch", result.fetchMock);
+    useDashboardStore.setState({
+      hosts: [
+        { id: "remote-1", name: "builder" },
+        { id: "remote-2", name: "runner" },
+      ] as never,
+    });
+    const user = userEvent.setup();
+    renderAdd();
+    await user.click(await screen.findByRole("button", { name: /Choose from 9/ }));
+    const view = screen.getByRole("group", { name: "Discovered repositories" });
+    await user.type(within(view).getByRole("searchbox"), "zz");
+    expect(within(view).getByText("No repository matches “zz”.")).toBeInTheDocument();
+
+    const picker = within(view).getByRole("combobox");
+    pickDropdownOption(picker, "builder");
+    pickDropdownOption(picker, "runner");
+    pending["remote-2"]!(
+      jsonResponse(
+        200,
+        names.map((n) => repo(`${n}-r2`, { cwd: `/r2/${n}` })),
+      ),
+    );
+    expect(await within(view).findByText("atlas-r2")).toBeInTheDocument();
+    // The slow answer from the host switched away from changes nothing.
+    pending["remote-1"]!(jsonResponse(200, [repo("stale", { cwd: "/r1/stale" })]));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(within(view).queryByText("stale")).toBeNull();
+    expect(within(view).getByRole("searchbox")).toHaveValue("");
+    expect(within(view).queryByText(/No repository matches/)).toBeNull();
+  });
+
+  it("Configure search roots closes the launcher and opens Settings → Projects", async () => {
+    stub([]);
+    const closeLauncher = vi.fn();
+    useDashboardStore.setState({ closeLauncher });
+    const user = userEvent.setup();
+    renderAdd();
+    await user.click(await screen.findByRole("button", { name: "Configure search roots" }));
+    expect(closeLauncher).toHaveBeenCalled();
+  });
+});
+
+describe("launcher discovered-view styles (#3244)", () => {
+  // #3287 — the row reads as an action on a touch device (phone and fold).
+  it("a coarse pointer gives the row the form's tappable-row look at 44px", () => {
+    const block =
+      /@media \(pointer: coarse\) \{([\s\S]*?)\n\}/.exec(launcherProjectsCss)?.[1] ?? "";
+    const body = rule(block.replace(/\n {2}/g, "\n"), "button.launcher-discovered-row");
+    expect(body).toContain("min-height: 44px");
+    expect(body).toContain("border-color: var(--border-soft)");
+    expect(body).toContain("background: var(--field)");
+  });
+
+  it("the hidden form is not drawn under the discovered view", () => {
+    expect(rule(launcherProjectsCss, ".launcher-project-form[hidden]")).toMatch(/display:\s*none/);
+  });
+});

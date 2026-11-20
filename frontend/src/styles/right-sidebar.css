@@ -5,20 +5,28 @@
    toolbar-aware top offset. Phone doesn't render any of this. */
 
 .right-rail {
-  width: 40px;
+  /* 48px at every band, border included, like the left rail (#3055). */
+  width: calc(48px + env(safe-area-inset-right));
+  box-sizing: border-box;
+  padding-right: env(safe-area-inset-right);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 8px 0;
+  padding-top: 8px;
+  padding-bottom: 8px;
   background: var(--sidebar);
   border-left: 1px solid var(--border);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 
 .right-rail-btn {
   position: relative;
-  width: 30px;
+  width: 40px;
+  flex-shrink: 0;
   height: 30px;
   display: grid;
   place-items: center;
@@ -29,25 +37,37 @@
   color: var(--muted);
   cursor: pointer;
 }
-.right-rail-btn:hover {
+.right-rail-btn:hover:not(:disabled) {
   color: var(--fg);
   background: var(--seg);
+}
+.right-rail-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .right-rail-btn.active {
   color: var(--fg);
   background: var(--seg);
 }
 /* Active marker hugs the rail's right edge instead of an inset shadow, which
-   shifted the glyph off-center. */
+   shifted the glyph off-center. The 40px button leaves a 3.5px gutter in the
+   48px rail, and the rail clips its overflow: -3px keeps the 2px marker
+   inside it (#3055). */
 .right-rail-btn.active::after {
   content: "";
   position: absolute;
   top: 6px;
   bottom: 6px;
-  right: -5px;
+  right: -3px;
   width: 2px;
   border-radius: 1px;
   background: var(--ring);
+}
+/* The right half's session buttons reuse .left-rail-btn, whose marker sits
+   at -4px: in this rail's 3.5px gutter that is half a pixel outside the
+   clip. Same offset as the view buttons' marker above. */
+.right-rail .left-rail-btn.active::before {
+  left: -3px;
 }
 .right-rail-btn svg {
   display: block;
@@ -81,6 +101,12 @@
   background: var(--r);
 }
 
+.right-sidebar-panel:focus {
+  /* Focus lands here, programmatically, when a detail closes with nowhere
+     better to go; it is a landing place, not a control. */
+  outline: none;
+}
+
 /* One horizontal inset for header, project picker, toolbar and view bodies so
    every view's content lines up on the same left edge. */
 .right-sidebar-panel {
@@ -98,35 +124,24 @@
   container-type: inline-size;
   container-name: sidebar-frame;
 }
-.right-sidebar-panel.overlay {
+/* Always docked (#3006): the panel is a flex sibling of the grid and pushes
+   it. It never takes more than leaves the workspace about 400px beside the
+   48px rail. */
+.right-sidebar-panel.docked {
+  max-width: calc(100vw - 448px);
+}
+/* Too narrow to dock (RIGHT_SIDEBAR_FULL_WIDTH_QUERY): an open view covers
+   the workspace up to the rail. No scrim; the rail tab or Escape closes it. */
+.right-sidebar-panel.docked.full {
   position: fixed;
-  top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
-  right: 40px;
+  top: calc(var(--shell-bar-h) + var(--shell-top, 0px));
+  /* Clear of the left rail, so the mode switch stays reachable (#3009). */
+  left: var(--left-rail-w);
+  right: calc(48px + env(safe-area-inset-right));
   bottom: 0;
-  max-width: 84vw;
+  max-width: none;
   z-index: 46;
-  box-shadow: 0 0 50px rgba(0, 0, 0, 0.45);
-}
-.right-sidebar-scrim {
-  position: fixed;
-  top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
-  left: 0;
-  /* Stops at the rail (not the viewport edge) so rail buttons stay clickable
-     while the drawer is open — matches .right-sidebar-panel.overlay's right. */
-  right: 40px;
-  bottom: 0;
-  z-index: 45;
-}
-/* A file row being dragged (lib/fileDrag.ts): let the drop reach whatever is
-   under the floating drawer — a terminal pane — instead of the scrim. */
-.file-dragging .right-sidebar-scrim {
-  pointer-events: none;
-}
-/* Dim the scrim on the tiers where this drawer is an overlay. Width used to
-   decide that, so a forced desktop on a narrow window dimmed a docked panel
-   and a forced tablet on a wide window did not (issue #1531). */
-:where(.app[data-tier="phone"], .app[data-tier="tablet"]) .right-sidebar-scrim {
-  background: rgba(0, 0, 0, 0.3);
+  border-left: 0;
 }
 
 .right-sidebar-resize-handle {
@@ -200,14 +215,14 @@
   flex: 1;
   min-width: 0;
 }
-.right-sidebar-header .settings-dropdown select {
+.right-sidebar-header .settings-dropdown .ui-dropdown-field {
   width: 100%;
   background-color: transparent;
   border-color: transparent;
   text-overflow: ellipsis;
   font-weight: 600;
 }
-.right-sidebar-header .settings-dropdown select:hover {
+.right-sidebar-header .settings-dropdown .ui-dropdown-field:hover {
   background-color: var(--seg);
 }
 .right-sidebar-toolbar-slot {
@@ -218,20 +233,23 @@
 }
 /* The thin context strip under the header row, and the slot a pushed detail
    view's header fills. While the detail slot has content it replaces the picker,
-   toolbar and strip, so a detail never stacks a second header bar. */
+   toolbar and strip, so a detail never stacks a second header bar. The switch
+   is DetailHeader's `data-sidebar-detail` on the panel, not `:has()` (#2979):
+   a WebView without `:has()` would otherwise hide the detail's Back. */
 .right-sidebar-detail-slot {
   display: none;
   flex: 1;
   min-width: 0;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *) > .right-sidebar-detail-slot {
+[data-sidebar-detail] .right-sidebar-header > .right-sidebar-detail-slot {
   display: flex;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *)
+[data-sidebar-detail]
+  .right-sidebar-header
   > :is(.right-sidebar-follow-glyph, .settings-dropdown, .right-sidebar-toolbar-slot) {
   display: none;
 }
-.right-sidebar-header:has(.right-sidebar-detail-slot > *) + .right-sidebar-strip-slot {
+[data-sidebar-detail] .right-sidebar-strip-slot {
   display: none;
 }
 .right-sidebar-strip-slot:empty {
@@ -334,4 +352,68 @@
 .project-sidebar-row-sub {
   font-size: 0.6875rem;
   color: var(--muted);
+}
+
+/* Touch: the header and rail controls are what opens and closes the panel
+   now, so they get a taller target (#3006). The rail is 48px wide at every
+   band, matching the left one (#3055), so its touch targets are 48px. */
+@media (pointer: coarse) {
+  .right-sidebar-icon-btn,
+  .right-sidebar-header .sb-ibtn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .right-rail-btn,
+  .right-rail .left-rail-btn {
+    min-height: 48px;
+  }
+}
+
+/* ---- Two halves, 800-1099px (#3010) -------------------------------------- */
+/* The panel is exactly the right half: the width left after both rails,
+   split evenly with the grid, so the seam sits in the middle (on a foldable,
+   on the hinge). Not the stored width, no resize handle, and the width is
+   never animated (a terminal reflows on every step; docs/motion.md). */
+/* The shell banners span both halves (#3213): the body becomes a grid whose
+   first row, between the two rails, holds them above the halves. The rails
+   run the full height beside them, and the left half (.grid-area) takes the
+   right half's column too while nothing shows there. The halves stay equal
+   (1fr each), and the key bar and the halves' focus outlines are untouched:
+   the banners are in neither half. */
+.app-body.app-body--halves {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.app-body--halves > .left-rail {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+.app-body--halves > .shell-banners {
+  grid-column: 2 / 4;
+  grid-row: 1;
+  min-width: 0;
+}
+.app-body--halves > .grid-area {
+  grid-column: 2 / 4;
+  grid-row: 2;
+}
+.app-body--halves > .grid-area:has(~ .right-sidebar-panel) {
+  grid-column: 2;
+}
+.app-body--halves > .right-sidebar-panel {
+  grid-column: 3;
+  grid-row: 2;
+}
+.app-body--halves > .right-rail {
+  grid-column: 4;
+  grid-row: 1 / -1;
+}
+.app.halves-band .grid-area,
+.app.halves-band .right-sidebar-panel.docked.half {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+  max-width: none;
+  transition: none;
 }

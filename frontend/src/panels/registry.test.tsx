@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Suspense, useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { IDockviewPanelProps } from "dockview-react";
 import { makePanelWrapper, components, KanbanBoardOverlay } from "./registry.js";
 import type * as PanelUtilsModule from "../panelUtils.js";
 import { useDashboardStore } from "../store/index.js";
-import { makeSession, makeProject } from "../test/fixtures.js";
+import { makeSession, makeProject, makeTask } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
 import { ErrorBoundary } from "../ErrorBoundary.js";
 import { useRetriableLazy } from "../lib/retriableLazy.js";
@@ -219,6 +219,40 @@ describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave stor
     render(<components.terminal {...props} />);
   }
 
+  it("an OSC title does not replace a task worker's task title", () => {
+    useDashboardStore.setState({
+      tasks: [makeTask({ id: 9, sessionId: 1, title: "Fix the login form" })],
+    });
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+
+    capturedOnTitleChange?.("✳ Thinking");
+
+    // The tab already shows the task title, so the OSC title changes nothing.
+    expect(setTitle).not.toHaveBeenCalledWith("✳ Thinking · demo");
+    expect(setTitle).not.toHaveBeenCalled();
+  });
+
+  it("re-titles a numbered tab when the other session with its name goes away", () => {
+    useDashboardStore.setState({
+      sessions: [
+        makeSession({ id: 0, projectId: 1, name: "claude" }),
+        makeSession({ id: 1, projectId: 1, name: "claude" }),
+      ],
+    });
+    const setTitle = vi.fn();
+    renderTerminalPanel(setTitle);
+    expect(setTitle).not.toHaveBeenCalled(); // the seeded title is the baseline
+
+    act(() => {
+      useDashboardStore.setState({
+        sessions: [makeSession({ id: 1, projectId: 1, name: "claude" })],
+      });
+    });
+
+    expect(setTitle).toHaveBeenLastCalledWith("claude");
+  });
+
   it("applies the first OSC title immediately, with no delay", () => {
     const setTitle = vi.fn();
     renderTerminalPanel(setTitle);
@@ -261,7 +295,7 @@ describe("TerminalPanelWrapper — OSC title throttling (workspace-autosave stor
 
   it("never calls setTitle once the session is nameLocked (an explicit rename pins it)", () => {
     useDashboardStore.setState({
-      sessions: [makeSession({ id: 1, projectId: 1, nameLocked: true })],
+      sessions: [makeSession({ id: 1, projectId: 1, name: "pinned", nameLocked: true })],
     });
     const setTitle = vi.fn();
     renderTerminalPanel(setTitle);
@@ -398,6 +432,26 @@ describe("GitPanelRedirectWrapper — the retired dock Git panel", () => {
   });
 });
 
+describe("GitHubPanelRedirectWrapper — the retired grid GitHub panel", () => {
+  it("opens the GitHub sidebar view for the saved panel's project and closes itself", async () => {
+    resetStore();
+    const close = vi.fn();
+    const containerApi = { getPanel: vi.fn(() => ({ api: { close } })) };
+    const props = {
+      params: { projectId: 7 },
+      api: { id: "github-7" },
+      containerApi,
+    } as unknown as IDockviewPanelProps<{ projectId?: number }>;
+    render(<components.github {...props} />);
+    await userEvent.click(screen.getByRole("button", { name: /open github/i }));
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarView).toBe("github");
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(containerApi.getPanel).toHaveBeenCalledWith("github-7");
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
 // React 19's lazyInitializer (react/cjs/react.production.js) latches a
 // rejected dynamic import forever — the SAME lazy() payload re-throws the
 // identical cached error on every subsequent render, with zero new network
@@ -501,17 +555,19 @@ describe("useRetriableLazy — 'Reload pane' can recover from a rejected dynamic
 // as registered for real — recovers too, so a future revert back to a bare
 // module-level `lazy()` in registry.tsx would break this test.
 //
-// Mocking "../BrowserPane.js" with a THROWING GETTER (rather than a
+// Mocking "../BrowserPaneHost.js" (the module the Browser wrapper lazy-loads
+// since #3371) with a THROWING GETTER (rather than a
 // rejecting import()) is what makes a controllable reject-once-then-succeed
-// possible here: loadBrowserPane's `.then((m) => ({ default: m.BrowserPane }))`
-// reads `m.BrowserPane` on every call, so a getter that throws on its first
+// possible here: loadBrowserPaneHost's
+// `.then((m) => ({ default: m.BrowserPaneHost }))` reads `m.BrowserPaneHost`
+// on every call, so a getter that throws on its first
 // access turns that `.then()` handler's promise rejection into exactly what
 // lazy() sees from a real "Failed to fetch dynamically imported module"
 // network failure — with no way to actually make jsdom's import() itself
 // reject on demand.
 let browserPaneImportAttempts = 0;
-vi.mock("../BrowserPane.js", () => ({
-  get BrowserPane() {
+vi.mock("../BrowserPaneHost.js", () => ({
+  get BrowserPaneHost() {
     browserPaneImportAttempts += 1;
     if (browserPaneImportAttempts === 1) {
       throw new Error("Failed to fetch dynamically imported module");
@@ -615,25 +671,13 @@ vi.mock("../UnifiedBoard.js", () => ({
 
 describe("KanbanBoardOverlay", () => {
   const noop = () => {};
-  it("renders as an absolute grid overlay by default", async () => {
+  it("renders as an absolute grid overlay", async () => {
     const { container } = render(<KanbanBoardOverlay onOpenSession={noop} onSessionEnded={noop} />);
     expect(container.querySelector(".kanban-board-overlay")).not.toBeNull();
-    expect(container.querySelector(".kanban-board-inline")).toBeNull();
   });
-  it("renders in flow when inline (phone navigator)", () => {
-    const { container } = render(
-      <KanbanBoardOverlay inline onOpenSession={noop} onSessionEnded={noop} />,
-    );
-    expect(container.querySelector(".kanban-board-inline")).not.toBeNull();
-    expect(container.querySelector(".kanban-board-overlay")).toBeNull();
-  });
-  // #2873 — axe `region`: the board's content has to sit inside a landmark, in
-  // both placements (grid overlay and the phone navigator's in-flow board).
-  it.each([
-    ["overlay", false],
-    ["inline", true],
-  ])("puts the board inside a named Tasks region (%s)", async (_name, inline) => {
-    render(<KanbanBoardOverlay inline={inline} onOpenSession={noop} onSessionEnded={noop} />);
+  // #2873 — axe `region`: the board's content has to sit inside a landmark.
+  it("puts the board inside a named Tasks region", async () => {
+    render(<KanbanBoardOverlay onOpenSession={noop} onSessionEnded={noop} />);
     const region = screen.getByRole("region", { name: "Tasks" });
     expect(await within(region).findByTestId("board")).toBeInTheDocument();
   });
@@ -665,5 +709,68 @@ describe("components['task-detail'] — close on delete", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "delete task" }));
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #3010 — one mounted terminal per session: while a session shows on the
+// right half (800-1099px), the right half renders it and the grid's copy
+// stands aside, so the pty is not resized by two viewers and the key bar
+// has one input to address.
+describe("TerminalPanelWrapper — the right half's session stands aside", () => {
+  function renderPanel() {
+    const props = {
+      params: { sessionId: 1 },
+      api: { setTitle: vi.fn(), isActive: false, onDidActiveChange: () => ({ dispose: () => {} }) },
+      containerApi: {},
+    } as unknown as IDockviewPanelProps<{ sessionId: number }>;
+    return render(<components.terminal {...props} />);
+  }
+
+  beforeEach(() => {
+    resetStore();
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 1, projectId: 1 })],
+      projects: [makeProject({ id: 1, name: "demo" })],
+      activeWorkspaceId: 4,
+      foldHalves: {
+        4: {
+          right: ["session-1"],
+          shownRight: "session-1",
+          shownLeft: null,
+          lastUsed: null,
+          open: [],
+        },
+      },
+      foldHalvesActive: true,
+    });
+  });
+
+  it("renders no terminal while its session shows on the right half", () => {
+    renderPanel();
+    expect(screen.queryByTestId("terminal-pane")).toBeNull();
+    expect(screen.getByText("Shown on the right half")).toBeInTheDocument();
+  });
+
+  it("renders the terminal in Tasks mode, where the right half shows no session", () => {
+    useDashboardStore.setState({ viewMode: "kanban" });
+    renderPanel();
+    expect(screen.getByTestId("terminal-pane")).toBeInTheDocument();
+    act(() => useDashboardStore.setState({ viewMode: "list" }));
+    expect(screen.queryByTestId("terminal-pane")).toBeNull();
+  });
+
+  it("renders the terminal again once the halves are gone or the half is closed", () => {
+    renderPanel();
+    act(() => useDashboardStore.setState({ foldHalvesActive: false }));
+    expect(screen.getByTestId("terminal-pane")).toBeInTheDocument();
+    act(() =>
+      useDashboardStore.setState({
+        foldHalvesActive: true,
+        foldHalves: {
+          4: { right: ["session-1"], shownRight: null, shownLeft: null, lastUsed: null, open: [] },
+        },
+      }),
+    );
+    expect(screen.getByTestId("terminal-pane")).toBeInTheDocument();
   });
 });

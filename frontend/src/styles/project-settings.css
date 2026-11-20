@@ -1,0 +1,53 @@
+/* Project settings dialog (#3406) — Settings' own frame (SettingsShell) around
+   the four project editors. Each editor is a full-height two-pane panel that
+   scrolls inside itself, so the content pane hands it the whole box instead
+   of scrolling it with Settings' padded body. */
+.settings-content-body.project-settings-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.project-settings-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: auto;
+}
+.project-settings-body[hidden] {
+  display: none;
+}
+
+/* Asks before closing over an unsaved draft. */
+.project-settings-leave {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--status-warn-bg);
+  font-size: 0.78125rem;
+  flex-shrink: 0;
+}
+.project-settings-leave > span {
+  flex: 1;
+  min-width: 12em;
+}
+
+/* The sidebar's Skills drill-in: the panel's list/detail pair stacks in the
+   rail's width (same as the phone rule in mobile.css). */
+.project-skills-drill .agent-rules-panel {
+  flex-direction: column;
+  height: auto;
+}
+.project-skills-drill .agent-rules-panel-list {
+  width: 100%;
+  padding: 0 0 8px;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+}
+.project-skills-drill .agent-rules-panel-editor {
+  padding: 10px 0;
+}

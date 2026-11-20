@@ -602,6 +602,13 @@ export function dockMonitorMinWidthPx(fontSize: number, padding: number): number
 // internally consistent with each other (same font, same ratio) without
 // silently changing the width floor's own pinned number.
 const PX_PER_ROW_AT_14PX = 18.9;
+/** One terminal cell in px at `fontSize`, from the measured 14px baselines
+ * above. Used for the size floor of a pane added at the desk (#3033). */
+export function terminalCellPx(fontSize: number): { cellWidth: number; cellHeight: number } {
+  const scale = fontSize / BASELINE_FONT_SIZE_PX;
+  return { cellWidth: PX_PER_COL_AT_14PX * scale, cellHeight: PX_PER_ROW_AT_14PX * scale };
+}
+
 // pty-manager.ts's own MIN_TERMINAL_ROWS — hand-synced the same way
 // MIN_TERMINAL_COLS above is; the frontend has no build-time import for it
 // (see pty-manager.ts's own comment on why only MAX_TERMINAL_COLS/ROWS are

@@ -1,10 +1,11 @@
 import type { SettingsSection } from "./settings/settingsSections.js";
 import type { LayoutTier } from "./lib/layoutTierTypes.js";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
+import { selectSessionTitleContexts, sessionDisplayTitle } from "./lib/sessionDisplay.js";
 import { useShallow } from "zustand/react/shallow";
 import {
   ChevronDownIcon,
@@ -15,59 +16,44 @@ import {
   TerminalPromptIcon,
 } from "./ui/icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
-import { resolveSkipPermissions } from "./launchers/skipPermissions.js";
+import { buildSkipPermissionsAgentIds } from "./launchers/launcherList.js";
+import {
+  resolveInitialLaunchProjectId,
+  useProjectLaunchers,
+} from "./launchers/useSessionLaunch.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import type { PaletteEntry } from "./hooks/useCommandSearch.js";
-import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
-import type { PaletteCommand } from "./paletteCommands.js";
 import {
-  STORAGE_KEYS,
-  readJSON,
-  readNumber,
-  writeJSON,
-  writeNumber,
-} from "./lib/persistedState.js";
+  PALETTE_CREATE_IDS,
+  PALETTE_GO_TO_IDS,
+  buildPaletteCommands,
+  searchPaletteCommands,
+} from "./paletteCommands.js";
+import type { PaletteCommand } from "./paletteCommands.js";
 import { describeError } from "./lib/describeError.js";
 import { projectHostCount } from "./lib/hostBadge.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
-import { resolveActiveProjectId } from "./panelUtils.js";
-import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { PaletteRow } from "./command-palette/PaletteRow.js";
-import {
-  AUTO_VALUE,
-  OWN_HOST_VALUE,
-  buildHostTargetOptions,
-  describeAutoPreview,
-  rememberHostChoice,
-  resolveHostChoice,
-  withoutAutoChoices,
-} from "./command-palette/hostTarget.js";
-import type { PlacementPreview } from "./api/types.js";
-import { Dropdown, TextInput } from "./ui/primitives.js";
+import { TextInput } from "./ui/primitives.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
+import { useDismissExit } from "./hooks/usePresence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
+import { useServerInfo } from "./settings/useServerInfo.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
+import { agentBrowserIsRailView, useCurrentLayoutBand } from "./right-sidebar/viewBands.js";
 import {
   ACTIVE_TERMINAL_FOCUS_SELECTOR,
   WORKSPACE_FOCUS_FALLBACK_SELECTOR,
 } from "./paletteFocusTargets.js";
-import { ModelSelect } from "./settings/ModelPicker.js";
-import {
-  commandHasModelFlag,
-  commandModelCli,
-  useModelOptions,
-  type ModelCli,
-} from "./models/modelCatalogs.js";
 
-// The unified launcher menu — one component backs the toolbar's "New
-// session"/⌘K entry (scope: "global", needs a project-target picker to
-// resolve a working directory) AND a project row's own "+ session" trigger
-// (scope: "project", cwd is already implicit). GET /api/projects/:id/actions
-// already returns the fully merged list (detected shells/agents + npm
-// scripts + tasks.json + .crs/actions.json) for whichever project is the
-// current target, so both scopes hit the exact same endpoint once a target
-// is resolved — the only difference is whether the target strip is
-// read-only ("Runs in") or clickable ("Launch in" + picker).
+// The command palette (⌘K): commands, and a search over sessions, workspaces
+// and the target project's agents, shells and scripts (GET
+// /api/projects/:id/actions, the fully merged list). It starts no session
+// itself (#3054). A blank query lists commands only, led by "New session…",
+// which opens the New session launcher (launchers/SessionLauncher.tsx) on
+// the target project (#3069). A typed agent, shell or script name opens the
+// launcher with that entry preselected, Launch focused. `scope: "project"`
+// (a read-only "Runs in" strip) was the split path's; App no longer opens it.
 const SOURCE_LABEL: Record<Launcher["kind"], string | null> = {
   shell: null,
   agent: null,
@@ -90,24 +76,6 @@ function cancelDeferredWorkspaceFocus() {
     clearTimeout(deferredWorkspaceFocusTimer);
     deferredWorkspaceFocusTimer = null;
   }
-}
-
-// Expands Settings -> Session management's naming-pattern tokens
-// ({agent} {project} {n}) into a concrete session name at launch time — see
-// settings.sessions.namePattern (default "{agent} · {project}"). A falsy
-// result (empty pattern, or a pattern that expands to only whitespace)
-// yields `undefined` so callers fall back to the sessions route's own
-// "name ?? command" display convention rather than persisting an empty name.
-function expandSessionNamePattern(
-  pattern: string,
-  tokens: { agent: string; project: string; n: number },
-): string | undefined {
-  const expanded = pattern
-    .replaceAll("{agent}", tokens.agent)
-    .replaceAll("{project}", tokens.project)
-    .replaceAll("{n}", String(tokens.n))
-    .trim();
-  return expanded.length > 0 ? expanded : undefined;
 }
 
 interface CommandRowProps {
@@ -174,15 +142,10 @@ interface CommandPaletteProps {
   scope: "global" | "project";
   projectId: number | null;
   onClose: () => void;
-  onLaunched: (session: Session) => void;
   // U2 (audit finding: "⌘K is a launcher, not a switcher") — selecting a
-  // Sessions-group result below activates that session's existing pane
-  // rather than creating a new one, so this needs its own callback distinct
-  // from onLaunched above. App.tsx passes its own onOpenSession straight
-  // through (the same open-or-focus-existing-panel handler Sidebar.tsx's
-  // session rows use), not handleLaunched (which additionally knows about
-  // split-request/new-panel placement — irrelevant here, the panel already
-  // exists).
+  // Sessions-group result below activates that session's existing pane.
+  // App.tsx passes its own onOpenSession straight through (the same
+  // open-or-focus-existing-panel handler Sidebar.tsx's session rows use).
   onOpenSession: (session: Session) => void;
   // Issue #27: the palette's own "Integrations" section, opening the
   // per-project GitHub panel or the Settings -> Integrations section
@@ -220,6 +183,12 @@ interface CommandPaletteProps {
   // Pane menu's "View timeline" for the active session. Omitted from the
   // list when there is no active session pane.
   onOpenTimeline?: (session: Session) => void;
+  // Pane menu's "Open browser" (panelUtils' openBrowserPanePanel) for
+  // the active session, #3215. Where the agent's browser is a right-sidebar
+  // view instead of a pane (the phone and the rails bands, viewBands.ts), the
+  // command opens that view and this is not called. Omitted from the list
+  // when there is no active session pane.
+  onOpenAgentBrowser?: (session: Session) => void;
   // Issue #28: same section, opening a browser preview pane for this
   // project's dev server.
   onOpenBrowser: (projectId: number) => void;
@@ -254,7 +223,6 @@ export function CommandPalette({
   scope,
   projectId: initialProjectId,
   onClose,
-  onLaunched,
   onOpenSession,
   onOpenGitHub,
   onOpenAgentRules,
@@ -271,6 +239,7 @@ export function CommandPalette({
   onOpenHosts,
   onOpenSettings,
   onOpenTimeline,
+  onOpenAgentBrowser,
   onOpenBlankBrowser,
   onToggleRightSidebar,
   onOpenBrowserUrl,
@@ -298,28 +267,18 @@ export function CommandPalette({
         activePanelId: s.activePanelId,
       })),
     );
-  const [targetProjectId] = useState<number | null>(() => {
-    if (scope === "project") return initialProjectId;
-    // Default to the focused pane's project; a killed session pane doesn't
-    // count, and neither does a stale id no longer in `projects`.
-    const paneProjectId =
-      activePanelId?.startsWith("session-") === true
-        ? (sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed")
-            ?.projectId ?? null)
-        : resolveActiveProjectId(activePanelId, sessions);
-    const pane = projects.find((p) => p.id === paneProjectId);
-    if (pane) return pane.id;
-    const stored = readNumber(STORAGE_KEYS.lastLaunchProjectId, 0);
-    return (projects.find((p) => p.id === stored) ?? projects[0] ?? null)?.id ?? null;
-  });
+  const [targetProjectId] = useState<number | null>(() =>
+    resolveInitialLaunchProjectId({
+      scope,
+      projectId: initialProjectId,
+      activePanelId,
+      sessions,
+      projects,
+    }),
+  );
   const [manualTargetProjectId, setManualTargetProjectId] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [projectIndex, setProjectIndex] = useState(0);
-  const [launchers, setLaunchers] = useState<Launcher[]>([]);
-  // The project whose GET /api/projects/:id/actions has settled — drives the
-  // options strip's loading placeholder (derived, so a project switch reads
-  // as "loading" again without a synchronous setState in the effect).
-  const [launchersLoadedFor, setLaunchersLoadedFor] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
   // Feed the search-only "Go to PR" / "Open session on branch" rows.
@@ -329,7 +288,6 @@ export function CommandPalette({
   const projectBranches = useDashboardStore((s) =>
     effectiveProjectId !== null ? s.gitBranchesByProject[effectiveProjectId]?.branches : undefined,
   );
-  const launchersLoaded = launchersLoadedFor === effectiveProjectId;
 
   // P11 — same posture as Settings.tsx: a fresh mount per open (this
   // component's own header comment above already says so), so `active: true`
@@ -371,6 +329,11 @@ export function CommandPalette({
   // any other input — this only changes what grabs focus on OPEN.
   const isCoarsePointer = useCoarsePointer();
   const modalRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // #3015 — the palette's own dismiss controls (Escape in the search field,
+  // the backdrop, the close button) play the exit before `onClose`. Running a
+  // command closes at once: the command's result is what the user looks at.
+  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
   const {
     onKeyDown: onTrapKeyDown,
     suppressRestore,
@@ -526,27 +489,17 @@ export function CommandPalette({
     onTrapKeyDown(e);
   };
 
-  // Issue #271, option 1 — the launcher's opt-in "isolate this session"
-  // toggle: launch directly into a fresh worktree instead of the target
-  // project's own cwd. Off by default; <WorktreeOptions> only fetches
-  // branches once the toggle is switched on, not on every palette open.
-  // `worktreeEnabled`/`worktreeBaseRef` stay lifted here (not owned by
-  // <WorktreeOptions>) because `launch()` below also reads them at launch
-  // time.
-  const [worktreeEnabled, setWorktreeEnabled] = useState(false);
-  const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
-  // Issue #2237 — the launcher's host target. `rememberedHosts` mirrors the
-  // persisted project id -> choice map; the EFFECTIVE choice is derived from
-  // it against the current project/hosts so a host that has left the project
-  // falls back to the default (null = the project's own host).
-  const hosts = useDashboardStore((s) => s.hosts);
-  const [rememberedHosts, setRememberedHosts] = useState<Record<string, string>>(() =>
-    withoutAutoChoices(readJSON<Record<string, string>>(STORAGE_KEYS.lastLaunchHostByProject, {})),
+  // The target project's agents, shells and scripts — the same list the New
+  // session launcher shows (launchers/useSessionLaunch.ts).
+  const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
+  // Seeded once per settled fetch for the target project (see
+  // `seedLauncherSelection` below, which needs the search state declared
+  // further down).
+  const seedLauncherSelectionRef = useRef<() => void>(() => {});
+  const { launchers, loaded: launchersLoaded } = useProjectLaunchers(effectiveProjectId, () =>
+    seedLauncherSelectionRef.current(),
   );
-  const [autoPreview, setAutoPreview] = useState<{
-    projectId: number;
-    preview: PlacementPreview | null;
-  } | null>(null);
+
   // The project drill-in and the "New workspace" name step. Declared up
   // here so "New workspace" `.run()` can open the name step without a ref:
   // the step's query reset needs setQuery, which does not exist until the
@@ -557,10 +510,12 @@ export function CommandPalette({
   // The non-launcher commands (paletteCommands.ts): the empty-query view
   // lists the `top` ones and drills into the `project` ones; a typed query
   // searches them all (useCommandSearch).
+  const layoutBand = useCurrentLayoutBand();
+  const serverInfo = useServerInfo();
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const activeSession =
     sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed") ?? null;
   const commands = buildPaletteCommands({
-    layoutTier,
     projectId: effectiveProjectId,
     projectName: projects.find((p) => p.id === effectiveProjectId)?.name ?? null,
     favoriteUrls:
@@ -572,7 +527,10 @@ export function CommandPalette({
     // both, and a phone-tier window with a fine pointer is not a case where
     // the Dock is available (issue #1881).
     dockUnavailable: dockUnavailableReason(layoutTier, isCoarsePointer),
+    // Unknown (not loaded yet) counts as on, like the rail's Browser view.
+    browserFeature: serverInfo == null || !!serverInfo.features?.browser,
     activeSession,
+    activeSessionTitleContext: activeSession ? titleContexts.get(activeSession.id) : undefined,
     prs: projectPrs?.map((pr) => ({ number: pr.number, title: pr.title })),
     branches: projectBranches?.map((b) => b.name),
     open: {
@@ -594,6 +552,15 @@ export function CommandPalette({
       hosts: onOpenHosts,
       settings: onOpenSettings,
       timeline: onOpenTimeline,
+      agentBrowser: onOpenAgentBrowser
+        ? (session) => {
+            if (agentBrowserIsRailView(layoutBand)) {
+              useDashboardStore.getState().openRailBrowserAgent(session.projectId);
+            } else {
+              onOpenAgentBrowser(session);
+            }
+          }
+        : undefined,
       goToPr: (projectId, number) =>
         useDashboardStore.getState().openRightSidebarPr(projectId, number),
       prune: (projectId) => useDashboardStore.getState().openRightSidebarPrune(projectId),
@@ -617,6 +584,12 @@ export function CommandPalette({
         setSubView("workspace-name");
         setSubIndex(0);
       },
+      newSession: () =>
+        useDashboardStore
+          .getState()
+          .openLauncher(
+            effectiveProjectId !== null ? { projectId: effectiveProjectId } : undefined,
+          ),
     },
   });
   const topCommands = commands.filter((c) => c.placement === "top");
@@ -647,13 +620,19 @@ export function CommandPalette({
     commands,
   });
 
-  // Blank query: the Commands group is painted above Launchers, but
-  // `matchingCommands` stays empty until there is a query, so `entries`
-  // would otherwise be launchers only and arrows could not reach New
-  // workspace, Settings or Devices. Prepend the painted rows. Search
-  // ranking is unchanged — a typed query still uses `entries` as
-  // useCommandSearch built it (commands after launchers). The default-agent
-  // seed below adds the same lead, so Enter still launches that launcher.
+  // A fetch that settles under a typed query puts its matches ahead of the
+  // commands, so the selection restarts at the first result. The blank view
+  // lists no launcher (#3069), so nothing moves and the selection stays.
+  const seedLauncherSelection = () => {
+    if (query.trim() !== "") setSelectedIndex(0);
+  };
+  useEffect(() => {
+    seedLauncherSelectionRef.current = seedLauncherSelection;
+  });
+
+  // Blank query: `matchingCommands` stays empty until there is a query, so
+  // the painted `top` commands are the arrow list. A typed query uses
+  // `entries` as useCommandSearch built it.
   const blankCommands = query.trim() === "" ? topCommands : [];
   const navEntries: PaletteEntry[] =
     blankCommands.length === 0
@@ -808,241 +787,36 @@ export function CommandPalette({
 
   useEffect(() => {
     if (effectiveProjectId === null) return;
-    // A fast project switch (1 -> 2 -> 3) must not let project 1's slower
-    // response overwrite project 3's launchers.
-    let ignore = false;
-    api
-      .listProjectActions(effectiveProjectId)
-      .then((fetched) => {
-        if (ignore) return;
-        setLaunchers(fetched);
-        setLaunchersLoadedFor(effectiveProjectId);
-        // Settings -> Launchers & agents "Default agent" — pre-select the
-        // matching launcher (by id, since a shell/agent launcher's id is
-        // `${kind}:${bin}`, e.g. "agent:claude" — see agent-detect.ts) so
-        // hitting Enter immediately launches it instead of defaulting to
-        // whatever GET /api/projects/:id/actions happened to list first.
-        const defaultIndex = fetched.findIndex(
-          (l) => l.id === `agent:${settings.launchers.defaultAgent}`,
-        );
-        // A project switch mid-search (e.g. via the target picker while a
-        // query is already typed) can leave the Sessions/Workspaces groups
-        // occupying the front of the flattened `entries` list — resetting
-        // to 0 there lands on whichever group is actually first, rather
-        // than aiming this launcher-only `defaultIndex` at an unrelated
-        // flattened slot. On a blank query the Commands group leads the
-        // arrow list (it is painted above the launchers), so the seed adds
-        // that same lead — Enter still launches the default agent, and a
-        // list with no default agent still starts on the first launcher.
-        const commandLead = query.trim() === "" ? topCommands.length : 0;
-        setSelectedIndex(
-          query.trim() !== "" ? 0 : commandLead + (defaultIndex >= 0 ? defaultIndex : 0),
-        );
-      })
-      .catch(() => {
-        if (ignore) return;
-        setLaunchers([]);
-        setLaunchersLoadedFor(effectiveProjectId);
-      });
-    return () => {
-      ignore = true;
-    };
-    // Only re-resolve the default on a genuine project switch — re-running
-    // this whenever `settings.launchers.defaultAgent` itself changes would
-    // yank the current selection out from under a mid-search user.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveProjectId]);
-
-  useEffect(() => {
-    if (effectiveProjectId === null) return;
     void useDashboardStore.getState().refreshProjectUrls(effectiveProjectId);
   }, [effectiveProjectId]);
 
-  const skipPermissionsAgentIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const id of settings.launchers.skipPermissionsAgents ?? []) {
-      ids.add(id);
-    }
-    for (const l of launchers) {
-      if (l.kind !== "agent") continue;
-      const id = normalizeAgentId(l.id);
-      if (l.skipPermissions === false) {
-        ids.delete(id);
-      } else if (l.skipPermissions === true) {
-        ids.add(id);
-      }
-    }
-    return ids;
-  }, [settings.launchers.skipPermissionsAgents, launchers]);
-
-  // Universal override — when checked, ALL agents launch with skip-permissions.
-  // Per-agent config (settings / .crs/actions.json) is shown as a badge on the
-  // agent row instead of pre-checking the box. The user's choice persists
-  // across launcher selections (no reset on pick change).
-  const [skipPermissionsOverride, setSkipPermissionsOverride] = useState<boolean | null>(null);
-
-  const skipPermissionsEnabled = skipPermissionsOverride ?? false;
-
-  // Issue #1424 — per-session model override, shown in the options strip
-  // below for whichever launcher is currently highlighted. Unlike
-  // `skipPermissionsOverride` above, this does NOT persist across a launcher
-  // switch: it's keyed to the CLI it was picked for (`modelOverride.cli`),
-  // and read back as "no override" (falls through to the settings default)
-  // the moment `activeCli` no longer matches — moving the highlight from
-  // Claude to Codex must never carry a Claude model over to a Codex launch.
-  // No reset-on-close effect needed: the palette unmounts on close (App.tsx
-  // renders it behind `paletteOpen &&`), so a fresh mount already means
-  // fresh state.
-  const [modelOverride, setModelOverride] = useState<{
-    cli: ModelCli;
-    value: string | null;
-  } | null>(null);
-
-  const activeLauncherCommand = navEntry?.type === "launcher" ? navEntry.launcher.command : null;
-  const activeCli = activeLauncherCommand !== null ? commandModelCli(activeLauncherCommand) : null;
-  // A command that already has its own --model (or codex's -m) flag keeps it
-  // — offering a picker that the backend would then silently ignore
-  // (buildModelFlag's own skip-if-present rule, hook-adapters/shared.ts)
-  // would be actively misleading.
-  const showModelPicker =
-    activeCli !== null &&
-    activeLauncherCommand !== null &&
-    !commandHasModelFlag(activeLauncherCommand, activeCli);
-  // Called unconditionally (rules of hooks) even when nothing is a
-  // model-capable launcher — "claude-code" is a safe, no-fetch fallback
-  // (useModelOptions never hits the network for it), and the result is
-  // simply not rendered when `showModelPicker` is false.
-  const modelCatalog = useModelOptions(activeCli ?? "claude-code");
-  const modelValue =
-    activeCli !== null && modelOverride?.cli === activeCli ? modelOverride.value : null;
-  const activeCliSettingsDefault =
-    activeCli === "claude-code"
-      ? settings.claudeCode?.defaultModel
-      : activeCli === "codex"
-        ? settings.codex?.defaultModel
-        : activeCli === "agy"
-          ? settings.agy?.defaultModel
-          : activeCli === "opencode"
-            ? settings.opencode?.implementerModel
-            : null;
-  const modelDefaultLabel = activeCliSettingsDefault
-    ? `Default (${activeCliSettingsDefault})`
-    : "CLI default";
-
-  const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
-
-  // Issue #2237 — only a project reaching more than one host (its own plus
-  // its `hostCwds`) gets the chip; a single-host project launches as before.
-  const hostOptions = useMemo(
-    () => (target ? buildHostTargetOptions(target, hosts) : []),
-    [target, hosts],
+  const skipPermissionsAgentIds = useMemo(
+    () => buildSkipPermissionsAgentIds(settings.launchers.skipPermissionsAgents, launchers),
+    [settings.launchers.skipPermissionsAgents, launchers],
   );
-  const showHostChip = target !== null && projectHostCount(target, sessions) > 1;
-  const hostChoice = target
-    ? resolveHostChoice(rememberedHosts[String(target.id)], target, hosts, true)
-    : null;
-  // "Elsewhere" = a base ref from this host's branches is not safe: another
-  // host, or Auto. The project's own host (explicit, on an auto project) is not.
-  const placedElsewhere =
-    showHostChip && hostChoice !== null && (target === null || hostChoice !== target.hostId);
-  useEffect(() => {
-    if (!showHostChip || hostChoice !== AUTO_VALUE || effectiveProjectId === null) return;
-    let cancelled = false;
-    api
-      .getPlacementPreview(effectiveProjectId, "auto")
-      .then((preview) => {
-        if (!cancelled) setAutoPreview({ projectId: effectiveProjectId, preview });
-      })
-      .catch(() => {
-        if (!cancelled) setAutoPreview({ projectId: effectiveProjectId, preview: null });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [showHostChip, hostChoice, effectiveProjectId]);
-  const onHostChange = (value: string) => {
-    if (!target) return;
-    const next = rememberHostChoice(rememberedHosts, target, value);
-    setRememberedHosts(next);
-    writeJSON(STORAGE_KEYS.lastLaunchHostByProject, withoutAutoChoices(next));
-  };
 
-  // P9 — this used to be `void createSession(...).then(...)` with no
-  // `.catch` at all: a failed launch (a 4xx from a bad worktree base ref, a
-  // 503 from a dead remote host, ...) left the palette open showing nothing
-  // but a search box, with the only evidence anything went wrong being an
-  // unhandled rejection in the console. `launching`/`launchError` are new
-  // local state (same "an inline error near the control that triggered the
-  // request" shape as <WorktreeOptions>'s own branches-fetch error and
-  // UnifiedBoard.tsx's TasksToolbar) — critically, the failure path must NOT
-  // call onClose():
-  // closing on failure would unmount the very component about to render the
-  // error, hiding it from the user just as reliably as never catching the
-  // rejection did.
-  const [launching, setLaunching] = useState(false);
-  const [launchError, setLaunchError] = useState<string | null>(null);
-
-  const launch = (launcher: Launcher) => {
-    if (effectiveProjectId === null || launching) return;
-    writeNumber(STORAGE_KEYS.lastLaunchProjectId, effectiveProjectId);
-    const name = expandSessionNamePattern(settings.sessions.namePattern, {
-      agent: launcher.title,
-      project: target?.name ?? "",
-      n: sessions.filter((s) => s.projectId === effectiveProjectId).length + 1,
+  // #3054 — the palette starts no session: an agent, shell or script opens
+  // the launcher with this project and that entry preselected (Launch takes
+  // focus there, so Enter launches). The palette's own focus restore runs
+  // first, so closing the launcher returns focus to what opened the palette.
+  const openInLauncher = (launcher: Launcher) => {
+    useDashboardStore.getState().openLauncher({
+      ...(effectiveProjectId !== null ? { projectId: effectiveProjectId } : {}),
+      launcherId: launcher.id,
     });
-    const trimmedBaseRef = worktreeBaseRef.trim();
-    // Issue #1424 — re-derive the launched launcher's own CLI here rather
-    // than trusting `activeCli` (computed from the currently highlighted
-    // row): `launch()` is also reachable from a row's onClick with whatever
-    // launcher that row represents, which onMouseEnter's setSelectedIndex
-    // makes the same row in practice, but this keeps the guarantee exact
-    // regardless of hover-event timing. Omitted (not sent) unless the
-    // override was set for this exact CLI and isn't the default option, so
-    // the backend resolves the settings default the same way it would if
-    // the picker had never rendered at all.
-    const launcherCli = commandModelCli(launcher.command);
-    const model =
-      modelOverride && modelOverride.cli === launcherCli && modelOverride.value !== null
-        ? modelOverride.value
-        : undefined;
-    setLaunching(true);
-    setLaunchError(null);
-    useDashboardStore
-      .getState()
-      .createSession(effectiveProjectId, launcher.command, {
-        // A launcher's cwd is a path on the project's own host; it means
-        // nothing on another one (and `isolate` excludes it).
-        cwd: placedElsewhere ? undefined : launcher.cwd,
-        name,
-        // A base ref picked here is unsafe on another host: send `isolate`
-        // and let the server cut the worktree from that host's default.
-        worktree:
-          worktreeEnabled && !placedElsewhere && trimmedBaseRef
-            ? { baseRef: trimmedBaseRef }
-            : undefined,
-        isolate: worktreeEnabled && placedElsewhere ? true : undefined,
-        targetHostId:
-          showHostChip && hostChoice !== null && hostChoice !== AUTO_VALUE ? hostChoice : undefined,
-        placement: showHostChip && hostChoice === AUTO_VALUE ? "auto" : undefined,
-        model,
-        skipPermissions: resolveSkipPermissions(launcher, settings, skipPermissionsOverride),
-      })
-      .then((session) => {
-        onLaunched(session);
-        closeAfterAction();
-      })
-      .catch((err: unknown) => {
-        console.debug("[CommandPalette] launch failed", err);
-        setLaunching(false);
-        setLaunchError(err instanceof Error ? err.message : "Failed to launch — try again.");
-      });
+    closeAfterAction(false);
   };
 
   return (
-    <div className="overlay-backdrop cmd-palette-backdrop" onClick={onClose}>
+    <div
+      ref={backdropRef}
+      className="overlay-backdrop cmd-palette-backdrop motion-scrim"
+      data-presence={presence}
+      onClick={dismiss}
+    >
       <div
         ref={modalRef}
-        className="cmd-palette"
+        className="cmd-palette motion-dialog"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onDialogKeyDown}
         role="dialog"
@@ -1075,7 +849,7 @@ export function CommandPalette({
                   ? "Workspace name…"
                   : subView
                     ? `Project: ${target?.name ?? ""} › filter…`
-                    : "Launch a session or run a command…"
+                    : "Run a command, or find a session or agent…"
             }
             aria-activedescendant={
               pickerOpen && filteredProjects.length > 0
@@ -1133,7 +907,11 @@ export function CommandPalette({
                 return;
               }
               if (e.key === "Escape") {
-                onClose();
+                // Handled here: the global Escape (useGlobalShortcuts) would
+                // otherwise unmount the palette in the same batch, before its
+                // exit could play (#3015).
+                e.stopPropagation();
+                dismiss();
               } else if (e.key === "ArrowDown" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 openProjectPicker();
@@ -1155,7 +933,7 @@ export function CommandPalette({
                 } else if (picked.type === "command") {
                   activateCommand(picked.command);
                 } else {
-                  launch(picked.launcher);
+                  openInLauncher(picked.launcher);
                 }
               }
             }}
@@ -1179,19 +957,13 @@ export function CommandPalette({
           <button
             type="button"
             className="kbd kbd-btn"
-            onClick={onClose}
+            onClick={dismiss}
             aria-label="Close command palette"
             title="Close"
           >
             {isCoarsePointer ? <CloseIcon size={14} /> : "esc"}
           </button>
         </div>
-
-        {launchError && (
-          <div className="cmd-palette-launch-error" title={launchError}>
-            {launchError}
-          </div>
-        )}
 
         <div className={`cmd-palette-target-strip${scope === "global" ? " global" : ""}`}>
           {scope === "project" ? (
@@ -1209,7 +981,7 @@ export function CommandPalette({
             </>
           ) : (
             <div className="cmd-palette-target-row">
-              <span className="cmd-palette-target-label">Launch in</span>
+              <span className="cmd-palette-target-label">Project</span>
               <button
                 type="button"
                 className={`cmd-palette-target-chip clickable${pickerOpen ? " open" : ""}`}
@@ -1234,122 +1006,10 @@ export function CommandPalette({
           )}
           {scope === "global" && (
             <div className="cmd-palette-target-hint">
-              A global command needs a project to resolve its working directory.
+              Project commands and new sessions use this project.
             </div>
-          )}
-          {showHostChip && (
-            <>
-              <div className="cmd-palette-target-row">
-                <span className="cmd-palette-target-label">On</span>
-                <span className="cmd-palette-target-chip">
-                  <Dropdown
-                    small
-                    ariaLabel="Target host"
-                    value={
-                      hostChoice === null || hostChoice === target?.hostId
-                        ? OWN_HOST_VALUE
-                        : hostChoice
-                    }
-                    onChange={onHostChange}
-                    options={hostOptions}
-                  />
-                </span>
-              </div>
-              {hostChoice === AUTO_VALUE && (
-                <div className="cmd-palette-target-hint indent">
-                  {autoPreview?.projectId === effectiveProjectId && autoPreview.preview
-                    ? describeAutoPreview(autoPreview.preview, hosts)
-                    : "Auto picks the host when you launch."}
-                </div>
-              )}
-            </>
-          )}
-          {/* Issue #271, option 1 — opt-in worktree isolation at launch time.
-              Not shown until a project target is resolved (mirrors every
-              other target-dependent affordance in this strip). */}
-          {!pickerOpen && effectiveProjectId !== null && (
-            <WorktreeOptions
-              projectId={effectiveProjectId}
-              enabled={worktreeEnabled}
-              onEnabledChange={setWorktreeEnabled}
-              baseRef={worktreeBaseRef}
-              onBaseRefChange={setWorktreeBaseRef}
-              baseOnPlacedHost={placedElsewhere}
-            />
           )}
         </div>
-
-        {!pickerOpen && effectiveProjectId !== null && !launchersLoaded && (
-          <div className="cmd-palette-options-strip loading" role="status" aria-live="polite">
-            Loading launchers…
-          </div>
-        )}
-        {!pickerOpen && effectiveProjectId !== null && launchersLoaded && (
-          <div
-            className={`cmd-palette-options-strip${
-              (navEntry?.type === "launcher" && navEntry.launcher.kind === "agent") ||
-              showModelPicker
-                ? ""
-                : " collapsed"
-            }`}
-          >
-            <div
-              style={{
-                visibility:
-                  navEntry?.type === "launcher" && navEntry.launcher.kind === "agent"
-                    ? "visible"
-                    : "hidden",
-              }}
-              aria-hidden={!(navEntry?.type === "launcher" && navEntry.launcher.kind === "agent")}
-            >
-              <label className="cmd-palette-worktree-toggle">
-                <input
-                  type="checkbox"
-                  checked={skipPermissionsEnabled}
-                  onChange={(e) => setSkipPermissionsOverride(e.target.checked)}
-                />
-                <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>⚠</span>
-                <span>Skip permissions (all agents)</span>
-              </label>
-              <div
-                style={{
-                  fontSize: "0.65625rem",
-                  color: "var(--dim)",
-                  marginLeft: 22,
-                  marginTop: 1,
-                  lineHeight: 1.3,
-                }}
-              >
-                Overrides per-agent settings — suppresses approval prompts for all agents
-              </div>
-            </div>
-            {/* Issue #1424 — per-session model override for the highlighted
-                launcher. `visibility`/`aria-hidden`, not a conditional
-                unmount, so the strip's height doesn't jump as the highlight
-                moves between an agent launcher and a plain shell command. */}
-            <div
-              className="cmd-palette-model-picker"
-              style={{ visibility: showModelPicker ? "visible" : "hidden" }}
-              aria-hidden={!showModelPicker}
-            >
-              <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 4 }}>
-                Model
-              </div>
-              <ModelSelect
-                small
-                ariaLabel="Model for this session"
-                value={modelValue}
-                options={modelCatalog.options}
-                defaultLabel={modelDefaultLabel}
-                allowCustom={modelCatalog.allowCustom}
-                onChange={(v) => {
-                  if (activeCli === null) return;
-                  setModelOverride({ cli: activeCli, value: v });
-                }}
-              />
-            </div>
-          </div>
-        )}
 
         {pickerOpen ? (
           <div
@@ -1358,7 +1018,7 @@ export function CommandPalette({
             ref={projectListRef}
           >
             <div className="cmd-palette-group-label">
-              {filteredProjects.length === 0 ? "No matching projects" : "Launch in which project?"}
+              {filteredProjects.length === 0 ? "No matching projects" : "Which project?"}
             </div>
             {filteredProjects.map((p, idx) => (
               <PaletteRow
@@ -1430,16 +1090,34 @@ export function CommandPalette({
                 so they don't compete with actual command results. */}
             {query.trim() === "" && (
               <>
-                <div className="cmd-palette-group-label">Commands</div>
-                {blankCommands.map((command, i) => (
-                  <CommandRow
-                    key={command.id}
-                    command={command}
-                    selected={i === navIndex}
-                    onMouseEnter={() => setSelectedIndex(i)}
-                    onClick={() => activateCommand(command)}
-                  />
-                ))}
+                {(
+                  [
+                    ["Create", PALETTE_CREATE_IDS],
+                    ["Go to", PALETTE_GO_TO_IDS],
+                  ] as const
+                ).map(([label, ids]) => {
+                  const rows = blankCommands.filter((c) =>
+                    (ids as readonly string[]).includes(c.id),
+                  );
+                  if (rows.length === 0) return null;
+                  return (
+                    <Fragment key={label}>
+                      <div className="cmd-palette-group-label">{label}</div>
+                      {rows.map((command) => {
+                        const i = blankCommands.indexOf(command);
+                        return (
+                          <CommandRow
+                            key={command.id}
+                            command={command}
+                            selected={i === navIndex}
+                            onMouseEnter={() => setSelectedIndex(i)}
+                            onClick={() => activateCommand(command)}
+                          />
+                        );
+                      })}
+                    </Fragment>
+                  );
+                })}
               </>
             )}
             {/* U2 — shown above the Launchers list whenever there's at
@@ -1460,7 +1138,7 @@ export function CommandPalette({
                   // returns [] when `query.trim() === ""`), so these rows
                   // only render once that lead is empty.
                   const project = projects.find((p) => p.id === session.projectId);
-                  const title = session.name || session.lastTitle || session.command;
+                  const title = sessionDisplayTitle(session, titleContexts.get(session.id));
                   const subtitleParts = [project?.name, session.liveBranch].filter(
                     (part): part is string => Boolean(part),
                   );
@@ -1513,12 +1191,31 @@ export function CommandPalette({
                 })}
               </>
             )}
-            <div className="cmd-palette-group-label">Launchers</div>
-            {filtered.length === 0 && matchingCommands.length === 0 && (
-              <div style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}>
-                No matching launchers.
-              </div>
-            )}
+            {/* #3054 — these open the launcher; the launcher starts the
+                session. #3069 — only for a typed query; the blank view has
+                the one "New session…" command instead. */}
+            {query.trim() !== "" &&
+              (effectiveProjectId !== null && !launchersLoaded ? (
+                <>
+                  <div className="cmd-palette-group-label">New session</div>
+                  <div
+                    role="status"
+                    style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}
+                  >
+                    Loading agents, shells and scripts…
+                  </div>
+                </>
+              ) : filtered.length > 0 ? (
+                <div className="cmd-palette-group-label">New session</div>
+              ) : (
+                matchingCommands.length === 0 && (
+                  <div
+                    style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}
+                  >
+                    No matching agents, shells or scripts.
+                  </div>
+                )
+              ))}
             {filtered.map((launcher, i) => {
               // Blank query prepends the Commands rows to the arrow list;
               // a typed query does not (`blankCommands` is empty), so this
@@ -1530,7 +1227,7 @@ export function CommandPalette({
                   key={launcher.id}
                   selected={absoluteIndex === navIndex}
                   onMouseEnter={() => setSelectedIndex(absoluteIndex)}
-                  onClick={() => launch(launcher)}
+                  onClick={() => openInLauncher(launcher)}
                   icon={
                     logo ? (
                       <img src={logo} alt="" width={16} height={16} />
@@ -1607,9 +1304,7 @@ export function CommandPalette({
           </span>
           <span className="cmd-palette-footer-item">
             <span className="kbd">↵</span>
-            {/* Reflects whichever entry is actually selected, not just the
-                launch-a-command case — "Launch in X" would be misleading
-                once the highlighted row is a command, session, or workspace. */}
+            {/* Reflects whichever entry is actually selected. */}
             {subView === "workspace-name"
               ? query.trim()
                 ? `Create ${query.trim()}`
@@ -1626,7 +1321,9 @@ export function CommandPalette({
                       ? navEntry.command.drillIn
                         ? `Open ${navEntry.command.title}`
                         : `Run ${navEntry.command.title}`
-                      : `Launch in ${target?.name ?? "…"}`}
+                      : navEntry?.type === "launcher"
+                        ? `New session in ${target?.name ?? "…"}…`
+                        : "Select"}
           </span>
           {pickerOpen && (
             <span className="cmd-palette-footer-item">

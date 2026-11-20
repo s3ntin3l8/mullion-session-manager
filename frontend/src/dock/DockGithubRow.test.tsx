@@ -98,7 +98,7 @@ describe("Dock", () => {
       await waitFor(() =>
         expect(fetchMock).toHaveBeenCalledWith("/api/projects/1/github", expect.anything()),
       );
-      expect(screen.queryByTitle(/Open GitHub panel/)).not.toBeInTheDocument();
+      expect(screen.queryByTitle(/Open GitHub for/)).not.toBeInTheDocument();
     });
 
     it("shows the repo, issue count, and PR count once the status loads", async () => {
@@ -110,7 +110,7 @@ describe("Dock", () => {
       expect(screen.getByText("2 PRs")).toBeInTheDocument();
     });
 
-    it("opens the GitHub panel for the current project when clicked", async () => {
+    it("opens the GitHub view for the current project when clicked", async () => {
       githubByProject[1] = () => jsonResponse(200, STATUS);
       const onOpenGitHub = vi.fn();
       const user = userEvent.setup();

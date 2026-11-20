@@ -7,6 +7,7 @@ import { useDashboardStore } from "../../store/index.js";
 import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
+import { dropdownOptions, dropdownValue, pickDropdownOption } from "../../test/dropdown.js";
 
 // Ergonomics coverage for ModelsSection — NOT the regression test for the
 // route↔client shape mismatch that crashed this pane. That's
@@ -99,7 +100,7 @@ describe("Settings -> Models", () => {
     ]) {
       const select = screen.getByRole("combobox", { name });
       await waitFor(() =>
-        expect(Array.from(select.querySelectorAll("option")).map((o) => o.textContent)).toEqual([
+        expect(dropdownOptions(select).map((o) => o.label)).toEqual([
           "opencode default",
           ...MODELS,
         ]),
@@ -108,54 +109,47 @@ describe("Settings -> Models", () => {
   });
 
   it("offers opusplan for Claude Code and PATCHes it", async () => {
-    const user = userEvent.setup();
     render(<ModelsSection />);
 
     const select = screen.getByRole("combobox", { name: "Claude Code implementer model" });
-    const options = Array.from(select.querySelectorAll("option")).map((o) =>
-      o.getAttribute("value"),
-    );
+    const options = dropdownOptions(select).map((o) => o.value);
     expect(options).toEqual(expect.arrayContaining(["opusplan", "opusplan[1m]", "__custom__"]));
-    await user.selectOptions(select, "opusplan");
+    pickDropdownOption(select, "opusplan");
 
     expect(useDashboardStore.getState().settings.claudeCode.defaultModel).toBe("opusplan");
     await expectPatch({ claudeCode: { defaultModel: "opusplan" } });
   });
 
   it("saves a Claude Code delegate model and clears it back to no delegation", async () => {
-    const user = userEvent.setup();
     render(<ModelsSection />);
 
     const select = screen.getByRole("combobox", { name: "Claude Code delegate model" });
-    expect(select).toHaveValue("");
-    await user.selectOptions(select, "sonnet");
+    expect(dropdownValue(select)).toBe("");
+    pickDropdownOption(select, "sonnet");
     expect(useDashboardStore.getState().settings.claudeCode.delegateModel).toBe("sonnet");
     await expectPatch({ claudeCode: { delegateModel: "sonnet" } });
 
-    await user.selectOptions(select, "");
+    pickDropdownOption(select, "");
     expect(useDashboardStore.getState().settings.claudeCode.delegateModel).toBeNull();
   });
 
   it("saves a delegate model for every CLI", async () => {
-    const user = userEvent.setup();
     render(<ModelsSection />);
 
-    await user.selectOptions(
+    pickDropdownOption(
       await screen.findByRole("combobox", { name: "Codex delegate model" }),
       "gpt-5.6-sol",
     );
     expect(useDashboardStore.getState().settings.codex.delegateModel).toBe("gpt-5.6-sol");
 
     const opencodeSelect = screen.getByRole("combobox", { name: "opencode delegate model" });
-    await waitFor(() =>
-      expect(opencodeSelect.querySelectorAll("option").length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(opencodeSelect, "openrouter/minimax-m3");
+    await waitFor(() => expect(dropdownOptions(opencodeSelect).length).toBeGreaterThan(1));
+    pickDropdownOption(opencodeSelect, "openrouter/minimax-m3");
     expect(useDashboardStore.getState().settings.opencode.delegateModel).toBe(
       "openrouter/minimax-m3",
     );
 
-    await user.selectOptions(
+    pickDropdownOption(
       await screen.findByRole("combobox", {
         name: /agy delegate model|Antigravity delegate model/i,
       }),
@@ -163,7 +157,7 @@ describe("Settings -> Models", () => {
     );
     expect(useDashboardStore.getState().settings.agy.delegateModel).toBe("claude-sonnet-4-6");
 
-    await user.selectOptions(
+    pickDropdownOption(
       await screen.findByRole("combobox", {
         name: /mcode delegate model|MiniMax Code delegate model/i,
       }),
@@ -173,10 +167,9 @@ describe("Settings -> Models", () => {
   });
 
   it("saves a Claude Code small model (a full id)", async () => {
-    const user = userEvent.setup();
     render(<ModelsSection />);
 
-    await user.selectOptions(
+    pickDropdownOption(
       screen.getByRole("combobox", { name: "Claude Code small model" }),
       "claude-haiku-5-5",
     );
@@ -191,9 +184,7 @@ describe("Settings -> Models", () => {
   it("does not offer model aliases as a small model", () => {
     render(<ModelsSection />);
     const select = screen.getByRole("combobox", { name: "Claude Code small model" });
-    const values = within(select)
-      .getAllByRole("option")
-      .map((o) => (o as HTMLOptionElement).value);
+    const values = dropdownOptions(select).map((o) => o.value);
     for (const alias of ["haiku", "sonnet", "opus", "fable", "opusplan"]) {
       expect(values).not.toContain(alias);
     }
@@ -218,7 +209,6 @@ describe("Settings -> Models", () => {
   });
 
   it("PATCHes null when a CLI is set back to its default", async () => {
-    const user = userEvent.setup();
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
@@ -229,8 +219,8 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     const select = screen.getByRole("combobox", { name: "Codex implementer model" });
-    expect(select).toHaveValue("gpt-5.6-sol");
-    await user.selectOptions(select, "");
+    expect(dropdownValue(select)).toBe("gpt-5.6-sol");
+    pickDropdownOption(select, "");
 
     await expectPatch({ codex: { defaultModel: null } });
   });
@@ -239,7 +229,7 @@ describe("Settings -> Models", () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
-    await user.selectOptions(
+    pickDropdownOption(
       screen.getByRole("combobox", { name: "Claude Code implementer model" }),
       "__custom__",
     );
@@ -258,7 +248,7 @@ describe("Settings -> Models", () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
-    await user.selectOptions(
+    pickDropdownOption(
       screen.getByRole("combobox", { name: "Codex implementer model" }),
       "__custom__",
     );
@@ -274,7 +264,7 @@ describe("Settings -> Models", () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
-    await user.selectOptions(
+    pickDropdownOption(
       screen.getByRole("combobox", { name: "Claude Code implementer model" }),
       "__custom__",
     );
@@ -318,50 +308,47 @@ describe("Settings -> Models", () => {
     });
     render(<ModelsSection />);
 
-    expect(screen.getByRole("combobox", { name: "Claude Code implementer model" })).toHaveValue(
-      "__custom__",
-    );
+    expect(
+      dropdownValue(screen.getByRole("combobox", { name: "Claude Code implementer model" })),
+    ).toBe("__custom__");
     expect(
       screen.getByRole("textbox", { name: /Claude Code implementer model \(custom/ }),
     ).toHaveValue("claude-opus-4-5");
   });
 
   it("populates the agy select from /api/agy/models and PATCHes the choice", async () => {
-    const user = userEvent.setup();
     render(<ModelsSection />);
 
     const select = screen.getByRole("combobox", { name: "Antigravity implementer model" });
     await waitFor(() =>
-      expect(within(select).getByText("gemini-3.1-pro-high")).toBeInTheDocument(),
+      expect(dropdownOptions(select).map((o) => o.label)).toContain("gemini-3.1-pro-high"),
     );
-    await user.selectOptions(select, "gemini-3.1-pro-high");
+    pickDropdownOption(select, "gemini-3.1-pro-high");
 
     await expectPatch({ agy: { defaultModel: "gemini-3.1-pro-high" } });
   });
 
   // Issue #1784 — the MiniMax Code group reads mcode's own catalog.
   it("populates the MiniMax Code select from /api/mcode/models and PATCHes the choice", async () => {
-    const user = userEvent.setup();
     render(<ModelsSection />);
 
     const select = screen.getByRole("combobox", { name: "MiniMax Code implementer model" });
     await waitFor(() =>
-      expect(within(select).getByText("minimax/MiniMax-M3.1-Flash")).toBeInTheDocument(),
+      expect(dropdownOptions(select).map((o) => o.label)).toContain("minimax/MiniMax-M3.1-Flash"),
     );
-    await user.selectOptions(select, "minimax/MiniMax-M3.1-Flash");
+    pickDropdownOption(select, "minimax/MiniMax-M3.1-Flash");
 
     await expectPatch({ mcode: { defaultModel: "minimax/MiniMax-M3.1-Flash" } });
   });
 
   it("selecting an opencode model PATCHes settings.opencode with the chosen key only", async () => {
-    const user = userEvent.setup();
     render(<ModelsSection />);
 
     const select = screen.getByRole("combobox", { name: "opencode implementer model" });
     await waitFor(() =>
-      expect(within(select).getByText("anthropic/claude-sonnet-4-5")).toBeInTheDocument(),
+      expect(dropdownOptions(select).map((o) => o.label)).toContain("anthropic/claude-sonnet-4-5"),
     );
-    await user.selectOptions(select, "anthropic/claude-sonnet-4-5");
+    pickDropdownOption(select, "anthropic/claude-sonnet-4-5");
 
     expect(useDashboardStore.getState().settings.opencode?.implementerModel).toBe(
       "anthropic/claude-sonnet-4-5",
@@ -376,7 +363,7 @@ describe("Settings -> Models", () => {
     expect(await screen.findByText(/couldn't load the model list/i)).toBeInTheDocument();
     const agySelect = screen.getByRole("combobox", { name: "Antigravity implementer model" });
     await waitFor(() =>
-      expect(within(agySelect).getByText("gemini-3.1-pro-high")).toBeInTheDocument(),
+      expect(dropdownOptions(agySelect).map((o) => o.label)).toContain("gemini-3.1-pro-high"),
     );
   });
 
@@ -421,7 +408,7 @@ describe("Settings -> Models", () => {
     });
     render(<ModelsSection />);
 
-    await user.selectOptions(
+    pickDropdownOption(
       screen.getByRole("combobox", { name: "Claude Code implementer model" }),
       "__custom__",
     );
@@ -463,17 +450,21 @@ describe("Settings -> Models", () => {
     const first = render(<ModelsSection />);
     const select = screen.getByRole("combobox", { name: "Codex implementer model" });
     await waitFor(() =>
-      expect(
-        Array.from(select.querySelectorAll("option")).map((o) => o.getAttribute("value")),
-      ).toEqual(["", ...CODEX_MODELS, "__custom__"]),
+      expect(dropdownOptions(select).map((o) => o.value)).toEqual([
+        "",
+        ...CODEX_MODELS,
+        "__custom__",
+      ]),
     );
     first.unmount();
 
     routeFetch({ "/api/codex/models": () => jsonResponse(200, []) });
     render(<ModelsSection />);
     const fallback = screen.getByRole("combobox", { name: "Codex implementer model" });
-    await waitFor(() => expect(within(fallback).getByText("gpt-6-astra")).toBeInTheDocument());
-    expect(within(fallback).queryByText("gpt-5.5")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(dropdownOptions(fallback).map((o) => o.label)).toContain("gpt-6-astra"),
+    );
+    expect(dropdownOptions(fallback).map((o) => o.label)).not.toContain("gpt-5.5");
   });
 
   // The reviewer is the last line of defence on a Task Master task: a
@@ -770,9 +761,9 @@ describe("Settings -> Models", () => {
 
       expect(await screen.findByRole("button", { name: "Show 3 more CLIs" })).toBeInTheDocument();
       const row = screen.getByTestId("models-row-codex");
-      expect(within(row).getByRole("combobox", { name: "Codex implementer model" })).toHaveValue(
-        "gpt-5.6-sol",
-      );
+      expect(
+        dropdownValue(within(row).getByRole("combobox", { name: "Codex implementer model" })),
+      ).toBe("gpt-5.6-sol");
       expect(within(row).getByText("not detected")).toBeInTheDocument();
     });
 

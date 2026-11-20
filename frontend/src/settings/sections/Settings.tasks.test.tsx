@@ -8,6 +8,7 @@ import { __flushPendingSettingsPatchForTests } from "../../store/slices/ui.js";
 import { DEFAULT_SETTINGS, type ServerInfo } from "../../api/index.js";
 import { makeAppSettings, makeTaskMaster, makeTaskMasterEnv } from "../../test/fixtures.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
+import { dropdownValue, pickDropdownOption } from "../../test/dropdown.js";
 
 // Task Master Settings UI follow-up — mirrors Settings.sessions.test.tsx's
 // fake-in-memory-backend pattern: a fake server over global fetch, not a
@@ -397,22 +398,21 @@ describe("Settings -> Task Master", () => {
   });
 
   it("lets the Default agent / Default review agent dropdowns override the install-wide defaults", async () => {
-    const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="tasks" />);
 
     const defaultAgentRow = await screen.findByText("Default agent");
     const defaultAgentSelect = defaultAgentRow
       .closest(".settings-row")
-      ?.querySelector("select") as HTMLSelectElement;
-    await user.selectOptions(defaultAgentSelect, "codex");
+      ?.querySelector<HTMLElement>(".ui-dropdown-field") as HTMLElement;
+    pickDropdownOption(defaultAgentSelect, "codex");
     expect(useDashboardStore.getState().settings.taskMaster.defaultAgent).toBe("codex");
 
     const reviewRow = screen.getByText("Default review agent");
     const reviewSelect = reviewRow
       .closest(".settings-row")
-      ?.querySelector("select") as HTMLSelectElement;
-    expect(reviewSelect).toHaveValue("none");
-    await user.selectOptions(reviewSelect, "agy");
+      ?.querySelector<HTMLElement>(".ui-dropdown-field") as HTMLElement;
+    expect(dropdownValue(reviewSelect)).toBe("none");
+    pickDropdownOption(reviewSelect, "agy");
     expect(useDashboardStore.getState().settings.taskMaster.defaultReviewAgent).toBe("agy");
   });
 

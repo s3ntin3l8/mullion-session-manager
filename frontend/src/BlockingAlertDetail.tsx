@@ -9,6 +9,7 @@ import type {
   BlockingAlertsResponse,
 } from "./api/blocking-alerts-types.js";
 import { parseMergeBlockedThreads, safeGithubUrl } from "./needsHuman.js";
+import { Dropdown } from "./ui/primitives.js";
 
 function priorText(d: BlockingAlertPriorDismissal): string {
   const reason = d.reason ?? "dismissed";
@@ -61,18 +62,13 @@ function DismissAction({
       <div>
         {`Dismiss alert #${number} (${rule}${where ? ` at ${where}` : ""}) on GitHub, reply to its thread and resolve it? The merge is then retried.`}
       </div>
-      <select
-        aria-label="Dismissal reason"
+      <Dropdown
+        ariaLabel="Dismissal reason"
         value={reason}
         disabled={submitting}
-        onChange={(e) => setReason(e.target.value as BlockingAlertDismissReason)}
-      >
-        {REASONS.map((r) => (
-          <option key={r} value={r}>
-            {r}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => setReason(v)}
+        options={REASONS.map((r) => ({ value: r, label: r }))}
+      />
       <textarea
         aria-label="Dismissal comment"
         value={comment}

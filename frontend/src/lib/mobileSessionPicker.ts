@@ -1,6 +1,7 @@
 import type { NotificationEvent, Project, Session, Workspace } from "../api/index.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import { isListedSession, sessionDisplayTitle } from "./sessionDisplay.js";
+import type { SessionTitleContexts } from "./sessionDisplay.js";
 import { buildSessionWorkspaceIndex } from "../panelUtils.js";
 
 // Issue #1882 — the workspace a session's panel lives in.
@@ -39,6 +40,11 @@ export interface PickerRow {
   // it — or null when it is in no workspace's layout. See workspaceHomes for
   // why the answer is sometimes absent.
   workspace: PickerWorkspace | null;
+  // The session's project name, or null for a non-session pane or a session
+  // whose project isn't in `projects`. The "Needs you" pin has no project
+  // heading, so its rows show this to tell same-titled sessions apart
+  // (issue #2996).
+  projectName: string | null;
   // Text the switcher's search box matches (title, raw command, project name)
   // — the same fields sessionMatchesSearch uses for the sidebar filter.
   searchFields: string[];
@@ -68,6 +74,9 @@ export interface PickerInput {
   // and whether that is here.
   workspaces: Workspace[];
   activeWorkspaceId: number | null;
+  // Each session's task title and number (selectSessionTitleContexts, #3285),
+  // so a row shows the same title as the sidebar. Absent = neither.
+  titleContexts?: SessionTitleContexts;
 }
 
 // Which workspace, if any, a row's session lives in.
@@ -154,6 +163,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
         unreadCount: 0,
         needsYou: false,
         workspace: null,
+        projectName: null,
         searchFields: [panel.title],
       });
     }
@@ -167,12 +177,12 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
     const isMuted = muted.has(session.id);
     const events = input.events[session.id];
     const seen = input.lastSeenSeq[session.id] ?? 0;
-    // Both names are searchable, not just whichever one is displayed — a
-    // renamed tab's live panel title and the locked/OSC name
-    // sessionDisplayTitle resolves (and the sidebar's own search matches)
-    // can disagree once the panel's title has drifted since the rename.
-    const displayTitle = sessionDisplayTitle(session);
-    const title = panel?.title || displayTitle;
+    // The row shows the title the sidebar shows (#3285) — not the open
+    // panel's tab title, which follows the live terminal title and would
+    // hide a task's title or a session's number. Both stay searchable: the
+    // panel's title can drift from the one sessionDisplayTitle resolves.
+    const displayTitle = sessionDisplayTitle(session, input.titleContexts?.get(session.id));
+    const title = displayTitle;
     const searchFields = [displayTitle, session.command];
     if (panel && panel.title && panel.title !== displayTitle) searchFields.push(panel.title);
     if (project) searchFields.push(project.name);
@@ -181,6 +191,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
       panelId: panel?.id ?? null,
       session,
       title,
+      projectName: project?.name ?? null,
       searchFields,
       unreadCount: sessionUnreadCount(session.id, events, seen, input.dismissedEventKeys, isMuted),
       needsYou: sessionNeedsYou(session, events, seen, input.dismissedEventKeys, isMuted),

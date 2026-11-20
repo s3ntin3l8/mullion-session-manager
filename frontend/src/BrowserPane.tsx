@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { isMacPlatform, macChordPress } from "./browserKeyMap.js";
@@ -65,6 +66,16 @@ function parseControlMessage(raw: string): ControlMessage | null {
   return null;
 }
 
+// A page with nothing loaded yet reports `about:blank` (Chromium's start
+// page). The address bar shows that as empty, its placeholder in view, and
+// never sends it back as a navigation: the server refuses any non-http(s)
+// target (routes/browser.ts), so a Go or Enter on a fresh pane would
+// otherwise raise a "Refusing to navigate" error toast (#3215).
+function isBlankAddress(url: string): boolean {
+  const trimmed = url.trim();
+  return trimmed === "" || trimmed.toLowerCase() === "about:blank";
+}
+
 function mouseButtonName(button: number): "left" | "right" | "middle" {
   if (button === 2) return "right";
   if (button === 1) return "middle";
@@ -82,6 +93,15 @@ function mouseButtonName(button: number): "left" | "right" | "middle" {
 export function BrowserPane(props: {
   params: BrowserPaneParams;
   onTitleChange?: (title: string) => void;
+  /** Rendered first in the toolbar: the Browser pane's mode switch (#3371). */
+  toolbarStart?: ReactNode;
+  /** Rendered last in the toolbar, after reload. */
+  toolbarEnd?: ReactNode;
+  /** #3373 — the page's own address, as the server reports it. */
+  onUrlChange?: (url: string) => void;
+  /** #3373 — an address to load, once per `rev`. Held until the socket is
+   * open, so a first attach still gets it; only http(s) is ever sent. */
+  navigateTo?: { url: string; rev: number };
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
@@ -100,9 +120,15 @@ export function BrowserPane(props: {
   const sendControlRef = useRef<(message: Record<string, unknown>) => void>(() => {});
   const retryRef = useRef<() => void>(() => {});
   const onTitleChangeRef = useRef(props.onTitleChange);
+  const onUrlChangeRef = useRef(props.onUrlChange);
   useEffect(() => {
     onTitleChangeRef.current = props.onTitleChange;
+    onUrlChangeRef.current = props.onUrlChange;
   });
+  // #3373 — a navigation asked for before the socket opened, and the mount
+  // effect's way to send it once it can.
+  const pendingNavigateRef = useRef<string | null>(null);
+  const flushNavigateRef = useRef<() => void>(() => {});
 
   // "Re-bind" drops the dead binding and attaches again, which resolves the
   // session's current host and checkout; "Unbind" only drops it (the next
@@ -152,6 +178,12 @@ export function BrowserPane(props: {
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
     }
     sendControlRef.current = sendControl;
+    flushNavigateRef.current = () => {
+      const url = pendingNavigateRef.current;
+      if (url == null || ws?.readyState !== WebSocket.OPEN) return;
+      pendingNavigateRef.current = null;
+      sendControl({ type: "navigate", url });
+    };
 
     const RECONNECT_BASE_DELAY_MS = 500;
     const RECONNECT_MAX_DELAY_MS = 8000;
@@ -175,14 +207,17 @@ export function BrowserPane(props: {
         setStatus("open");
         setLastError(null);
         setBindingError(null);
+        flushNavigateRef.current();
       });
 
       socket.addEventListener("message", (event) => {
         if (typeof event.data === "string") {
           const message = parseControlMessage(event.data);
           if (!message) return;
-          if (message.type === "url") setAddressInput(message.url);
-          else if (message.type === "title") onTitleChangeRef.current?.(message.title);
+          if (message.type === "url") {
+            setAddressInput(isBlankAddress(message.url) ? "" : message.url);
+            onUrlChangeRef.current?.(message.url);
+          } else if (message.type === "title") onTitleChangeRef.current?.(message.title);
           else if (message.type === "exited") setStatus("failed");
           else if (message.type === "error") {
             if (message.code === "binding_unavailable") {
@@ -247,7 +282,7 @@ export function BrowserPane(props: {
     // Mouse/keyboard forwarding — the canvas shows a scaled bitmap of the
     // remote page, so pointer coordinates are rescaled from CSS pixels to
     // the frame's own pixel dimensions before being sent.
-    function canvasPoint(event: MouseEvent): { x: number; y: number } {
+    function canvasPoint(event: { clientX: number; clientY: number }): { x: number; y: number } {
       const rect = canvas!.getBoundingClientRect();
       // `|| 1` alone doesn't catch a zero-width/height rect (e.g. before
       // layout, or in a headless test) when canvas.width is non-zero — that
@@ -275,6 +310,48 @@ export function BrowserPane(props: {
     // The canvas has its own right-click semantics in the remote page — the
     // browser's native context menu over it would just be confusing noise.
     const onContextMenu = (event: MouseEvent) => event.preventDefault();
+    // Touch (the fold's Browser view, a tablet's grid pane): a one-finger
+    // drag scrolls the page. Without this a finger could only tap, through
+    // the browser's compatibility mouse events, and never scroll. The finger's
+    // start point is sent as a mouse move first, because the remote wheel
+    // scrolls whatever is under the remote pointer. A tap never moves, so
+    // it still arrives as the compatibility click.
+    let lastTouch: { x: number; y: number } | null = null;
+    const onTouchStart = (event: TouchEvent) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+      if (!touch) {
+        lastTouch = null;
+        return;
+      }
+      lastTouch = { x: touch.clientX, y: touch.clientY };
+      const { x, y } = canvasPoint(touch);
+      sendControl({ type: "mouse", action: "move", x, y });
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const touch = event.touches.length === 1 ? event.touches[0] : undefined;
+      if (!touch) {
+        // A second finger (a pinch): forget the drag, so lifting one finger
+        // does not scroll by the distance from a stale point.
+        lastTouch = null;
+        return;
+      }
+      if (!lastTouch) return;
+      const rect = canvas!.getBoundingClientRect();
+      const scale = rect.height > 0 ? canvas!.height / rect.height : 1;
+      const deltaX = (lastTouch.x - touch.clientX) * scale;
+      const deltaY = (lastTouch.y - touch.clientY) * scale;
+      lastTouch = { x: touch.clientX, y: touch.clientY };
+      if (deltaX === 0 && deltaY === 0) return;
+      event.preventDefault();
+      sendControl({ type: "mouse", action: "wheel", deltaX, deltaY });
+    };
+    const onTouchEnd = () => {
+      lastTouch = null;
+    };
+    canvas.addEventListener("touchstart", onTouchStart, { passive: true });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd);
+    canvas.addEventListener("touchcancel", onTouchEnd);
     canvas.addEventListener("mousemove", onMouseMove);
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mouseup", onMouseUp);
@@ -384,6 +461,10 @@ export function BrowserPane(props: {
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchEnd);
       canvas.removeEventListener("mousemove", onMouseMove);
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("mouseup", onMouseUp);
@@ -394,20 +475,32 @@ export function BrowserPane(props: {
       canvas.removeEventListener("paste", onPaste);
       ws?.close();
       sendControlRef.current = () => {};
+      flushNavigateRef.current = () => {};
       retryRef.current = () => {};
     };
     // Bound to the session id, not this panel's own lifetime — matches
     // TerminalPane.tsx's own mount-effect dependency.
   }, [props.params.sessionId]);
 
+  const navigateRev = props.navigateTo?.rev;
+  const navigateUrl = props.navigateTo?.url;
+  useEffect(() => {
+    if (navigateRev == null || navigateUrl == null) return;
+    // The server refuses anything else too (routes/browser.ts); never send it.
+    if (!/^https?:\/\//i.test(navigateUrl)) return;
+    pendingNavigateRef.current = navigateUrl;
+    flushNavigateRef.current();
+  }, [navigateRev, navigateUrl]);
+
   const navigate = () => {
     const trimmed = addressInput.trim();
-    if (trimmed) sendControlRef.current({ type: "navigate", url: trimmed });
+    if (!isBlankAddress(trimmed)) sendControlRef.current({ type: "navigate", url: trimmed });
   };
 
   return (
     <div className="browser-pane">
       <div className="browser-panel-toolbar">
+        {props.toolbarStart}
         <button
           className="browser-panel-reload"
           title="Back"
@@ -442,6 +535,7 @@ export function BrowserPane(props: {
         >
           <RefreshIcon size={13} />
         </button>
+        {props.toolbarEnd}
       </div>
       <div className="browser-pane-canvas-wrap">
         <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />

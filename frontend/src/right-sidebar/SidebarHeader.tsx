@@ -1,11 +1,12 @@
 import { useContext, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { KebabMenu, type KebabMenuItem } from "../ui/KebabMenu.js";
-import { SidebarStripSlotContext } from "./sidebarToolbarSlot.js";
+import { SidebarPhoneContext, SidebarStripSlotContext } from "./sidebarToolbarSlot.js";
 import { SidebarToolbar, type SidebarToolbarAction } from "./SidebarToolbar.js";
 
 export interface SidebarHeaderProps {
-  /** The view's name, shown in the strip under the header row. */
+  /** The view's name, shown in the strip under the header row (not on the
+   * phone, whose head names the view already). */
   label: string;
   /** What the view is showing: a branch, a PR count, the worktree root. */
   context?: ReactNode;
@@ -20,7 +21,8 @@ export interface SidebarHeaderProps {
 // The one header every right-sidebar view uses: its icon buttons and ⋯ menu go
 // into the drawer's header row (next to the project picker, via SidebarToolbar's
 // own slot portal) and a context strip goes under it. Outside the drawer there
-// are no slots, so both render inline.
+// are no slots, so both render inline. On the phone the view's head names it
+// (#3216), so the strip carries only the context, and is left out without one.
 export function SidebarHeader({
   label,
   context,
@@ -29,12 +31,14 @@ export function SidebarHeader({
   overflow = [],
 }: SidebarHeaderProps) {
   const stripSlot = useContext(SidebarStripSlotContext);
-  const strip = (
-    <div className="sb-strip">
-      <b>{label}</b>
-      {context != null && <span title={contextTitle}>{context}</span>}
-    </div>
-  );
+  const phone = useContext(SidebarPhoneContext);
+  const strip =
+    phone && context == null ? null : (
+      <div className="sb-strip">
+        {!phone && <b>{label}</b>}
+        {context != null && <span title={contextTitle}>{context}</span>}
+      </div>
+    );
   const toolbar =
     actions.length > 0 || overflow.length > 0 ? (
       <SidebarToolbar
@@ -51,7 +55,7 @@ export function SidebarHeader({
   return (
     <>
       {toolbar}
-      {stripSlot ? createPortal(strip, stripSlot) : strip}
+      {strip && stripSlot ? createPortal(strip, stripSlot) : strip}
     </>
   );
 }

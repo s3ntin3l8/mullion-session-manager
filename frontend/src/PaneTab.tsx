@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { SetupBadge } from "./ui/SetupBadge.js";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
@@ -72,6 +72,12 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   const sessions = useDashboardStore((s) => s.sessions);
   const highlightedPanelId = useDashboardStore((s) => s.highlightedPanelId);
   const highlightFlash = highlightedPanelId === `session-${sessionId}`;
+  // #3122 — a pane a fold or phone open added here in the background
+  // (useApplyPendingOpens) is "new" until it is first shown on this device.
+  // Not the session's attention state: it says "added while you were away",
+  // and it neither sets attention nor notifies.
+  const panelId = props.api.id;
+  const isNew = useDashboardStore((s) => s.newPanelIds.includes(panelId));
   // Branch sub-label (issue #96) — the session's best-known branch; see the
   // displayBranch precedence comment below. Dirty marker from the
   // separately-polled gitStatuses.
@@ -216,6 +222,90 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
     const disposable = props.api.onDidActiveChange((e) => setIsActive(e.isActive));
     return () => disposable.dispose();
   }, [sessionId, props.api]);
+
+  // #3122 — the "new" mark clears the first time the pane is shown: when it
+  // becomes the active panel and stays it (a click on its tab, keyboard
+  // navigation, the first focus of a split pane, which is visible at once)
+  // or when a background tab becomes its group's visible one (dockview
+  // showing it because the tab in front of it closed). Only a pane that was
+  // hidden behind another tab counts: dockview also hides and re-shows a
+  // group's front panel with the group itself (another group maximized,
+  // then restored), and that re-show is not a first look at a split pane.
+  useEffect(() => {
+    if (!isNew) return;
+    const clear = () => useDashboardStore.getState().clearPanelNew(panelId);
+    if (isActive) {
+      // Checked again on the next frame: a click on another tab in this
+      // group activates the group, and with it this (its current) panel, on
+      // pointerdown, but dockview opens the clicked tab only in a
+      // requestAnimationFrame it schedules then (_activateOnPointerDown).
+      // This frame callback is scheduled after that one, so it runs after the
+      // switch. A momentary activation is not this pane being shown, so it
+      // must not clear the mark.
+      const frame = requestAnimationFrame(() => {
+        if (props.api.isActive) clear();
+      });
+      return () => cancelAnimationFrame(frame);
+    }
+    let hiddenBehindTab = !props.api.isVisible;
+    const disposable = props.api.onDidVisibilityChange((e) => {
+      if (!e.isVisible) {
+        // Its group still visible: another tab of the group is in front.
+        hiddenBehindTab = props.api.group.api.isVisible;
+        return;
+      }
+      if (hiddenBehindTab) clear();
+    });
+    return () => disposable.dispose();
+  }, [isNew, isActive, panelId, props.api]);
+
+  // #3106 — the tab's accessible name is what it shows. dockview names its
+  // tab element (.dv-tab, this component's host) with an aria-label of the
+  // bare title, but the tab also shows the branch, the status badge, the
+  // host and the unread count, so that label left visible words out of the
+  // name (axe's label-content-name-mismatch). aria-labelledby, which wins
+  // over aria-label, points the name at the tab's visible content instead:
+  // `.pane-tab-leading`, not the whole tab, so the close and actions
+  // buttons' names do not run into it. #3122's ", new" is a visually hidden
+  // word in that content, so it follows the mark without touching the label
+  // dockview rewrites on every title change.
+  //
+  // The close and actions buttons still sit inside dockview's role="tab"
+  // (axe's nested-interactive): dockview renders that element itself and
+  // gives a tab component no slot outside it, and its group-level header
+  // actions are one set per group, not per tab.
+  //
+  // dockview builds a new .dv-tab when the panel moves to another group (or
+  // floats) and moves this component's element into it without remounting
+  // it, so the attribute is applied again whenever the group or location
+  // changes, a frame later, once the new tab holds this content.
+  const nameId = useId();
+  const { api } = props;
+  useEffect(() => {
+    let labelled: Element | null = null;
+    const apply = () => {
+      const tab = tabRef.current?.closest(".dv-tab") ?? null;
+      if (tab === labelled) return;
+      labelled?.removeAttribute("aria-labelledby");
+      tab?.setAttribute("aria-labelledby", nameId);
+      labelled = tab;
+    };
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(apply);
+    };
+    apply();
+    // Mounted before dockview put this content in its .dv-tab: try once more
+    // a frame later rather than leave the tab unnamed.
+    if (!labelled) later();
+    const moved = [api.onDidGroupChange(later), api.onDidLocationChange(later)];
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const d of moved) d.dispose();
+      labelled?.removeAttribute("aria-labelledby");
+    };
+  }, [api, nameId]);
 
   // Clears the unread badge by advancing the read cursor (store.ts's
   // markEventSeen, which updates the local lastSeenSeq and sends the "seen"
@@ -369,7 +459,10 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
       ref={setTabRef}
       className={`pane-tab${ringClass}${groupHasAttention ? " pane-tab-group-attention" : ""}${highlightFlash ? " highlight-flash" : ""}`}
     >
-      <div className="pane-tab-leading">
+      {/* #3122 — drawn in the tab's left padding, out of the flow, so it
+          neither widens the tab nor moves the close buttons when it clears. */}
+      {isNew && <span className="pane-tab-new-dot" aria-hidden="true" />}
+      <div className="pane-tab-leading" id={nameId}>
         {dot}
         {!tight && agentLogo && (
           <img src={agentLogo} alt="" width={14} height={14} className="pane-tab-agent-logo" />
@@ -433,6 +526,9 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             {!tight && unreadCount}
           </span>
         )}
+        {/* #3122 — the dot above says "new" to the eye; this says it to a
+            screen reader, at the end of the tab's name (see nameId). */}
+        {isNew && <span className="visually-hidden">, new</span>}
       </div>
       <div className="pane-tab-actions">
         <button

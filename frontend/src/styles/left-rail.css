@@ -1,0 +1,752 @@
+/* ============================================================ */
+/* Left rail (#3009)                                              */
+/* ============================================================ */
+/* The app's global navigation from 700px up, in place of the top bar: the
+   mode switch at the top, Workspace mode's own entries in the middle, the
+   command box, bell and settings at the bottom. Not rendered on the phone
+   tier, which keeps its top bar. It owns the left and bottom safe-area
+   insets on its edge; `.app-body`'s top padding (app-shell.css) owns the top
+   one now that no bar does. */
+.left-rail {
+  width: var(--left-rail-w);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  padding-left: env(safe-area-inset-left);
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  /* The middle region (below) is what scrolls: it shrinks first, so the mode
+     switch and the bottom cluster stay put on a short window, such as a
+     foldable in landscape. Only a window too short for those fixed parts
+     alone (about 250px) scrolls the rail itself, as a last resort, so the
+     bell and settings are never cut off. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: none;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+
+.left-rail-modes,
+.left-rail-middle,
+.left-rail-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.left-rail-modes,
+.left-rail-bottom,
+.left-rail > .left-rail-btn,
+.left-rail > .left-rail-sep {
+  flex-shrink: 0;
+}
+/* The workspace chip and, while the sidebar is hidden, the open panes. The one
+   part of the rail that scrolls when it does not fit. Full rail width, so a
+   button's active marker (left: -4px) is not clipped by the scroll box; no
+   visible scrollbar, which a 48px rail has no room for. */
+.left-rail-middle {
+  align-self: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 2px 0;
+}
+.left-rail-middle::-webkit-scrollbar {
+  display: none;
+}
+.left-rail-middle:empty {
+  display: none;
+}
+/* In Tasks mode there is no middle region, so this pushes the cluster down. */
+.left-rail-bottom {
+  margin-top: auto;
+  padding-top: 8px;
+}
+.left-rail-sep {
+  flex-shrink: 0;
+  width: 24px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.left-rail-btn {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  min-height: 34px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.left-rail-btn:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--seg);
+}
+.left-rail-btn.active {
+  color: var(--fg);
+  background: var(--seg);
+}
+/* Active marker on the rail's outer edge, as the right rail does on its own. */
+.left-rail-btn.active::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--ring);
+}
+.left-rail-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.left-rail-btn svg {
+  display: block;
+}
+/* The sidebar toggle mirrors its glyph while the sidebar is hidden. */
+.left-rail-btn.collapsed svg {
+  transform: scaleX(-1);
+}
+.left-rail-mode {
+  min-height: 44px;
+}
+.left-rail-label {
+  font-size: 0.625rem;
+  line-height: 1;
+}
+
+/* Same pill as the right rail's count badge (right-sidebar.css). */
+.left-rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 1px;
+  min-width: 14px;
+  height: 0.875rem;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 0.875rem;
+  text-align: center;
+}
+
+@media (pointer: coarse) {
+  .left-rail-btn {
+    min-height: 44px;
+  }
+}
+
+/* Tasks mode from 700px: the board full size beside the right sidebar. The
+   left sidebar is not shown: collapsed the way the desktop collapse does it
+   (sidebar.css), not `display: none`, which would give the session list's
+   virtualizer a zero-height box; `visibility` also takes its controls out of
+   the tab order. Below 1100px there is no left sidebar to hide (#3041).
+   App.tsx does not render the Dock in Tasks mode. */
+.app[data-mode="tasks"]:not([data-tier="phone"]) {
+  .sidebar-wrapper {
+    width: 0 !important;
+    border-right: none;
+    overflow: hidden;
+    visibility: hidden;
+  }
+}
+
+/* ---- Workspace chip (#3009) ---------------------------------------------- */
+.rail-ws-chip {
+  flex-shrink: 0;
+  width: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 0 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail-ws-chip:hover,
+.rail-ws-chip[aria-expanded="true"] {
+  color: var(--fg);
+  background: var(--seg);
+}
+.rail-ws-initial {
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--dim);
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1;
+}
+/* The initial is drawn here, not as text in the chip: the chip's visible text
+   is then the workspace name its accessible name starts with (#2886). */
+.rail-ws-initial::before {
+  content: attr(data-initial);
+}
+.rail-ws-name {
+  /* overflow clips at the line box: room for descenders (g, y, p). */
+  line-height: 1.3;
+  max-width: 42px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-ws-squares {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 3px;
+  max-width: 40px;
+  margin-top: 2px;
+}
+.rail-ws-square {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  opacity: 0.55;
+}
+.rail-ws-square.current {
+  opacity: 1;
+  outline: 1.5px solid var(--fg);
+  outline-offset: 1px;
+}
+
+/* ---- Open panes (#3009) -------------------------------------------------- */
+.rail-pane-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.rail-pane-logo {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+.rail-pane-label {
+  /* overflow clips at the line box: room for descenders (g, y, p). */
+  line-height: 1.3;
+  max-width: 38px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-pane.active .rail-pane-label {
+  /* overflow clips at the line box: room for descenders (g, y, p). */
+  line-height: 1.3;
+  color: var(--fg);
+}
+.rail-pane-needs-you {
+  position: absolute;
+  top: 3px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ring);
+}
+.rail-pane-unread {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 13px;
+  height: 0.8125rem;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  line-height: 0.8125rem;
+  text-align: center;
+}
+
+/* ---- Workspace list: popover (fine pointer) and sheet (coarse) ----------- */
+.rail-ws-popover {
+  /* Above the full-width right sidebar (46),
+     below the command palette (50). */
+  z-index: 48;
+  width: 280px;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 6px;
+}
+/* A row's "⋯" menu opens beside the row, over the list (#3073). */
+.rail-ws-menu {
+  z-index: 49;
+}
+/* A flex child of the popover and of the sheet (both max-height columns), so
+   only .rail-ws-scroll scrolls and "New workspace" stays reachable with a
+   long list. */
+.rail-ws-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+.rail-ws-search {
+  flex-shrink: 0;
+}
+.rail-ws-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.rail-ws-group + .rail-ws-group {
+  margin-top: 8px;
+}
+/* #3217 — a group reads as a hierarchy: a header that is a label (the name in
+   the text colour, the group's colour square, a count; no hover, no row
+   padding) and its workspaces indented under it along a guide line. The
+   header's colour square sits in the handle column (a 20px slot) and it has
+   no right padding, so its "⋯" sits on the same vertical line as every row's
+   "⋯" (#3072; .rail-ws-item has none either). */
+.rail-ws-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 0;
+  color: var(--fg);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.rail-ws-group-color {
+  width: 10px;
+  height: 10px;
+  margin: 0 5px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.rail-ws-group-count {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+/* "No group": the section label, quieter than a group's name, in the same
+   slot so the rows under it share the groups' indent. */
+.rail-ws-ungrouped-header {
+  padding-left: 28px;
+  color: var(--muted);
+  font-weight: 500;
+}
+.rail-ws-group.grouped > .rail-ws-group-body,
+.rail-ws-group.ungrouped > .rail-ws-group-body {
+  margin-left: 9px;
+  padding-left: 4px;
+  border-left: 1px solid var(--border);
+}
+.rail-ws-group.drop-target > .rail-ws-group-body {
+  border-left-color: var(--accent-solid);
+}
+/* The handle that drags a row (#3217): only it starts a drag, so it alone
+   gives up the browser's touch scrolling; a finger on a row still scrolls. */
+.rail-ws-grip {
+  flex-shrink: 0;
+  width: 20px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  opacity: 0.55;
+  cursor: grab;
+  touch-action: none;
+}
+.rail-ws-grip:hover,
+.rail-ws-grip:focus-visible {
+  opacity: 1;
+  background: var(--seg);
+}
+.rail-ws-grip:disabled {
+  opacity: 0.2;
+  cursor: default;
+  background: transparent;
+}
+.rail-ws-scroll.reordering {
+  cursor: grabbing;
+  user-select: none;
+}
+.rail-ws-item.dragging {
+  opacity: 0.45;
+}
+/* Where the dragged row will land: a line between two rows, taking no
+   height, so showing it does not move the rows it is measured against. */
+.rail-ws-drop-indicator {
+  position: relative;
+  z-index: 1;
+  height: 2px;
+  margin: -1px 0 -1px 20px;
+  border-radius: 2px;
+  background: var(--accent-solid);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-solid) 60%, transparent);
+}
+/* An empty group, and "No group" while dragging with nothing ungrouped,
+   still give the drag somewhere to land. */
+.rail-ws-drop-empty {
+  margin: 2px 0 2px 20px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.rail-ws-group.drop-target .rail-ws-drop-empty {
+  border-color: var(--accent-solid);
+  color: var(--fg);
+}
+.rail-ws-row {
+  width: 100%;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-ws-row svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.rail-ws-row:hover {
+  background: var(--seg);
+}
+.rail-ws-row.active {
+  background: var(--seg);
+  font-weight: 600;
+}
+.rail-ws-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-ws-new {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.rail-ws-new-btn {
+  color: var(--muted);
+}
+.rail-ws-empty {
+  padding: 8px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+/* #3048 — a workspace row is its switch button plus a "⋯" that opens the
+   workspace's actions in a menu beside the row (#3073); a group header has
+   its own. */
+.rail-ws-item {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.rail-ws-item .rail-ws-row {
+  flex: 1;
+  min-width: 0;
+}
+.rail-ws-group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-ws-more {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.rail-ws-more:hover,
+.rail-ws-more[aria-expanded="true"] {
+  background: var(--seg);
+  color: var(--fg);
+}
+/* Rename in place (#3073): the row keeps its icon, the field takes the
+   name's place; a group header's field takes its name's. */
+.rail-ws-row.rail-ws-renaming {
+  padding-block: 0;
+  cursor: default;
+}
+.rail-ws-row.rail-ws-renaming:hover {
+  background: transparent;
+}
+.rail-ws-renaming .workspace-rename-input,
+.rail-ws-group-header .workspace-rename-input {
+  flex: 1;
+  min-width: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+/* "New workspace" and "New group" stack (#3072): side by side, half the
+   picker's width cut "New workspace" short on desktop, and more so at the
+   sheet's larger font. */
+.rail-ws-new-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Under a coarse pointer: touch-size rows (48px) and a 1rem (16px) search field, so
+   iOS does not zoom into it. */
+.rail-ws-list.touch .rail-ws-row {
+  min-height: 48px;
+  font-size: 0.9375rem;
+}
+.rail-ws-list.touch .rail-ws-more,
+.rail-ws-list.touch .rail-ws-grip {
+  width: 44px;
+  height: 44px;
+}
+.rail-ws-list.touch .rail-ws-group-header {
+  min-height: 44px;
+  font-size: 0.9375rem;
+}
+.rail-ws-list.touch .rail-ws-group-color {
+  margin: 0 17px;
+}
+.rail-ws-list.touch .rail-ws-ungrouped-header {
+  padding-left: 52px;
+}
+.rail-ws-list.touch .rail-ws-drop-indicator {
+  margin-left: 44px;
+}
+.rail-ws-list.touch .rail-ws-drop-empty {
+  margin-left: 44px;
+  padding-block: 12px;
+}
+.rail-ws-list.touch .workspace-rename-input {
+  min-height: 44px;
+  font-size: 1rem;
+}
+.rail-ws-list.touch .rail-ws-search {
+  min-height: 44px;
+  font-size: 1rem;
+}
+
+/* ---- Two halves, 800-1099px (#3010) -------------------------------------- */
+/* Each half's header: the pane's title and the button that moves it to the
+   other half. With both halves on screen the focused one is marked, since it
+   is the one the key bar and the keyboard address. */
+.half-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome);
+  box-shadow: inset 0 2px 0 transparent;
+}
+.half-header.focused {
+  box-shadow: inset 0 2px 0 var(--ring);
+}
+.half-header-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--fg);
+}
+.half-header-project {
+  color: var(--muted);
+}
+.half-header-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.half-header-btn:hover {
+  color: var(--fg);
+  background: var(--seg);
+}
+.half-header-close {
+  padding: 0 6px;
+}
+@media (pointer: coarse) {
+  .half-header {
+    min-height: 44px;
+  }
+  .half-header-btn {
+    min-height: 40px;
+    min-width: 40px;
+    justify-content: center;
+  }
+}
+.fold-half-right {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.fold-half-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+/* The right half's arrival (a fade that settles) lives with the other
+   layout-change motion in styles/motion.css; its width never animates. */
+/* A grid pane whose session shows on the right half stands aside. */
+.fold-elsewhere {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+/* The long-press menu on a rail entry. */
+.rail-entry-menu {
+  z-index: 48;
+  min-width: 200px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.rail-entry-menu-item {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.rail-entry-menu-item:hover,
+.rail-entry-menu-item:focus-visible {
+  background: var(--seg);
+}
+/* Renaming a pane in place from its half's header. */
+.half-header-rename {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--ring);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8125rem;
+}
+@media (pointer: coarse) {
+  .half-header-rename {
+    height: 36px;
+    /* 16px at the root size: iOS zooms the page into a smaller input. */
+    font-size: 1rem;
+  }
+}
+
+/* Tasks mode's middle region (#3026): the board's statuses, a count over a
+   short label, a dot when a task there needs the owner. */
+.rail-status-list {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.rail-status-entry {
+  position: relative;
+  flex-direction: column;
+  gap: 1px;
+  width: 40px;
+  min-height: 40px;
+  padding: 2px 0;
+}
+.rail-status-count {
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.rail-status-label {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.5625rem;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-status-dot {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--y);
+}
+@media (pointer: coarse) {
+  .rail-status-entry {
+    min-height: 44px;
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { DockviewPanelApi } from "dockview-react";
 import type { ProjectUrl, ServerInfo } from "./api/index.js";
@@ -9,21 +10,13 @@ import { SavedUrlModal } from "./SavedUrlModal.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { describeError } from "./lib/describeError.js";
 import { TextInput } from "./ui/primitives.js";
+import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
+import type { BrowserPanelParams } from "./lib/browserPanelParams.js";
+import { addressHandoffRefusal } from "./lib/browserHandoff.js";
+import type { PreviewSource } from "./lib/browserHandoff.js";
 
-export interface BrowserPanelParams {
-  projectId?: number;
-  kind?: "external";
-  url?: string;
-  slug?: string;
-  /** Issues #2016/#2018 — a pane opened on one branch preview. Kept apart
-   * from `slug`, which the params write-back below rewrites from whatever
-   * the pane last loaded (and clears while it loads). */
-  previewSlug?: string;
-  targetName?: string;
-  targetRev?: number;
-  activeSavedUrlId?: number | null;
-  activeSavedUrlLabel?: string | null;
-}
+// Lives in lib/ so the store can name it without importing this component.
+export type { BrowserPanelParams } from "./lib/browserPanelParams.js";
 
 type BrowserPanelState =
   | { status: "empty" }
@@ -74,9 +67,27 @@ const PREVIEW_TOKEN_QUERY_PARAM = "__mullion_preview";
 // appending in one place. `token` is omitted entirely (not just empty) when
 // previewAuthRequired is false, so a gate-off deployment's iframe src is
 // unchanged from before this feature existed.
-function buildPreviewSrc(scheme: string, slug: string, baseHost: string, token?: string): string {
+function buildPreviewSrc(
+  scheme: string,
+  slug: string,
+  baseHost: string,
+  token?: string,
+  path?: string,
+): string {
   const base = `${scheme}//preview-${slug}.${baseHost}/`;
-  return token ? `${base}?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}` : base;
+  if (!path || path === "/") {
+    return token ? `${base}?${PREVIEW_TOKEN_QUERY_PARAM}=${encodeURIComponent(token)}` : base;
+  }
+  // #3373 — a page the agent's browser was on. Its parts are assigned one by
+  // one, never resolved against the base: a path starting with "//" must not
+  // become a network-path reference that changes the authority.
+  const url = new URL(base);
+  const [, pathname = "/", search = "", hash = ""] = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(path) ?? [];
+  url.pathname = pathname || "/";
+  url.search = search;
+  if (token) url.searchParams.set(PREVIEW_TOKEN_QUERY_PARAM, token);
+  url.hash = hash;
+  return url.href;
 }
 
 // Mints a preview's bootstrap token only when the server requires one (see
@@ -166,9 +177,23 @@ async function resolvePreviewUrl(
 export function BrowserPanel({
   params,
   api: panelApi,
+  toolbarStart,
+  toolbarEnd,
+  onSourceChange,
+  onShowInAgentBrowser,
 }: {
   params: BrowserPanelParams;
-  api?: DockviewPanelApi;
+  api?: Pick<DockviewPanelApi, "updateParameters">;
+  /** Rendered first in the toolbar: the Browser pane's mode switch (#3371). */
+  toolbarStart?: ReactNode;
+  /** Rendered last in the toolbar, after reload. */
+  toolbarEnd?: ReactNode;
+  /** #3373 — what the preview loaded, for the ⇄ button. Never the iframe's
+   * address (see PreviewSource). */
+  onSourceChange?: (source: PreviewSource | null) => void;
+  /** #3373 — opens the current address in the agent's browser; offered in
+   * an external preview's "unavailable" state. */
+  onShowInAgentBrowser?: () => void;
 }) {
   // Dockview replaces the full params object on write-back. Keep the latest
   // snapshot without making that write effect depend on its own output.
@@ -202,6 +227,9 @@ export function BrowserPanel({
   // behavior intact.
   const [previewViaProxy, setPreviewViaProxy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  // #3373 — the page to open below the project preview's root. Cleared when
+  // the user picks another target from the dropdown.
+  const [previewPath, setPreviewPath] = useState(params.previewPath);
   const [currentUrl, setCurrentUrl] = useState(initialUrl);
   const [addressInput, setAddressInput] = useState(initialUrl);
   const [activeSavedUrlId, setActiveSavedUrlId] = useState<number | null>(
@@ -212,8 +240,6 @@ export function BrowserPanel({
   );
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [urlHistory, setUrlHistory] = useState<string[]>(initialUrl ? [initialUrl] : []);
-  const [historyIndex, setHistoryIndex] = useState(initialUrl ? 0 : -1);
   const [favoriteUrls, setFavoriteUrls] = useState<ProjectUrl[]>([]);
   const [favDropdownOpen, setFavDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -323,6 +349,7 @@ export function BrowserPanel({
               previewSlug,
               info.previewBaseHost,
               token,
+              previewPath,
             );
             if (await isPreviewProxyError(src)) {
               if (cancelled) return;
@@ -391,6 +418,7 @@ export function BrowserPanel({
             preview.slug,
             info.previewBaseHost,
             token,
+            previewPath,
           );
           if (await isPreviewProxyError(src)) {
             if (cancelled) return;
@@ -423,6 +451,7 @@ export function BrowserPanel({
     reloadKey,
     activeSavedUrlId,
     savedUrls,
+    previewPath,
   ]);
 
   // Update dockview parameters so layout saves/restores the current URL/slug correctly.
@@ -438,15 +467,12 @@ export function BrowserPanel({
       slug,
       activeSavedUrlId,
       activeSavedUrlLabel,
+      previewPath,
     });
-  }, [panelApi, currentUrl, fetchState, activeSavedUrlId, activeSavedUrlLabel]);
+  }, [panelApi, currentUrl, fetchState, activeSavedUrlId, activeSavedUrlLabel, previewPath]);
 
   // Follow Agent URL sync
-  const activeSessionId = useDashboardStore((s) => {
-    if (!s.activePanelId) return null;
-    const match = s.activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
-    return match ? parseInt(match[1], 10) : null;
-  });
+  const activeSessionId = useDashboardStore((s) => sessionIdFromSessionPaneId(s.activePanelId));
 
   const activeSession = useDashboardStore((s) =>
     activeSessionId !== null ? s.sessions.find((sess) => sess.id === activeSessionId) : undefined,
@@ -527,6 +553,7 @@ export function BrowserPanel({
 
   const navigateToSavedUrl = (id: number, url: string, label: string) => {
     setFollowAgent(false);
+    setPreviewPath(undefined);
     setActiveSavedUrlId(id);
     setActiveSavedUrlLabel(label);
     setDropdownOpen(false);
@@ -536,6 +563,7 @@ export function BrowserPanel({
 
   const navigateToDevServer = () => {
     setFollowAgent(false);
+    setPreviewPath(undefined);
     setActiveSavedUrlId(null);
     setActiveSavedUrlLabel(null);
     setDropdownOpen(false);
@@ -597,12 +625,34 @@ export function BrowserPanel({
           ? { status: "empty" }
           : fetchState;
 
-  const pushToHistory = (url: string) => {
-    const newHistory = urlHistory.slice(0, historyIndex + 1);
-    newHistory.push(url);
-    setUrlHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
-  };
+  // #3373 — what the preview loaded, for ⇄. A cross-origin iframe does not
+  // report where the user clicked, so this is the address it was given: the
+  // one typed, saved or followed, or the project preview it shows by slug.
+  const savedUrlAddress =
+    activeSavedUrlId !== null ? savedUrls.find((u) => u.id === activeSavedUrlId)?.url : undefined;
+  const source = useMemo<PreviewSource | null>(() => {
+    if (isExternal || followAgent) return currentUrl ? { kind: "address", url: currentUrl } : null;
+    if (activeSavedUrlId !== null) {
+      return savedUrlAddress ? { kind: "address", url: normalizeUrl(savedUrlAddress) } : null;
+    }
+    if (previewSlug) return { kind: "project", slug: previewSlug };
+    return devServerUrl ? { kind: "project" } : null;
+  }, [
+    isExternal,
+    followAgent,
+    currentUrl,
+    activeSavedUrlId,
+    savedUrlAddress,
+    previewSlug,
+    devServerUrl,
+  ]);
+  const onSourceChangeRef = useRef(onSourceChange);
+  useEffect(() => {
+    onSourceChangeRef.current = onSourceChange;
+  });
+  useEffect(() => {
+    onSourceChangeRef.current?.(source);
+  }, [source]);
 
   const navigate = () => {
     setFollowAgent(false);
@@ -611,37 +661,30 @@ export function BrowserPanel({
     setAddressInput(normalized);
     setActiveSavedUrlId(null);
     setActiveSavedUrlLabel(null);
-    pushToHistory(normalized);
     setCurrentUrl(normalized);
   };
 
-  const goBack = () => {
-    setFollowAgent(false);
-    if (historyIndex <= 0) return;
-    const newIndex = historyIndex - 1;
-    setHistoryIndex(newIndex);
-    const url = urlHistory[newIndex];
-    setAddressInput(url);
-    setActiveSavedUrlId(null);
-    setActiveSavedUrlLabel(null);
-    setCurrentUrl(url);
-  };
-
-  const goForward = () => {
-    setFollowAgent(false);
-    if (historyIndex >= urlHistory.length - 1) return;
-    const newIndex = historyIndex + 1;
-    setHistoryIndex(newIndex);
-    const url = urlHistory[newIndex];
-    setAddressInput(url);
-    setActiveSavedUrlId(null);
-    setActiveSavedUrlLabel(null);
-    setCurrentUrl(url);
-  };
+  // A project preview that has nothing to show yet returns a bare message.
+  // Inside the Browser pane it still needs its toolbar, or the mode switch
+  // would go missing exactly when the preview cannot load (#3371).
+  const hasToolbarSlots = toolbarStart != null || toolbarEnd != null;
+  const withToolbar = (body: ReactNode) =>
+    hasToolbarSlots ? (
+      <div className="browser-panel">
+        <div className="browser-panel-toolbar">
+          {toolbarStart}
+          <span className="browser-panel-url" />
+          {toolbarEnd}
+        </div>
+        {body}
+      </div>
+    ) : (
+      body
+    );
 
   if (!isExternal) {
     if (state.status === "loading" || state.status === "empty") {
-      return <div className="browser-panel-empty">Loading…</div>;
+      return withToolbar(<div className="browser-panel-empty">Loading…</div>);
     }
     if (state.status === "unavailable") {
       // Retry only offered once there's actually a dev server/saved URL to
@@ -653,7 +696,7 @@ export function BrowserPanel({
       const canRetry =
         (!!devServerUrl || !!previewSlug || activeSavedUrlId !== null || isExternal) &&
         state.retryable !== false;
-      return (
+      return withToolbar(
         <div className="browser-panel-empty">
           <div>{state.message}</div>
           {canRetry && (
@@ -665,7 +708,7 @@ export function BrowserPanel({
               Retry
             </button>
           )}
-        </div>
+        </div>,
       );
     }
     const currentLabel = params.targetName ?? activeSavedUrlLabel ?? "Dev server";
@@ -673,6 +716,7 @@ export function BrowserPanel({
     return (
       <div className="browser-panel">
         <div className="browser-panel-toolbar">
+          {toolbarStart}
           {params.targetName ? (
             <span className="browser-panel-dropdown-label">{params.targetName}</span>
           ) : (
@@ -780,6 +824,7 @@ export function BrowserPanel({
           >
             <RefreshIcon size={13} />
           </button>
+          {toolbarEnd}
         </div>
         <iframe
           key={`${reloadKey}:${params.targetRev ?? 0}`}
@@ -804,23 +849,11 @@ export function BrowserPanel({
 
   return (
     <div className="browser-panel">
+      {/* No back and forward here: a cross-origin iframe's history cannot be
+          read, so the Browser pane offers them in Agent's browser only
+          (#3371). */}
       <div className="browser-panel-toolbar">
-        <button
-          className="browser-panel-reload"
-          disabled={historyIndex <= 0}
-          onClick={goBack}
-          title="Back"
-        >
-          ‹
-        </button>
-        <button
-          className="browser-panel-reload"
-          disabled={historyIndex >= urlHistory.length - 1}
-          onClick={goForward}
-          title="Forward"
-        >
-          ›
-        </button>
+        {toolbarStart}
         <TextInput
           small
           className="browser-panel-address mono"
@@ -873,7 +906,6 @@ export function BrowserPanel({
                         setAddressInput(favUrl);
                         setActiveSavedUrlId(null);
                         setActiveSavedUrlLabel(null);
-                        pushToHistory(favUrl);
                         setCurrentUrl(favUrl);
                       }}
                     >
@@ -934,6 +966,7 @@ export function BrowserPanel({
         >
           <RefreshIcon size={13} />
         </button>
+        {toolbarEnd}
       </div>
       {state.status === "empty" && (
         <div className="browser-panel-empty">
@@ -942,7 +975,27 @@ export function BrowserPanel({
         </div>
       )}
       {state.status === "loading" && <div className="browser-panel-empty">Loading…</div>}
-      {state.status === "unavailable" && <div className="browser-panel-empty">{state.message}</div>}
+      {state.status === "unavailable" && (
+        <div className="browser-panel-empty">
+          <div>{state.message}</div>
+          {/* #3373 — the agent's browser loads what an iframe cannot. Offered
+              only for an address it would accept. */}
+          {onShowInAgentBrowser && addressHandoffRefusal(currentUrl) === null && (
+            <>
+              <div style={{ marginTop: 8 }}>
+                This site cannot be shown as a preview. The agent's browser can show it.
+              </div>
+              <button
+                className="browser-panel-go"
+                style={{ marginTop: 8 }}
+                onClick={onShowInAgentBrowser}
+              >
+                Open in the agent's browser
+              </button>
+            </>
+          )}
+        </div>
+      )}
       {state.status === "ready" && (
         <iframe
           key={`${reloadKey}:${params.targetRev ?? 0}`}

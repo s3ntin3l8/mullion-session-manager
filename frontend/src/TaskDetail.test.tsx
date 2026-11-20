@@ -20,6 +20,7 @@ import type {
   Session,
   Task,
 } from "./api/index.js";
+import { dropdownOptions, findDropdownsWithOption, pickDropdownOption } from "./test/dropdown.js";
 
 let tasks: Task[];
 let sessions: Session[];
@@ -2019,36 +2020,35 @@ describe("TaskDetail delete action", () => {
   describe("agent selection and display", () => {
     it("renders agent dropdowns for backlog tasks and calls updateTask on change", async () => {
       tasks = [makeTask({ id: 1, status: "backlog", agent: null, reviewAgent: null })];
-      const user = userEvent.setup();
       render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
-      await screen.findAllByRole("option", { name: "Claude Code" });
+      await findDropdownsWithOption("Claude Code");
       const selects = screen.getAllByRole("combobox");
       // Agent, Review agent, plus the claude worker's model and small model.
       expect(selects.length).toBe(4);
       // Hermes review — the resolved "none" default renders capitalized as
       // "None" in the dropdown label, so it reads as "no review agent" rather
       // than a lowercase agent name.
-      expect(screen.getByRole("option", { name: "Project default (None)" })).toBeInTheDocument();
+      const labels = selects.flatMap((f) => dropdownOptions(f).map((o) => o.label));
+      expect(labels).toContain("Project default (None)");
 
-      await user.selectOptions(selects[0], "claude");
+      pickDropdownOption(selects[0], "claude");
       expect(updateTask).toHaveBeenCalledWith(1, { agent: "claude" });
 
-      await user.selectOptions(selects[1], "none");
+      pickDropdownOption(selects[1], "none");
       expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
     });
 
     it("renders agent dropdowns for failed tasks so user can adjust agent before retrying", async () => {
       tasks = [makeTask({ id: 1, status: "failed", agent: "claude", reviewAgent: null })];
-      const user = userEvent.setup();
       render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
-      await screen.findAllByRole("option", { name: "Claude Code" });
+      await findDropdownsWithOption("Claude Code");
       const selects = screen.getAllByRole("combobox");
       // Agent, Review agent, plus the claude worker's model and small model.
       expect(selects.length).toBe(4);
 
-      await user.selectOptions(selects[0], "codex");
+      pickDropdownOption(selects[0], "codex");
       expect(updateTask).toHaveBeenCalledWith(1, { agent: "codex" });
     });
 

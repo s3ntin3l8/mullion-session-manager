@@ -14,20 +14,147 @@ separate flag:
   is served over https (see "Why the proxy exists" below) and buys framing
   sites that refuse direct embedding.
 
+**Preview or Agent's browser?** The Preview on this page is
+an iframe in _your_ browser: open it from the command palette ("Open browser:
+preview…" for a project target, "Open browser: blank preview" for any URL,
+"Open browser: <label>" for a saved URL) or from a project's Preview menu. It is
+not the **Agent's browser** ([browser-automation.md](browser-automation.md)),
+the session's server-side Chromium its agent drives, which opens from a
+session pane's menu or the palette's "Open browser: agent's browser · <session>" (on the
+phone and the rails layouts, the right sidebar's Browser view).
+
+**One Browser pane, two modes.** From 1100px both open in the same pane,
+titled "Browser · Preview: <target>" or "Browser · Agent's browser:
+<session>". A switch at the left of its toolbar (on its own row above the
+address when the pane is narrow) flips the pane between **Preview** and
+**Agent's browser** in place; each mode keeps its page while the pane is
+open. Preview keeps its target dropdown and the favorites star; back and
+forward are in Agent's browser only, since an iframe's history cannot be
+read. A pane opened as a preview and switched to Agent's browser takes the
+project's focused (or last-focused) session at that moment and stays on it;
+the switch names that session. The switch never starts a browser by itself:
+it first asks whether the session has one, and a session without one shows
+"<session> has no browser yet." and an **Open browser** button. Agent's
+browser is unavailable (with the reason on hover) when the project has no
+session, or for a blank or external preview with no project. When the
+session ends the pane falls back to Preview, or closes if it has no
+project. Without `BROWSER_ENABLED` there is no switch and the pane is
+Preview only. The mode is saved with the workspace layout, so a reload
+keeps it.
+
+**Open in the other one (⇄).** The ⇄ button at the end of the toolbar opens
+the current address in the other mode and switches to it (#3373). It is not a
+copy of the address field, because the two engines see addresses differently:
+
+- **Preview → Agent's browser** uses the address the preview loaded, not where
+  you clicked inside it (a cross-origin iframe does not report that); the
+  tooltip names the address. A typed, saved or followed address goes as is.
+  For a project preview the server works out the address
+  (`GET /api/sessions/:id/browser/address-for-preview?slug=`,
+  `src/services/browser-handoff.ts`): the preview's upstream, resolved as the
+  proxy resolves it, read from the host the session's browser target names. A
+  dev server on a bare port or on `localhost` is that host's own `localhost`,
+  so it only travels when the session's browser runs on the same host as the
+  dev server. The client names the preview by its slug, never by the iframe's
+  address, so the `__mullion_preview` token never reaches the agent's browser.
+  ⇄ counts as an explicit open: it attaches, and so launches, the session's
+  browser.
+- **Agent's browser → Preview** uses the page's own address as the server
+  reports it. `POST /api/sessions/:id/browser/preview-for-address` (the
+  address in the body, so it stays out of the request log) says whether its origin is one of the project's dev servers, branch previews or
+  preview targets (from the session browser's host); if it is, the preview
+  opens that target through the proxy, on the same page. Any other http(s)
+  page opens as an external address, and the pane keeps its project.
+- ⇄ is disabled, with the reason as its tooltip, for anything that is not http
+  or https, for a `localhost` address that is not one of the project's dev
+  servers (it means a different machine to each engine; `0.0.0.0` and `[::]`
+  count as `localhost`), for a dev server on another host than the session's
+  browser, and for a preview proxy address pasted as an external one
+  (`preview-<slug>.<host>`, or anything carrying `__mullion_preview`). A name
+  only one network resolves (a docker-compose service such as
+  `http://web:3000`) is sent as is: the agent's browser resolves it on its
+  own host.
+- An external preview that cannot load says "This site cannot be shown as a
+  preview. The agent's browser can show it." and offers **Open in the agent's
+  browser**. A page that forbids framing without going through the proxy
+  cannot be detected (the iframe just shows the browser's own error), so that
+  case has only ⇄.
+- Opening a project's preview again (the Dock, a branch row, a preview
+  target) puts back the pane's own target if ⇄ had opened something else in
+  it.
+
 There are two kinds of preview, in either mode:
 
 - **Project preview** — one per project (opening it again reuses the same
   slug in proxy mode). Resolves to the project's configured dev-server
   URL/port.
-- **External preview** — any URL you paste via "New preview tab", validated
+- **External preview** — any URL you paste via "New preview tab" (the
+  palette's "Open browser: blank preview"), validated
   against SSRF guards at creation time in proxy mode (see Security below);
   direct-embed mode has no server-side fetch, so there's nothing to
   validate — the guard simply doesn't apply.
 
 Open a preview using **Preview ▾** in a project's Dock header (see [`dock.md`](dock.md)'s UI reference), the command palette
-("Preview: `<project>`" for the project preview, or "New preview tab" for
-an empty pane with the address bar focused, for typing an arbitrary URL
-directly).
+("Open browser: preview…" to choose a preview target for the project,
+"Open browser: blank preview" for an empty pane with the address bar focused,
+for typing an arbitrary URL directly, or "Open browser: `<label>`" for a saved
+URL).
+
+## The Browser view in the right sidebar (below 1100px)
+
+Where the window is between 700 and 1099px wide (the rails layouts, among
+them a foldable unfolded), the right rail has a **Browser** view. On a phone
+the "⋯" sheet lists it with the rail's other views, and it opens full screen
+for the current session's project. It is the Browser pane in the rail
+(#3372): the same **Preview** / **Agent's browser** switch, always on its own
+row above the address. From 1100px the view is not registered, and both
+modes are the grid's Browser pane. The rail's Browser icon stays there (#3403),
+in the same place with the same name, as a button rather than a toggle
+(tooltip "Open browser"; disabled with no project in the rail): it focuses the
+Browser pane if one is open in the workspace, else opens the followed
+session's Agent's browser (the pane menu's "Open browser"), else the
+project's preview as the palette's "Open browser: preview…" does.
+
+Below 1100px every preview opens in this view, in Preview on its target,
+never as a pane: the palette's preview entries (the target picker, the blank
+preview, a saved URL), a project's Preview menu, Git branch rows, GitHub PR
+rows and the Inbox's accepted dev server. A blank preview keeps whatever
+project the rail follows; the others move the rail to their project. Preview
+otherwise works on the rail's project: a project target opened for another
+project gives way to the rail project's own preview when the rail moves.
+The rail's Browser icon and the phone's "⋯" → Browser open the view in the
+mode it was last in (Agent's browser the first time), and the palette's
+"Open browser: agent's browser · <session>" opens it in Agent's browser.
+
+The view keeps its mode and its preview address while it is closed, while
+another view shows, and across the window crossing 1100px and back: widening
+past 1100px still closes the view, and the next open below 1100px finds it as
+it was. A Browser pane already in the grid stays a pane when the window
+narrows. Neither is saved across a reload.
+
+In Agent's browser the view shows the browser of the session the right
+sidebar follows, the same CDP-streamed page as the grid pane, under the
+pane's own address bar (back, forward, the address, reload). Unlike a grid
+pane, which fixes its session at the switch, the view follows focus.
+
+The session it shows is the one whose pane has focus, or the last one that
+had focus while a pane that is not a session's (Settings, a Git panel) has
+it. Only a session of the project the sidebar follows counts. With none,
+Agent's browser says "No session in focus" (the switch gives the same reason
+from Preview), and Preview still works.
+
+Opening the agent browser launches it, so the view does not open one by
+itself: it asks for the session's browser bindings first
+(`GET /api/sessions/:id/browser`). A session with one shows its page; a
+session without one shows "… has no browser yet." and an **Open browser**
+button, which does what the pane menu's "Open browser" does.
+
+The pane menu's "Open browser" (which adds the browser as a pane of
+its own) is offered only from 1100px: below it, `rails-full` included, this
+view is the agent browser (#3370).
+
+On a touch screen a one-finger drag on the page scrolls it (in the view and
+in the grid pane); a tap clicks.
 
 ## Why the proxy exists (and when you need it)
 
@@ -452,7 +579,7 @@ separate work.
 
 Use **Project → Dock → Previews** to configure the existing Dev server and additional named destinations such as Docker web or API docs. The Dev server field has moved out of Edit project. Preview configuration is stored in Mullion's database; changing an address does not edit `.crs/dock.json` or restart monitors.
 
-Destinations accept a port, `IP:port`, `hostname:port`, or a full HTTP(S) URL with a path/query. Shorthand uses HTTP. Each additional target chooses **Project host** (the default) or **Main Mullion server** as the connection origin; localhost refers to that machine. The Dock's **Preview ▾** menu shows names and destinations, **New preview tab**, and **Manage previews…**. The palette's Preview action offers the same choices when the Dock is hidden.
+Destinations accept a port, `IP:port`, `hostname:port`, or a full HTTP(S) URL with a path/query. Shorthand uses HTTP. Each additional target chooses **Project host** (the default) or **Main Mullion server** as the connection origin; localhost refers to that machine. The Dock's **Preview ▾** menu shows names and destinations, **New preview tab**, and **Manage previews…**. The palette's **Browser** row (a default row) offers the same choices, and opens the active session's agent browser instead when a session pane is active.
 
 Named targets require `PREVIEW_BASE_HOST`. Each has its own stable pane and preview slug. Reopening or reloading uses its saved destination; removing a target removes its registered preview. Targets are explicit destinations, independent of Docker discovery, monitor lifecycle, bookmarks, and branch/PR previews.
 

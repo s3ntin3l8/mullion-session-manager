@@ -45,7 +45,14 @@ export function useCloseKilledSessionPanels({
         if (sessionId != null) {
           const session = sessions.find((s) => s.id === sessionId);
           if (!session || session.status === "killed" || session.status === "exited") {
-            staleTimelineOrBrowserPane.push(panel.id);
+            // A Browser pane with a project switches itself to Preview
+            // instead (BrowserPaneHost.tsx, #3371); only one without is
+            // closed here.
+            const projectId =
+              session?.projectId ?? (panel.params as { projectId?: number } | undefined)?.projectId;
+            if (panel.id.startsWith("timeline-") || projectId == null) {
+              staleTimelineOrBrowserPane.push(panel.id);
+            }
           }
         }
       }

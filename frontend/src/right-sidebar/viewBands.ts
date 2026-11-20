@@ -1,0 +1,57 @@
+// Which layout bands a right-sidebar view exists in (Tasks mode redesign,
+// #3012). Browser and Dock are right-sidebar views below 1100px: on the rails
+// layouts (700 to 1099.98px) the screen is a session beside its companions,
+// and on the phone the "more" sheet lists what the rail lists (design 9.4),
+// each opening full screen. From 1100px the browser is a grid pane and the
+// Dock the bottom panel, as they always were, so the two views are not
+// registered there. The Browser's rail icon stays (`railButtonOutsideBands`,
+// #3403) as a button that opens the pane; the Dock's does not.
+//
+// `bands` on a registry entry is the declarative record (the panel reads it
+// to close a view the current band has no place for);
+// `useEnabledInCompanionBands` is the hook form of the same rule, which the
+// rail and the phone's "more" sheet call through the entry's `useEnabled`.
+import { resolveLayoutBand, useLayoutBand } from "../lib/layoutTier.js";
+import type { LayoutBand } from "../lib/layoutTierTypes.js";
+import { useDashboardStore } from "../store/index.js";
+
+export const RAILS_BANDS: readonly LayoutBand[] = ["rails-full", "rails-halves"];
+
+/** Where Browser and Dock are views: the phone and the rails bands. */
+export const COMPANION_BANDS: readonly LayoutBand[] = ["phone", ...RAILS_BANDS];
+
+export function viewInBand(view: { bands?: readonly LayoutBand[] }, band: LayoutBand): boolean {
+  return view.bands === undefined || view.bands.includes(band);
+}
+
+/**
+ * Whether the agent's browser is a right-sidebar view in this band rather
+ * than a grid pane (#3370). The one rule the command palette and the pane
+ * menu both ask, so they cannot open different things in the same band:
+ * the palette opens the rail's Browser view, the pane menu offers no entry.
+ */
+export function agentBrowserIsRailView(band: LayoutBand): boolean {
+  return viewInBand({ bands: COMPANION_BANDS }, band);
+}
+
+/**
+ * Whether a preview opens in the rail's Browser view rather than as a pane
+ * (#3372, decision 2): wherever the agent's browser is that view, since it is
+ * one view with both modes. Read at
+ * the moment of opening, so the openers need no subscription of their own.
+ */
+export function previewOpensInRail(): boolean {
+  return agentBrowserIsRailView(
+    resolveLayoutBand(useDashboardStore.getState().settings.layoutMode),
+  );
+}
+
+/** The live layout band, from the user's layout-mode setting. */
+export function useCurrentLayoutBand(): LayoutBand {
+  return useLayoutBand(useDashboardStore((s) => s.settings.layoutMode));
+}
+
+/** `useEnabled` for a view that exists only in the companion bands. */
+export function useEnabledInCompanionBands(): boolean {
+  return viewInBand({ bands: COMPANION_BANDS }, useCurrentLayoutBand());
+}

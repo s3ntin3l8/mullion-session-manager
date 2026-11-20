@@ -9,6 +9,34 @@
   --bg-light: #fafafa;
 }
 
+/* Motion tokens (docs/motion.md). Theme-independent, so they live at :root
+   with the two values above rather than on .cmux-root. lib/motion.ts carries
+   the same numbers for code that animates from TypeScript, and
+   lib/motion.test.ts pins the two copies together. Anything a finger can move
+   uses the spring in lib/spring.ts instead of a duration.
+
+   Under prefers-reduced-motion the reset at the end of this file zeroes every
+   transition that uses these (and every other) durations, so nothing here
+   needs a reduced-motion variant. Do not add one that shortens them to a few
+   milliseconds: that reset's comment explains why a near-zero transition
+   breaks the terminal's text canvas. */
+:root {
+  /* The scale and tint a control shows the moment it is touched. */
+  --motion-press: 110ms;
+  /* Content arriving in place, and what travel becomes under reduced motion. */
+  --motion-fade: 160ms;
+  /* A layout change no finger drives (a card moving to its new lane). */
+  --motion-layout: 420ms;
+  /* Anything that arrives and settles. */
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Press feedback. */
+  --motion-ease-press: cubic-bezier(0, 0, 0.58, 1);
+  /* The blur behind material (sheets and popovers, styles/motion.css). The
+     motion study's value. One place to set it to `none` if a phone-class GPU
+     drops frames with it on. */
+  --material-blur: blur(22px) saturate(160%);
+}
+
 /* Design tokens ported 1:1 from the Claude Design "Cmux design integration"
    project (Cmux Redesign.dc.html / Cmux States.dc.html) — see
    .claude/plans/ok-i-m-thinking-of-merry-corbato.md's Phase 4b section and
@@ -36,9 +64,14 @@
      declarations across the stylesheets — session meta lines, section
      captions, inactive dockview tab labels). They are now #9b9ba5 / #8a8a94:
      5.63:1 and 4.53:1 worst-case, still the same neutral hue family and
-     still a clear step below --fg. */
-  --muted: #9b9ba5;
-  --dim: #8a8a94;
+     still a clear step below --fg.
+     #3045/#3055: they are now #b0b0ba / #a0a0ab. Rows paint a hover tint of
+     --fg (--seg, 11%) over the sidebar and some stack a second one (a
+     section header's 5% under its button's), and #8a8a94 fell to 3.58:1 on
+     that. --dim clears 4.5:1 on the stacked tint (4.6:1), --muted stays a
+     step above it. */
+  --muted: #b0b0ba;
+  --dim: #a0a0ab;
   --accent-solid: #0e9f6e;
   --ring: #12b981;
   /* --accent-fill / --badge-dim are FILL roles: they are the background of a
@@ -99,6 +132,17 @@
   --track: color-mix(in srgb, var(--fg) 5%, transparent);
   --field: var(--sidebar);
   --seg: color-mix(in srgb, var(--fg) 11%, transparent);
+  /* Material (docs/motion.md): the translucent layer sheets and popovers sit
+     on, its light edge, and the tint a pressed control shows. Based on
+     --term, not --chrome. Over the worst backdrop (pure white under this
+     theme) 94% of --term is still no lighter than solid --chrome, so every
+     text colour that clears AA on --chrome clears it on material too.
+     --chrome itself has no such headroom (--r and --accent-solid barely
+     clear 4.5:1 on it), so no visible translucency of --chrome keeps AA.
+     tokens.contrast.test.ts holds the invariant. */
+  --material: color-mix(in srgb, var(--term) 94%, transparent);
+  --material-edge: color-mix(in srgb, #ffffff 9%, transparent);
+  --press-tint: color-mix(in srgb, var(--fg) 8%, transparent);
 }
 
 .cmux-root.light {
@@ -114,9 +158,12 @@
   --fg: #171717;
   /* Same two roles as the dark theme above, re-tuned for light surfaces:
      --muted was #737373 (3.90:1 on --pane-hd — below AA) and --dim was
-     #9a9a9a (2.31:1). Now 5.67:1 and 4.72:1 worst-case. */
-  --muted: #5a5a5a;
-  --dim: #666666;
+     #9a9a9a (2.31:1).
+     #3045/#3055: they are now #484848 / #585858 (were #5a5a5a / #666666),
+     for the same stacked hover tint as the dark theme: 6.29:1 and 4.89:1 on
+     it, 8.31:1 and 6.46:1 flat. */
+  --muted: #484848;
+  --dim: #585858;
   /* --accent-solid doubles as a text color here (link/label text in the
      settings sections) and as a badge fill. #0e9f6e was only 3.24:1 as text
      and 3.39:1 under white text; #0b6e4b is 5.16:1 and 6.28:1. Still the
@@ -181,6 +228,10 @@
   --track: color-mix(in srgb, var(--fg) 5%, transparent);
   --field: #ffffff;
   --seg: color-mix(in srgb, var(--fg) 9%, transparent);
+  --material: color-mix(in srgb, var(--term) 94%, transparent);
+  /* On a light surface the edge of light is white, stronger than dark's. */
+  --material-edge: color-mix(in srgb, #ffffff 70%, transparent);
+  --press-tint: color-mix(in srgb, var(--fg) 7%, transparent);
 }
 
 * {
@@ -456,9 +507,9 @@ html[data-theme-hint="dark"] {
    300ms fallback timer, and the tab-reorder one has none, so a reorder
    leaves `dv-tab--shifting` (will-change plus an already-zero transition)
    on the tabs until the next one. Harmless, and not worth a longer duration.
-   `transition-delay` is left alone on purpose: sidebar.css relies on
-   `visibility 0s linear 0.24s` to keep a closing drawer visible, and the
-   delay still applies at a `0s` duration. Animations keep 0.01ms: removing
+   `transition-delay` is left alone on purpose: a delayed `visibility`
+   transition keeps a closing surface visible, and the delay still applies at
+   a `0s` duration. Animations keep 0.01ms: removing
    that part changed nothing.
 
    The end states are safe: cmuxPulse settles at opacity 1 (full legibility),

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 // Mobile UI/UX overhaul, item B.1 (see .claude/plans/we-need-to-work-
 // iterative-planet.md) — `.app` is `position: fixed; inset: 0`
@@ -65,11 +65,58 @@ import { useEffect } from "react";
 // rAF-coalesced for the same reason terminalRepaintRegistry.ts's own
 // repaint dispatch is: `resize`/`scroll` on visualViewport can fire in a
 // tight burst while the keyboard animates open/closed.
+//
+// Issue #3014 — the same measurement also answers "is the on-screen keyboard
+// up?", which the phone's mode bar needs (it hides while typing). Not a second
+// detector: this hook is the one place that watches the visual viewport. Two
+// cases count as up:
+//   - iOS (and any browser that overlays the keyboard): `--kb-inset` > 0.
+//   - Chrome/Android with `interactive-widget=resizes-content` (index.html):
+//     the layout viewport itself shrinks, so `--kb-inset` stays 0. There the
+//     sign is the layout height dropping well below the tallest height seen at
+//     this width (a rotation or a fold changes the width, which resets it).
+// Published as `data-keyboard="up"` on <html> for CSS, and through
+// `useKeyboardUp()` for React. That store notifies only on a change, so the
+// per-frame updates above still cost no re-render.
+
+// Below this, a height change is browser chrome (an address bar collapsing,
+// ~56px), not a keyboard (~250px and up).
+export const KEYBOARD_MIN_HEIGHT = 150;
+
+let keyboardUp = false;
+const keyboardListeners = new Set<() => void>();
+
+function setKeyboardUp(up: boolean): void {
+  if (up === keyboardUp) return;
+  keyboardUp = up;
+  if (up) document.documentElement.dataset.keyboard = "up";
+  else delete document.documentElement.dataset.keyboard;
+  for (const listener of keyboardListeners) listener();
+}
+
+function subscribeKeyboard(listener: () => void): () => void {
+  keyboardListeners.add(listener);
+  return () => keyboardListeners.delete(listener);
+}
+
+/** Whether the on-screen keyboard is up, as measured by useVisualViewportInset. */
+export function useKeyboardUp(): boolean {
+  return useSyncExternalStore(
+    subscribeKeyboard,
+    () => keyboardUp,
+    () => false,
+  );
+}
+
 export function useVisualViewportInset(): void {
   useEffect(() => {
     const vv = window.visualViewport;
     if (!vv) return;
 
+    // The tallest layout height seen at the current width: the height with
+    // no keyboard, for the Android resizes-content case above.
+    let baseWidth = -1;
+    let baseHeight = 0;
     let raf = 0;
     const update = () => {
       cancelAnimationFrame(raf);
@@ -80,6 +127,16 @@ export function useVisualViewportInset(): void {
         const style = document.documentElement.style;
         style.setProperty("--kb-inset", `${inset}px`);
         style.setProperty("--kb-offset-top", `${Math.max(0, vv.offsetTop)}px`);
+        const width = window.innerWidth;
+        if (width !== baseWidth) {
+          baseWidth = width;
+          baseHeight = layoutHeight;
+        } else {
+          baseHeight = Math.max(baseHeight, layoutHeight);
+        }
+        setKeyboardUp(
+          inset >= KEYBOARD_MIN_HEIGHT || baseHeight - layoutHeight >= KEYBOARD_MIN_HEIGHT,
+        );
       });
     };
 
@@ -90,6 +147,7 @@ export function useVisualViewportInset(): void {
       cancelAnimationFrame(raf);
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
+      setKeyboardUp(false);
     };
   }, []);
 }

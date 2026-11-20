@@ -3,15 +3,12 @@ import type { ComponentType, FunctionComponent } from "react";
 import type { DockviewPanelApi, IDockviewPanelProps } from "dockview-react";
 import { TerminalPane } from "../TerminalPane.js";
 import type { TerminalPaneParams } from "../TerminalPane.js";
-import { GitHubPanel } from "../GitHubPanel.js";
-import type { GitHubPanelParams } from "../GitHubPanel.js";
+import { GitHubPanelRedirect } from "../GitHubPanelRedirect.js";
 import { GitPanelRedirect } from "../GitPanelRedirect.js";
-import { ProjectHubPanel } from "../ProjectHubPanel.js";
-import type { ProjectHubPanelParams, ProjectHubTab } from "../ProjectHubPanel.js";
-import type { BrowserPanelParams } from "../BrowserPanel.js";
+import { ProjectPanelRedirect } from "../ProjectPanelRedirect.js";
+import type { BrowserHostComponent, BrowserHostParams } from "../BrowserPaneHost.js";
 import type { FileEditorPanelParams } from "../FileEditorPanel.js";
 import type { ExternalFilePanelParams } from "../ExternalFilePanel.js";
-import type { BrowserPaneParams } from "../BrowserPane.js";
 import type { DevicePaneParams } from "../DevicePane.js";
 import { SessionTimeline } from "../SessionTimeline.js";
 import type { SessionTimelineParams } from "../SessionTimeline.js";
@@ -23,8 +20,10 @@ import { PaneTab } from "../PaneTab.js";
 import { Spinner } from "../ui/Spinner.js";
 import { useDashboardStore } from "../store/index.js";
 import type { Session } from "../api/index.js";
-import { formatPaneTitle } from "../paneTitle.js";
-import { openExternalFilePanel, openFileEditorPanel, openSessionPanel } from "../panelUtils.js";
+import { paneTabTitle } from "../paneTitle.js";
+import { selectSessionTitleContexts } from "../lib/sessionDisplay.js";
+import { openSessionPanel } from "../panelUtils.js";
+import { openTerminalPath } from "../lib/openTerminalPath.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
 import { useRetriableLazy } from "../lib/retriableLazy.js";
 
@@ -44,13 +43,12 @@ import { useRetriableLazy } from "../lib/retriableLazy.js";
 // comment for the full trace), leaving "Reload pane" unable to ever retry.
 const loadUnifiedBoard = () =>
   import("../UnifiedBoard.js").then((m) => ({ default: m.UnifiedBoard }));
-const loadBrowserPanel = () =>
-  import("../BrowserPanel.js").then((m) => ({ default: m.BrowserPanel }));
+const loadBrowserPaneHost = () =>
+  import("../BrowserPaneHost.js").then((m) => ({ default: m.BrowserPaneHost }));
 const loadFileEditorPanel = () =>
   import("../FileEditorPanel.js").then((m) => ({ default: m.FileEditorPanel }));
 const loadExternalFilePanel = () =>
   import("../ExternalFilePanel.js").then((m) => ({ default: m.ExternalFilePanel }));
-const loadBrowserPane = () => import("../BrowserPane.js").then((m) => ({ default: m.BrowserPane }));
 const loadDevicePane = () => import("../DevicePane.js").then((m) => ({ default: m.DevicePane }));
 
 // Shared Suspense fallback for the lazy dockview panels above (the Browser
@@ -167,6 +165,28 @@ export function makePanelWrapper<
 // stays intact, it just doesn't repaint on every single OSC frame.
 const OSC_TITLE_THROTTLE_MS = 1000;
 
+type DashboardState = ReturnType<typeof useDashboardStore.getState>;
+
+// A terminal tab's title from the store (#3292). `osc` is the latest live OSC
+// title, if any; `seeded` the agent title the tab was seeded with (undefined:
+// the session was not listed yet, so the live value stands in).
+function tabTitleFor(
+  state: DashboardState,
+  sessionId: number,
+  osc: string | null,
+  seeded: string | null | undefined,
+): string | null {
+  const session = state.sessions.find((s) => s.id === sessionId);
+  if (!session) return null;
+  const projectName = state.projects.find((p) => p.id === session.projectId)?.name;
+  const lastTitle = osc ?? (seeded === undefined ? session.lastTitle : seeded);
+  return paneTabTitle(
+    { ...session, lastTitle },
+    projectName,
+    selectSessionTitleContexts(state).get(sessionId),
+  );
+}
+
 // Wrapped per-panel (not once around the whole dockview area) so a crash in
 // one session's terminal can't take out sibling panes too.
 function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
@@ -181,17 +201,51 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // useDashboardStore selectors + a dep-array effect) so the always-current
   // nameLocked flag gates every OSC event without re-subscribing TerminalPane
   // on every store change.
+  // The latest live OSC title; it feeds only the agent-title step of the
+  // session's title order (#3292), so a locked name or a task title is never
+  // overwritten by it.
+  const oscTitleRef = useRef<string | null>(null);
+  // Until the first live OSC title, the agent title stays at the value the
+  // tab was seeded with: the ~4s session poll refreshes `lastTitle` with the
+  // agent's elapsed-second counter, and following it would repaint (and
+  // autosave) the tab on every poll — the storm the throttle below prevents.
+  // Seeded once, lazily, from the store (undefined: the session was not
+  // listed yet, so the live value stands in), so the selector below stays pure.
+  const seededLastTitleRef = useRef<string | null | undefined>(
+    useDashboardStore.getState().sessions.find((s) => s.id === sessionId)?.lastTitle,
+  );
+  const resolveTabTitle = useCallback(
+    (state: DashboardState): string | null =>
+      tabTitleFor(state, sessionId, oscTitleRef.current, seededLastTitleRef.current),
+    [sessionId],
+  );
+  // The title the tab shows. The tab was seeded with the store's title at
+  // addPanel time, so the first value is the baseline, not a change.
+  const lastStoreTitleRef = useRef<string | null>(
+    tabTitleFor(useDashboardStore.getState(), sessionId, null, undefined),
+  );
   const applyTitle = useCallback(
     (oscTitle: string) => {
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      if (!session || session.nameLocked) return; // pinned by an explicit rename
-      const projectName = projects.find((p) => p.id === session.projectId)?.name;
-      props.api.setTitle(formatPaneTitle(oscTitle, projectName));
+      oscTitleRef.current = oscTitle;
+      const title = resolveTabTitle(useDashboardStore.getState());
+      // A title the tab already shows (a locked name, a task title) is not
+      // re-applied: no repaint, no layout-change event.
+      if (title === null || title === lastStoreTitleRef.current) return;
+      lastStoreTitleRef.current = title;
+      props.api.setTitle(title);
       lastAppliedAtRef.current = Date.now();
     },
-    [props.api, sessionId],
+    [props.api, resolveTabTitle],
   );
+  // Re-title when the session's task link or number changes (e.g. the first
+  // `claude` ends and `claude 2` becomes the only one). The selector yields a
+  // string, so a store change that leaves the title alone does not re-render.
+  const storeTitle = useDashboardStore(resolveTabTitle);
+  useEffect(() => {
+    if (storeTitle === lastStoreTitleRef.current) return;
+    lastStoreTitleRef.current = storeTitle;
+    if (storeTitle !== null) props.api.setTitle(storeTitle);
+  }, [storeTitle, props.api]);
   // Trailing-edge throttle: the first title in any OSC_TITLE_THROTTLE_MS
   // window applies immediately (lastAppliedAtRef starts at 0, so the very
   // first call in this panel's lifetime is always instant — no delay before
@@ -237,34 +291,12 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   // comment), so this wrapper is where the dockview panel API lives and
   // where the resulting plain boolean gets threaded down.
   const layout = useLayoutContext();
-  // Ctrl/Cmd-click on a path in the terminal -> the project's file editor,
-  // rooted at this session's cwd (an agent prints paths relative to where it
-  // runs, which for a worktree session is the worktree). Reads the store at
-  // call time like applyTitle above.
+  // Ctrl/Cmd-click on a path in the terminal -> the project's file editor
+  // (lib/openTerminalPath.ts, shared with the fold's right half).
   const { containerApi } = props;
   const onOpenFile = useCallback(
     (rawPath: string, line?: number) => {
-      const { sessions, projects } = useDashboardStore.getState();
-      const session = sessions.find((s) => s.id === sessionId);
-      const project = session && projects.find((p) => p.id === session.projectId);
-      if (!session || !project) return;
-      const root = (session.cwd ?? project.cwd).replace(/\/+$/, "");
-      let rel = rawPath;
-      // `~/x`, or an absolute path outside this session's root: not a project
-      // file — open the read-only external viewer, whose backend allowlist
-      // (Settings -> Readable paths) decides whether it's actually openable.
-      if (rel.startsWith("~/") || (rel.startsWith("/") && !rel.startsWith(`${root}/`))) {
-        openExternalFilePanel(containerApi, project.id, projects, layout, { path: rel, line });
-        return;
-      }
-      if (rel.startsWith("/")) rel = rel.slice(root.length + 1);
-      rel = rel.replace(/^(\.\/)+/, "");
-      if (rel === "" || rel.startsWith("../")) return;
-      openFileEditorPanel(containerApi, project.id, projects, layout, {
-        path: rel,
-        sessionId: session.cwd && session.cwd !== project.cwd ? session.id : undefined,
-        line,
-      });
+      openTerminalPath(containerApi, sessionId, layout, rawPath, line);
     },
     [sessionId, containerApi, layout],
   );
@@ -273,6 +305,26 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
     const disposable = props.api.onDidActiveChange((e) => setIsActive(e.isActive));
     return () => disposable.dispose();
   }, [sessionId, props.api]);
+  // #3010 — while this session shows on the right half (800-1099px), the
+  // right half renders its terminal; the grid's copy stands aside. Two live
+  // copies of one session would both resize its pty (the server keeps the
+  // last size sent) and both register for the key bar's input.
+  // Not in Tasks mode: the board takes the left half and the task sidebar the
+  // right, so the right half renders no session and the grid's copy is the
+  // one. A view covering the right half is different: the session stays the
+  // right half's and is on screen nowhere until the view closes. Its grid
+  // group is hidden behind the maximized left pane, so a copy mounted there
+  // would only measure a box nobody sees, and could size the pty to it.
+  const onRightHalf = useDashboardStore(
+    (s) =>
+      s.foldHalvesActive &&
+      s.viewMode !== "kanban" &&
+      s.activeWorkspaceId !== null &&
+      s.foldHalves[s.activeWorkspaceId]?.shownRight === panelId,
+  );
+  if (onRightHalf) {
+    return <div className="fold-elsewhere">Shown on the right half</div>;
+  }
   return (
     <div
       className={highlightedPanelId === panelId ? "panel-body-highlight" : ""}
@@ -297,11 +349,23 @@ function TerminalPanelWrapper(props: IDockviewPanelProps<TerminalPaneParams>) {
   );
 }
 
-// A crash here is much lower-stakes than a terminal pane (a static status
-// fetch, not a live WS/xterm connection), but wrapped the same way for the
-// same reason: one project's GitHub panel misbehaving shouldn't blank the
-// whole dashboard.
-const GitHubPanelWrapper = makePanelWrapper<GitHubPanelParams>(GitHubPanel);
+// The grid GitHub panel is retired (the right sidebar's GitHub view is the one
+// home); same contract as GitPanelRedirectWrapper below. Never delete this key.
+function GitHubPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number }>) {
+  const [resetKey, resetPanel] = useResetKey();
+  const openRightSidebarView = useDashboardStore((s) => s.openRightSidebarView);
+  const projectId = props.params?.projectId;
+  const { api, containerApi } = props;
+  const onOpen = useCallback(() => {
+    openRightSidebarView("github", projectId);
+    containerApi.getPanel(api.id)?.api.close();
+  }, [openRightSidebarView, projectId, api, containerApi]);
+  return (
+    <ErrorBoundary onReset={resetPanel}>
+      <GitHubPanelRedirect key={resetKey} onOpen={onOpen} />
+    </ErrorBoundary>
+  );
+}
 
 // The dock Git panel is retired (Source Control is a right-sidebar view now);
 // this keeps the `git` kind registered so a saved workspace layout that still
@@ -328,41 +392,33 @@ function GitPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number
   );
 }
 
-// The tabbed Project panel hosting Agent Rules / Briefing / Scaffold / Dock /
-// Skills. Hand-written (not makePanelWrapper) because it persists the user's
-// tab choice back into the panel's params, which needs dockview's own `api`.
-function ProjectHubPanelWrapper(props: IDockviewPanelProps<ProjectHubPanelParams>) {
+// The Project panel (`project-hub`) and the five single-purpose panels it
+// replaced are retired (#3406): the editors are the Project settings dialog
+// and Skills a drill-in of the sidebar's Project view. Every kind stays
+// registered so a saved workspace layout that still names one doesn't throw on
+// restore (an unregistered kind makes fromJSON wipe the whole layout);
+// panelUtils.ts's closeLegacyPanels sweeps them before they can mount, and the
+// stub's button opens the dialog if one is ever seen. Never delete these keys.
+function ProjectPanelRedirectWrapper(props: IDockviewPanelProps<{ projectId?: number }>) {
   const [resetKey, resetPanel] = useResetKey();
+  const openProjectSettings = useDashboardStore((s) => s.openProjectSettings);
+  const projectId = props.params?.projectId;
+  const { api, containerApi } = props;
+  const onOpen = useCallback(() => {
+    if (projectId != null) openProjectSettings(projectId, "agent-rules");
+    // Closed through the container so a panel the restore sweep already
+    // removed is a no-op rather than a throw.
+    containerApi.getPanel(api.id)?.api.close();
+  }, [openProjectSettings, projectId, api, containerApi]);
   return (
     <ErrorBoundary onReset={resetPanel}>
-      <ProjectHubPanel
-        key={resetKey}
-        params={props.params}
-        onTabChange={(tab) => props.api.updateParameters({ ...props.params, tab })}
-      />
+      <ProjectPanelRedirect key={resetKey} onOpen={onOpen} />
     </ErrorBoundary>
   );
 }
 
-// Agent Rules / Briefing / Scaffold / Dock / Skills used to be five panel
-// kinds of their own. They stay registered — rendering the hub on the
-// matching tab — so a saved workspace layout that still names one doesn't
-// throw on restore (an unregistered kind makes fromJSON wipe the whole
-// layout); the restore effect's migrateLegacyProjectPanels then converts
-// them to a real `project-hub` panel. Never delete these keys.
-function makeLegacyHubWrapper(tab: ProjectHubTab) {
-  return makePanelWrapper<{ projectId: number }>(function LegacyHubPanel({ params }) {
-    return <ProjectHubPanel params={{ projectId: params.projectId, tab }} />;
-  });
-}
-const AgentRulesPanelWrapper = makeLegacyHubWrapper("agent-rules");
-const ProjectBriefingPanelWrapper = makeLegacyHubWrapper("briefing");
-const ProjectSetupPanelWrapper = makeLegacyHubWrapper("scaffold");
-const DockConfigPanelWrapper = makeLegacyHubWrapper("dock");
-const SkillsPanelWrapper = makeLegacyHubWrapper("skills");
-
 // Lazy because it pulls in CodeMirror (the only place in the app that does);
-// hand-written for the same reason as BrowserPanelWrapper below — it needs
+// hand-written for the same reason as the Browser wrapper below — it needs
 // useRetriableLazy so "Reload pane" can retry a failed chunk load.
 function FileEditorPanelWrapper(props: IDockviewPanelProps<FileEditorPanelParams>) {
   const [resetKey, resetPanel] = useResetKey();
@@ -372,7 +428,7 @@ function FileEditorPanelWrapper(props: IDockviewPanelProps<FileEditorPanelParams
       <div style={{ position: "relative", width: "100%", height: "100%" }}>
         <Suspense fallback={<LazyPanelFallback />}>
           {/* Same intentional per-resetKey component identity as
-              BrowserPanelWrapper below. */}
+              the Browser wrapper below. */}
           {/* eslint-disable-next-line react-hooks/static-components */}
           <LazyFileEditorPanel key={resetKey} params={props.params} />
         </Suspense>
@@ -398,64 +454,45 @@ function ExternalFilePanelWrapper(props: IDockviewPanelProps<ExternalFilePanelPa
   );
 }
 
-// Same reasoning as GitHubPanelWrapper above — a crashing iframe/preview
-// fetch shouldn't blank the whole dashboard either. Hand-written (rather
-// than makePanelWrapper, which every other suspense-less/no-extra-hooks
-// panel above uses) because it needs its own hook call — useRetriableLazy —
+// The Browser pane (#3371). Both browser components a saved layout can hold
+// load the same pane: `browser` (a preview) starts in Preview and
+// `browserPane` (`browserPane-<sessionId>`) in Agent's browser; the pane's
+// switch changes the mode inside the panel without renaming it. Same
+// reasoning as GitHubPanelWrapper above — a crashing iframe or canvas
+// stream shouldn't blank the whole dashboard. Hand-written (rather than
+// makePanelWrapper) because it needs its own hook call — useRetriableLazy —
 // to rebuild the lazy() payload on every "Reload pane" (see that hook's own
-// comment).
-function BrowserPanelWrapper(props: IDockviewPanelProps<BrowserPanelParams>) {
-  const [resetKey, resetPanel] = useResetKey();
-  const LazyBrowserPanel = useRetriableLazy(loadBrowserPanel, resetKey);
-  return (
-    <ErrorBoundary onReset={resetPanel}>
-      {/* Same host-div fix as makePanelWrapper's own suspense branch above —
-          see its comment. */}
-      <div style={{ position: "relative", width: "100%", height: "100%" }}>
-        <Suspense fallback={<LazyPanelFallback />}>
-          {/* useRetriableLazy deliberately returns a NEW component identity
-              per resetKey — that's the whole retry mechanism (see its own
-              comment) — so this intentionally isn't the stable
-              once-per-render component reference the rule expects. */}
-          {/* eslint-disable-next-line react-hooks/static-components */}
-          <LazyBrowserPanel key={resetKey} params={props.params} api={props.api} />
-        </Suspense>
-      </div>
-    </ErrorBoundary>
-  );
+// comment). The pane sets its own title, so no page title is reported up.
+function makeBrowserWrapper(component: BrowserHostComponent) {
+  return function BrowserWrapper(props: IDockviewPanelProps<BrowserHostParams>) {
+    const [resetKey, resetPanel] = useResetKey();
+    const LazyBrowserPaneHost = useRetriableLazy(loadBrowserPaneHost, resetKey);
+    return (
+      <ErrorBoundary onReset={resetPanel}>
+        {/* Same host-div fix as makePanelWrapper's own suspense branch above —
+            see its comment. */}
+        <div style={{ position: "relative", width: "100%", height: "100%" }}>
+          <Suspense fallback={<LazyPanelFallback />}>
+            {/* useRetriableLazy deliberately returns a NEW component identity
+                per resetKey — that's the whole retry mechanism (see its own
+                comment). The static-components rule does not look inside a
+                component a factory returns, so no disable is needed here. */}
+            <LazyBrowserPaneHost
+              key={resetKey}
+              params={props.params}
+              api={props.api}
+              component={component}
+            />
+          </Suspense>
+        </div>
+      </ErrorBoundary>
+    );
+  };
 }
+const BrowserPanelWrapper = makeBrowserWrapper("browser");
+const BrowserPaneWrapper = makeBrowserWrapper("browserPane");
 
-// Same reasoning as GitHubPanelWrapper above — a stream-parsing/canvas
-// crash shouldn't blank the whole dashboard either. Reports the Playwright
-// page's title up via props.api.setTitle, same shape as
-// TerminalPanelWrapper's onTitleChange but simpler (no nameLocked/rename
-// concept for this panel type yet).
-function BrowserPaneWrapper(props: IDockviewPanelProps<BrowserPaneParams>) {
-  const [resetKey, resetPanel] = useResetKey();
-  const LazyBrowserPane = useRetriableLazy(loadBrowserPane, resetKey);
-  const onTitleChange = useCallback(
-    (pageTitle: string) => {
-      props.api.setTitle(pageTitle ? `Agent Browser: ${pageTitle}` : "Agent Browser");
-    },
-    [props.api],
-  );
-  return (
-    <ErrorBoundary onReset={resetPanel}>
-      {/* Same host-div fix as makePanelWrapper's own suspense branch above —
-          see its comment. */}
-      <div style={{ position: "relative", width: "100%", height: "100%" }}>
-        <Suspense fallback={<LazyPanelFallback />}>
-          {/* Same intentional new-identity-per-resetKey reasoning as
-              BrowserPanelWrapper above. */}
-          {/* eslint-disable-next-line react-hooks/static-components */}
-          <LazyBrowserPane key={resetKey} params={props.params} onTitleChange={onTitleChange} />
-        </Suspense>
-      </div>
-    </ErrorBoundary>
-  );
-}
-
-// Same shape as BrowserPaneWrapper just above (a stream-parsing/canvas
+// Same shape as the Browser wrapper just above (a stream-parsing/canvas
 // crash shouldn't blank the whole dashboard either), with no title reported
 // up — a device has no equivalent of a page title.
 function DevicePaneWrapper(props: IDockviewPanelProps<DevicePaneParams>) {
@@ -484,10 +521,6 @@ export function KanbanBoardOverlay(props: {
   onSessionEnded: (session: Session) => void;
   // Phone tier: the board's one-column-at-a-time layout (see UnifiedBoard).
   phone?: boolean;
-  // How many status columns the compact board shows at once (see UnifiedBoard).
-  columnCount?: number;
-  // Phone: rendered inside the navigator (in flow) instead of as a grid overlay.
-  inline?: boolean;
 }) {
   const [resetKey, resetPanel] = useResetKey();
   const LazyUnifiedBoard = useRetriableLazy(loadUnifiedBoard, resetKey);
@@ -496,20 +529,19 @@ export function KanbanBoardOverlay(props: {
     // `region`); a <section> with an accessible name is the implicit region role.
     <section
       aria-label="Tasks"
-      className={props.inline ? "kanban-board-inline" : "kanban-board-overlay"}
-      style={props.inline ? undefined : { position: "absolute", inset: 0 }}
+      className="kanban-board-overlay"
+      style={{ position: "absolute", inset: 0 }}
     >
       <ErrorBoundary onReset={resetPanel}>
         <Suspense fallback={<LazyPanelFallback />}>
           {/* Same intentional new-identity-per-resetKey reasoning as
-              BrowserPanelWrapper above. */}
+              the Browser wrapper above. */}
           {/* eslint-disable-next-line react-hooks/static-components */}
           <LazyUnifiedBoard
             key={resetKey}
             onOpenSession={props.onOpenSession}
             onSessionEnded={props.onSessionEnded}
             phone={props.phone}
-            columnCount={props.columnCount}
           />
         </Suspense>
       </ErrorBoundary>
@@ -599,16 +631,16 @@ function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
 // eslint-disable-next-line react-refresh/only-export-components
 export const components = {
   terminal: TerminalPanelWrapper,
-  github: GitHubPanelWrapper,
+  github: GitHubPanelRedirectWrapper,
   git: GitPanelRedirectWrapper,
-  "agent-rules": AgentRulesPanelWrapper,
+  "agent-rules": ProjectPanelRedirectWrapper,
   "file-editor": FileEditorPanelWrapper,
   "external-file": ExternalFilePanelWrapper,
-  "project-hub": ProjectHubPanelWrapper,
-  "project-briefing": ProjectBriefingPanelWrapper,
-  "project-setup": ProjectSetupPanelWrapper,
-  "dock-config": DockConfigPanelWrapper,
-  skills: SkillsPanelWrapper,
+  "project-hub": ProjectPanelRedirectWrapper,
+  "project-briefing": ProjectPanelRedirectWrapper,
+  "project-setup": ProjectPanelRedirectWrapper,
+  "dock-config": ProjectPanelRedirectWrapper,
+  skills: ProjectPanelRedirectWrapper,
   browser: BrowserPanelWrapper,
   browserPane: BrowserPaneWrapper,
   device: DevicePaneWrapper,

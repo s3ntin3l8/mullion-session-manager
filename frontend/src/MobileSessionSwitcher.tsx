@@ -36,6 +36,9 @@ export interface MobileSessionRow {
   // Where this row's session's panel lives — the workspace holding it — or
   // null when it is in no workspace (issue #1882).
   workspace: PickerWorkspace | null;
+  // The session's project, shown on "Needs you" rows only — that section has
+  // no project heading (issue #2996). Null for a pane or a project-less row.
+  projectName: string | null;
   searchFields: string[];
 }
 
@@ -72,14 +75,7 @@ export function MobileSessionSwitcher({
   onRenameCancel,
   showWorkspaceChip,
   onSelectWorkspace,
-  contextLabel,
-  sheetClassName,
 }: {
-  // Small label ahead of the session name in the trigger — the active
-  // workspace's name on tablet, where workspaces exist (phone has none).
-  contextLabel?: string;
-  // Extra class on the sheet (the tablet width cap).
-  sheetClassName?: string;
   // Open panes only, in dockview order: the swipe / `n/N` domain.
   items: MobileSessionItem[];
   // Every listed session, grouped — the sheet's content.
@@ -103,9 +99,7 @@ export function MobileSessionSwitcher({
   onRenameCancel: () => void;
   // Issue #1882 — the phone tier has no workspace switcher, so a row names
   // the workspace its session lives in, and a row whose session lives
-  // elsewhere offers to go there. Absent on the tablet tier, which HAS a
-  // workspace switcher (in the navigator's Projects tab) and so has no blind
-  // spot to cover.
+  // elsewhere offers to go there.
   showWorkspaceChip?: boolean;
   onSelectWorkspace?: (workspaceId: number) => void;
 }) {
@@ -226,7 +220,6 @@ export function MobileSessionSwitcher({
           setOpen(true);
         }}
       >
-        {contextLabel && <span className="mobile-session-context">{contextLabel}</span>}
         {active ? (
           <>
             <span className="mobile-session-dot" style={{ background: active.dotColor }} />
@@ -265,7 +258,6 @@ export function MobileSessionSwitcher({
         label="Sessions"
         closeLabel="Close session list"
         title={`Sessions (${listedRows.length})`}
-        sheetClassName={sheetClassName}
         backStack
         sheetRef={sheetRef}
         onEscape={() => {
@@ -289,14 +281,16 @@ export function MobileSessionSwitcher({
         <div className="mobile-session-list">
           {visibleSections.map((section) => (
             <section key={section.key} className="mobile-session-section">
-              <h3
+              {/* h2: the page's only heading above it is the app's h1, so an
+                  h3 skipped a level (axe heading-order, #2886). */}
+              <h2
                 className={`mobile-session-section-head${
                   section.kind === "needs-you" ? " needs-you" : ""
                 }`}
               >
                 <span>{section.label}</span>
                 <span className="mobile-session-section-count">{section.rows.length}</span>
-              </h3>
+              </h2>
               <ul>
                 {section.rows.map((row) => {
                   // The pin only repeats rows that live under their
@@ -348,7 +342,24 @@ export function MobileSessionSwitcher({
                               className="mobile-session-logo"
                             />
                           )}
-                          <span className="mobile-session-title">{row.title}</span>
+                          {pinned && row.projectName ? (
+                            // The pin has no project heading, and titles are
+                            // often just the agent's command (`claude`), so
+                            // the project goes under the title. Inside the
+                            // button, so it is part of the accessible name.
+                            <span className="mobile-session-text">
+                              <span className="mobile-session-title">{row.title}</span>{" "}
+                              <span className="mobile-session-project" title={row.projectName}>
+                                {/* Reads "claude in runway", like the
+                                    workspace chip's hidden prefix. The
+                                    {" "} nodes keep the words apart: the
+                                    accessible name trims each span. */}
+                                <span className="visually-hidden">in</span> {row.projectName}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="mobile-session-title">{row.title}</span>
+                          )}
                           {row.unreadCount > 0 && (
                             <span className="mobile-session-unread">{row.unreadCount}</span>
                           )}

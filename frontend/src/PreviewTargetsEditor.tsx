@@ -6,7 +6,14 @@ import { useDashboardStore } from "./store/index.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
 
-export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
+export function PreviewTargetsEditor({
+  projectId,
+  onDirtyChange,
+}: {
+  projectId: number;
+  // Told whenever the draft gains or loses unsaved changes (#3406).
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
   const [draft, setDraft] = useState<ProjectPreviewConfig>();
   const [saved, setSaved] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +75,9 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
     (target) => !target.name.trim() || !target.destination.trim(),
   );
   const dirty = !!draft && JSON.stringify(draft) !== saved;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
   return (
     <section className="preview-targets-editor" aria-label="Preview destinations">
       <div className="preview-config-toolbar">

@@ -99,11 +99,9 @@
   border-color: var(--muted);
 }
 
-/* Phase 6 Task Master (6.5/#218) — the sidebar's standalone nav entry that
-   opens the global Tasks panel, replacing the 2.5 thin slice's inline
-   TasksSection list. Same row density/icon-plus-label shape as a project
-   row's own header, but a single fixed row rather than an expandable
-   section. */
+/* A single fixed sidebar row: icon, label and trailing controls. It was the
+   sidebar's Tasks entry until Tasks became a mode on the left rail (#3072);
+   SidebarDevices.tsx's device rows still use it. */
 .sidebar-tasks-entry {
   display: flex;
   align-items: center;
@@ -122,15 +120,6 @@
 }
 .sidebar-tasks-entry:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
-}
-/* Tasks-as-a-destination — this is now the sidebar's own indicator that
-   Tasks (not a workspace) is the active view, mirroring
-   .workspace-item.active's on/off shape in WorkspaceSwitcher.tsx, which
-   drops ITS active highlight while this one is on (Sidebar.tsx passes
-   `viewMode === "kanban"` to both). */
-.sidebar-tasks-entry.active {
-  background: color-mix(in srgb, var(--accent-solid) 14%, transparent);
-  color: var(--accent-solid);
 }
 .sidebar-tasks-entry-label {
   flex: 1;
@@ -201,6 +190,11 @@
 .kanban-unified-tasks {
   display: flex;
   flex-direction: column;
+  /* .kanban-unified-main is a flex row: without a grow this is only as wide
+     as its content, so on a board with no lanes (no tasks, or none matching)
+     the filter bar and its border stopped where the buttons did (#3213). */
+  flex: 1 1 auto;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
 }
@@ -353,7 +347,11 @@
   background: var(--sidebar);
   padding: 8px 9px;
   cursor: pointer;
-  transition: border-color 0.1s;
+  /* Restates styles/motion.css's press transition, which this rule's own
+     `transition` would otherwise replace. */
+  transition:
+    border-color var(--motion-press) var(--motion-ease-press),
+    scale var(--motion-press) var(--motion-ease-press);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -1008,8 +1006,15 @@
 
 /* Empty tiled grid — a dashed dropzone in the actual grid area, closer to
    the design doc's own size since .grid-area is wide, unlike the sidebar
-   states above. */
+   states above.
+   Above dockview's watermark (`.dv-watermark-container`, absolute, full size,
+   z-index 1), which otherwise took every tap on the buttons below (#3053).
+   Lifted, it would also take a session dragged in from the sidebar, whose
+   drop listener sits on dockview's own element underneath: so the box lets
+   the pointer through and only its buttons catch it. */
 .empty-grid-dropzone {
+  z-index: 2;
+  pointer-events: none;
   flex: 1;
   margin: 12px;
   border: 1.5px dashed var(--border);
@@ -1030,6 +1035,13 @@
   font-family: "Geist Mono", monospace;
   font-size: 0.71875rem;
   color: var(--dim);
+}
+/* #2978 — the touch form of the hint above: two buttons at the 44px floor. */
+.empty-grid-actions > button {
+  pointer-events: auto;
+  min-height: 44px;
+  padding: 0 16px;
+  font-size: 0.8125rem;
 }
 
 /* Issue #211's Kanban board — an opaque overlay over .dockview-container
@@ -1137,7 +1149,7 @@
   border-radius: 9px;
   background: var(--sidebar);
   overflow: hidden;
-  transition: border-color 0.1s;
+  transition: border-color var(--motion-press) var(--motion-ease-press);
 }
 .kanban-card-drop-target {
   border-color: var(--accent-solid);
@@ -2294,8 +2306,8 @@ button.github-panel-row.gh-issue-row {
 .history-worktree-filter .settings-dropdown {
   width: 100%;
 }
-.gh-history-toolbar .settings-dropdown select,
-.history-worktree-filter .settings-dropdown select {
+.gh-history-toolbar .settings-dropdown .ui-dropdown-field,
+.history-worktree-filter .settings-dropdown .ui-dropdown-field {
   width: 100%;
   text-overflow: ellipsis;
 }

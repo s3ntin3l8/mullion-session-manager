@@ -45,6 +45,7 @@ import {
 import type { SessionGithubAuth } from "./session-github-token.js";
 import { startSetupRecipe } from "./setup-recipe.js";
 import { closeSessionBrowserBindings, recordSessionBrowserBinding } from "./session-browsers.js";
+import { dropPendingOpensForSession } from "./workspace-pending-opens.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import { isSiblingWorktreeCwd } from "./session-cwd.js";
 import {
@@ -2298,6 +2299,10 @@ export async function killSession(
 
   // #182 — "session close kills associated browser instances."
   closeSessionBrowserBindings(app, sessionId);
+
+  // #3033 — a session killed on the fold or the phone before a desktop
+  // applied its open must not be added at the desk afterwards.
+  dropPendingOpensForSession(app.db, sessionId);
 
   // Clean up a preview worktree if this session had one. The row still
   // flips to "killed" above regardless of whether this succeeds — unlike

@@ -18,7 +18,7 @@ export interface UseOpenPreviewRequestParams {
 
 // Issues #2016/#2018 — resolves the store's requestOpenPreview intent: a
 // Git/GitHub view asked to open a preview in the dock's browser pane, and has
-// no panel opener of its own (a standalone GitHub panel, say). The preview
+// no panel opener of its own (a sidebar view, say). The preview
 // twin of useOpenTaskRequest.ts, with the same gates: nothing opens before
 // the active workspace's first restore (whose clear() would wipe the pane),
 // and a request that lands mid-restore retries on a setTimeout(0) rather

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { IDockviewHeaderActionsProps } from "dockview";
 import { useDashboardStore } from "./store/index.js";
+import type { TerminalPaneParams } from "./TerminalPane.js";
 import { SplitDownIcon, SplitRightIcon } from "./ui/icons.js";
+import { clearHeaderSplitHidden, setHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
 
 // Ported 1:1 from the design's pane-header anatomy (Cmux States.dc.html,
 // section 02): split-right/split-down sit at the far right of a pane's
@@ -22,7 +24,9 @@ import { SplitDownIcon, SplitRightIcon } from "./ui/icons.js";
 // buttons are hidden entirely, giving the tab strip's own more essential
 // content (title, close, kebab) the room they were otherwise fighting it
 // for. Split remains reachable via each tab's own kebab menu
-// (PaneActionsMenu.tsx's "Split right"/"Split down" items). Roughly this
+// (PaneActionsMenu.tsx's "Split right"/"Split down" items), which lists them
+// only while this header hides them (#3214): the measurement is published per
+// group through lib/paneHeaderSplit.ts. Roughly this
 // component's own rendered footprint (two 24px `.pane-tab-btn`s + 6px gap +
 // 4px right padding, ~58px) plus enough of the remainder for a single tab to
 // sit at its own min-width (xterm.css's `.dv-tab`) without the two
@@ -93,10 +97,28 @@ export function PaneHeaderActions(props: IDockviewHeaderActionsProps) {
   }, []);
   useEffect(() => () => observerRef.current?.disconnect(), []);
 
+  // #3214 — the pane menu reads this group's measurement to decide whether to
+  // list its own split entries. Only while the buttons can render at all
+  // (an active panel); cleared when the group's header goes away.
+  const groupId = props.group?.id;
+  const rendersButtons = !!props.activePanel;
+  useEffect(() => {
+    if (!groupId || !rendersButtons) return;
+    setHeaderSplitHidden(groupId, hidden);
+    return () => clearHeaderSplitHidden(groupId);
+  }, [groupId, rendersButtons, hidden]);
+
   if (!props.activePanel) return null;
 
+  // #3054 — opens the launcher with the pane's project preselected; a pane
+  // that is not a session's opens it on the usual default project.
   const split = (direction: "right" | "below") => {
-    requestSplit(props.activePanel!.id, direction);
+    const panel = props.activePanel!;
+    const sessionId = (panel.params as TerminalPaneParams | undefined)?.sessionId;
+    const projectId = useDashboardStore
+      .getState()
+      .sessions.find((s) => s.id === sessionId)?.projectId;
+    requestSplit(panel.id, direction, projectId);
   };
 
   return (

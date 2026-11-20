@@ -92,7 +92,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 
 import { previewPlacement } from "../services/placement.js";
 import { commandAgentBin } from "../services/hook-adapters/index.js";
-import { portFromUrl } from "../plugins/preview-proxy.js";
+import { portFromUrl } from "../services/preview-upstream.js";
 import { resolveBackend } from "../services/session-backend.js";
 
 import { readGitBranch } from "../services/git-branch.js";
@@ -1951,7 +1951,7 @@ export async function projectsRoute(app: FastifyInstance) {
 
       // Local: a bare port means "this same machine" (isValidDevServerUrl's
       // own comment) — pingDevServer needs a real URL, so resolve it the
-      // same way preview-proxy.ts's resolveUpstreamBase does for a local
+      // same way preview-upstream.ts's resolveUpstreamBase does for a local
       // target. A full URL is honored as-is, including its own host (this
       // process trusts itself, same admin-trust level as hosts.ts's own
       // baseUrl) — only the remote branch above restricts to a bare

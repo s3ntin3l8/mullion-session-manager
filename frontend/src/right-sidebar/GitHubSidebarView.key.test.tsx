@@ -18,7 +18,7 @@ vi.mock("../GitHubPanel.js", () => ({
 
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 
-const actions = { onOpenGitHub: vi.fn() } as never;
+const actions = {} as never;
 
 describe("GitHubSidebarView", () => {
   it("remounts the panel for another project, so its state cannot carry over", () => {

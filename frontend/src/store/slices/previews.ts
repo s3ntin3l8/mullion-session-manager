@@ -5,7 +5,7 @@ import type { DashboardState, PreviewsSlice } from "../types.js";
 // Issues #2016/#2018 — the registered previews (GET /api/previews), so the
 // Mullion links index can show which branches and PRs already have one, and
 // the intent that opens one in the dock's browser pane from anywhere (a
-// standalone GitHub panel has no direct access to App.tsx's panel opener).
+// sidebar view has no direct access to App.tsx's panel opener).
 //
 // Not polled on a timer: listing derives each checkout preview's branch with
 // a host round trip, so it refreshes when a Git/GitHub view mounts (at most

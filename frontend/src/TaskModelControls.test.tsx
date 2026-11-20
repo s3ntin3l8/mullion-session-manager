@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup } from "@testing-library/react";
 import type { AppSettings, Task } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
 
@@ -26,6 +26,13 @@ vi.mock("./api/index.js", async (orig) => {
 
 import { TaskModelControls } from "./TaskModelControls.js";
 import { resolvedDefaultModel } from "./lib/taskModelDefault.js";
+import {
+  allDropdowns,
+  dropdownOptions,
+  dropdownValue,
+  findDropdownsWithOption,
+  pickDropdownOption,
+} from "./test/dropdown.js";
 
 const settings = {
   claudeCode: { defaultModel: "opus", reviewerModel: null, smallModel: "claude-haiku-5-5" },
@@ -73,15 +80,15 @@ describe("TaskModelControls", () => {
     const onUpdate = renderControls({ workerAgent: "opencode" });
     const provider = await screen.findByLabelText("Worker model provider");
     expect(screen.queryByLabelText("Worker model")).toBeNull();
-    await waitFor(() => expect(screen.getByText("anthropic")).toBeTruthy());
-    fireEvent.change(provider, { target: { value: "openrouter" } });
+    await findDropdownsWithOption("anthropic");
+    pickDropdownOption(provider, "openrouter");
     const model = await screen.findByLabelText("Worker model");
-    expect(Array.from(model.querySelectorAll("option")).map((o) => o.value)).toEqual([
+    expect(dropdownOptions(model).map((o) => o.value)).toEqual([
       "",
       "openrouter/foo",
       "openrouter/bar",
     ]);
-    fireEvent.change(model, { target: { value: "openrouter/bar" } });
+    pickDropdownOption(model, "openrouter/bar");
     expect(onUpdate).toHaveBeenCalledWith({ model: "openrouter/bar" });
   });
 
@@ -91,9 +98,13 @@ describe("TaskModelControls", () => {
       t: { modelOverride: "openrouter/bar" },
     });
     const provider = await screen.findByLabelText("Worker model provider");
-    expect(screen.getAllByText("Default (openrouter/foo)")).toHaveLength(2);
-    expect((provider as HTMLSelectElement).value).toBe("openrouter");
-    fireEvent.change(provider, { target: { value: "" } });
+    expect(
+      allDropdowns().flatMap((f) =>
+        dropdownOptions(f).filter((o) => o.label === "Default (openrouter/foo)"),
+      ),
+    ).toHaveLength(2);
+    expect(dropdownValue(provider)).toBe("openrouter");
+    pickDropdownOption(provider, "");
     expect(onUpdate).toHaveBeenCalledWith({ model: null });
   });
 
@@ -105,16 +116,16 @@ describe("TaskModelControls", () => {
     const onUpdate = renderControls({ workerAgent: agent });
     const select = await screen.findByLabelText("Worker model");
     expect(screen.queryByLabelText("Worker model provider")).toBeNull();
-    expect(screen.getByText(label)).toBeTruthy();
-    await screen.findByText(model);
-    fireEvent.change(select, { target: { value: model } });
+    expect(dropdownOptions(select).some((o) => o.label === label)).toBe(true);
+    await findDropdownsWithOption(model);
+    pickDropdownOption(select, model);
     expect(onUpdate).toHaveBeenCalledWith({ model });
   });
 
   it("claude offers Custom… and a small-model control; codex has no small model", async () => {
     renderControls({ workerAgent: "claude" });
     expect(await screen.findByLabelText("Small model")).toBeTruthy();
-    expect(screen.getAllByText("Custom…", { selector: "option" }).length).toBeGreaterThan(0);
+    expect((await findDropdownsWithOption("Custom…")).length).toBeGreaterThan(0);
     cleanup();
     renderControls({ workerAgent: "codex" });
     await screen.findByLabelText("Worker model");
@@ -147,8 +158,8 @@ describe("TaskModelControls", () => {
       />,
     );
     const select = await screen.findByLabelText("Worker model");
-    await screen.findByText("gpt-5-mini");
-    fireEvent.change(select, { target: { value: "gpt-5-mini" } });
+    await findDropdownsWithOption("gpt-5-mini");
+    pickDropdownOption(select, "gpt-5-mini");
     expect(await screen.findByText("model must be provider/model")).toBeTruthy();
   });
 

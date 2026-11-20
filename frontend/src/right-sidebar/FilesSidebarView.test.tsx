@@ -31,7 +31,6 @@ vi.mock("../api/index.js", async (importOriginal) => {
 
 const actions = {
   onOpenGit: vi.fn(),
-  onOpenGitHub: vi.fn(),
   onOpenFileEditor: vi.fn(),
   onOpenFile: vi.fn(),
   onOpenAgentRules: vi.fn(),
@@ -40,6 +39,8 @@ const actions = {
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
   onOpenTasks: vi.fn(),
+  onOpenDevice: vi.fn(),
+  onOpenRailBrowser: vi.fn(),
 };
 
 const entry = (name: string, kind: ProjectDirEntry["kind"], over = {}): ProjectDirEntry => ({

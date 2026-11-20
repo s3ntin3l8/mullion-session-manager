@@ -12,9 +12,10 @@ import {
 } from "../ui/icons.js";
 import { TextInput } from "../ui/primitives.js";
 
-// SessionRow's row 1 — the `.session-item-row` strip (status dot, agent
-// logo/name, rename-in-place, status label, git-details toggle, kebab menu,
-// end-session button). Extracted verbatim from SessionRow (PR 27 phase 2,
+// SessionRow's first two lines — the `.session-item-row` strip (status dot,
+// agent logo/name, rename-in-place, git-details toggle, kebab menu,
+// end-session button) and, below it, the meta line SessionRow builds (status
+// word · host · branch, issue #3286). Extracted verbatim from SessionRow (PR 27 phase 2,
 // Wave 5 of .claude/plans/can-we-do-a-warm-cocke.md).
 //
 // Rename state (`renaming`/`draftName`/the blur-suppression ref/the
@@ -29,7 +30,7 @@ import { TextInput } from "../ui/primitives.js";
 // (keeps it prop-driven and independently testable, matching
 // GitLine/FileChanges/Chips' own shape).
 //
-// `dot`/`statusLabel` come in as already-built JSX (SessionRow computes both
+// `dot`/`metaLine` come in as already-built JSX (SessionRow computes both
 // from `session.sessionStatus`/`sessionStatusSeverity`/hookEmits — see that
 // component's own comments) rather than this component re-deriving them,
 // same "shared/coordinating derivation stays where multiple regions need
@@ -43,11 +44,18 @@ export interface HeaderProps {
   showAgentFallback: boolean;
   agentBinary: string;
   dot: ReactNode;
-  statusLabel: ReactNode;
+  // Issue #3286 — the row's second line (status word · host · branch),
+  // already built by SessionRow. Rendered BELOW the `.session-item-row`
+  // strip, so the title on line 1 gets all the width the controls leave.
+  metaLine: ReactNode;
+  // Issue #3286 — this session's pane is in the current workspace. The
+  // title is set in a heavier weight; the word "open" that used to sit in
+  // the status group is gone. SessionRow's aria-label still says it.
+  openInWorkspace?: boolean;
   // Issue #29 — the Runway quota chip for this session's agent, already
   // built by SessionRow (it owns the snapshot and the agent's CLI name) and
   // rendered right next to the agent's identity. It is a ReactNode, not
-  // data, for the same reason `dot`/`statusLabel` are: this component stays
+  // data, for the same reason `dot`/`metaLine` are: this component stays
   // prop-driven and never reads the store or the quota itself. Absent →
   // nothing is rendered at all.
   quotaBadge?: ReactNode;
@@ -92,7 +100,8 @@ export function Header({
   showAgentFallback,
   agentBinary,
   dot,
-  statusLabel,
+  metaLine,
+  openInWorkspace = false,
   quotaBadge,
   hasDetails,
   alwaysExpandGit,
@@ -130,58 +139,63 @@ export function Header({
   };
 
   return (
-    <div className="session-item-row">
-      {dot}
-      {agentLogo && (
-        <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
-      )}
-      {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
-      {renaming ? (
-        <TextInput
-          small
-          ref={renameInputRef}
-          className="session-rename-input"
-          value={draftName}
-          // P10 — matches WorkspaceSwitcher.tsx's own rename inputs
-          // (`.workspace-rename-input`): without this, clicking into the
-          // field to place the cursor also bubbles up as a click on the
-          // row and fires `onOpen`, same class of bug the row's `onKeyDown`
-          // guard exists to prevent for the keyboard case.
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setDraftName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commitRename();
-            else if (e.key === "Escape") {
-              suppressBlurRef.current = true;
-              setRenaming(false);
-            }
-          }}
-          onBlur={() => {
-            if (!suppressBlurRef.current) commitRename();
-            suppressBlurRef.current = false;
-          }}
-        />
-      ) : (
-        <span
-          className={`session-name${showCommand ? " mono" : ""}`}
-          title={title}
-          onDoubleClick={(e) => {
-            e.stopPropagation();
-            suppressBlurRef.current = false;
-            setDraftName(title);
-            setRenaming(true);
-          }}
-        >
-          {title}
-        </span>
-      )}
-      {statusLabel}
-      {/* Issue #29 — the Runway quota chip, next to the agent's identity:
+    <>
+      <div className="session-item-row">
+        {dot}
+        {agentLogo && (
+          <img src={agentLogo} alt="" width={14} height={14} className="session-agent-logo" />
+        )}
+        {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
+        {/* Whitespace-only text is not painted in a flex row, but it keeps
+            the row's text content as separate words ("fake-agent.sh fix
+            login", not "fake-agent.shfix login"), which is what the row's
+            aria-label is checked against (#3286). Same before the meta line. */}
+        {showAgentFallback && " "}
+        {renaming ? (
+          <TextInput
+            small
+            ref={renameInputRef}
+            className="session-rename-input"
+            value={draftName}
+            // P10 — matches WorkspaceSwitcher.tsx's own rename inputs
+            // (`.workspace-rename-input`): without this, clicking into the
+            // field to place the cursor also bubbles up as a click on the
+            // row and fires `onOpen`, same class of bug the row's `onKeyDown`
+            // guard exists to prevent for the keyboard case.
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setDraftName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitRename();
+              else if (e.key === "Escape") {
+                suppressBlurRef.current = true;
+                setRenaming(false);
+              }
+            }}
+            onBlur={() => {
+              if (!suppressBlurRef.current) commitRename();
+              suppressBlurRef.current = false;
+            }}
+          />
+        ) : (
+          <span
+            className={`session-name${showCommand ? " mono" : ""}${openInWorkspace ? " open" : ""}`}
+            title={title}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              suppressBlurRef.current = false;
+              setDraftName(title);
+              setRenaming(true);
+            }}
+          >
+            {title}
+          </span>
+        )}
+        {/* Issue #29 — the Runway quota chip, next to the agent's identity:
         it answers "is this agent's provider out of quota?" without the
         operator having to open the row's details. It renders nothing at all
         when Runway has nothing to say (see QuotaBadge). */}
-      {quotaBadge}
-      {/* Sidebar declutter — was row 3's git-only toggle (issue #202); now
+        {quotaBadge}
+        {/* Sidebar declutter — was row 3's git-only toggle (issue #202); now
         gates every history section session-row/Details.tsx renders (git,
         files, agents, the agent's last message), not just git. `hasDetails`
         (SessionRow's own `detailsAvailable`) is "is there ANYTHING to show",
@@ -189,101 +203,103 @@ export function Header({
         toggle at all, not one that expands to an empty row. Suppressed
         entirely when `alwaysExpandGit` is set (a caller with room to always
         show details) — there's nothing to toggle then. */}
-      {hasDetails && !alwaysExpandGit && (
-        <span onClick={(e) => e.stopPropagation()}>
-          <button
-            className="session-git-toggle"
-            title={gitLineExpanded ? "Hide details" : "Show details"}
-            aria-expanded={gitLineExpanded}
-            onClick={onToggleGitLineExpanded}
-          >
-            <ChevronDownIcon
-              size={11}
-              className={gitLineExpanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+        {hasDetails && !alwaysExpandGit && (
+          <span className="session-row-control" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="session-git-toggle"
+              title={gitLineExpanded ? "Hide details" : "Show details"}
+              aria-expanded={gitLineExpanded}
+              onClick={onToggleGitLineExpanded}
+            >
+              <ChevronDownIcon
+                size={11}
+                className={gitLineExpanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+              />
+            </button>
+          </span>
+        )}
+        {!isTerminal && (
+          <span className="session-row-control" onClick={(e) => e.stopPropagation()}>
+            <KebabMenu
+              menuPlacement="auto"
+              title="More…"
+              items={[
+                ...(onOpenAsFloat
+                  ? [
+                      {
+                        key: "open-as-float",
+                        label: "Open as new window",
+                        onClick: onOpenAsFloat,
+                      } as const,
+                    ]
+                  : []),
+                {
+                  key: "rename",
+                  label: "Rename",
+                  icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
+                  onClick: () => {
+                    suppressBlurRef.current = false;
+                    setDraftName(title);
+                    setRenaming(true);
+                  },
+                } as const,
+                {
+                  key: "promote",
+                  label: "Promote to worktree…",
+                  icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
+                  onClick: onPromote,
+                  // Opens the promote dialog, which traps focus itself.
+                  opensOverlay: true,
+                } as const,
+                ...(onRevealInGit
+                  ? [
+                      {
+                        key: "reveal-in-git",
+                        label: "Reveal in Git",
+                        icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
+                        onClick: onRevealInGit,
+                      } as const,
+                    ]
+                  : []),
+                {
+                  key: "mute",
+                  label: isMuted ? "Unmute notifications" : "Mute notifications",
+                  icon: isMuted ? (
+                    <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
+                  ) : (
+                    <BellIcon size={14} style={{ color: "var(--muted)" }} />
+                  ),
+                  onClick: onToggleMute,
+                } as const,
+              ]}
             />
-          </button>
-        </span>
-      )}
-      {!isTerminal && (
-        <span onClick={(e) => e.stopPropagation()}>
-          <KebabMenu
-            menuPlacement="auto"
-            title="More…"
-            items={[
-              ...(onOpenAsFloat
-                ? [
-                    {
-                      key: "open-as-float",
-                      label: "Open as new window",
-                      onClick: onOpenAsFloat,
-                    } as const,
-                  ]
-                : []),
-              {
-                key: "rename",
-                label: "Rename",
-                icon: <RenameIcon size={14} style={{ color: "var(--muted)" }} />,
-                onClick: () => {
-                  suppressBlurRef.current = false;
-                  setDraftName(title);
-                  setRenaming(true);
-                },
-              } as const,
-              {
-                key: "promote",
-                label: "Promote to worktree…",
-                icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
-                onClick: onPromote,
-                // Opens the promote dialog, which traps focus itself.
-                opensOverlay: true,
-              } as const,
-              ...(onRevealInGit
-                ? [
-                    {
-                      key: "reveal-in-git",
-                      label: "Reveal in Git",
-                      icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
-                      onClick: onRevealInGit,
-                    } as const,
-                  ]
-                : []),
-              {
-                key: "mute",
-                label: isMuted ? "Unmute notifications" : "Mute notifications",
-                icon: isMuted ? (
-                  <BellOffIcon size={14} style={{ color: "var(--muted)" }} />
-                ) : (
-                  <BellIcon size={14} style={{ color: "var(--muted)" }} />
-                ),
-                onClick: onToggleMute,
-              } as const,
-            ]}
-          />
-        </span>
-      )}
-      {!isTerminal && (
-        <span onClick={(e) => e.stopPropagation()}>
-          <ConfirmButton
-            title={
-              childCount > 0
-                ? `End this session — ${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
-                : "End this session (the program will be terminated)"
-            }
-            onConfirm={onConfirmEnd}
-            allowDoubleClickConfirm
-            // Phase 5 (Track B, issue #196 5.6) — always require the
-            // arm-then-confirm step when this session has live children,
-            // regardless of the global "confirm before kill" setting.
-            // Ending it always defaults to detach (see killSession), never
-            // a silent cascade-kill, but a user with that setting off
-            // should still see the child count before it fires — that's
-            // the one thing skipConfirm would otherwise skip entirely.
-            skipConfirm={!confirmBeforeKill && childCount === 0}
-          >
-            <CloseIcon size={11} />
-          </ConfirmButton>
-        </span>
-      )}
-    </div>
+          </span>
+        )}
+        {!isTerminal && (
+          <span className="session-row-control" onClick={(e) => e.stopPropagation()}>
+            <ConfirmButton
+              title={
+                childCount > 0
+                  ? `End this session — ${childCount} running child session${childCount === 1 ? "" : "s"} will keep running independently`
+                  : "End this session (the program will be terminated)"
+              }
+              onConfirm={onConfirmEnd}
+              allowDoubleClickConfirm
+              // Phase 5 (Track B, issue #196 5.6) — always require the
+              // arm-then-confirm step when this session has live children,
+              // regardless of the global "confirm before kill" setting.
+              // Ending it always defaults to detach (see killSession), never
+              // a silent cascade-kill, but a user with that setting off
+              // should still see the child count before it fires — that's
+              // the one thing skipConfirm would otherwise skip entirely.
+              skipConfirm={!confirmBeforeKill && childCount === 0}
+            >
+              <CloseIcon size={11} />
+            </ConfirmButton>
+          </span>
+        )}
+      </div>{" "}
+      {metaLine}
+    </>
   );
 }

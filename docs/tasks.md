@@ -439,12 +439,30 @@ unresolved dependency state.
 The task board and the session board (originally two separate surfaces —
 issue #211's session-only Kanban view and this section's own dockview
 panel) have merged into one unified Kanban view (`frontend/src/
-UnifiedBoard.tsx`). Command Palette → Integrations → **Tasks**, the
-sidebar's own Tasks nav entry (badge count of tasks needing a decision
-right now — `ready` + `reviewing`), or the list/Kanban toggle in the
-toolbar all switch to it — it's an overlay over the dockview grid, not a
-panel, so toggling back to list view instantly restores whatever was
-tiled underneath. Task status columns are the board; a task with a linked
+UnifiedBoard.tsx`). It is the app's **Tasks mode**; the grid is
+**Workspace mode** (`#3009`). From 700px wide the left rail's mode switch
+(the Tasks entry shows how many tasks need you, as the board's "Needs me"
+filter counts them), Ctrl/⌘ + Alt + **O** and Command Palette → Integrations →
+**Tasks** all switch to it; the sidebar no longer has a Tasks row of its own
+(#3072). Tasks mode
+shows the board full size beside the right sidebar, without the left sidebar
+or the Dock. It's an overlay over the dockview grid, not a panel, so switching
+back to Workspace instantly restores whatever was tiled underneath. The last
+mode is remembered per device. A task's worker or reviewer pill in the
+sidebar's task detail opens that session in Workspace mode and keeps the task
+open in the sidebar. The phone (`#3014`) has no drawer: a tab bar at the
+bottom (Workspace, Tasks with the needs-you count, New, Inbox and More, `#3288`),
+hidden while the on-screen keyboard is up, switches modes; in Tasks mode its
+New opens the new-task form. Its board shows one lane at a time
+(Backlog, Ready, Active, Done) under a strip naming each lane with its count;
+swipe between lanes. "Needs you" is a filter chip there, a dot marks each lane
+holding such a task, and the board opens on the first of them. A task opens
+full screen with its actions at the bottom. More lists the right sidebar's
+views, then Settings; a view opens above the tab bar, which stays visible:
+Workspace or Tasks closes it, and another view from More replaces it. The back gesture closes a
+sheet, then a detail inside a view, then the view; it switches mode only to
+return to Tasks after a task's session pill took you to Workspace. Task
+status columns are the board; a task with a linked
 worker or review session renders that session's live status nested on its
 own card, and any session not owned by a task collects in the **ad-hoc
 sessions strip** beneath the columns (`#2845`,
@@ -486,8 +504,9 @@ The strip is on every layout, phone included.
   panel** (the left-rail toggle, or Display → Facets panel: Off / On / Auto —
   Auto opens it from a 1440px window or with more than 8 projects) shows the
   same state, project and epic choices with counts; it edits the same filter
-  state as the row. On phone the row collapses to [New task] [Filter] and the
-  same controls live in the filter sheet.
+  state as the row. On phone the row collapses to the "Needs you" chip and an
+  icon-only Filter button carrying the active-filter count, and the same
+  controls live in the filter sheet; New task is the tab bar's New entry.
   All of these are client-side render filters over the full task list, so a
   drag-and-drop reorder stays correct under any combination of them
   (`absoluteDropIndex`, `#610`). Filter state is saved per browser:
@@ -519,16 +538,42 @@ The strip is on every layout, phone included.
   card can be dragged between Backlog and Ready inside its lane, never into
   another lane (that would change its parent or project). The phone board stays
   flat. **Card density** (`crs.taskDensity`): Compact (default) or Comfortable.
-- **Phone and tablet** (`#2845`): the board is one status at a time, picked
-  from a control under the toolbar. On a **phone** it is four joined segments —
+- **Stacked when narrow** (`#3011`): when the board's own measured width has
+  room for fewer than three lanes (under 540px: three 160px lanes, their gaps
+  and padding), it lists one section per status instead: Reviewing, In
+  progress, Ready, Failed (only while it holds a task), then Backlog and Done
+  collapsed. Each header carries the count and a dot when a task in it needs
+  you; a strip of the statuses on top jumps to one and opens it. The decision
+  follows the board's width, not the device, so the fold's board stacks when a
+  task opens beside it and goes back to lanes when the sidebar closes, and a
+  narrow desktop window stacks too. The selected card stays in view across the
+  switch (its section opens if it was folded) and travels to its new place;
+  under reduced motion it fades in place. In stacked mode Group by is ignored
+  (the sections are flat), the facets panel is hidden, Hide done leaves Done
+  and Failed as headers only, and cards can still be dragged within a section
+  and between Backlog and Ready while both are open.
+- **Status list in the left rail** (`#3026`): in Tasks mode, from 700px, the
+  rail's middle region lists the board's statuses (a count over a short label,
+  a dot when a task there needs you), whichever layout the board shows,
+  including lanes on a wide desktop. The board publishes the entries it
+  derives from its filtered tasks (`boardStatuses` in the store), so the rail,
+  the stacked sections and the strip agree under every filter. A tap, on the
+  rail or on the stacked board's strip, raises the store's `statusJumpRequest`
+  (status plus nonce): the stacked board opens that section and scrolls to it,
+  the lanes scroll that lane into view. A request made before the board
+  mounted is not replayed. The strip stays on the stacked board as well.
+- **Phone** (`#2845`): the board is one lane at a time, picked
+  from a strip under the top bar: four joined segments —
   Backlog, Ready, **Active** (In progress, which holds the queued tasks, then
   Reviewing, stacked) and **Done** (Done, then Failed) — each with a count; it
-  opens on Active, then Ready, when they hold something, and Hide Done & Failed
-  removes the Done segment. On a **tablet** (the compact tier, two columns wide)
-  it is the per-status chips with two adjacent columns side by side. Both keep
-  the same compact card, show the filters in the filter sheet, ignore Group by
-  (the board stays flat) and keep empty columns as full columns rather than
-  rails. Tapping a card opens its detail full-screen.
+  opens on the first segment holding a task that needs you (a dot marks each
+  such segment, `#3014`), else on Active, then Ready, when they hold
+  something; swipe between segments; and Hide Done & Failed removes the Done
+  segment. From 700px the board is full size in Tasks mode (the old
+  two-column variant in the tablet's navigator is gone, `#3016`). The phone keeps the same compact card, shows the
+  filters in the filter sheet, ignores Group by (the board stays flat) and keeps
+  empty columns as full columns rather than rails. Tapping a card opens its
+  detail full-screen.
 - Cards show the title; the linked **issue** number and the **PR** number as
   links to GitHub, the resolved agent name and the time in status; the owning
   **project** (always, since it is what tells one project's `#310` from
@@ -580,12 +625,14 @@ approval` (generic on purpose, no title: a notification tray is outside the
   board rings the selected card. The detail carries the worker session's
   embedded timeline and — when a review agent is configured — a distinct
   "Review" card with the review agent's own timeline, its captured findings
-  text, and (once the task has auto-returned) a round indicator. Phone and
-  tablet have no usable right rail (phone renders none; tablet floats it over
-  the navigator the board sits in), so a card there opens the full-screen
-  docked task detail instead. A task notification click opens the same detail
-  the same way, and the PR and issue chips in the GitHub and Git views show the
-  task in the Tasks view too.
+  text, and (once the task has auto-returned) a round indicator. From 700px
+  every card, task chip and notification opens here (`#3011`). The phone shows
+  this same detail full screen over the board, with its actions at the bottom
+  (`#3014`); a task notification there still opens the full-screen docked task
+  detail. Elsewhere a notification click opens the sidebar's detail, and the PR and issue
+  chips in the GitHub and Git views show the task in the Tasks view too.
+- Tapping an ad-hoc session in the strip under the board switches to
+  Workspace mode and shows that session there (`#3011`).
 - **The review checks the diff against the issue's Scope.** The reviewer
   reports each Scope checkbox as `met`, `partial`, `missing` or `deviated`,
   shown as a "Scope check" section in the review and on the PR. A `missing` or
@@ -727,7 +774,11 @@ edge, with the collapse chevron on the right.
 
 The detail does not depend on the list: a backlog, done, archived or
 other-project task opens too, and Back returns to the list with its filter and
-scroll position. The icon in the header pops the task out to a docked panel.
+scroll position. From 1100px the icon in the header pops the task out to a
+docked panel; the rails bands below that do not offer it (`#3011`). **Approve** in the
+sidebar (the task detail, and the task strip in a PR's or an issue's detail)
+sits behind a confirm step: the first press arms it ("Confirm approve", with a
+countdown), the second approves.
 
 ### Board actions
 

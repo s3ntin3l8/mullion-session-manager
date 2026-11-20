@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   HERMES_REVIEW_OPTION,
   hermesReviewerAvailable,
@@ -38,6 +38,7 @@ import {
 } from "./createProjectModalUtils.js";
 import { BrowseButton, FolderPicker } from "./FolderPicker.js";
 import { Modal } from "./ui/Modal.js";
+import { COARSE_POINTER_QUERY } from "./lib/layoutTier.js";
 
 // Empty string represents "unset" (fall through to the next precedence
 // tier) in the Dropdown below, which is string-only — converted to/from
@@ -186,6 +187,13 @@ interface CreateProjectModalProps {
   // an operator): they carry an "auto-detected" badge, and saving the dialog
   // acknowledges them.
   initialHostCwdsMeta?: HostCwdsMeta;
+  // #3071 — "embedded": the form fills the surface it is rendered in (the
+  // New session launcher's body) with a Back control, instead of opening a
+  // dialog over it. `onClose` is then "back".
+  surface?: "modal" | "embedded";
+  // #3244 — content shown first in the form's body, above its fields (the
+  // launcher's "Choose from N discovered repositories" row).
+  lead?: ReactNode;
 }
 
 export function CreateProjectModal({
@@ -215,6 +223,8 @@ export function CreateProjectModal({
   projectHostId = LOCAL_HOST_ID,
   initialHostCwds = {},
   initialHostCwdsMeta,
+  surface = "modal",
+  lead,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [pickerPath, setPickerPath] = useState<string | null>(null);
@@ -342,6 +352,12 @@ export function CreateProjectModal({
   const [recheckError, setRecheckError] = useState<string | null>(null);
   const isEdit = mode === "edit";
   const pathInputRef = useRef<HTMLInputElement>(null);
+  // #3287 — on a touch device, focusing the path field as Add project opens
+  // brings the on-screen keyboard up at once and scrolls the form to the
+  // field, past whatever leads it (the launcher's discovered-repositories
+  // row). Decided once, as the form opens: a pointer change while it is open
+  // must not pull focus into the field.
+  const [coarseAtOpen] = useState(() => window.matchMedia(COARSE_POINTER_QUERY).matches);
   const remoteHosts = hosts.filter((h) => h.id !== LOCAL_HOST_ID);
   // Every registered host the project is NOT pinned to: those are the ones it
   // may also live on. (A remote-hosted project can also live on this machine.)
@@ -751,6 +767,10 @@ export function CreateProjectModal({
 
   return (
     <Modal
+      surface={surface}
+      // Embedded, Back and Escape wait for a create or save in flight, as its
+      // Cancel does. (The dialog keeps its existing close behaviour.)
+      closeDisabled={surface === "embedded" && submitting}
       onClose={onClose}
       icon={<FolderIcon size={16} />}
       title={isEdit ? "Edit project" : "Add project"}
@@ -759,8 +779,11 @@ export function CreateProjectModal({
       }
       // The repository path is the field the dialog exists to fill in, so
       // it takes initial focus rather than the close button the focus trap
-      // would otherwise pick (it comes first in DOM order).
-      initialFocusRef={pathInputRef}
+      // would otherwise pick (it comes first in DOM order). Not when adding
+      // under a coarse pointer (#3287): the close (or Back) button takes it,
+      // the keyboard stays down and the view opens at its top. The launcher
+      // then hands focus to its discovered-repositories row when it shows.
+      initialFocusRef={coarseAtOpen && !isEdit ? undefined : pathInputRef}
       footer={
         <>
           <span className="create-modal-footer-hint">
@@ -795,6 +818,7 @@ export function CreateProjectModal({
         </>
       }
     >
+      {lead}
       {/* Issue #1726 / roadmap 8.12 — the placement control.
               "Pinned" is today's behaviour exactly (every session runs on
               the project's own host); "automatic" opts the project into the
@@ -923,18 +947,16 @@ export function CreateProjectModal({
           <label className="create-modal-field-hint" htmlFor="pre-provision-mode">
             Pre-provision checkouts
           </label>
-          <select
+          <Dropdown
             id="pre-provision-mode"
             value={Array.isArray(preProvision) ? "some" : preProvision}
-            onChange={(e) => {
-              const v = e.target.value;
-              setPreProvision(v === "some" ? [] : (v as "none" | "all"));
-            }}
-          >
-            <option value="none">None — clone on first use</option>
-            <option value="all">All eligible hosts</option>
-            <option value="some">Selected hosts</option>
-          </select>
+            onChange={(v) => setPreProvision(v === "some" ? [] : v)}
+            options={[
+              { value: "none", label: "None — clone on first use" },
+              { value: "all", label: "All eligible hosts" },
+              { value: "some", label: "Selected hosts" },
+            ]}
+          />
           {Array.isArray(preProvision) &&
             hosts
               .filter((h) => h.id !== projectHostId)

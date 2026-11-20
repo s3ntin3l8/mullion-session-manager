@@ -9,11 +9,12 @@ import {
   restoreTiledGroupWidths,
 } from "../panelUtils.js";
 import {
-  PHONE_BREAKPOINT_QUERY,
+  BAND_BOUNDARY_QUERIES,
   DESKTOP_BREAKPOINT_QUERY,
+  resolveLayoutPresentation,
   resolveLayoutTier,
 } from "../lib/layoutTier.js";
-import type { LayoutTier } from "../lib/layoutTier.js";
+import type { LayoutPresentation, LayoutTier } from "../lib/layoutTier.js";
 import type { LayoutMode } from "../api/index.js";
 
 export interface UseLayoutPresentationParams {
@@ -27,6 +28,9 @@ export interface UseLayoutPresentationParams {
   // `liftPhoneTaint` so saving resumes (issue #1426's mark is otherwise only
   // cleared by a restore, which a live flip never triggers).
   onUnfold?: () => void;
+  /** #3010 — the pane a one-pane presentation should show as it starts
+   *  (the fold's last used on the phone, the left one in the halves). */
+  preferPanel?: (presentation: LayoutPresentation) => string | null;
   // App.tsx owns the resolved tier itself (a bare `useState`, not returned
   // from this hook) rather than this hook owning it and returning the value
   // — that's forced, not stylistic: the tier is also read at this
@@ -65,7 +69,12 @@ export function useLayoutPresentation({
   layoutMode,
   setLayoutTier,
   onUnfold,
+  preferPanel,
 }: UseLayoutPresentationParams): void {
+  const preferPanelRef = useRef(preferPanel);
+  useEffect(() => {
+    preferPanelRef.current = preferPanel;
+  }, [preferPanel]);
   // Latest callback, read when the rAF fires — keeps its (per-workspace)
   // identity out of the breakpoint effect's dependencies.
   const onUnfoldRef = useRef(onUnfold);
@@ -92,7 +101,7 @@ export function useLayoutPresentation({
   // which can land on "phone" if the app is opened at phone width — is never
   // treated as an entering-phone TRANSITION and doesn't snapshot a layout
   // that was never actually tablet/desktop to begin with.
-  const prevTierRef = useRef<LayoutTier | null>(null);
+  const prevTierRef = useRef<LayoutPresentation | null>(null);
   const widthSnapshotRef = useRef<Map<string, number> | null>(null);
   // Holds the pending restore rAF's id so effect cleanup (below) can cancel
   // it — without this, an unmount (or a dockviewApi/layoutMode change that
@@ -105,17 +114,22 @@ export function useLayoutPresentation({
 
   useEffect(() => {
     const onChange = () => {
-      const tier = resolveLayoutTier(layoutMode);
+      // #3010 — keyed on the presentation, not the tier: the halves band
+      // (800-1099px) is a one-pane presentation inside the tablet tier, and
+      // moving between it and the phone (folding) keeps the snapshot taken
+      // when the grid was left.
+      setLayoutTier(resolveLayoutTier(layoutMode));
+      const tier = resolveLayoutPresentation(layoutMode);
       const prevTier = prevTierRef.current;
       prevTierRef.current = tier;
-      setLayoutTier(tier);
       if (!dockviewApi) return;
       try {
-        if (prevTier !== null && prevTier !== "phone" && tier === "phone") {
+        if (prevTier !== null && prevTier === "grid" && tier !== "grid") {
           widthSnapshotRef.current = snapshotTiledGroupWidths(dockviewApi);
         }
-        applyLayoutPresentation(dockviewApi, tier);
-        if (prevTier === "phone" && tier !== "phone") {
+        const prefer = prevTier !== tier ? (preferPanelRef.current?.(tier) ?? null) : null;
+        applyLayoutPresentation(dockviewApi, tier === "grid" ? "desktop" : tier, prefer);
+        if (prevTier !== null && prevTier !== "grid" && tier === "grid") {
           const snapshot = widthSnapshotRef.current;
           widthSnapshotRef.current = null;
           // Deferred a frame — dockview's own ResizeObserver-driven relayout
@@ -164,14 +178,15 @@ export function useLayoutPresentation({
         if (restoreRafRef.current !== null) cancelAnimationFrame(restoreRafRef.current);
       };
     }
-    const phone = window.matchMedia(PHONE_BREAKPOINT_QUERY);
-    const desktop = window.matchMedia(DESKTOP_BREAKPOINT_QUERY);
-    phone.addEventListener("change", onChange);
-    desktop.addEventListener("change", onChange);
+    // Every band boundary, so crossing 800 and 1100px (in and out of the
+    // halves) is seen, not only the phone and desktop tier edges.
+    const lists = [...BAND_BOUNDARY_QUERIES, DESKTOP_BREAKPOINT_QUERY].map((q) =>
+      window.matchMedia(q),
+    );
+    for (const mq of lists) mq.addEventListener("change", onChange);
     return () => {
       if (restoreRafRef.current !== null) cancelAnimationFrame(restoreRafRef.current);
-      phone.removeEventListener("change", onChange);
-      desktop.removeEventListener("change", onChange);
+      for (const mq of lists) mq.removeEventListener("change", onChange);
     };
   }, [dockviewApi, layoutMode, setLayoutTier]);
 
@@ -193,7 +208,7 @@ export function useLayoutPresentation({
   useEffect(() => {
     if (!dockviewApi) return;
     const hideIfPhone = (group: DockviewGroupPanel) => {
-      group.header.hidden = resolveLayoutTier(layoutMode) === "phone";
+      group.header.hidden = resolveLayoutPresentation(layoutMode) !== "grid";
     };
     // onDidMaximizedGroupChange's own `group` is always tiled by
     // construction (a floating group can't be grid-maximized — dockview

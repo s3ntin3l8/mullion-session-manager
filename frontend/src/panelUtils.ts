@@ -7,33 +7,33 @@ import type {
   Position,
   SerializedDockview,
 } from "dockview";
-import type { Task, Workspace, TabletPaneCap, CodexHookTrust } from "./api/index.js";
+import type { Task, Workspace, CodexHookTrust } from "./api/index.js";
 import { positionToDirection } from "dockview";
 import type { Session, Device } from "./api/index.js";
 import { initialPaneTitle } from "./paneTitle.js";
+import { sessionPaneTitle } from "./lib/sessionDisplay.js";
+import type { SessionTitleContext } from "./lib/sessionDisplay.js";
 import type { LayoutContext, LayoutTier } from "./lib/layoutTier.js";
-import type { ProjectHubTab } from "./ProjectHubPanel.js";
+import { browserAgentTitle } from "./lib/browserTitles.js";
+import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 
 // U9 — App.tsx's global Escape handler's own action list, extracted here
 // (App.tsx itself can only export components — react-refresh/only-export-
-// components) so it's directly unit-testable: App.tsx pulls in real
-// dockview/xterm/WS machinery App.test.tsx never had to mock before, so
-// mounting the whole component just to exercise a keydown handler isn't
-// this codebase's existing pattern (see App.test.tsx's absence). App.tsx's
-// effect calls this directly, so this IS the real code path, not a
-// parallel reimplementation of it. `clearSplitRequest` closing a
-// split-triggered palette (not just a plain-opened one — see App.tsx's own
-// `paletteOpen`'s `palette.open || (splitRequest !== null && ...)`
-// computation) is the actual U9 fix; `clearPalette`/`closeSettings` were
-// already correct.
+// components) so it's directly unit-testable. App.tsx's effect calls this
+// directly, so this IS the real code path. The launcher (a split's, too,
+// #3054) closes through its own dialog or sheet.
 export function handleGlobalEscape(actions: {
   clearPalette: () => void;
   closeSettings: () => void;
-  clearSplitRequest: () => void;
+  // Asks rather than closes over an unsaved draft (#3406).
+  closeProjectSettings: () => void;
+  // The palette or Settings is open: it sits above Project settings, so this
+  // Escape is theirs and the project dialog stays (one Escape, one close).
+  overlayOpen: boolean;
 }): void {
   actions.clearPalette();
   actions.closeSettings();
-  actions.clearSplitRequest();
+  if (!actions.overlayOpen) actions.closeProjectSettings();
 }
 
 // Issue #1189 — same "extracted here so it's directly unit-testable"
@@ -196,11 +196,8 @@ export function resolveActiveProjectId(
   if (!activePanelId) return null;
   const projectMatch = activePanelId.match(/^(?:git|github|agent-rules|dock-config)-(\d+)$/);
   if (projectMatch) return parseInt(projectMatch[1], 10);
-  const sessionMatch = activePanelId.match(/^(?:session|timeline|browserPane)-(\d+)$/);
-  if (sessionMatch) {
-    const sessionId = parseInt(sessionMatch[1], 10);
-    return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
-  }
+  const sessionId = sessionIdFromSessionPaneId(activePanelId);
+  if (sessionId != null) return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
   return null;
 }
 
@@ -229,19 +226,6 @@ export function tiledColumnCount(
     if (isTiledPanel(panel)) ids.add(panel.group.id);
   }
   return ids.size;
-}
-
-// Explicit splits bypass tabletPositioning's cap. Warn once the resulting
-// tiled columns are past it, and only on the tablet tier, and only until
-// this workspace has already been told (the caller owns that set).
-export function shouldWarnTabletPaneCap(args: {
-  tier: LayoutTier;
-  columnCount: number;
-  cap: number;
-  alreadyWarned: boolean;
-}): boolean {
-  if (args.tier !== "tablet" || args.alreadyWarned) return false;
-  return args.columnCount > args.cap;
 }
 
 // A panel opened from the sidebar/launcher should only ever *peek* (float)
@@ -298,7 +282,35 @@ export function maximizeIfTiled(
 // post-workspace-switch highlight) go through here. Desktop/tablet behave
 // exactly as a bare `setActive()` always did.
 export function focusPanelForTier(api: DockviewApi, panel: IDockviewPanel, tier: LayoutTier): void {
+  if (halvesRouter?.(api, panel)) return;
   panel.api.setActive();
+  if (tier === "phone") maximizeIfTiled(api, panel);
+}
+
+// #3010 — between 800 and 1099px a workspace shows two panes, one per half.
+// App registers this while that layout is on screen: it shows the pane on the
+// half it belongs to (maximizing its group for the left half, the way the
+// phone shows one pane; rendering it beside the grid for the right half) and
+// returns true. Every focus and open path below goes through focusPanelForTier
+// or presentNewPanel, so they all land on the right half without each knowing
+// about halves. Null everywhere else.
+export type HalvesRouter = (api: DockviewApi, panel: IDockviewPanel) => boolean;
+let halvesRouter: HalvesRouter | null = null;
+export function setHalvesRouter(router: HalvesRouter | null): void {
+  halvesRouter = router;
+}
+export function halvesActive(): boolean {
+  return halvesRouter !== null;
+}
+
+/** After adding a panel: phone shows it alone; the halves place it. */
+export function presentNewPanel(
+  api: DockviewApi,
+  panel: IDockviewPanel | undefined,
+  tier: LayoutTier,
+): void {
+  if (!panel) return;
+  if (halvesRouter?.(api, panel)) return;
   if (tier === "phone") maximizeIfTiled(api, panel);
 }
 
@@ -315,7 +327,7 @@ export function focusPanelForTier(api: DockviewApi, panel: IDockviewPanel, tier:
 // stopped responding" (issue: small panes/floating windows ignoring
 // input). 720x460 clears 40x10 with margin at every allowed fontSize.
 // Applied to every panel kind opened via desktopPositioning below, not
-// just terminal ones — a GitHub/timeline/task-detail panel squeezed into
+// just terminal ones — a timeline/task-detail panel squeezed into
 // 300x300 is unusable too, even though only a terminal pane is actually
 // broken by it.
 const DEFAULT_FLOATING_PANEL_SIZE = { width: 720, height: 460 };
@@ -337,6 +349,13 @@ function desktopPositioning(
     ? { floating: DEFAULT_FLOATING_PANEL_SIZE }
     : { position: { direction: "right" } };
 }
+
+// The tablet bands that keep a grid (700-799px and 1100-1279px, #3010) still
+// never float a panel on a touch-first width: a new panel docks as a column
+// while fewer than two are tiled, and joins a tiled group as a tab after
+// that. This was the "tablet pane cap" setting (2 or 3); the 800-1099px band
+// now shows two halves instead, so the setting is gone and the limit is 2.
+const TABLET_COLUMN_LIMIT = 2;
 
 // Tablet tier plan, PR 4 — the capped-grid policy that gives tablet real
 // layout work of its own, rather than being a relabeled desktop. Docks as
@@ -367,13 +386,13 @@ function desktopPositioning(
 // function needs.
 function tabletPositioning(
   api: DockviewApi,
-  cap: TabletPaneCap,
 ):
   | { position: { direction: "right" } }
   | { position: { referencePanel: IDockviewPanel; direction: "within" } }
   | Record<string, never> {
   const tiledPanels = api.panels.filter(isTiledPanel);
-  if (tiledColumnCount(api.panels) < cap) return { position: { direction: "right" } };
+  if (tiledColumnCount(api.panels) < TABLET_COLUMN_LIMIT)
+    return { position: { direction: "right" } };
   const target =
     api.activePanel && isTiledPanel(api.activePanel) ? api.activePanel : tiledPanels[0];
   if (!target) return {};
@@ -422,11 +441,15 @@ function positioningForTier(
   | { position: { direction: "right" } }
   | { position: { referencePanel: IDockviewPanel; direction: "within" } }
   | Record<string, never> {
+  // The halves show one grid pane at a time on the left, like the phone: a
+  // new panel must land in a tiled group, never float (a float cannot be
+  // maximized).
+  if (halvesActive()) return phonePositioning(api);
   switch (layout.tier) {
     case "phone":
       return phonePositioning(api);
     case "tablet":
-      return tabletPositioning(api, layout.tabletPaneCap);
+      return tabletPositioning(api);
     case "desktop":
       return desktopPositioning(api);
   }
@@ -511,8 +534,9 @@ export function openTerminalSessionIds(panels: ReadonlyArray<{ id: string }>): n
  */
 export function sessionIdFromPanelId(panelId: string | null | undefined): number | null {
   if (!panelId) return null;
-  const match =
-    panelId.match(/^(?:session|timeline|browserPane)-(\d+)$/) ?? panelId.match(/^file-\d+-@(\d+)-/);
+  const own = sessionIdFromSessionPaneId(panelId);
+  if (own != null) return own;
+  const match = panelId.match(/^file-\d+-@(\d+)-/);
   return match ? parseInt(match[1]!, 10) : null;
 }
 
@@ -682,6 +706,151 @@ export function shouldAutoOpenChildPanels(input: {
   );
 }
 
+// #3033 — where a desktop client adds a session opened on the fold or the
+// phone (the owner's placement rule, issue #3033). The user's own column
+// count is the limit for width; each column may be split once into two rows;
+// after that, tabs:
+//   1. one pane in the workspace: the new one opens to its right, 50/50;
+//   2. two or more columns: no column is added; a column with a single row is
+//      split `below` (so two columns fill to 2x2, three to 3x2);
+//   3. every column has two rows, or a split would break the size floor: tab;
+//   4. the pane split, or tabbed into, is the reference session's when rule 2
+//      allows it, else the largest one rule 2 allows; a tab goes to the
+//      reference session's pane, else the pane last active;
+//   5. size floor: a split only happens when the axis it halves keeps at
+//      least PENDING_OPEN_MIN_COLS (a `right` split) or PENDING_OPEN_MIN_ROWS
+//      (a `below` split) terminal cells in both resulting panes. Only the
+//      halved axis is checked; the other one does not change. The floor
+//      (40 x 10) only stops slivers in a small window: 2x2 must fill on a
+//      1440px laptop with both sidebars open (a grid about 900 x 700px), so
+//      it never shapes a normal layout (#3033 review);
+//   6. focus: not decided here. The caller adds the pane inactive; the
+//      issue's "attention marker until first activated" is not implemented,
+//      because no such marker exists yet (the pane shows the session's own
+//      status badge only);
+//   7. an empty workspace: the caller adds the session as its only pane
+//      (null here).
+// A "column" is a top-level horizontal division of the grid, found from the
+// groups' rects: a vertical line no group straddles. A layout whose columns
+// are not each a plain stack of rows (nested the other way) counts its leaf
+// panes instead: fewer than 2 x columns and room above the floor splits the
+// largest pane `below`, anything else is a tab. Pure: the hook
+// (useApplyPendingOpens) measures the rects and adds the panel.
+
+export const PENDING_OPEN_MIN_COLS = 40;
+export const PENDING_OPEN_MIN_ROWS = 10;
+// Sub-pixel slack when comparing edges of rects dockview laid out.
+const RECT_EPSILON_PX = 1;
+
+export interface GroupRect {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One terminal cell, in px, at the desktop's terminal font. */
+export interface CellMetrics {
+  cellWidth: number;
+  cellHeight: number;
+}
+
+export type PendingOpenPlacement =
+  { referenceGroup: string; direction: "right" | "below" } | { referenceGroup: string; tab: true };
+
+/** Whether halving `rect` along `direction` keeps the floor on that axis. */
+function canSplit(rect: GroupRect, direction: "right" | "below", metrics: CellMetrics): boolean {
+  return direction === "right"
+    ? rect.width / 2 + RECT_EPSILON_PX >= PENDING_OPEN_MIN_COLS * metrics.cellWidth
+    : rect.height / 2 + RECT_EPSILON_PX >= PENDING_OPEN_MIN_ROWS * metrics.cellHeight;
+}
+
+function area(rect: GroupRect): number {
+  return rect.width * rect.height;
+}
+
+function largest(rects: readonly GroupRect[]): GroupRect | undefined {
+  let best: GroupRect | undefined;
+  for (const rect of rects) if (!best || area(rect) > area(best)) best = rect;
+  return best;
+}
+
+/** The grid's top-level columns: groups between vertical lines no group
+ * straddles, left to right. */
+export function columnsOfGroups(groups: readonly GroupRect[]): GroupRect[][] {
+  const cuts = [...new Set(groups.map((g) => g.x + g.width))]
+    .sort((a, b) => a - b)
+    .filter((cut) =>
+      groups.every((g) => g.x + g.width <= cut + RECT_EPSILON_PX || g.x >= cut - RECT_EPSILON_PX),
+    );
+  const columns: GroupRect[][] = [];
+  let left = -Infinity;
+  for (const cut of cuts) {
+    const members = groups.filter(
+      (g) => g.x >= left - RECT_EPSILON_PX && g.x + g.width <= cut + RECT_EPSILON_PX,
+    );
+    if (members.length > 0) columns.push(members);
+    left = cut;
+  }
+  return columns;
+}
+
+/** A column that is a plain vertical stack: every member spans its width. */
+function isStackOfRows(column: readonly GroupRect[]): boolean {
+  const x = Math.min(...column.map((g) => g.x));
+  const right = Math.max(...column.map((g) => g.x + g.width));
+  return column.every(
+    (g) =>
+      Math.abs(g.x - x) <= RECT_EPSILON_PX && Math.abs(g.x + g.width - right) <= RECT_EPSILON_PX,
+  );
+}
+
+export function placePendingOpen(input: {
+  /** The workspace's tiled groups (floating ones left out). */
+  groups: readonly GroupRect[];
+  /** The group holding the reference session's pane, if it is open. */
+  referenceGroupId: string | null;
+  /** The group last active on this desktop, for a tab without a reference. */
+  activeGroupId: string | null;
+  metrics: CellMetrics;
+}): PendingOpenPlacement | null {
+  const { groups, metrics } = input;
+  if (groups.length === 0) return null;
+  const byId = (id: string | null) => (id === null ? undefined : groups.find((g) => g.id === id));
+  const reference = byId(input.referenceGroupId);
+  const tab = (): PendingOpenPlacement => ({
+    referenceGroup: (reference ?? byId(input.activeGroupId) ?? largest(groups)!).id,
+    tab: true,
+  });
+
+  if (groups.length === 1) {
+    const only = groups[0]!;
+    return canSplit(only, "right", metrics)
+      ? { referenceGroup: only.id, direction: "right" }
+      : tab();
+  }
+
+  const columns = columnsOfGroups(groups);
+  if (columns.every(isStackOfRows)) {
+    // Rule 2: only a column still holding a single row may be split.
+    const splittable = columns
+      .filter((column) => column.length === 1)
+      .map((column) => column[0]!)
+      .filter((rect) => canSplit(rect, "below", metrics));
+    const target =
+      (reference && splittable.find((r) => r.id === reference.id)) ?? largest(splittable);
+    return target ? { referenceGroup: target.id, direction: "below" } : tab();
+  }
+
+  // Nested the other way: count leaf panes.
+  const big = largest(groups)!;
+  if (groups.length < 2 * columns.length && canSplit(big, "below", metrics)) {
+    return { referenceGroup: big.id, direction: "below" };
+  }
+  return tab();
+}
+
 // Where a NEW panel lands: dockview's own placement options. A panel either
 // floats (with an explicit size, so it is big enough to use) or is positioned
 // relative to another panel/group — never both, and neither at all means "a
@@ -700,11 +869,11 @@ type PanelPlacement =
  * The two differences are the point of the extraction (issue #2410) — they
  * are spelled out here rather than left to each caller's own copy:
  *
- *  - `retargetParams`: three of the openers (openProjectHubPanel,
- *    openFileEditorPanel, openExternalFilePanel) re-target an ALREADY-OPEN
+ *  - `retargetParams`: two of the openers (openFileEditorPanel,
+ *    openExternalFilePanel) re-target an ALREADY-OPEN
  *    panel through `updateParameters` — a fresh `rev`, so the panel switches
  *    to what was just asked for instead of showing its previous target. The
- *    other eight leave the open panel exactly as it is.
+ *    others leave the open panel exactly as it is.
  *  - `applyDesktopPositioning`: the project-panel opener applies the tier
  *    positioning only conditionally — phone always (phonePositioning's own
  *    float-avoidance, issue #1452), desktop and tablet only when the panel's
@@ -784,7 +953,8 @@ export function openOrFocusPanel(
   const placement: PanelPlacement =
     spec.position !== undefined
       ? { position: spec.position }
-      : layout && (layout.tier === "phone" || (spec.applyDesktopPositioning ?? true))
+      : layout &&
+          (layout.tier === "phone" || halvesActive() || (spec.applyDesktopPositioning ?? true))
         ? positioningForTier(api, layout)
         : {};
 
@@ -796,7 +966,7 @@ export function openOrFocusPanel(
     params: spec.params,
     ...placement,
   });
-  if (layout?.tier === "phone") maximizeIfTiled(api, panel);
+  if (layout) presentNewPanel(api, panel, layout.tier);
 }
 
 export function openSessionPanel(
@@ -837,13 +1007,19 @@ export function openOrFocusSessionPanel(
 // tier-positioned shape as openSessionPanel above, just a distinct
 // `timeline-<id>` panel id/component so it can coexist with that session's
 // own terminal panel (and be opened/closed independently of it).
-export function openTimelinePanel(api: DockviewApi, session: Session, layout: LayoutContext): void {
+export function openTimelinePanel(
+  api: DockviewApi,
+  session: Session,
+  layout: LayoutContext,
+  // The session's task title and number (#3285), as for the browser pane.
+  titleCtx?: SessionTitleContext,
+): void {
   openOrFocusPanel(
     api,
     `timeline-${session.id}`,
     {
       component: "timeline",
-      title: `Timeline: ${session.name || session.command}`,
+      title: `Timeline: ${sessionPaneTitle(session, titleCtx)}`,
       params: { sessionIds: [session.id] },
     },
     layout,
@@ -862,17 +1038,46 @@ export function openBrowserPanePanel(
   api: DockviewApi,
   session: Session,
   layout: LayoutContext,
+  // The session's task title and number (#3285), so the pane is named the
+  // way the sidebar names the session.
+  titleCtx?: SessionTitleContext,
 ): void {
   openOrFocusPanel(
     api,
     `browserPane-${session.id}`,
     {
       component: "browserPane",
-      title: `Agent Browser: ${session.name || session.command}`,
+      title: browserAgentTitle(sessionPaneTitle(session, titleCtx)),
       params: { sessionId: session.id },
+      // The pane can show Preview by now (#3371): focusing it to open the
+      // session's browser switches it back, to this session, and attaches
+      // (a fresh openRev, so a pane already in Agent's browser still does).
+      retargetParams: { mode: "agent", agentSessionId: undefined, openRev: nextRev() },
     },
     layout,
   );
+}
+
+/**
+ * Focuses a Browser pane already open in the workspace: an agent's-browser
+ * `browserPane`, or a preview/legacy `browser` panel (#3403). A pane `prefer`
+ * accepts (the followed session's, or its project's) wins over any other, so
+ * a rail following one project does not land on another project's pane while
+ * its own is open. Returns whether there was one, so the caller opens one
+ * only when there was not.
+ */
+export function focusOpenBrowserPane(
+  api: DockviewApi,
+  layout: LayoutContext,
+  prefer: (params: Record<string, unknown>) => boolean,
+): boolean {
+  const panes = api.panels.filter(
+    (p) => p.api.component === "browserPane" || p.api.component === "browser",
+  );
+  const panel = panes.find((p) => prefer(p.api.getParameters?.() ?? {})) ?? panes[0];
+  if (!panel) return false;
+  focusPanelForTier(api, panel, layout.tier);
+  return true;
 }
 
 // Opens (or focuses) a device's video/input panel (DevicePane.tsx, routes/
@@ -917,25 +1122,25 @@ export function openTaskDetailPanel(api: DockviewApi, task: Task, layout: Layout
 }
 
 // PR 34h of the hook-extraction series — App.tsx used to declare six
-// near-identical `onOpen*` callbacks inline (GitHub, Git, Agent Rules, Dock
-// Config, Skills, Browser), each opening (or focusing) a single project-
+// near-identical `onOpen*` callbacks inline (Git, Agent Rules, Dock
+// Config, Skills, Browser, and formerly GitHub), each opening (or focusing) a single project-
 // scoped tooling panel: same open-or-focus-by-`<kind>-<projectId>` shape as
 // openSessionPanel/openTimelinePanel/openBrowserPanePanel/openTaskDetailPanel
 // above, just keyed by project id instead of session/task id, and with a
 // project-derived title instead of a session/task-derived one. Generalized
 // here (usePanelOpener.ts, hooks/usePanelOpener.ts, wraps each call in its
-// own useCallback) rather than six separate copies.
+// own useCallback) rather than separate copies.
 export interface ProjectPanelKindConfig {
   // Both the dockview panel-id prefix (`<kind>-<projectId>`) and the
   // registered `component` name in panels/registry.tsx — identical for
-  // every one of these six panel kinds today, so one field covers both.
+  // every one of these panel kinds today, so one field covers both.
   kind: string;
   // Prefixed to the matching project's name for the panel's title (e.g.
-  // "GitHub" -> "GitHub: my-project"), and used verbatim as the title when
+  // "Skills" -> "Skills: my-project"), and used verbatim as the title when
   // no matching project is found (deleted project, or a stale/racing
-  // lookup) — every one of the six original callbacks used the identical
-  // label for both cases (e.g. onOpenGitHub: `GitHub: ${project.name}` /
-  // "GitHub"), so a single field covers both rather than two.
+  // lookup) — every one of the original callbacks used the identical
+  // label for both cases (e.g. onOpenBrowser's "Browser" prefix), so a
+  // single field covers both rather than two.
   titleLabel: string;
   // Whether to apply tier-based positioning (positioningForTier above) when
   // creating a NEW panel, on desktop and tablet. True for every kind except
@@ -985,31 +1190,6 @@ let revCounter = 0;
 function nextRev(): number {
   revCounter = Math.max(revCounter + 1, Date.now());
   return revCounter;
-}
-
-/** Opens (or focuses and re-targets) the project's tabbed Project panel on
- * `tab` — a fresh `rev` makes an already-open panel switch to that tab. */
-export function openProjectHubPanel(
-  api: DockviewApi,
-  projectId: number,
-  projects: { id: number; name: string | null }[],
-  layout: LayoutContext,
-  tab?: ProjectHubTab,
-  dockView?: "previews",
-): void {
-  const project = projects.find((p) => p.id === projectId);
-  openOrFocusPanel(
-    api,
-    `project-hub-${projectId}`,
-    {
-      component: "project-hub",
-      title: project ? `Project: ${project.name}` : "Project",
-      params: { projectId, tab, dockView },
-      // A fresh rev makes an already-open panel switch to that tab.
-      retargetParams: { projectId, tab, dockView, rev: nextRev() },
-    },
-    layout,
-  );
 }
 
 /** Opens the project's file editor on `target.path` — focusing the existing
@@ -1213,27 +1393,23 @@ function collectFloatingPanelIds(
 const LEGACY_PANEL_IDS = ["tasks"] as const;
 
 // Component kinds whose panels are swept by *kind* rather than by fixed id,
-// because their ids are per project (`git-<projectId>`, the retired dock Git
-// panel — Source Control now lives in the right sidebar; see
-// GitPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
-// registered in panels/registry.tsx.
-const LEGACY_PANEL_KINDS = ["git"] as const;
-
-// The five per-project setup panels that now live as tabs of one
-// `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component
-// kinds stay registered (panels/registry.tsx renders the hub on the matching
-// tab) so a saved layout can never throw on restore; migrateLegacyProjectPanels
-// below is the self-heal half that converts any found in a live dockview.
-const LEGACY_PROJECT_PANEL_KINDS: Record<string, ProjectHubTab> = {
-  "agent-rules": "agent-rules",
-  "project-briefing": "briefing",
-  "project-setup": "scaffold",
-  "dock-config": "dock",
-  skills: "skills",
-};
-
-const LEGACY_PROJECT_PANEL_ID_RE =
-  /^(agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
+// because their ids are per project (`<kind>-<projectId>`). Each stays
+// registered in panels/registry.tsx (like LEGACY_PANEL_IDS) as a redirect stub:
+//  - `git` and `github`: the retired dock Git panel and GitHub grid panel,
+//    both right-sidebar views now (GitPanelRedirect.tsx / GitHubPanelRedirect.tsx).
+//  - `project-hub` and the five setup panels it once replaced: the retired
+//    Project panel (#3406), whose editors are the Project settings dialog now
+//    and Skills a drill-in of the sidebar's Project view (ProjectPanelRedirect.tsx).
+const LEGACY_PANEL_KINDS = [
+  "git",
+  "github",
+  "project-hub",
+  "agent-rules",
+  "project-briefing",
+  "project-setup",
+  "dock-config",
+  "skills",
+] as const;
 
 const PROJECT_PANEL_ID_RE =
   /^(?:project-hub|file-editor|agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
@@ -1255,48 +1431,16 @@ export function staleProjectPanelIds(
   });
 }
 
-// Replaces each legacy per-project setup panel with the project's hub panel,
-// in the same group (`within`); several legacy panels of one project merge
-// into one hub (the first one found picks the tab). Matches on the panel id
-// (`<kind>-<projectId>`, openOrFocusProjectPanel's scheme) rather than a
-// component-name field. Returns true if anything changed, so the caller
-// persists the cleaned layout — same contract as closeLegacyPanels.
-export function migrateLegacyProjectPanels(
-  api: DockviewApi,
-  projects: { id: number; name: string | null }[] = [],
-): boolean {
-  let changed = false;
-  for (const panel of [...api.panels]) {
-    const match = LEGACY_PROJECT_PANEL_ID_RE.exec(panel.id);
-    if (!match) continue;
-    const projectId = Number(match[2]);
-    const hubId = `project-hub-${projectId}`;
-    if (!api.getPanel(hubId)) {
-      const project = projects.find((p) => p.id === projectId);
-      api.addPanel({
-        id: hubId,
-        component: "project-hub",
-        title: project?.name ? `Project: ${project.name}` : "Project",
-        params: { projectId, tab: LEGACY_PROJECT_PANEL_KINDS[match[1]] },
-        position: { referencePanel: panel.id, direction: "within" },
-      });
-    }
-    panel.api.close();
-    changed = true;
-  }
-  return changed;
-}
-
 // Returns true if it closed anything, so the caller (App.tsx's restore
 // effect) knows to persist the cleaned layout — same shape as its existing
 // closedKilledPanels flag, kept separate from it since the two sweeps close
 // panels for unrelated reasons.
 //
-// `onRetiredPanel` is told the `projectId` of each swept retired-kind panel
-// (the dock Git panel): fromJSON renders panel content on a later React pass,
-// so the sweep closes the panel before GitPanelRedirect could ever mount —
-// this callback is how the restore still lands the user in the Source Control
-// sidebar view the panel became.
+// `onRetiredPanel` is told the kind and `projectId` of each swept retired-kind
+// panel: fromJSON renders panel content on a later React pass, so the sweep
+// closes the panel before its redirect stub could ever mount — this callback
+// is how the restore still lands the user where the panel went (the caller
+// decides which kinds open anything).
 export function closeLegacyPanels(
   api: DockviewApi,
   onRetiredPanel?: (kind: string, projectId: number | undefined) => void,
@@ -1447,10 +1591,10 @@ export function stripSessionPanelTitles(serialized: SerializedDockview): Seriali
 
 // Companion to stripSessionPanelTitles: re-derives each restored terminal
 // panel's title the same way a freshly-opened one gets it (openSessionPanel/
-// buildPanelBase's own `initialPaneTitle(session, projectName)` — session
-// name if locked, else `session.lastTitle` (the backend's last-seen OSC
-// title, issue #69), else the bare command), since the persisted blob no
-// longer carries it. Call this once, right after `dockviewApi.fromJSON(...)`
+// buildPanelBase's own `initialPaneTitle(session, projectName)` — the
+// session title order of #3285: the user's name, the task title, the agent's
+// last-seen terminal title (`lastTitle`, issue #69), the worktree branch, the
+// numbered launch name), since the persisted blob no longer carries it. Call this once, right after `dockviewApi.fromJSON(...)`
 // — a live terminal reconnecting will overwrite it again in real time via
 // TerminalPanelWrapper's own (now-throttled) onTitleChange, same as it
 // always did; this only covers the gap between restore and that first live
@@ -1541,13 +1685,25 @@ export function serializeForPersist(api: DockviewApi): SerializedDockview {
 // it shares desktop's "not phone" branch below (restore every header, exit
 // any maximize left over from a phone-tier session before this transition),
 // the same cleanup desktop already needed with no special-casing added.
-export function applyLayoutPresentation(api: DockviewApi, tier: LayoutTier): void {
-  const isPhone = tier === "phone";
+export function applyLayoutPresentation(
+  api: DockviewApi,
+  tier: LayoutTier | "halves",
+  // #3010 — the pane to show when the one-pane presentation starts: on
+  // folding, the one used last; on unfolding into the halves, the left one.
+  preferPanelId?: string | null,
+): void {
+  const onePane = tier === "phone" || tier === "halves";
   for (const group of api.groups) {
-    if (!isPhone || isTiledGroup(group)) group.header.hidden = isPhone;
+    if (!onePane || isTiledGroup(group)) group.header.hidden = onePane;
   }
-  if (!isPhone) {
+  if (!onePane) {
     if (api.hasMaximizedGroup()) api.exitMaximizedGroup();
+    return;
+  }
+  const preferred = preferPanelId ? api.getPanel(preferPanelId) : undefined;
+  if (preferred && isTiledPanel(preferred)) {
+    preferred.api.setActive();
+    api.maximizeGroup(preferred);
     return;
   }
   if (api.hasMaximizedGroup()) return;

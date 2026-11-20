@@ -7,10 +7,9 @@ import {
   serializeForPersist,
   applyLayoutPresentation,
   closeLegacyPanels,
-  migrateLegacyProjectPanels,
   reseedSessionPanelTitles,
 } from "../panelUtils.js";
-import { resolveLayoutTier } from "../lib/layoutTier.js";
+import { resolveLayoutPresentation } from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 
 const AUTOSAVE_DEBOUNCE_MS = 800;
@@ -28,8 +27,13 @@ const AUTOSAVE_DEBOUNCE_MS = 800;
 // stale for even one commit. Also covers a forced `settings.layoutMode:
 // "phone"` override, which is server-global — see AppearanceSection.tsx's
 // own hint text for that consequence.
+// Issue #1426, extended by #3010 — the phone (one pane) and the two halves
+// between 800 and 1099px (one pane per half) are device-local views of the
+// workspace, not edits of it: maximizing a group, hiding headers and adding a
+// pane to show it on a half must never reach the layout desktop shares. Named
+// for the phone, where it started.
 function isPhoneTierNow(): boolean {
-  return resolveLayoutTier(useDashboardStore.getState().settings.layoutMode) === "phone";
+  return resolveLayoutPresentation(useDashboardStore.getState().settings.layoutMode) !== "grid";
 }
 
 interface PendingSave {
@@ -85,6 +89,14 @@ export interface UseWorkspacePersistenceResult {
   // effect, so nothing else would clear the mark and every pane change made
   // after unfolding would be dropped until a reload or workspace switch.
   liftPhoneTaint: () => void;
+  // #3033 — true while a layout change made now would not be saved for the
+  // active workspace: the live presentation is not the grid (the phone, or
+  // the halves, by isPhoneTierNow's live matchMedia read; the `layoutTier`
+  // prop is not consulted), or the phone taint that outlives unfolding until
+  // liftPhoneTaint. A pane added for a pending
+  // open in that window would never reach the saved layout, so
+  // useApplyPendingOpens waits for this to read false.
+  isSaveSuspended: () => boolean;
 }
 
 // Extracted from App.tsx (PR 34a of the hook-extraction series) — restores
@@ -310,8 +322,19 @@ export function useWorkspacePersistence({
             if (session?.status === "killed") {
               stalePanelIds.push(panel.id);
             }
-          } else if (panel.id.startsWith("timeline-") || panel.id.startsWith("browserPane-")) {
+          } else if (panel.id.startsWith("timeline-")) {
             if (!session || session.status === "killed" || session.status === "exited") {
+              stalePanelIds.push(panel.id);
+            }
+          } else if (panel.id.startsWith("browserPane-")) {
+            // A Browser pane with a project switches itself to Preview
+            // (BrowserPaneHost.tsx, #3371); only one without is pruned.
+            const projectId =
+              session?.projectId ?? (panel.params as { projectId?: number } | undefined)?.projectId;
+            if (
+              (!session || session.status === "killed" || session.status === "exited") &&
+              projectId == null
+            ) {
               stalePanelIds.push(panel.id);
             }
           }
@@ -334,18 +357,16 @@ export function useWorkspacePersistence({
       // panels for unrelated reasons.
       // A swept retired `git` panel opens its project's Source Control view
       // (once — several stale panels would just fight over the drawer).
-      let openedSourceControl = false;
+      // The retired `github` grid panel does the same for the GitHub view.
+      // The retired Project panel kinds open nothing: a dialog popping up on a
+      // workspace switch would be a surprise (#3406).
+      const openedViews = new Set<string>();
       closedLegacyPanels = closeLegacyPanels(dockviewApi, (kind, projectId) => {
-        if (kind !== "git" || projectId == null || openedSourceControl) return;
-        openedSourceControl = true;
-        useDashboardStore.getState().openRightSidebarView("git", projectId);
+        if ((kind !== "git" && kind !== "github") || projectId == null) return;
+        if (openedViews.has(kind)) return;
+        openedViews.add(kind);
+        useDashboardStore.getState().openRightSidebarView(kind, projectId);
       });
-      // Same self-heal for the five per-project setup panels that are now
-      // tabs of one `project-hub` panel (ProjectHubPanel.tsx): converts any
-      // restored legacy panel in place and flags the layout for re-save.
-      closedLegacyPanels =
-        migrateLegacyProjectPanels(dockviewApi, useDashboardStore.getState().projects) ||
-        closedLegacyPanels;
       // Terminal panel titles are deliberately excluded from the persisted
       // blob (panelUtils.ts's stripSessionPanelTitles, part of the
       // workspace-autosave rate-limit-storm fix) — re-derive them here the
@@ -385,7 +406,13 @@ export function useWorkspacePersistence({
     // Safe regardless of whether restoringRef suppresses this call's own
     // onDidLayoutChange echo, since serializeForPersist strips
     // maximizedNode unconditionally on every future save.
-    applyLayoutPresentation(dockviewApi, layoutTier);
+    // #3010 — the halves (800-1099px) are a one-pane presentation inside
+    // the tablet tier; their own effect (useFoldHalves) then shows the left
+    // half's remembered pane.
+    const presentation = resolveLayoutPresentation(
+      useDashboardStore.getState().settings.layoutMode,
+    );
+    applyLayoutPresentation(dockviewApi, presentation === "halves" ? "halves" : layoutTier);
     restoredWorkspaceIdRef.current = activeWorkspaceId;
     // Bumped directly here rather than relying on the onDidLayoutChange
     // effect below to notice this restore — it structurally can't, because
@@ -444,5 +471,12 @@ export function useWorkspacePersistence({
     if (activeWorkspaceId !== null) phoneTouchedRef.current.delete(activeWorkspaceId);
   }, [activeWorkspaceId]);
 
-  return { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint };
+  const isSaveSuspended = useCallback(
+    () =>
+      isPhoneTierNow() ||
+      (activeWorkspaceId !== null && phoneTouchedRef.current.has(activeWorkspaceId)),
+    [activeWorkspaceId],
+  );
+
+  return { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint, isSaveSuspended };
 }

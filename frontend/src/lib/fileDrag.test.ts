@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from "vitest";
 import {
-  FILE_DRAGGING_CLASS,
   FILE_DRAG_MIME,
   activeFileDrag,
   endFileDrag,
@@ -68,8 +67,8 @@ describe("fileDrag", () => {
     expect(readFileDrag(fakeDt({ [FILE_DRAG_MIME]: raw }))).toBeNull();
   });
 
-  describe("the body marker that lets a drop through the sidebar's scrim", () => {
-    const marked = () => document.body.classList.contains(FILE_DRAGGING_CLASS);
+  describe("the in-flight payload's lifetime", () => {
+    const marked = () => activeFileDrag() !== null;
 
     it("is set while a row is dragged and cleared when it ends", () => {
       expect(marked()).toBe(false);

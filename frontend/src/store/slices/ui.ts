@@ -6,6 +6,7 @@ import { resolveTaskMaster } from "../../taskConfig.js";
 import {
   STORAGE_KEYS,
   readBool,
+  readJSON,
   readMutedSessionIds,
   readString,
   removeItem,
@@ -26,7 +27,6 @@ import {
   clampRightSidebarWidth,
   readStoredActiveWorkspaceId,
   readStoredDockControlWorktrees,
-  readStoredHierarchicalView,
   readStoredRightSidebarWidth,
   readStoredSidebarWidth,
   readStoredViewMode,
@@ -35,11 +35,33 @@ import {
 } from "../helpers.js";
 import type { DashboardState, UiSlice } from "../types.js";
 import {
+  EMPTY_FOLD_HALVES,
+  moveToHalf,
+  noteOpen,
+  noteShownLeft,
+  noteUsed,
+  parseFoldHalves,
+  forgetPanes,
+  showRight,
+  toggleRight,
+} from "../../lib/foldHalves.js";
+import type { FoldHalvesState } from "../../lib/foldHalves.js";
+import { sessionIdFromOwnPaneId } from "../../lib/panelIds.js";
+import {
   currentSidebarLocation,
   pruneSidebarHistory,
   pushSidebarHistory,
   sameSidebarTarget,
 } from "../sidebarHistory.js";
+
+// How many recently focused sessions the store remembers (recentSessionIds).
+const RECENT_SESSION_LIMIT = 20;
+
+// Right sidebar views that are not reopened on load, though left open (#3053):
+// the ones right-sidebar/views-registry.ts restricts to the two halves (their
+// `bands`), where an open view covers the right half. A new halves-only view
+// belongs here too.
+const NOT_RESTORED_OPEN_VIEWS: readonly string[] = ["browser", "dock"];
 
 // State patch that clears the transient drill-ins when the right sidebar is
 // about to start showing `view` from closed or from another view: the GitHub
@@ -138,6 +160,9 @@ export function __discardPendingSettingsPatchForTests(): void {
   pendingSettingsPatchDiscarder?.();
 }
 
+// LauncherRequest.seq — module-level so it keeps counting across a close.
+let launcherSeq = 0;
+
 export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set, get) => {
   // Closure-scoped (not React/store state) — accumulates across rapid
   // updateSettings() calls between debounce windows, same pattern
@@ -212,7 +237,23 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     writeString(STORAGE_KEYS.themeHint, resolveTheme(next.theme));
   }
 
-  const rightSidebarPinned = readBool(STORAGE_KEYS.rightSidebarPinned, false);
+  // #3010 — applies one change to the active workspace's halves and keeps
+  // the device-local copy in step. A no-op change writes nothing.
+  const updateFoldHalves = (change: (h: FoldHalvesState) => FoldHalvesState) => {
+    const { activeWorkspaceId, foldHalves } = get();
+    if (activeWorkspaceId === null) return;
+    const before = foldHalves[activeWorkspaceId] ?? EMPTY_FOLD_HALVES;
+    const after = change(before);
+    if (after === before) return;
+    const next = { ...foldHalves, [activeWorkspaceId]: after };
+    writeJSON(STORAGE_KEYS.foldHalves, next);
+    set({ foldHalves: next });
+  };
+
+  const storedRightSidebarView = readString(
+    STORAGE_KEYS.rightSidebarView,
+    DEFAULT_RIGHT_SIDEBAR_VIEW,
+  );
 
   return {
     settings: DEFAULT_SETTINGS,
@@ -221,34 +262,46 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     terminalPrefs: deriveTerminalPrefs(DEFAULT_SETTINGS),
     hideEndedSessions: DEFAULT_SETTINGS.sessions.hideEndedSessions,
     showTaskSessions: DEFAULT_SETTINGS.sessions.showTaskSessions,
-    // Desktop-only persistent collapse (distinct from the mobile-only
-    // `sidebarOpen` overlay flag App.tsx owns locally — different semantics
-    // per breakpoint: mobile is a closed-by-default overlay, desktop is an
-    // open-by-default panel the user can choose to hide).
+    // The docked left sidebar's persistent collapse from 1280px: open by
+    // default. From 1100 to 1279px App.tsx keeps its own, collapsed-by-default
+    // flag instead, and below 1100px there is no left sidebar (#3041).
     sidebarCollapsed: readBool(STORAGE_KEYS.sidebarCollapsed, false),
     sidebarWidth: readStoredSidebarWidth(),
-    rightSidebarView: readString(STORAGE_KEYS.rightSidebarView, DEFAULT_RIGHT_SIDEBAR_VIEW),
+    rightSidebarView: storedRightSidebarView,
     rightSidebarProjectRequest: null,
+    railBrowser: { mode: "agent", preview: null, rev: 0 },
     rightSidebarHistoryRequest: null,
     rightSidebarBranchRequest: null,
     rightSidebarPruneRequest: null,
     githubOpenPrByProject: {},
-    rightSidebarPinned,
-    // Only a pinned drawer reopens on load — see STORAGE_KEYS.rightSidebarOpen.
-    rightSidebarOpen: rightSidebarPinned && readBool(STORAGE_KEYS.rightSidebarOpen, false),
+    // The panel is always docked (#3006), so it comes back the way it was left,
+    // except a Browser or Dock view (#3053): those are views only on the two
+    // halves, where an open one covers the right half, so a fresh start shows
+    // the half and leaves the view a tap away on the rail.
+    rightSidebarOpen:
+      readBool(STORAGE_KEYS.rightSidebarOpen, false) &&
+      !NOT_RESTORED_OPEN_VIEWS.includes(storedRightSidebarView),
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
-    hierarchicalView: readStoredHierarchicalView(),
+    crossLinkReturn: null,
+    newTaskFormOpen: false,
     kanbanOrder: {},
-    splitRequest: null,
+    launcherRequest: null,
     openSessionRequest: null,
     openTaskRequest: null,
+    boardStatuses: [],
+    statusJumpRequest: null,
+    foldHalves: parseFoldHalves(readJSON(STORAGE_KEYS.foldHalves, {})),
+    focusedHalf: "left",
+    foldHalvesActive: false,
     selectedTaskId: null,
     taskSelectionSeq: 0,
     sidebarHistory: [],
     followedProjectId: null,
     highlightedPanelId: null,
+    newPanelIds: [],
     activePanelId: null,
+    recentSessionIds: [],
     activeWorkspaceId: readStoredActiveWorkspaceId(),
     dockControlWorktrees: readStoredDockControlWorktrees(),
     dockConfigRefreshTrigger: 0,
@@ -276,7 +329,32 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       }, HIGHLIGHT_DURATION_MS);
     },
 
-    setActivePanelId: (id) => set({ activePanelId: id }),
+    markPanelNew: (id) =>
+      set((state) =>
+        state.newPanelIds.includes(id) ? state : { newPanelIds: [...state.newPanelIds, id] },
+      ),
+
+    clearPanelNew: (id) =>
+      set((state) =>
+        state.newPanelIds.includes(id)
+          ? { newPanelIds: state.newPanelIds.filter((x) => x !== id) }
+          : state,
+      ),
+
+    setActivePanelId: (id) =>
+      set((s) => {
+        // Only the panes that are the session itself (not its browser or a file).
+        const sessionId = sessionIdFromOwnPaneId(id);
+        if (sessionId == null) return { activePanelId: id };
+        if (s.recentSessionIds[0] === sessionId) return { activePanelId: id };
+        return {
+          activePanelId: id,
+          recentSessionIds: [sessionId, ...s.recentSessionIds.filter((x) => x !== sessionId)].slice(
+            0,
+            RECENT_SESSION_LIMIT,
+          ),
+        };
+      }),
 
     setDockControlWorktree: (projectId, controlId, value) => {
       if (!value || isDockPreviewPath(value)) return;
@@ -347,13 +425,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       patchTimer = setTimeout(flushPendingPatch, SETTINGS_PATCH_DEBOUNCE_MS);
     },
 
-    cycleTheme: () => {
-      const current = get().settings.theme;
-      const next: AppSettings["theme"] =
-        current === "dark" ? "light" : current === "light" ? "system" : "dark";
-      get().updateSettings({ theme: next });
-    },
-
     setTerminalPrefs: (patch) => {
       get().updateSettings({ terminal: patch });
     },
@@ -409,6 +480,22 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
           },
         }),
       }));
+    },
+
+    setRailBrowserMode: (mode) =>
+      set((s) => (s.railBrowser.mode === mode ? {} : { railBrowser: { ...s.railBrowser, mode } })),
+
+    setRailBrowserPreview: (preview) =>
+      set((s) => ({ railBrowser: { ...s.railBrowser, preview } })),
+
+    openRailBrowserPreview: (preview, projectId) => {
+      set((s) => ({ railBrowser: { mode: "preview", preview, rev: s.railBrowser.rev + 1 } }));
+      get().openRightSidebarView("browser", projectId);
+    },
+
+    openRailBrowserAgent: (projectId) => {
+      get().setRailBrowserMode("agent");
+      get().openRightSidebarView("browser", projectId);
     },
 
     // Intentionally shared by every GitHubPanel host of a project (right
@@ -517,11 +604,6 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       });
     },
 
-    setRightSidebarPinned: (value) => {
-      writeBool(STORAGE_KEYS.rightSidebarPinned, value);
-      set({ rightSidebarPinned: value });
-    },
-
     setRightSidebarWidth: (value) => {
       const clamped = clampRightSidebarWidth(value);
       writeNumber(STORAGE_KEYS.rightSidebarWidth, clamped);
@@ -530,24 +612,87 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
 
     setViewMode: (value) => {
       writeString(STORAGE_KEYS.viewMode, value);
-      set({ viewMode: value });
+      // Only a real switch forgets a cross-link: opening the session it asked
+      // for calls this again with "list" (usePanelOpener's leaveTaskView).
+      // A real switch also closes the new-task form (#3288): the board
+      // unmounts with Tasks mode, and a form left open would come back with
+      // its title field focused, raising the phone's keyboard unasked.
+      set((s) => ({
+        viewMode: value,
+        crossLinkReturn: s.viewMode === value ? s.crossLinkReturn : null,
+        newTaskFormOpen: s.viewMode === value ? s.newTaskFormOpen : false,
+      }));
     },
 
-    setHierarchicalView: (value) => {
-      writeBool(STORAGE_KEYS.hierarchicalView, value);
-      set({ hierarchicalView: value });
+    toggleViewMode: () => {
+      get().setViewMode(get().viewMode === "kanban" ? "list" : "kanban");
+    },
+
+    openSessionInWorkspace: (sessionId) => {
+      const { viewMode, selectedTaskId } = get();
+      get().setViewMode("list");
+      // Only a real switch is a cross-link: from Workspace there is no Tasks
+      // mode to return to.
+      if (viewMode === "kanban") set({ crossLinkReturn: { taskId: selectedTaskId } });
+      // #3010 — the cross-link lands on the left half (design frame 2c),
+      // whichever half the session was on.
+      get().moveToHalf(`session-${sessionId}`, "left", []);
+      get().requestOpenSession(sessionId);
+    },
+
+    returnFromCrossLink: () => {
+      const link = get().crossLinkReturn;
+      if (!link) return;
+      get().setViewMode("kanban");
+      if (link.taskId !== null) get().openRightSidebarTask(link.taskId, null);
+    },
+
+    moveToHalf: (panelId, half, openIds) =>
+      updateFoldHalves((h) => moveToHalf(h, panelId, half, openIds)),
+    toggleRightPane: (panelId) => updateFoldHalves((h) => toggleRight(h, panelId)),
+    showRightPane: (panelId) => updateFoldHalves((h) => showRight(h, panelId)),
+    noteLeftPane: (panelId, used = true) =>
+      updateFoldHalves((h) => noteShownLeft(h, panelId, used)),
+    noteHalfUsed: (used) => updateFoldHalves((h) => noteUsed(h, used)),
+    forgetFoldPanes: (closedIds) => updateFoldHalves((h) => forgetPanes(h, closedIds)),
+    noteFoldOpen: (openIds) => updateFoldHalves((h) => noteOpen(h, openIds)),
+    forgetFoldHalvesWorkspace: (workspaceId) => {
+      const { foldHalves } = get();
+      if (!(workspaceId in foldHalves)) return;
+      const next = { ...foldHalves };
+      delete next[workspaceId];
+      writeJSON(STORAGE_KEYS.foldHalves, next);
+      set({ foldHalves: next });
+    },
+    setFocusedHalf: (half) => {
+      if (get().focusedHalf !== half) set({ focusedHalf: half });
+    },
+    setFoldHalvesActive: (active) => {
+      if (get().foldHalvesActive !== active) set({ foldHalvesActive: active });
+    },
+    setNewTaskFormOpen: (open) => {
+      if (get().newTaskFormOpen !== open) set({ newTaskFormOpen: open });
     },
 
     setKanbanColumnOrder: (columnId, order) => {
       set((state) => ({ kanbanOrder: { ...state.kanbanOrder, [columnId]: order } }));
     },
 
-    requestSplit: (referencePanelId, direction) => {
-      set({ splitRequest: { referencePanelId, direction } });
+    requestSplit: (referencePanelId, direction, projectId) => {
+      get().openLauncher({
+        ...(projectId !== undefined ? { projectId } : {}),
+        split: { referencePanelId, direction },
+      });
     },
 
-    clearSplitRequest: () => {
-      set({ splitRequest: null });
+    openLauncher: (target) => {
+      launcherSeq += 1;
+      set({ launcherRequest: { target: target ?? null, seq: launcherSeq } });
+    },
+
+    closeLauncher: (seq) => {
+      if (seq !== undefined && get().launcherRequest?.seq !== seq) return;
+      set({ launcherRequest: null });
     },
 
     requestOpenSession: (sessionId) => {
@@ -603,6 +748,14 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     requestOpenTask: (taskId) => {
       set((state) => ({
         openTaskRequest: { taskId, nonce: (state.openTaskRequest?.nonce ?? 0) + 1 },
+      }));
+    },
+
+    setBoardStatuses: (entries) => set({ boardStatuses: entries }),
+
+    requestStatusJump: (status) => {
+      set((state) => ({
+        statusJumpRequest: { status, nonce: (state.statusJumpRequest?.nonce ?? 0) + 1 },
       }));
     },
 

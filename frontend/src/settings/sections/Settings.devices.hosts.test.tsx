@@ -10,6 +10,7 @@ import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
 import { makeHost } from "../../test/fixtures.js";
 import { resetStore } from "../../test/resetStore.js";
+import { dropdownOptions, findDropdownByLabel, pickDropdownOption } from "../../test/dropdown.js";
 
 // Host picker and unreachable state in Settings -> Devices, against a small
 // fake backend (the big one lives in Settings.devices.test.tsx, which is at its
@@ -106,7 +107,7 @@ describe("Settings -> Devices host picker", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
     await user.click(await screen.findByText("Create a device"));
-    await screen.findByDisplayValue("pixel_7");
+    await findDropdownByLabel("pixel_7"); // wait for the AVD picker to load
     return user;
   };
 
@@ -122,8 +123,7 @@ describe("Settings -> Devices host picker", () => {
     hostsDb = FOUR_HOSTS;
     await openForm();
     const picker = await screen.findByRole("combobox", { name: "Host" });
-    const options = within(picker).getAllByRole("option") as HTMLOptionElement[];
-    expect(options.map((o) => [o.textContent, o.disabled])).toEqual([
+    expect(dropdownOptions(picker).map((o) => [o.label, o.disabled])).toEqual([
       ["Primary", false],
       ["Mac mini", false],
       ["Old agent — unsupported (agent needs an update)", true],
@@ -134,7 +134,7 @@ describe("Settings -> Devices host picker", () => {
   it("sends the chosen hostId", async () => {
     hostsDb = FOUR_HOSTS;
     const user = await openForm();
-    await user.selectOptions(await screen.findByRole("combobox", { name: "Host" }), "h-mac");
+    pickDropdownOption(await screen.findByRole("combobox", { name: "Host" }), "h-mac");
     await user.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(createBodies).toHaveLength(1));
     expect(createBodies[0]).toMatchObject({ avdName: "pixel_7", hostId: "h-mac" });

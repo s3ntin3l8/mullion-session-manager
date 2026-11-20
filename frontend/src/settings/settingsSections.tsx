@@ -224,7 +224,7 @@ export function phoneSections(): typeof SECTIONS {
 }
 
 // The settings filter, shared by the desktop nav rail (Settings.tsx) and the
-// phone's navigator list (PhoneNavigator.tsx) so the two agree on what a
+// phone list (Settings.tsx, `phone`) so the two agree on what a
 // query finds (issue #1880). The phone's list had no filter at all, so
 // finding one of the sections meant scrolling; the desktop's had one.
 //
@@ -257,7 +257,6 @@ export const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "appearance", text: "theme dark light system" },
   { section: "appearance", text: "sidebar density comfortable compact" },
   { section: "appearance", text: "layout auto phone tablet desktop foldable" },
-  { section: "appearance", text: "tablet columns panes side by side" },
   { section: "terminal", text: "terminal font family geist jetbrains ibm plex sf mono menlo" },
   { section: "terminal", text: "font size" },
   { section: "terminal", text: "pane padding margin inset panel edge" },

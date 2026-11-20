@@ -6,7 +6,7 @@
 // roadmap's suggested domain list. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
-import type { Workspace, Group } from "./types.js";
+import type { Workspace, Group, PendingOpen } from "./types.js";
 
 export const workspacesApi = {
   listWorkspaces: () => request<Workspace[]>("/api/workspaces"),
@@ -36,6 +36,29 @@ export const workspacesApi = {
     }),
 
   deleteWorkspace: (id: number) => request<void>(`/api/workspaces/${id}`, { method: "DELETE" }),
+
+  // #3033 — sessions opened on the fold or the phone, for a desktop client to
+  // add. The fold and the phone record and withdraw; the desktop lists and
+  // acknowledges. None of these touch the saved layout.
+  listPendingOpens: (workspaceId: number) =>
+    request<PendingOpen[]>(`/api/workspaces/${workspaceId}/pending-opens`),
+
+  recordPendingOpen: (workspaceId: number, sessionId: number, referenceSessionId: number | null) =>
+    request<PendingOpen>(`/api/workspaces/${workspaceId}/pending-opens`, {
+      method: "POST",
+      body: JSON.stringify({ sessionId, referenceSessionId }),
+    }),
+
+  acknowledgePendingOpen: (workspaceId: number, sessionId: number) =>
+    request<{ acknowledged: boolean }>(
+      `/api/workspaces/${workspaceId}/pending-opens/${sessionId}/ack`,
+      { method: "POST" },
+    ),
+
+  withdrawPendingOpen: (workspaceId: number, sessionId: number) =>
+    request<void>(`/api/workspaces/${workspaceId}/pending-opens/${sessionId}`, {
+      method: "DELETE",
+    }),
 
   listGroups: () => request<Group[]>("/api/groups"),
 

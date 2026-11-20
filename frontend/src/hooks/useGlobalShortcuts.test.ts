@@ -7,15 +7,22 @@ import { APP_SHORTCUTS, matchShortcut } from "../lib/shortcutCatalog.js";
 
 // Mirrors useDockviewDrop.test.ts's own store-mock shape: a `storeState()`
 // factory serving `useDashboardStore.getState()`, the only call form this
-// hook uses (`clearSplitRequest()` inside the Escape branch, and the ⌘K
-// handler's `openGlobalLauncher` reads `viewMode` via getState()).
-const clearSplitRequest = vi.fn();
+// hook uses (the ⌘K handler's `openGlobalLauncher` reads `viewMode` via
+// getState()).
 const toggleRightSidebar = vi.fn();
 const toggleRightSidebarView = vi.fn();
+const toggleViewMode = vi.fn();
+const requestCloseProjectSettings = vi.fn();
 let viewMode: string = "list";
 
 function storeState() {
-  return { clearSplitRequest, toggleRightSidebar, toggleRightSidebarView, viewMode };
+  return {
+    toggleRightSidebar,
+    toggleRightSidebarView,
+    toggleViewMode,
+    requestCloseProjectSettings,
+    viewMode,
+  };
 }
 
 vi.mock("../store/index.js", () => {
@@ -53,6 +60,7 @@ function renderShortcuts(overrides: Partial<ShortcutArgs> = {}) {
       openSettings,
       openGlobalLauncher,
       rightSidebarEnabled: overrides.rightSidebarEnabled ?? true,
+      modeSwitchEnabled: overrides.modeSwitchEnabled ?? true,
     }),
   );
   return { setPalette, setSettingsOpen, openSettings, openGlobalLauncher, ...hook };
@@ -165,15 +173,16 @@ describe("useGlobalShortcuts", () => {
     expect(openSettings).not.toHaveBeenCalled();
   });
 
-  it("on Escape, closes the palette, closes settings, and clears any pending split request", () => {
+  it("on Escape, closes the palette and settings, and asks Project settings to close", () => {
     const setPalette = vi.fn();
     const setSettingsOpen = vi.fn();
+    requestCloseProjectSettings.mockClear();
     const { openSettings } = renderShortcuts({ setPalette, setSettingsOpen });
 
     dispatchKeyDown({ key: "Escape" });
 
     expect(setSettingsOpen).toHaveBeenCalledWith(false);
-    expect(clearSplitRequest).toHaveBeenCalledTimes(1);
+    expect(requestCloseProjectSettings).toHaveBeenCalledTimes(1);
     expect(setPalette).toHaveBeenCalledTimes(1);
     const updater = setPalette.mock.calls[0][0] as (p: unknown) => unknown;
     expect(updater({ open: true, scope: "global", projectId: null })).toEqual({
@@ -193,14 +202,15 @@ describe("useGlobalShortcuts", () => {
 
   it("ignores unrelated keys entirely", () => {
     const openGlobalLauncher = vi.fn();
+    const setPalette = vi.fn();
 
-    renderShortcuts({ openGlobalLauncher });
+    renderShortcuts({ openGlobalLauncher, setPalette });
     dispatchKeyDown({ key: "a" });
     dispatchKeyDown({ key: "Enter" });
     dispatchKeyDown({ key: "Tab", ctrlKey: true });
 
     expect(openGlobalLauncher).not.toHaveBeenCalled();
-    expect(clearSplitRequest).not.toHaveBeenCalled();
+    expect(setPalette).not.toHaveBeenCalled();
   });
 
   it("fires regardless of which element currently has DOM focus (no input/textarea guard)", () => {
@@ -266,6 +276,7 @@ describe("useGlobalShortcuts", () => {
           openSettings: vi.fn(),
           openGlobalLauncher,
           rightSidebarEnabled: true,
+          modeSwitchEnabled: true,
         }),
       { initialProps: { openGlobalLauncher: openGlobalLauncher1 } },
     );
@@ -280,13 +291,14 @@ describe("useGlobalShortcuts", () => {
   it("removes the keydown listener on unmount", () => {
     const openGlobalLauncher = vi.fn();
 
-    const { unmount } = renderShortcuts({ openGlobalLauncher });
+    const setPalette = vi.fn();
+    const { unmount } = renderShortcuts({ openGlobalLauncher, setPalette });
     unmount();
     dispatchKeyDown({ key: "k", ctrlKey: true });
     dispatchKeyDown({ key: "Escape" });
 
     expect(openGlobalLauncher).not.toHaveBeenCalled();
-    expect(clearSplitRequest).not.toHaveBeenCalled();
+    expect(setPalette).not.toHaveBeenCalled();
   });
 
   // Issue #1887 — the id-list assertion is what fails when APP_SHORTCUTS
@@ -295,13 +307,14 @@ describe("useGlobalShortcuts", () => {
   // prove the hook consults the catalog (inline matchers for these same
   // events still pass). The cases above pin the chords themselves.
   it("fires every app shortcut the catalog defines (issue #1887)", () => {
-    const { openGlobalLauncher, openSettings } = renderShortcuts();
+    const { openGlobalLauncher, openSettings, setSettingsOpen } = renderShortcuts();
     const representative: Record<string, KeyboardEventInit> = {
       "command-palette": { key: "k", ctrlKey: true },
       settings: { key: ",", metaKey: true },
       "right-sidebar": { key: "∫", code: "KeyB", metaKey: true, altKey: true },
       "git-view": { key: "©", code: "KeyG", metaKey: true, altKey: true },
       "github-view": { key: "˙", code: "KeyH", ctrlKey: true, altKey: true },
+      "mode-switch": { key: "ø", code: "KeyO", metaKey: true, altKey: true },
       dismiss: { key: "Escape" },
     };
     expect(APP_SHORTCUTS.map((shortcut) => shortcut.id).sort()).toEqual(
@@ -317,7 +330,23 @@ describe("useGlobalShortcuts", () => {
     expect(openSettings).toHaveBeenCalledTimes(1);
     expect(toggleRightSidebar).toHaveBeenCalledTimes(1);
     expect(toggleRightSidebarView.mock.calls).toEqual([["git"], ["github"]]);
-    expect(clearSplitRequest).toHaveBeenCalledTimes(1);
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
+    expect(setSettingsOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("Ctrl/Cmd+Alt+O switches mode, but not bare Alt+O or on the phone (#3009)", () => {
+    const { unmount } = renderShortcuts();
+    const o = dispatchKeyDown({ key: "o", code: "KeyO", ctrlKey: true, altKey: true });
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
+    expect(o.defaultPrevented).toBe(true);
+    dispatchKeyDown({ key: "ø", code: "KeyO", altKey: true });
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
+    unmount();
+
+    renderShortcuts({ modeSwitchEnabled: false });
+    const phone = dispatchKeyDown({ key: "o", code: "KeyO", ctrlKey: true, altKey: true });
+    expect(toggleViewMode).toHaveBeenCalledTimes(1);
+    expect(phone.defaultPrevented).toBe(false);
   });
 
   it("Ctrl/Cmd+Alt+G and +H open the Git and GitHub sidebar views, matched on the physical key", () => {

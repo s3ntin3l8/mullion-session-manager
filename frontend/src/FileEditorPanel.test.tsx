@@ -10,6 +10,7 @@ import { makeProject } from "./test/fixtures.js";
 import { hasDirtyFileUnder } from "./lib/dirtyFiles.js";
 import { activeFileDrag, endFileDrag } from "./lib/fileDrag.js";
 import { subscribeFilePathGone, type FilePathGone } from "./lib/filePathEvents.js";
+import { openDropdown, pickDropdownOption } from "./test/dropdown.js";
 
 // CodeMirror is exercised for real in components/CodeEditor.test.tsx; here a
 // textarea stands in so the panel's own behaviour is the thing under test.
@@ -238,11 +239,11 @@ describe("FileEditorPanel", () => {
       const user = userEvent.setup();
       render(<FileEditorPanel params={{ projectId: 1 }} />);
       await screen.findByText(".env");
-      expect(screen.getByRole("option", { name: "Worktree: feat-x" })).toBeInTheDocument();
+      expect(openDropdown(screen.getByRole("combobox"))).toHaveTextContent("Worktree: feat-x");
       expect(screen.queryByRole("option", { name: /dead/ })).toBeNull();
       expect(screen.queryByRole("option", { name: /proj$/ })).toBeNull();
 
-      await user.selectOptions(screen.getByRole("combobox"), "7");
+      pickDropdownOption(screen.getByRole("combobox"), "7");
       await waitFor(() =>
         expect(calls.some((c) => c.url.includes("/files?path=&sessionId=7"))).toBe(true),
       );
@@ -265,17 +266,16 @@ describe("FileEditorPanel", () => {
       render(<FileEditorPanel params={{ projectId: 1, sessionId: 42 }} />);
       await screen.findByText(".env");
       expect(calls[0].url).toContain("sessionId=42");
-      expect(screen.getByRole("option", { name: "Session 42" })).toBeInTheDocument();
+      expect(openDropdown(screen.getByRole("combobox"))).toHaveTextContent("Session 42");
     });
 
     it("a re-target back to the project wins over a hand-picked worktree root", async () => {
       seed([{ id: 7, projectId: 1, status: "active", cwd: "/elsewhere/feat-x" }]);
       const { fn, calls } = mockFetch();
       vi.stubGlobal("fetch", fn);
-      const user = userEvent.setup();
       const { rerender } = render(<FileEditorPanel params={{ projectId: 1, rev: 1 }} />);
       await screen.findByText(".env");
-      await user.selectOptions(screen.getByRole("combobox"), "7");
+      pickDropdownOption(screen.getByRole("combobox"), "7");
       await waitFor(() => expect(calls.some((c) => c.url.includes("sessionId=7"))).toBe(true));
 
       // e.g. the git panel's Edit: project-relative path, no sessionId, new rev

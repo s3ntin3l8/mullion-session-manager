@@ -25,8 +25,10 @@ import {
   type NotificationEvent,
   type Project,
   type Session,
+  type Task,
 } from "./api/index.js";
-import { makeSession, makeProject, makeHost } from "./test/fixtures.js";
+import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
+import { expectNameHasVisibleText, expectNoNestedInteractive } from "./test/a11y.js";
 
 // ConfirmButton checks settings.sessions.confirmBeforeKill from the store —
 // default it to false so the test doesn't need a full store hydrate. Every
@@ -44,11 +46,14 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // Defaults to [] in beforeEach; tests exercising the cascade UI set it
 // before rendering.
 let sessions: Session[];
+// Issue #3285 — a Task Master worker's row is titled by its task.
+let tasks: Task[] = [];
 // Issue #1727 — the hosts the fleet knows about, for the per-session host
 // badge. Defaults to one remote host so the badge's name lookup has
 // something to find.
 let hosts: Host[];
 let confirmBeforeKill = false;
+let activePanelId: string | null = null;
 // Issue #271 — PromoteDialog (rendered from SessionRow's kebab menu / the
 // promoteState==="pending" auto-open) reads these two store actions.
 const promoteSessionMock = vi.fn().mockResolvedValue(undefined);
@@ -67,12 +72,13 @@ vi.mock("./store/index.js", () => {
     selector({
       settings: { sessions: { confirmBeforeKill } },
       theme: "dark",
+      activePanelId,
       events,
       sessionGitStatuses,
       gitDiffStats,
       gitBranchesByProject,
       prsByProject,
-      tasks: [],
+      tasks,
       openRightSidebarPr: vi.fn(),
       sessions,
       // Issue #1892 — HostStatusLabel subscribes (the name lookup stays on
@@ -269,7 +275,7 @@ describe("SessionRow", () => {
       const badge = document.querySelector(".session-host-badge");
       expect(badge).not.toBeNull();
       expect(badge?.closest(".session-status-label")).toBeNull();
-      expect(badge?.closest(".session-status-group")).not.toBeNull();
+      expect(badge?.closest(".session-meta-line")).not.toBeNull();
     });
 
     // Issue #1852 — the placement decision's own words are the answer to
@@ -350,6 +356,223 @@ describe("SessionRow", () => {
     });
   });
 
+  // Issue #3286 — the title gets line 1 to itself; status, host and branch
+  // move to a dim second line, joined by " · ", each part left out with its
+  // separator when it does not apply.
+  describe("the meta line (issue #3286)", () => {
+    const metaLine = () => document.querySelector(".session-meta-line");
+
+    it("shows only the status for a local idle session", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, sessionStatus: "idle", sessionStatusSeverity: "dormant" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Idle");
+      expect(metaLine()?.querySelector(".session-meta-sep")).toBeNull();
+      expect(metaLine()?.querySelector(".session-status-label")).toHaveClass("idle");
+      // Line 1 holds the title, not the status.
+      const strip = document.querySelector(".session-item-row");
+      expect(strip?.querySelector(".session-name")).toHaveTextContent("claude code");
+      expect(strip?.querySelector(".session-status-label")).toBeNull();
+    });
+
+    it("shows status · host for a remote session, the name alone when its host is online", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "online" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · mac-mini");
+      expect(screen.queryByText("online")).not.toBeInTheDocument();
+    });
+
+    it("shows a remote host's state after its name when it is not online", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const host = metaLine()?.querySelector(".session-host-badge");
+      expect(host?.textContent).toBe("mac-mini unreachable");
+    });
+
+    it("shows a parked online host's state", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "online", drained: true })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.querySelector(".session-host-badge")).toHaveTextContent("parked");
+    });
+
+    it("shows status · branch for a session with a branch", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, liveBranch: "feat/two-lines" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · feat/two-lines");
+    });
+
+    it("shows status · host · branch in that order", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "local", liveBranch: "main" }}
+          project={PROJECT}
+          spansHosts
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.textContent).toBe("Working · this machine · main");
+    });
+
+    it("keeps the attention tone on the status word", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, sessionStatus: "finished", sessionStatusSeverity: "done" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(metaLine()?.querySelector(".session-status-label")).toHaveClass("finished");
+    });
+
+    it("keeps the awaiting-data and stale-hooks indicators with the status word", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, stateRestored: false, staleHooks: true }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const label = metaLine()?.querySelector(".session-status-label");
+      expect(label?.textContent?.startsWith("?")).toBe(true);
+      expect(label?.querySelector(".session-stale-icon")).not.toBeNull();
+    });
+
+    it("says line 2 in the row's accessible name, host state included", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline" })];
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "mac-mini", liveBranch: "main" }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Open session claude code, Working, mac-mini unreachable, main",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    it("names the agent first when it shows as text (no logo), as the row shows it", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, command: "fake-agent.sh", name: "fix login", nameLocked: true }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      expect(
+        screen.getByRole("button", { name: "Open session fake-agent.sh fix login, Working" }),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps the row's visible text a run of its accessible name (label-in-name)", () => {
+      hosts = [makeHost({ id: "mac-mini", name: "mac-mini", health: "offline", drained: true })];
+      render(
+        <SessionRow
+          session={{
+            ...SESSION,
+            command: "fake-agent.sh",
+            name: "fix login",
+            nameLocked: true,
+            resolvedHostId: "mac-mini",
+            liveBranch: "main",
+          }}
+          project={PROJECT}
+          openInWorkspace
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const row = document.querySelector<HTMLElement>(".session-item")!;
+      // No now line here: its text is not part of the name (it never was).
+      expect(row.querySelector(".session-now-line")).toBeNull();
+      // #3106 — the row's one keyboard control is its hidden open button,
+      // which a voice-control user reaches by what the row shows.
+      expectNameHasVisibleText(row.querySelector<HTMLElement>(".session-item-open")!, row);
+    });
+
+    it("caps a long status detail on the line and in the name; the tooltip keeps it", () => {
+      const detail = "x".repeat(200);
+      render(
+        <SessionRow
+          session={{
+            ...SESSION,
+            sessionStatus: "exited",
+            sessionStatusSeverity: "gone",
+            sessionStatusDetail: detail,
+          }}
+          project={PROJECT}
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const label = document.querySelector(".session-meta-line .session-status-label")!;
+      expect(label.textContent).toHaveLength(60);
+      expect(label.textContent?.endsWith("…")).toBe(true);
+      expect(label.getAttribute("title")).toBe(`exited: ${detail}`);
+      const open = document.querySelector(".session-item-open")!;
+      expect(open.getAttribute("aria-label")).not.toContain(detail);
+      expect(open.getAttribute("aria-label")).toContain(label.textContent);
+    });
+
+    it("drops the word 'open' for an open session; the title is heavier and the name says it", () => {
+      render(
+        <SessionRow
+          session={SESSION}
+          project={PROJECT}
+          openInWorkspace
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+      const row = screen
+        .getByRole("button", {
+          name: "Open session claude code, Working, already open in this workspace",
+        })
+        .closest(".session-item")!;
+      expect(row).not.toHaveTextContent(/\bopen\b/);
+      expect(row.querySelector(".session-name")).toHaveClass("open");
+    });
+  });
+
   it("sets application/x-mullion-session on drag start", () => {
     const onOpen = vi.fn();
     const onEnd = vi.fn();
@@ -380,35 +603,66 @@ describe("SessionRow", () => {
   });
 
   // P10 — the session row is the single most-used control in the app;
-  // before this fix it was a bare <div onClick draggable> with no keyboard
-  // support at all. Same role="button"/tabIndex/Enter-Space pattern as
-  // UnifiedBoard.tsx's TaskCard and NotificationBell.tsx's EventRow.
-  describe("keyboard accessibility (P10)", () => {
-    it("is a focusable role=button", () => {
+  // before that fix it was a bare <div onClick draggable> with no keyboard
+  // support at all. #3106 — the row itself is no longer a role="button"
+  // (it nests its own controls, axe's nested-interactive): it holds ONE real
+  // button, first in tab order, and its other controls are sibling tab stops.
+  describe("keyboard accessibility (P10, #3106)", () => {
+    it("has no interactive element inside another interactive element", () => {
       render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
-      const row = screen.getByRole("button", { name: /claude code/i });
-      expect(row).toHaveAttribute("tabIndex", "0");
+      const row = document.querySelector<HTMLElement>(".session-item")!;
+      expect(row).not.toHaveAttribute("role");
+      expect(row).not.toHaveAttribute("tabindex");
+      // The row's own controls exist, so the check is not vacuous.
+      expect(row.querySelectorAll("button").length).toBeGreaterThanOrEqual(3);
+      expectNoNestedInteractive(row);
     });
 
-    it("fires onOpen on Enter when the row itself is focused", async () => {
+    it("gives the row one real button, the first tab stop in it", async () => {
+      const user = userEvent.setup();
+      render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+      const open = screen.getByRole("button", { name: /^Open session claude code/ });
+      expect(open.tagName).toBe("BUTTON");
+      await user.tab();
+      expect(open).toHaveFocus();
+      // The row's other controls follow it as their own tab stops.
+      await user.tab();
+      expect(document.activeElement).not.toBe(open);
+      expect(document.querySelector(".session-item")).toContainElement(
+        document.activeElement as HTMLElement,
+      );
+    });
+
+    it("marks the session shown in the active pane on its open button", () => {
+      activePanelId = `session-${SESSION.id}`;
+      try {
+        render(<SessionRow session={SESSION} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+        expect(screen.getByRole("button", { name: /^Open session/ })).toHaveAttribute(
+          "aria-current",
+          "true",
+        );
+      } finally {
+        activePanelId = null;
+      }
+    });
+
+    it("fires onOpen once on Enter on the open button", async () => {
       const onOpen = vi.fn();
       const user = userEvent.setup();
       render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
 
-      const row = screen.getByRole("button", { name: /claude code/i });
-      row.focus();
+      screen.getByRole("button", { name: /claude code/i }).focus();
       await user.keyboard("{Enter}");
 
       expect(onOpen).toHaveBeenCalledTimes(1);
     });
 
-    it("fires onOpen on Space when the row itself is focused", async () => {
+    it("fires onOpen once on Space on the open button", async () => {
       const onOpen = vi.fn();
       const user = userEvent.setup();
       render(<SessionRow session={SESSION} project={PROJECT} onOpen={onOpen} onEnd={vi.fn()} />);
 
-      const row = screen.getByRole("button", { name: /claude code/i });
-      row.focus();
+      screen.getByRole("button", { name: /claude code/i }).focus();
       await user.keyboard(" ");
 
       expect(onOpen).toHaveBeenCalledTimes(1);
@@ -574,6 +828,19 @@ describe("SessionRow title display", () => {
     );
     expect(screen.getByText("my custom session")).toBeTruthy();
     expect(screen.queryByText("ignored osc title")).toBeNull();
+  });
+
+  it("shows a Task Master session's task title (#3285)", () => {
+    const session = makeSession({ id: 41, command: "claude", lastTitle: "agent's own title" });
+    tasks = [makeTask({ id: 7, sessionId: 41, title: "Fix the login form" })];
+    sessions = [session];
+    try {
+      render(<SessionRow session={session} project={PROJECT} onOpen={vi.fn()} onEnd={vi.fn()} />);
+      expect(screen.getByText("Fix the login form")).toBeTruthy();
+      expect(screen.queryByText("agent's own title")).toBeNull();
+    } finally {
+      tasks = [];
+    }
   });
 
   it("shows monospace class for command fallback, not for lastTitle", () => {

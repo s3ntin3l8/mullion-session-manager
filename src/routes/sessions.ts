@@ -28,6 +28,7 @@ import { removeCheckoutForced } from "../services/checkout-removal.js";
 import { parseHostCwds, projectCwdOnHost } from "../services/placement.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import { isValidDevServerUrl } from "./projects.js";
+import { addressForAgent, previewForAddress } from "../services/browser-handoff.js";
 import { checkDockPortConflict } from "../services/dock-port-check.js";
 import { getOrCreateProjectPreview } from "../services/preview-registry.js";
 import {
@@ -1710,6 +1711,39 @@ export async function sessionsRoute(app: FastifyInstance) {
 
     return listSessionBrowserBindings(app, sessionId);
   });
+
+  // #3373 — the Browser pane's "open in the other one" button. Both are
+  // read-only translations (services/browser-handoff.ts): neither binds nor
+  // launches the session's browser. `slug` names one of the project's
+  // previews (none: the checkout's dev server), never an iframe address, so
+  // the preview proxy's token never reaches here.
+  app.get<{ Params: { id: string }; Querystring: { slug?: string } }>(
+    "/api/sessions/:id/browser/address-for-preview",
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+      const slug = typeof request.query.slug === "string" ? request.query.slug : undefined;
+      const result = await addressForAgent(app, sessionId, slug || undefined);
+      if (!result) return reply.notFound();
+      return result;
+    },
+  );
+
+  // A POST, though it changes nothing: the agent's page address goes in the
+  // body, so it stays out of the request log (it can carry an OAuth code or a
+  // session parameter).
+  app.post<{ Params: { id: string }; Body: { url?: unknown } | undefined }>(
+    "/api/sessions/:id/browser/preview-for-address",
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+      const url = typeof request.body?.url === "string" ? request.body.url : "";
+      if (!url) return reply.badRequest("url is required");
+      const result = await previewForAddress(app, sessionId, url);
+      if (!result) return reply.notFound();
+      return result;
+    },
+  );
 
   // Unbinds the session's browser so the next attach or automation call
   // resolves its current host and checkout afresh — the way out of a binding

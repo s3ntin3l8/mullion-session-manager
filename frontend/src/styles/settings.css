@@ -43,18 +43,18 @@
   min-width: 0;
   box-sizing: border-box;
 }
-.settings-form .settings-row-control select,
+.settings-form .settings-row-control .ui-dropdown-field,
 .settings-form .settings-row-control input,
 .settings-form .settings-row-control textarea {
   min-width: 0;
   max-width: 100%;
   box-sizing: border-box;
 }
-.settings-form .settings-row-control select,
+.settings-form .settings-row-control .ui-dropdown-field,
 .settings-form .settings-row-control input {
   min-height: 36px;
 }
-.settings-form .settings-row-control select {
+.settings-form .settings-row-control .ui-dropdown-field {
   width: 100%;
 }
 .settings-form .settings-form-field-actions,
@@ -88,7 +88,7 @@
   }
 }
 @media (pointer: coarse) {
-  .settings-form .settings-row-control select,
+  .settings-form .settings-row-control .ui-dropdown-field,
   .settings-form .settings-row-control input[type="text"],
   .settings-form .settings-row-control input[type="password"],
   .settings-form .settings-row-control input[type="number"] {
@@ -118,7 +118,7 @@
   border-radius: 16px;
   overflow: hidden;
   box-shadow: 0 40px 90px -20px rgba(0, 0, 0, 0.7);
-  animation: cmuxPop 0.13s ease-out;
+  animation: cmuxPop var(--motion-fade) var(--motion-ease);
 }
 .settings-modal-header {
   display: flex;
@@ -311,7 +311,7 @@
   width: 100%;
   min-width: 0;
 }
-.settings-models-cell .settings-dropdown select {
+.settings-models-cell .settings-dropdown .ui-dropdown-field {
   width: 100%;
   max-width: 100%;
   min-width: 0;

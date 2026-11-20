@@ -1,4 +1,7 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
+import type { BrowserPanelParams } from "../lib/browserPanelParams.js";
+import type { BrowserMode } from "../lib/browserTitles.js";
+import type { TaskStatus } from "../api/index.js";
 import type {
   ExistingInstructionsMode,
   ScaffoldConflict,
@@ -41,7 +44,9 @@ import type {
 } from "../api/index.js";
 import type { GithubIssueUi } from "./githubResources.js";
 import type { ReorderUpdate } from "../reorder.js";
+import type { StatusEntry as BoardStatusEntry } from "../unified-board/stackLayout.js";
 import type { KanbanColumnId } from "../kanban.js";
+import type { FoldHalvesState, Half, LastUsed } from "../lib/foldHalves.js";
 
 // "list" is today's per-project sidebar tree (Sidebar.tsx); "kanban" is the
 // unified task/session board (UnifiedBoard.tsx — originally issue #211's
@@ -50,9 +55,14 @@ import type { KanbanColumnId } from "../kanban.js";
 // dockview grid area (App.tsx) — see that file's own comment for why it
 // lives there rather than inside the sidebar (a global, cross-project board
 // needs more width than the sidebar's SIDEBAR_MAX_WIDTH affords). Client-only
-// UI preference (localStorage, no backend field) — same for
-// hierarchicalView below (Phase 5 Track B, issue #195 5.5b: flat
-// vs hierarchical child-session nesting).
+// UI preference (localStorage, no backend field).
+//
+// The two values are also the app's two first-level modes (#3009): "list" is
+// Workspace mode (the grid, the left sidebar, the Dock) and "kanban" is Tasks
+// mode (the board full size beside the right sidebar). The names predate the
+// modes and every entry point already writes them, so they were kept rather
+// than renamed. The value is remembered per device (crs.viewMode) and restored
+// at start.
 export type ViewMode = "list" | "kanban";
 
 /** Where the right sidebar's Back goes after a cross-link between the Tasks
@@ -88,15 +98,34 @@ export interface TerminalPrefs {
   scrollback: number;
 }
 
+// Issue #3013 — an open New session launcher (SessionLauncher.tsx). `target`
+// is where the session should land: `projectId` preselects the project (a
+// sidebar project's "+", a pane's split, a palette entry); `half` is the
+// fold's left or right half. Null while the launcher is closed.
+export interface LauncherTarget {
+  half?: "left" | "right";
+  projectId?: number;
+  // #3054 — a launcher entry chosen in the command palette (an agent, a
+  // shell or a script, by its `Launcher.id`): preselected, and the launch
+  // button takes focus so Enter launches it.
+  launcherId?: string;
+  // #3054 — a pane's "Split right"/"Split down": the session lands next to
+  // this pane instead of through the normal open path.
+  split?: SplitRequest;
+}
+
+export interface LauncherRequest {
+  target: LauncherTarget | null;
+  // Distinct per open, so a surface that stays mounted between opens (the
+  // touch sheet) can start each one with fresh choices.
+  seq: number;
+}
+
 // A pane's split-right/split-down action (PaneHeaderActions.tsx, a dockview
-// `rightHeaderActionsComponent`) can't receive custom props from App.tsx —
-// dockview owns that component's render — so it signals intent through the
-// store instead (same reason PaneTab.tsx already reads/writes the store
-// directly). App.tsx reacts to a new `splitRequest` by opening the command
-// palette scoped to the reference panel's project; the palette's own launch
-// handler reads it back to decide whether to add the new panel via a normal
-// open-or-focus or as a real split (`position: {referencePanel, direction}`).
-// Cleared on launch or on palette close, whichever comes first.
+// `rightHeaderActionsComponent`, and PaneActionsMenu.tsx) can't receive
+// custom props from App.tsx — dockview owns that component's render — so it
+// opens the launcher through the store with this as its target (#3054); App's
+// launch handler places the session beside `referencePanelId`.
 export interface SplitRequest {
   referencePanelId: string;
   direction: "right" | "below";
@@ -710,11 +739,13 @@ export interface UiSlice {
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   // Right sidebar: `rightSidebarView` is the last-active view id (kept while
-  // closed so toggling reopens it), `rightSidebarOpen` whether the drawer is
-  // showing, `rightSidebarPinned` whether it docks (desktop only) instead of
-  // overlaying the grid.
+  // closed so toggling reopens it), `rightSidebarOpen` whether the panel is
+  // showing. The panel is always docked (#3006).
   rightSidebarView: string;
   rightSidebarProjectRequest: { projectId: number; nonce: number } | null;
+  /** The rail's Browser view (#3372): its mode and preview, kept here so a
+   *  close, another view or crossing 1100px does not lose them. */
+  railBrowser: RailBrowserState;
   /** A one-shot "show History scoped to this" request (Source Control's View
    *  in History); the History view applies it, then clears it. */
   rightSidebarHistoryRequest: { projectId: number; scope: string; nonce: number } | null;
@@ -728,14 +759,17 @@ export interface UiSlice {
    *  views and so a session row can open it before the panel is mounted. */
   githubOpenPrByProject: Record<number, number | null>;
   rightSidebarOpen: boolean;
-  rightSidebarPinned: boolean;
   rightSidebarWidth: number;
   // Issue #211 — see ViewMode's own doc comment.
   viewMode: ViewMode;
-  // Phase 5 (Track B, issue #195 5.5b) — see ViewMode's own doc comment.
-  // Only meaningful in "list" viewMode — the unified board's ad-hoc lane
-  // cards (UnifiedBoard.tsx) always render flat regardless of this flag.
-  hierarchicalView: boolean;
+  /** Set when "Open session in Workspace" switched from Tasks to Workspace
+   *  (#3014): the phone's back gesture then returns to Tasks, reopening the
+   *  task the switch came from. Cleared by any other mode change. */
+  crossLinkReturn: { taskId: number | null } | null;
+  /** Whether the Tasks board's new-task form is open (#3288). In the store,
+   *  not the board, so the phone's tab bar "New" entry and the board's own
+   *  New task button reach the same form. */
+  newTaskFormOpen: boolean;
   // Local-only presentation order for Kanban cards within a column (issue
   // #211) — there's no backend field for card order in Phase 1 (a session
   // has no `position` column, unlike workspaces/groups), so this is kept as
@@ -760,14 +794,26 @@ export interface UiSlice {
   dismissedCodexHookTrustVersion: string | null;
   checkCodexHookTrust: () => Promise<void>;
   dismissCodexHookTrust: () => void;
-  splitRequest: SplitRequest | null;
   // Panel id to show a brief highlight flash on (set via triggerPanelHighlight,
   // auto-clears after HIGHLIGHT_DURATION_MS). Both the tab (PaneTab.tsx) and
   // the panel body (TerminalPanelWrapper) read this to apply the flash.
   highlightedPanelId: string | null;
   triggerPanelHighlight: (id: string) => void;
+  // #3122 — panels a fold or phone open added to this desktop's workspace
+  // (useApplyPendingOpens) that have not been shown here yet. PaneTab draws
+  // a "new" dot on them and clears it on first activation; the hook clears
+  // it when the panel is closed. Client state for this device only: never
+  // written into workspaces.layout, and a reload forgets it.
+  newPanelIds: string[];
+  markPanelNew: (id: string) => void;
+  clearPanelNew: (id: string) => void;
   activePanelId: string | null;
   setActivePanelId: (id: string | null) => void;
+  // Session ids whose own pane (terminal or timeline) had focus, newest
+  // first, deduplicated and capped. The Browser pane (#3371) fixes "the
+  // project's last-focused session" from this when it switches to Agent's
+  // browser after focus already moved to the pane itself. Client state only.
+  recentSessionIds: number[];
   /** Issue #3230 — per-project, per-control selected worktree/branch value
    *  for Dock monitors, persisted in localStorage so stopping a control,
    *  remounting the Dock, or reloading the page keeps the selection. */
@@ -778,7 +824,7 @@ export interface UiSlice {
   // falling back to first-available/create-default when that happens. Kept
   // in the ui slice (not workspaces) — it's a client-only preference
   // (localStorage-backed set/read, no server round trip), the same shape as
-  // sidebarWidth/viewMode/hierarchicalView below rather than the
+  // sidebarWidth/viewMode below rather than the
   // workspaces slice's server-backed CRUD.
   activeWorkspaceId: number | null;
   setActiveWorkspaceId: (id: number | null) => void;
@@ -803,7 +849,7 @@ export interface UiSlice {
   // precedent, and a dock save is rare enough that every OTHER mounted
   // column doing one harmless extra fetch isn't worth a per-project map's
   // added complexity. Kept in ui (not workspaces/hosts) as a generic
-  // cross-cutting UI refresh signal, the same bucket splitRequest/
+  // cross-cutting UI refresh signal, the same bucket
   // notificationsPanelOpenRequest live in.
   dockConfigRefreshTrigger: number;
   bumpDockConfigRefreshTrigger: () => void;
@@ -815,17 +861,10 @@ export interface UiSlice {
   // The one write path for every preference: deep-merges `patch` into local
   // `settings` optimistically (so the UI reflects it immediately), then
   // fires a debounced PATCH /api/settings so a slider/number-field drag
-  // sends one request instead of one per tick. cycleTheme/setTerminalPrefs/
+  // sends one request instead of one per tick. setTerminalPrefs/
   // etc. below are thin wrappers over this for call sites that predate the
   // unified settings object.
   updateSettings: (patch: SettingsPatch) => void;
-  // Cycles the theme *preference* dark -> light -> system -> dark (issue
-  // #1432 — the old toggleTheme cycled the *resolved* theme dark<->light,
-  // which meant it could never land on, or leave, "system" without going
-  // through Settings). The Toolbar's quick toggle calls this; Settings'
-  // Theme segmented control (Dark/Light/System) still calls
-  // updateSettings({ theme: ... }) directly to jump to a specific value.
-  cycleTheme: () => void;
   setTerminalPrefs: (patch: Partial<TerminalPrefs>) => void;
   setHideEndedSessions: (value: boolean) => void;
   setShowTaskSessions: (value: boolean) => void;
@@ -836,6 +875,18 @@ export interface UiSlice {
   // Asks the drawer to show `projectId` (pins its project picker); the nonce
   // makes a repeat request for the same project still fire.
   openRightSidebarView: (view: string, projectId?: number) => void;
+  /** The rail Browser view's switch. */
+  setRailBrowserMode: (mode: BrowserMode) => void;
+  /** BrowserPanel's address write-back, in the rail's Browser view. */
+  setRailBrowserPreview: (preview: BrowserPanelParams) => void;
+  /**
+   * Opens the rail's Browser view in Preview on `preview` (null: the rail
+   * project's own preview), moving the rail to `projectId` when given. What
+   * every preview entry point does below 1100px (#3372).
+   */
+  openRailBrowserPreview: (preview: BrowserPanelParams | null, projectId?: number) => void;
+  /** Opens the rail's Browser view in Agent's browser on `projectId`. */
+  openRailBrowserAgent: (projectId: number) => void;
   setGithubOpenPr: (projectId: number, number: number | null) => void;
   /** Shows a PR's drill-in in the right sidebar's GitHub view. */
   openRightSidebarPr: (projectId: number, number: number, back?: SidebarBack | null) => void;
@@ -852,18 +903,68 @@ export interface UiSlice {
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;
-  setRightSidebarPinned: (value: boolean) => void;
   setRightSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
-  setHierarchicalView: (value: boolean) => void;
+  /** The mode switch's keyboard path (#3009): Workspace to Tasks and back. */
+  toggleViewMode: () => void;
+  /** "Open session in Workspace" from a task (#3009): switch to Workspace mode
+   *  and open the session there. The right sidebar's task stays selected;
+   *  useClearTaskSelectionOnProjectChange keeps a task whose project the
+   *  sidebar moves to. */
+  openSessionInWorkspace: (sessionId: number) => void;
+  /** Back from a cross-link (#3014): Tasks mode again, with the task the
+   *  switch came from opened in the right sidebar. A no-op without one. */
+  returnFromCrossLink: () => void;
+  /** #3010 — per workspace, which panes show on which half between 800 and
+   *  1099px. Device-local (crs.foldHalves), never in the saved layout. */
+  foldHalves: Record<number, FoldHalvesState>;
+  /** Which half has focus there: what the key bar and keyboard address. */
+  focusedHalf: Half;
+  /** Moves a pane of the active workspace to a half; `openIds` are its open
+   *  tiled panes (a move that would empty the left half is refused). */
+  moveToHalf: (panelId: string, half: Half, openIds: readonly string[]) => void;
+  /** A right-rail session as a view tab: show it, or hide it if showing. */
+  toggleRightPane: (panelId: string) => void;
+  /** Shows a right-half pane, or closes the right half (null). */
+  showRightPane: (panelId: string | null) => void;
+  /** Records the pane shown on the left half; `used` (default) also makes
+   *  it the one used last. */
+  noteLeftPane: (panelId: string, used?: boolean) => void;
+  noteHalfUsed: (used: LastUsed) => void;
+  /** Forgets panes of the active workspace that were closed. */
+  forgetFoldPanes: (closedIds: readonly string[]) => void;
+  /** Remembers the terminal panes open while the halves show. */
+  noteFoldOpen: (openIds: readonly string[]) => void;
+  /** Drops a deleted workspace's halves assignment. */
+  forgetFoldHalvesWorkspace: (workspaceId: number) => void;
+  setFocusedHalf: (half: Half) => void;
+  /** Whether the halves are on screen right now (800-1099px). Runtime only:
+   *  App sets it; the terminal pane wrapper reads it so a session shown on
+   *  the right half is not also mounted in the grid. */
+  foldHalvesActive: boolean;
+  setFoldHalvesActive: (active: boolean) => void;
+  setNewTaskFormOpen: (open: boolean) => void;
   // Replaces one severity sub-group's whole order array (UnifiedBoard.tsx's
   // ad-hoc lane computes the new array via kanban.ts's computeKanbanReorder,
   // reusing reorder.ts's computeReorder for the actual reindex math) —
   // mirrors setSidebarWidth's "component computes, store just stores" shape
   // above.
   setKanbanColumnOrder: (columnId: KanbanColumnId, order: number[]) => void;
-  requestSplit: (referencePanelId: string, direction: "right" | "below") => void;
-  clearSplitRequest: () => void;
+  // #3054 — opens the launcher with the pane's project preselected and a
+  // split target (see SplitRequest).
+  requestSplit: (
+    referencePanelId: string,
+    direction: "right" | "below",
+    projectId?: number,
+  ) => void;
+  // Issue #3013 — the New session launcher. The store cannot import
+  // `canLaunchTerminal` (panelUtils.ts imports the store), so the view-mode
+  // gate is applied where the launcher renders (SessionLauncherHost).
+  launcherRequest: LauncherRequest | null;
+  openLauncher: (target?: LauncherTarget) => void;
+  // With a `seq`, closes only that open (a stale launch must not close a
+  // launcher opened after it); without one, closes whatever is open.
+  closeLauncher: (seq?: number) => void;
   // Issue #1429 — a desktop OS notification's onclick opens the session
   // directly (same destination the bell row/phone sheet/push click/deep
   // link all converged on) — but useAttentionNotifications.ts has no
@@ -883,8 +984,8 @@ export interface UiSlice {
   // Hermes review, PR #1456 — cosmetic (the nonce check already prevents a
   // resolved request from re-firing on its own), but a resolved request
   // otherwise sits in the store forever, one stale object per session ever
-  // opened via notification. Symmetric with clearSplitRequest above, EXCEPT
-  // it takes the nonce being cleared and only actually clears when the
+  // opened via notification. A clear that
+  // takes the nonce being cleared and only actually clears when the
   // store's current request still has that exact nonce — a bare
   // unconditional clear could otherwise wipe out a BRAND NEW request that
   // arrived in the narrow gap between useOpenSessionRequest.ts's own
@@ -922,6 +1023,16 @@ export interface UiSlice {
   openTaskRequest: { taskId: number; nonce: number } | null;
   requestOpenTask: (taskId: number) => void;
   clearOpenTaskRequest: (nonce: number) => void;
+  // Tasks mode (#3026): the board's statuses with their counts under its
+  // current filters, published by UnifiedBoard so the left rail lists the same
+  // entries (it cannot reach the board's filtered tasks), and the one-shot
+  // request to jump to one of them. Each board layout consumes the request:
+  // stacked opens and scrolls to the section, lanes scrolls the lane in. The
+  // nonce lets the same status be requested twice in a row.
+  boardStatuses: BoardStatusEntry[];
+  setBoardStatuses: (entries: BoardStatusEntry[]) => void;
+  statusJumpRequest: { status: TaskStatus; nonce: number } | null;
+  requestStatusJump: (status: TaskStatus) => void;
   // Re-resolves `theme` whenever the OS-level color-scheme preference
   // changes, but only while settings.theme === "system" — a no-op the rest
   // of the time. Returns a cleanup function; called once from App.tsx
@@ -1079,6 +1190,50 @@ export interface ScaffoldSlice {
   clearScaffoldDraft: (projectId: number) => void;
 }
 
+// #3406 — the Project settings dialog and the Project view's Skills drill-in
+// (slices/projectSettings.ts).
+export type ProjectSettingsSection = "agent-rules" | "briefing" | "scaffold" | "dock";
+
+export interface ProjectSettingsTarget {
+  projectId: number;
+  section: ProjectSettingsSection;
+  /** Dock opened straight on its Previews list. */
+  dockView?: "previews";
+  /** Bumped by every open, so asking again for the section already shown
+   * (after the user moved to another) switches back to it. */
+  rev: number;
+}
+
+export interface ProjectSettingsSlice {
+  /** The open dialog, or null. */
+  projectSettings: ProjectSettingsTarget | null;
+  /** An editor in the dialog holds an unsaved draft. */
+  projectSettingsDirty: boolean;
+  /** Leaving was asked for while a draft is unsaved: the dialog asks first.
+   * `next` is where to go once confirmed: another project's dialog, or null
+   * to close. */
+  projectSettingsLeave: { next: ProjectSettingsTarget | null } | null;
+  /** A one-shot "show Skills" request for the sidebar's Project view; the
+   * view applies it, then clears it. */
+  projectSkillsRequest: { projectId: number; nonce: number } | null;
+  openProjectSettings: (
+    projectId: number,
+    section: ProjectSettingsSection,
+    dockView?: "previews",
+  ) => void;
+  /** Every way out of the dialog (close button, backdrop, Escape, phone
+   * back) goes through here: closes, or asks first over an unsaved draft. A
+   * second request while asking keeps editing. */
+  requestCloseProjectSettings: () => void;
+  /** Confirms the pending leave: drops the drafts. */
+  confirmLeaveProjectSettings: () => void;
+  /** Keeps editing. */
+  cancelLeaveProjectSettings: () => void;
+  setProjectSettingsDirty: (dirty: boolean) => void;
+  openProjectSkills: (projectId: number) => void;
+  clearProjectSkillsRequest: () => void;
+}
+
 export type DashboardState = ProjectsSlice &
   SessionsSlice &
   GitSlice &
@@ -1091,4 +1246,19 @@ export type DashboardState = ProjectsSlice &
   UiSlice &
   ToastsSlice &
   PreviewsSlice &
-  ScaffoldSlice;
+  ScaffoldSlice &
+  ProjectSettingsSlice;
+
+/**
+ * The rail's Browser view (#3372). `mode` is the mode it was last in, Agent's
+ * browser before any. `preview` is what Preview shows: null for the rail
+ * project's own preview, else a target an entry point opened, kept up to date
+ * by BrowserPanel's address write-back. `rev` is bumped by every entry point
+ * that opens a target, so the view loads it even when it is already open.
+ * Client state only, not persisted.
+ */
+export interface RailBrowserState {
+  mode: BrowserMode;
+  preview: BrowserPanelParams | null;
+  rev: number;
+}

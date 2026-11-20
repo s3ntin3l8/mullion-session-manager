@@ -162,6 +162,19 @@ describe("attachKeyConflictHandler", () => {
     expect(fire({ key: "h", code: "KeyH", altKey: true })).toBe(true);
   });
 
+  it("lets Ctrl/Cmd+Alt+O bubble to the mode switch (#3009)", () => {
+    const { term, fire } = makeFakeTerm();
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+    });
+    expect(fire({ key: "o", code: "KeyO", ctrlKey: true, altKey: true })).toBe(false);
+    expect(fire({ key: "ø", code: "KeyO", metaKey: true, altKey: true })).toBe(false);
+    // A bare Alt+O still reaches the shell.
+    expect(fire({ key: "o", code: "KeyO", altKey: true })).toBe(true);
+  });
+
   it("intercepts Ctrl+Shift+F to toggle the find bar", () => {
     const { term, fire } = makeFakeTerm();
     const onToggleFind = vi.fn();

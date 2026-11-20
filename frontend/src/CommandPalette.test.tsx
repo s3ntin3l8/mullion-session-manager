@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS, api } from "./api/index.js";
 import type { Launcher, Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeSession, makeWorkspace } from "./test/fixtures.js";
+import { stubPxWidth } from "./test/appHarness.js";
 import { ACTIVE_TERMINAL_FOCUS_SELECTOR, WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 
 // Issue #27: the palette's "Integrations" section — a GitHub-panel shortcut
@@ -56,7 +57,7 @@ describe("CommandPalette -> Integrations section", () => {
     vi.unstubAllGlobals();
   });
 
-  it("opens the GitHub panel for the current project", async () => {
+  it("finds GitHub by typing and opens the sidebar view for the current project", async () => {
     const onOpenGitHub = vi.fn();
     const user = userEvent.setup();
     render(
@@ -64,7 +65,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={onOpenGitHub}
         onOpenAgentRules={vi.fn()}
@@ -82,6 +82,9 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
+    // Not a default row any more: found by typing.
+    expect(screen.queryByText(/^GitHub$/)).toBeNull();
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "github");
     await user.click(await screen.findByText(/^GitHub$/));
     expect(onOpenGitHub).toHaveBeenCalledWith(PROJECT.id);
     expect(screen.queryByText("Git", { exact: true })).toBeNull();
@@ -95,7 +98,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={onOpenAgentRules}
@@ -127,7 +129,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -159,7 +160,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -191,7 +191,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -223,7 +222,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -241,8 +239,8 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "preview");
-    await user.click(await screen.findByText(/^Preview$/));
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "preview");
+    await user.click(await screen.findByText(/^Open browser: preview…$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(PROJECT.id);
   });
 
@@ -254,7 +252,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -272,8 +269,8 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "new preview tab");
-    await user.click(await screen.findByText("New preview tab"));
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "new preview tab");
+    await user.click(await screen.findByText("Open browser: blank preview"));
     expect(onOpenBlankBrowser).toHaveBeenCalled();
   });
 
@@ -285,7 +282,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -303,7 +299,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "github settings");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "github settings");
     await user.click(await screen.findByText("GitHub settings"));
     expect(onOpenSettingsSection).toHaveBeenCalledWith("github");
   });
@@ -319,7 +315,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="global"
         projectId={null}
         onClose={onClose}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -349,7 +344,6 @@ describe("CommandPalette -> Integrations section", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -369,29 +363,32 @@ describe("CommandPalette -> Integrations section", () => {
 
     await screen.findByText("Task board");
     expect(screen.getByText("Task board")).toBeInTheDocument();
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "bash");
     expect(screen.queryByText("GitHub settings")).not.toBeInTheDocument();
     expect(screen.queryByText("Task board")).not.toBeInTheDocument();
   });
 });
 
-// P9 — CommandPalette.tsx's session-launch path (createSession) used to be
-// `void somePromise.then(...)` with no `.catch` at all: a failure left
-// stale/empty UI plus an unhandled rejection in the console, with nothing
-// visible to the user. See command-palette/WorktreeOptions.test.tsx's own
-// "worktree isolation toggle" and "WorktreeOptions -> P9 silent failures"
-// describes for the toggle/branches-fetch half of this same fix, extracted
-// there since both exercise <WorktreeOptions> rather than the launch path.
-describe("CommandPalette -> P9 silent failures", () => {
-  const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
+// #3054 — the palette starts no session itself. "New session…" opens the
+// New session launcher on the palette's project; an agent, shell or script
+// found by a typed query opens it with that entry preselected. The launcher
+// starts the session (and owns a failed launch's inline error,
+// SessionLauncher.test.tsx).
+describe("CommandPalette -> entries open the launcher (#3054)", () => {
+  const CLAUDE: Launcher = {
+    id: "agent:claude",
+    kind: "agent",
+    title: "claude",
+    command: "claude",
+  };
+  const BASH: Launcher = { id: "shell:bash", kind: "shell", title: "bash", command: "bash" };
 
   function renderPalette(overrides: Partial<ComponentProps<typeof CommandPalette>> = {}) {
     return render(
       <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
+        scope="global"
+        projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -411,65 +408,216 @@ describe("CommandPalette -> P9 silent failures", () => {
     );
   }
 
+  let posts = 0;
+  beforeEach(() => {
+    posts = 0;
+    useDashboardStore.setState({
+      projects: [PROJECT],
+      sessions: [],
+      settings: DEFAULT_SETTINGS,
+      launcherRequest: null,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [CLAUDE, BASH]));
+        if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+        if (url.endsWith("/api/sessions") && init?.method === "POST") posts += 1;
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      }),
+    );
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("a failed launch surfaces an inline error and leaves the palette open, rather than a silent unhandled rejection", async () => {
-    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
-      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
-      if (url.endsWith("/api/sessions") && init?.method === "POST") {
-        return Promise.resolve(jsonResponse(503, { message: "Host is unreachable" }));
-      }
-      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const onClose = vi.fn();
-    const onLaunched = vi.fn();
+  const SEARCH = "Run a command, or find a session or agent…";
+
+  // #3069 — the blank view offers the one command and lists no agent, shell
+  // or script.
+  it("lists no agent, shell or script on a blank query, only New session… under Commands", async () => {
     const user = userEvent.setup();
-    renderPalette({ onClose, onLaunched });
+    renderPalette();
 
-    await user.click((await screen.findAllByText("bash"))[0]);
+    // Typing proves the launchers have loaded; clearing returns to the
+    // blank view with them in hand.
+    await user.type(await screen.findByPlaceholderText(SEARCH), "bash");
+    await screen.findByRole("button", { name: /bash/ });
+    await user.clear(screen.getByPlaceholderText(SEARCH));
 
-    expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
-    // The whole point of the fix: a failed launch must NOT close the
-    // palette (which would hide the very error it's meant to show) or
-    // report a success that never happened.
-    expect(onClose).not.toHaveBeenCalled();
-    expect(onLaunched).not.toHaveBeenCalled();
+    const row = screen.getByRole("button", { name: /New session…/ });
+    expect(row).toHaveTextContent("Choose an agent, shell or script");
+    expect(screen.getByText("Create")).toBeInTheDocument();
+    expect(screen.queryByText("New session")).toBeNull();
+    expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /claude/ })).toBeNull();
+    expect(screen.queryByText("Loading agents, shells and scripts…")).toBeNull();
+    expect(screen.queryByText("No matching agents, shells or scripts.")).toBeNull();
   });
 
-  it("a launch can be retried after a failure (the in-flight guard resets on rejection)", async () => {
-    useDashboardStore.setState({ projects: [PROJECT], sessions: [] });
-    let calls = 0;
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
-      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
-      if (url.endsWith("/api/sessions") && init?.method === "POST") {
-        calls += 1;
-        if (calls === 1) return Promise.resolve(jsonResponse(503, { message: "unreachable" }));
-        return Promise.resolve(
-          jsonResponse(201, { id: 1, projectId: PROJECT.id, command: "bash", cwd: null }),
-        );
-      }
-      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
-      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const onLaunched = vi.fn();
+  it("highlights New session… on open, so Enter opens the launcher on the project with no entry preselected", async () => {
+    const onClose = vi.fn();
+    const onOpenGitHub = vi.fn();
     const user = userEvent.setup();
-    renderPalette({ onLaunched });
+    renderPalette({ onClose, onOpenGitHub });
 
-    await user.click((await screen.findAllByText("bash"))[0]);
-    await screen.findByText(/unreachable/i);
+    const row = await screen.findByRole("button", { name: /New session…/ });
+    expect(row).toHaveClass("selected");
+    expect(document.querySelector(".cmd-palette-footer")?.textContent).toContain(
+      "Run New session…",
+    );
+    await user.keyboard("{Enter}");
 
-    await user.click((await screen.findAllByText("bash"))[0]);
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+    });
+    expect(onOpenGitHub).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+  });
 
-    await vi.waitFor(() => expect(onLaunched).toHaveBeenCalled());
+  it("a clicked New session… opens the launcher on the project, and creates no session", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette({ onClose });
+
+    await user.click(await screen.findByRole("button", { name: /New session…/ }));
+
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+  });
+
+  it("New session… opens the launcher with no target when there is no project", async () => {
+    useDashboardStore.setState({ projects: [] });
+    const user = userEvent.setup();
+    renderPalette();
+
+    await user.click(await screen.findByRole("button", { name: /New session…/ }));
+
+    expect(useDashboardStore.getState().launcherRequest).toMatchObject({ target: null });
+    expect(posts).toBe(0);
+  });
+
+  it("a typed shell, clicked, opens the launcher on it and the project, and creates no session", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette({ onClose });
+
+    await user.type(await screen.findByPlaceholderText(SEARCH), "bash");
+    await user.click(await screen.findByRole("button", { name: /bash/ }));
+
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+      launcherId: "shell:bash",
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+  });
+
+  it("a typed agent name lists the agent under New session, and Enter opens the launcher on that agent", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderPalette({ onClose });
+
+    await user.type(await screen.findByPlaceholderText(SEARCH), "claude");
+
+    const claude = await screen.findByRole("button", { name: /claude/ });
+    expect(screen.getByText("New session")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
+    // The matching agent is the first result, so it is the selection.
+    await waitFor(() => expect(claude).toHaveClass("selected"));
+    expect(document.querySelector(".cmd-palette-footer")?.textContent).toMatch(
+      /New session in mullion…/,
+    );
+    await user.keyboard("{Enter}");
+
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+      launcherId: "agent:claude",
+    });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(posts).toBe(0);
+  });
+
+  function holdActions() {
+    const held: { release: (() => void) | null } = { release: null };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/actions")) {
+          return new Promise<Response>((resolve) => {
+            held.release = () => resolve(jsonResponse(200, [CLAUDE, BASH]));
+          });
+        }
+        if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      }),
+    );
+    return held;
+  }
+
+  it("says, under a typed query only, that the list is loading until the project's agents, shells and scripts arrive", async () => {
+    const held = holdActions();
+    const user = userEvent.setup();
+    renderPalette();
+
+    // The blank view has nothing to wait for.
+    await screen.findByRole("button", { name: /New session…/ });
+    await waitFor(() => expect(held.release).not.toBeNull());
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText("New session")).toBeNull();
+
+    await user.type(screen.getByPlaceholderText(SEARCH), "bash");
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Loading agents, shells and scripts…",
+    );
+    expect(screen.getByText("New session")).toBeInTheDocument();
+
+    held.release!();
+    await screen.findByRole("button", { name: /bash/ });
+    expect(screen.queryByText("Loading agents, shells and scripts…")).toBeNull();
+    expect(screen.getByText("New session")).toBeInTheDocument();
+  });
+
+  it("moves the selection back to the first result when the list arrives under a typed query", async () => {
+    const held = holdActions();
+    const user = userEvent.setup();
+    renderPalette();
+
+    await waitFor(() => expect(held.release).not.toBeNull());
+    // "s" finds several commands while the launchers are still loading.
+    await user.type(screen.getByPlaceholderText(SEARCH), "s");
+    await user.keyboard("{ArrowDown}");
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>(".cmd-row"));
+    expect(rows().length).toBeGreaterThan(1);
+    expect(rows()[1]).toHaveClass("selected");
+
+    held.release!();
+    // "s" matches bash, which leads the list once it arrives.
+    const bash = await screen.findByRole("button", { name: /bash/ });
+    await waitFor(() => expect(bash).toHaveClass("selected"));
+    expect(rows()[0]).toBe(bash);
+  });
+
+  it("starts no session itself: no launch options, and a query nothing matches names what is missing", async () => {
+    const user = userEvent.setup();
+    renderPalette();
+
+    await screen.findByRole("button", { name: /New session…/ });
+    expect(screen.getByPlaceholderText(SEARCH)).toBeVisible();
+    expect(screen.queryByRole("combobox", { name: "Model for this session" })).toBeNull();
+    expect(screen.queryByText(/Skip permissions/)).toBeNull();
+    expect(screen.queryByText(/Isolate in a new worktree/)).toBeNull();
+    expect(screen.queryByText(/Launch in/)).toBeNull();
+    await user.type(screen.getByPlaceholderText(SEARCH), "zzzz-nothing");
+    expect(await screen.findByText("No matching agents, shells or scripts.")).toBeInTheDocument();
+    expect(screen.queryByText("New session")).toBeNull();
   });
 });
 
@@ -485,7 +633,6 @@ describe("CommandPalette -> focus management (P11)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -524,11 +671,11 @@ describe("CommandPalette -> focus management (P11)", () => {
     renderPalette();
     const dialog = await screen.findByRole("dialog", { name: "Command palette" });
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByPlaceholderText("Launch a session or run a command…")).toHaveFocus();
+    expect(screen.getByPlaceholderText("Run a command, or find a session or agent…")).toHaveFocus();
   });
 
   // Mobile/tablet touch fix — autofocusing the search input on open used to
-  // raise the on-screen keyboard immediately, covering the launcher list a
+  // raise the on-screen keyboard immediately, covering the command list a
   // touch user opened this to read. Same matchMedia-stub pattern as
   // Dock.test.tsx's own coarse-pointer test.
   function stubCoarsePointer() {
@@ -549,7 +696,9 @@ describe("CommandPalette -> focus management (P11)", () => {
     const dialog = await screen.findByRole("dialog", { name: "Command palette" });
 
     expect(dialog).toHaveFocus();
-    expect(screen.getByPlaceholderText("Launch a session or run a command…")).not.toHaveFocus();
+    expect(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+    ).not.toHaveFocus();
   });
 
   it("tapping the search box directly still raises the keyboard under a coarse pointer", async () => {
@@ -557,7 +706,7 @@ describe("CommandPalette -> focus management (P11)", () => {
     stubCoarsePointer();
     renderPalette();
     await screen.findByRole("dialog", { name: "Command palette" });
-    const input = screen.getByPlaceholderText("Launch a session or run a command…");
+    const input = screen.getByPlaceholderText("Run a command, or find a session or agent…");
 
     // This fix only changes what grabs focus on open — tapping the input is
     // still a normal click, exercised through userEvent (not a bare
@@ -584,7 +733,7 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     await user.keyboard("b");
 
-    expect(screen.getByPlaceholderText("Launch a session or run a command…")).toHaveFocus();
+    expect(screen.getByPlaceholderText("Run a command, or find a session or agent…")).toHaveFocus();
   });
 
   it("does not redirect focus to the search input on Escape (the dialog's own close key)", async () => {
@@ -596,7 +745,9 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     await user.keyboard("{Escape}");
 
-    expect(screen.getByPlaceholderText("Launch a session or run a command…")).not.toHaveFocus();
+    expect(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+    ).not.toHaveFocus();
   });
 
   // Independent code review — without the container-anchor branch
@@ -622,7 +773,7 @@ describe("CommandPalette -> focus management (P11)", () => {
     trigger.focus();
 
     const { unmount } = renderPalette();
-    await screen.findByPlaceholderText("Launch a session or run a command…");
+    await screen.findByPlaceholderText("Run a command, or find a session or agent…");
     expect(document.activeElement).not.toBe(trigger);
 
     // Mirrors App.tsx's conditional mount — closing is a full unmount.
@@ -630,55 +781,63 @@ describe("CommandPalette -> focus management (P11)", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("does NOT restore focus to the trigger when closing by launching a session (focus belongs to the new pane instead)", async () => {
+  // #3054 — an entry opens the launcher rather than launching. The
+  // palette's own restore runs, so the launcher (opening in the same commit)
+  // records the palette's opener as its own, and closing the launcher
+  // returns focus there rather than to <body>.
+  it("restores focus to the trigger when New session… hands over to the launcher", async () => {
+    render(<button>open palette</button>);
+    const trigger = screen.getByText("open palette");
+    trigger.focus();
+    useDashboardStore.setState({ launcherRequest: null });
+
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    const { unmount } = renderPalette({ onClose });
+
+    await user.click(await screen.findByRole("button", { name: /New session…/ }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+    });
+
+    // App.tsx's real close path is a conditional-mount flip.
+    unmount();
+
+    expect(trigger).toHaveFocus();
+  });
+
+  it("restores focus to the trigger when a typed entry hands over to the launcher", async () => {
     render(<button>open palette</button>);
     const trigger = screen.getByText("open palette");
     trigger.focus();
 
-    let resolveCreate: (session: Session) => void = () => {};
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
-      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
-      if (url.endsWith("/api/sessions") && init?.method === "POST") {
-        return new Promise((resolve) => {
-          resolveCreate = (session) => resolve(jsonResponse(201, session));
-        });
-      }
-      // store.createSession refreshes the session list right after — not
-      // under test here, so an empty list is fine.
-      if (url.startsWith("/api/sessions") && (init?.method ?? "GET") === "GET") {
-        return Promise.resolve(jsonResponse(200, []));
-      }
-      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, [LAUNCHER]));
+        if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
+        return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
+      }),
+    );
 
     const onClose = vi.fn();
-    const onLaunched = vi.fn();
     const user = userEvent.setup();
-    const { unmount } = renderPalette({ onClose, onLaunched });
+    const { unmount } = renderPalette({ onClose });
 
-    await user.click((await screen.findAllByText("bash"))[0]);
-    resolveCreate({
-      id: 1,
-      projectId: PROJECT.id,
-      command: "bash",
-      cwd: null,
-      env: null,
-    } as Session);
-    await vi.waitFor(() => expect(onLaunched).toHaveBeenCalled());
+    await user.type(
+      await screen.findByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
+    await user.click(await screen.findByRole("button", { name: /bash/ }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useDashboardStore.getState().launcherRequest?.target?.launcherId).toBe("agent:bash");
 
-    // App.tsx's real close path is a conditional-mount flip, not a method
-    // call on this component — mirror that here so the trap's own
-    // restore-on-close cleanup effect actually runs. Without
-    // `suppressRestore()` (called by `closeAfterAction` before `onClose`
-    // above), this unmount would snap focus back onto `trigger`; with it,
-    // focus is left wherever the real app's onOpenSession/onLaunched just
-    // put it (a new pane's terminal, per PR13/U7) instead.
+    // App.tsx's real close path is a conditional-mount flip.
     unmount();
 
-    expect(trigger).not.toHaveFocus();
+    expect(trigger).toHaveFocus();
   });
 
   // Issue #1884 — suppressRestore used to run for every action, including
@@ -696,8 +855,8 @@ describe("CommandPalette -> focus management (P11)", () => {
     });
     const user = userEvent.setup();
     const { unmount } = renderPalette();
-    await screen.findByPlaceholderText("Launch a session or run a command…");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+    await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "release");
     await user.keyboard("{Enter}");
 
     unmount();
@@ -716,8 +875,8 @@ describe("CommandPalette -> focus management (P11)", () => {
     });
     const user = userEvent.setup();
     const { unmount } = renderPalette();
-    await screen.findByPlaceholderText("Launch a session or run a command…");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "clickable");
+    await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "clickable");
     await user.click(await screen.findByText("clickable workspace"));
 
     unmount();
@@ -776,8 +935,8 @@ describe("CommandPalette -> focus management (P11)", () => {
       });
       const user = userEvent.setup();
       const { unmount } = renderPalette();
-      await screen.findByPlaceholderText("Launch a session or run a command…");
-      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+      await user.type(screen.getByPlaceholderText(/Run a command/), "release");
       await user.click(await screen.findByText("Release train"));
 
       await vi.waitFor(() => expect(pane).toHaveFocus());
@@ -809,8 +968,8 @@ describe("CommandPalette -> focus management (P11)", () => {
       });
       const user = userEvent.setup();
       renderPalette();
-      await screen.findByPlaceholderText("Launch a session or run a command…");
-      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+      await user.type(screen.getByPlaceholderText(/Run a command/), "release");
       await user.click(await screen.findByText("Release train"));
 
       await vi.waitFor(() => expect(row).toHaveFocus());
@@ -849,8 +1008,8 @@ describe("CommandPalette -> focus management (P11)", () => {
         },
       });
       unmountPalette = view.unmount;
-      await screen.findByPlaceholderText("Launch a session or run a command…");
-      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+      await user.type(screen.getByPlaceholderText(/Run a command/), "release");
       await user.click(await screen.findByText("Release train"));
 
       await vi.waitFor(() => expect(row).toHaveFocus());
@@ -882,8 +1041,8 @@ describe("CommandPalette -> focus management (P11)", () => {
       });
       const user = userEvent.setup();
       renderPalette();
-      await screen.findByPlaceholderText("Launch a session or run a command…");
-      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+      await user.type(screen.getByPlaceholderText(/Run a command/), "release");
       await user.click(await screen.findByText("Release train"));
 
       await vi.waitFor(() => expect(shown).toHaveFocus());
@@ -913,7 +1072,8 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     const user = userEvent.setup();
     const { unmount } = renderPalette();
-    await user.click(await screen.findByText("GitHub"));
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "github");
+    await user.click(await screen.findByText(/^GitHub$/));
 
     unmount();
     expect(trigger).toHaveFocus();
@@ -926,7 +1086,7 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     const user = userEvent.setup();
     const { unmount } = renderPalette();
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "github settings");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "github settings");
     await user.click(await screen.findByText("GitHub settings"));
 
     unmount();
@@ -940,8 +1100,8 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     const user = userEvent.setup();
     const { unmount } = renderPalette();
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "new preview tab");
-    await user.click(await screen.findByText("New preview tab"));
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "new preview tab");
+    await user.click(await screen.findByText("Open browser: blank preview"));
 
     unmount();
     expect(trigger).not.toHaveFocus();
@@ -964,7 +1124,7 @@ describe("CommandPalette -> focus management (P11)", () => {
   it("traps Tab within the palette", async () => {
     const user = userEvent.setup();
     const { container } = renderPalette();
-    await screen.findAllByText("bash");
+    await screen.findByRole("button", { name: /New session…/ });
 
     const dialog = container.querySelector(".cmd-palette") as HTMLElement;
     const focusable = Array.from(
@@ -985,7 +1145,7 @@ describe("CommandPalette -> focus management (P11)", () => {
   });
 });
 
-describe("CommandPalette -> skip-permissions badge and launch precedence", () => {
+describe("CommandPalette -> skip-permissions badge", () => {
   const CLAUDE: Launcher = {
     id: "agent:claude",
     kind: "agent",
@@ -1050,7 +1210,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1068,7 +1227,10 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       />,
     );
 
-    await screen.findByText("Launchers");
+    // "c" matches claude, codex and opencode, so the count of 2 still leaves
+    // opencode out.
+    await userEvent.setup().type(await screen.findByPlaceholderText(/Run a command/), "c");
+    await screen.findByRole("button", { name: /opencode/ });
     // claude (global settings list) + codex (launcher skipPermissions:true) = 2 badges
     expect(screen.getAllByText("⚠ skip perms")).toHaveLength(2);
   });
@@ -1080,7 +1242,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1100,10 +1261,10 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
 
     // opencode has skipPermissions: false in launcher config and is NOT in
     // the global settings list — no badge expected.
-    await screen.findByText("Launchers");
-    await userEvent.setup().click(screen.getByPlaceholderText(/Launch a session/));
-    await userEvent.setup().clear(screen.getByPlaceholderText(/Launch a session/));
-    await userEvent.setup().type(screen.getByPlaceholderText(/Launch a session/), "opencode");
+    await screen.findByText("New session…");
+    await userEvent.setup().click(screen.getByPlaceholderText(/Run a command/));
+    await userEvent.setup().clear(screen.getByPlaceholderText(/Run a command/));
+    await userEvent.setup().type(screen.getByPlaceholderText(/Run a command/), "opencode");
     expect(screen.queryByText("⚠ skip perms")).not.toBeInTheDocument();
   });
 
@@ -1114,7 +1275,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1132,416 +1292,11 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
       />,
     );
 
-    await screen.findByText("Launchers");
-    await userEvent.setup().click(screen.getByPlaceholderText(/Launch a session/));
-    await userEvent.setup().clear(screen.getByPlaceholderText(/Launch a session/));
-    await userEvent.setup().type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await screen.findByText("New session…");
+    await userEvent.setup().click(screen.getByPlaceholderText(/Run a command/));
+    await userEvent.setup().clear(screen.getByPlaceholderText(/Run a command/));
+    await userEvent.setup().type(screen.getByPlaceholderText(/Run a command/), "bash");
     expect(screen.queryByText("⚠ skip perms")).not.toBeInTheDocument();
-  });
-
-  it("passes skipPermissions=true when agent is in the global settings list and checkbox is off", async () => {
-    const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
-    const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
-
-    // claude is in the global settings list; launch without touching the checkbox.
-    await screen.findByText("Launchers");
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "claude");
-    await user.click((await screen.findAllByText("claude"))[0]);
-
-    expect(onCreateSession).toHaveBeenCalledWith(
-      expect.objectContaining({ skipPermissions: true }),
-    );
-  });
-
-  it("passes skipPermissions=false when agent has skipPermissions:false in launcher config even if in global list", async () => {
-    // Set opencode in the global list too, but its launcher config says false.
-    useDashboardStore.setState({
-      settings: {
-        ...DEFAULT_SETTINGS,
-        launchers: {
-          ...DEFAULT_SETTINGS.launchers,
-          skipPermissionsAgents: ["claude", "opencode"],
-        },
-      },
-    });
-    const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
-    const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
-
-    await screen.findByText("Launchers");
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "opencode");
-    await user.click((await screen.findAllByText("opencode"))[0]);
-
-    expect(onCreateSession).toHaveBeenCalledWith(
-      expect.objectContaining({ skipPermissions: false }),
-    );
-  });
-
-  it("keeps the options-strip in the DOM when a non-agent launcher is selected (visibility:hidden)", async () => {
-    vi.stubGlobal("fetch", mockFetch({}));
-    const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
-
-    await screen.findByText("Launchers");
-
-    // bash is a shell — the options-strip still renders (visibility:hidden).
-    // The toggle text must be in the DOM even when the selected launcher
-    // is not an agent, so the launcher list never shifts.
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
-    expect(screen.getByText("Skip permissions (all agents)")).toBeInTheDocument();
-  });
-
-  it("uses the override checkbox when launching and sends skipPermissions:true", async () => {
-    const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
-    const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
-
-    await screen.findByText("Launchers");
-
-    // Check the "Skip permissions (all agents)" override checkbox.
-    const checkbox = screen.getByRole("checkbox", {
-      name: /Skip permissions \(all agents\)/i,
-    });
-    await user.click(checkbox);
-
-    // Launch opencode (skipPermissions:false in launcher config, not in
-    // global list). The override checkbox should win, sending true.
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "opencode");
-    await user.click((await screen.findAllByText("opencode"))[0]);
-
-    expect(onCreateSession).toHaveBeenCalledWith(
-      expect.objectContaining({ skipPermissions: true }),
-    );
-  });
-});
-
-// Issue #1424 — the per-session model picker in the options strip, keyed to
-// whichever launcher is currently highlighted.
-describe("CommandPalette -> per-session model picker (issue #1424)", () => {
-  const CLAUDE: Launcher = {
-    id: "agent:claude",
-    kind: "agent",
-    title: "claude",
-    command: "claude",
-  };
-  const CODEX: Launcher = {
-    id: "agent:codex",
-    kind: "agent",
-    title: "codex",
-    command: "codex",
-  };
-  const BASH: Launcher = { id: "shell:bash", kind: "shell", title: "bash", command: "bash" };
-  // A custom (.crs/actions.json) launcher, not kind "agent" — the picker
-  // must still key off the COMMAND, not the launcher kind/id.
-  const CUSTOM_CLAUDE: Launcher = {
-    id: "custom:claude-review",
-    kind: "custom",
-    title: "claude review",
-    command: "claude --foo",
-  };
-  const CUSTOM_ALREADY_HAS_MODEL: Launcher = {
-    id: "custom:claude-opus",
-    kind: "custom",
-    title: "claude opus",
-    command: "claude --model opus",
-  };
-
-  beforeEach(() => {
-    useDashboardStore.setState({ projects: [PROJECT], sessions: [], settings: DEFAULT_SETTINGS });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  function mockFetch(opts: {
-    launchers?: Launcher[];
-    onCreateSession?: (body: unknown) => void;
-    codexModels?: string[];
-  }) {
-    const launchers = opts.launchers ?? [CLAUDE, CODEX, BASH];
-    return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/actions")) return Promise.resolve(jsonResponse(200, launchers));
-      if (url.includes("/urls")) return Promise.resolve(jsonResponse(200, []));
-      if (url.endsWith("/api/codex/models"))
-        return Promise.resolve(jsonResponse(200, opts.codexModels ?? []));
-      if (url.endsWith("/api/agy/models")) return Promise.resolve(jsonResponse(200, []));
-      if (url.endsWith("/api/opencode/models")) return Promise.resolve(jsonResponse(200, []));
-      if (url.endsWith("/api/sessions") && init?.method === "POST") {
-        opts.onCreateSession?.(JSON.parse(String(init.body)));
-        return Promise.resolve(
-          jsonResponse(201, { id: 1, projectId: PROJECT.id, command: "bash", status: "active" }),
-        );
-      }
-      if (url.startsWith("/api/sessions")) return Promise.resolve(jsonResponse(200, []));
-      return Promise.reject(new Error(`unhandled fetch in test: ${url}`));
-    });
-  }
-
-  function renderPalette(overrides: Partial<ComponentProps<typeof CommandPalette>> = {}) {
-    return render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-        onOpenTasks={vi.fn()}
-        {...overrides}
-      />,
-    );
-  }
-
-  it("sends the picked model when launching the highlighted Claude Code launcher", async () => {
-    const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
-    const user = userEvent.setup();
-    renderPalette();
-
-    // Claude is settings.launchers.defaultAgent — highlighted without typing.
-    await screen.findByText("Launchers");
-    const select = await screen.findByRole("combobox", { name: "Model for this session" });
-    await user.selectOptions(select, "opusplan");
-    // Enter launches entries[activeIndex] (Claude, still highlighted) — the
-    // search input, not the select, must have focus for its onKeyDown to see it.
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.keyboard("{Enter}");
-
-    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ model: "opusplan" }));
-  });
-
-  it("sends no model key when the picker is left on its default option", async () => {
-    const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
-    const user = userEvent.setup();
-    renderPalette();
-
-    await screen.findByText("Launchers");
-    await screen.findByRole("combobox", { name: "Model for this session" });
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.keyboard("{Enter}");
-
-    expect(onCreateSession).toHaveBeenCalled();
-    expect(onCreateSession.mock.calls[0]![0]).not.toHaveProperty("model");
-  });
-
-  it("does not carry a model picked for Claude over to a Codex launch", async () => {
-    const onCreateSession = vi.fn();
-    vi.stubGlobal("fetch", mockFetch({ onCreateSession }));
-    const user = userEvent.setup();
-    renderPalette();
-
-    await screen.findByText("Launchers");
-    const select = await screen.findByRole("combobox", { name: "Model for this session" });
-    await user.selectOptions(select, "opusplan");
-
-    // Move the highlight from Claude (index 0) to Codex (index 1) and launch
-    // with Enter, which launches entries[activeIndex] — the search input
-    // must be focused for its own onKeyDown handler to see the arrow key.
-    const input = screen.getByPlaceholderText(/Launch a session/);
-    await user.click(input);
-    await user.keyboard("{ArrowDown}");
-    await user.keyboard("{Enter}");
-
-    expect(onCreateSession).toHaveBeenCalled();
-    expect(onCreateSession.mock.calls[0]![0]).not.toHaveProperty("model");
-  });
-
-  it("shows a loading placeholder in the options strip until launchers resolve, then collapses it for a shell", async () => {
-    let resolveActions: (r: Response) => void = () => {};
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: string | URL | Request) => {
-        const u = typeof url === "string" ? url : url.toString();
-        if (u.includes("/actions")) {
-          return new Promise<Response>((resolve) => {
-            resolveActions = resolve;
-          });
-        }
-        return Promise.resolve(jsonResponse(200, []));
-      }),
-    );
-    renderPalette();
-
-    expect(await screen.findByText("Loading launchers…")).toBeInTheDocument();
-
-    resolveActions(jsonResponse(200, [BASH]));
-    await screen.findByText("Launchers");
-
-    expect(screen.queryByText("Loading launchers…")).not.toBeInTheDocument();
-    expect(document.querySelector(".cmd-palette-options-strip")).toHaveClass("collapsed");
-  });
-
-  it("shows no model control for a plain shell launcher", async () => {
-    vi.stubGlobal("fetch", mockFetch({}));
-    const user = userEvent.setup();
-    renderPalette();
-
-    await screen.findByText("Launchers");
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
-
-    expect(
-      screen.queryByRole("combobox", { name: "Model for this session" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows no model control for a custom launcher whose command already has --model", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch({ launchers: [CLAUDE, CODEX, BASH, CUSTOM_ALREADY_HAS_MODEL] }),
-    );
-    const user = userEvent.setup();
-    renderPalette();
-
-    await screen.findByText("Launchers");
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "claude opus");
-
-    expect(
-      screen.queryByRole("combobox", { name: "Model for this session" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows the model control for a custom (non-agent-kind) launcher matched by command", async () => {
-    vi.stubGlobal("fetch", mockFetch({ launchers: [CLAUDE, CODEX, BASH, CUSTOM_CLAUDE] }));
-    const user = userEvent.setup();
-    renderPalette();
-
-    await screen.findByText("Launchers");
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "claude review");
-
-    expect(await screen.findByRole("combobox", { name: "Model for this session" })).toBeVisible();
-  });
-
-  it("populates Codex's options from the live catalog", async () => {
-    vi.stubGlobal("fetch", mockFetch({ codexModels: ["gpt-6-astra", "gpt-6-luna"] }));
-    const user = userEvent.setup();
-    renderPalette();
-
-    await screen.findByText("Launchers");
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.clear(screen.getByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "codex");
-
-    const select = await screen.findByRole("combobox", { name: "Model for this session" });
-    expect(within(select).getByRole("option", { name: "gpt-6-astra" })).toBeInTheDocument();
-    expect(within(select).getByRole("option", { name: "gpt-6-luna" })).toBeInTheDocument();
-    // The static fallback list is NOT shown once the live catalog answers.
-    expect(within(select).queryByRole("option", { name: "gpt-6-sol" })).not.toBeInTheDocument();
   });
 });
 
@@ -1661,14 +1416,13 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     useDashboardStore.setState({ projects: [PROJECT], sessions: [session], workspaces: [] });
     vi.stubGlobal("fetch", mockFetch());
     const onOpenSession = vi.fn();
-    const onLaunched = vi.fn();
+    useDashboardStore.setState({ launcherRequest: null });
     const user = userEvent.setup();
     render(
       <CommandPalette
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={onLaunched}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1686,8 +1440,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "hotfix");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "hotfix");
 
     expect(await screen.findByText("Sessions")).toBeInTheDocument();
     // Matched on the session's own name plus its project and branch — same
@@ -1697,7 +1451,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
     expect(onOpenSession).toHaveBeenCalledWith(session);
     // The whole point of this group: it opens the EXISTING pane, it never
     // goes through the create-a-new-session path.
-    expect(onLaunched).not.toHaveBeenCalled();
+    expect(useDashboardStore.getState().launcherRequest).toBeNull();
   });
 
   it("does not surface a killed or dock session", async () => {
@@ -1716,7 +1470,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1734,8 +1487,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "match");
 
     await screen.findByText("matchme live");
     expect(screen.queryByText("killed one")).not.toBeInTheDocument();
@@ -1762,7 +1515,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1780,8 +1532,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "match");
 
     // The target strip reads "Runs in mullion" for this scope, and the
     // launcher list itself is already fetched per-project — a session from
@@ -1810,7 +1562,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1828,8 +1579,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "match");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "match");
 
     // Global scope's own project picker isn't bound to one project (unlike
     // "project" scope's "Runs in <project>" framing), so unlike the test
@@ -1859,7 +1610,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={onClose}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1877,8 +1627,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "release");
 
     expect(await screen.findByText("Workspaces")).toBeInTheDocument();
     await user.click(screen.getByText("Release train"));
@@ -1905,7 +1655,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1923,21 +1672,25 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
+    await screen.findByText("New session…");
     // Matches all three groups: the session/workspace names both contain
     // "bash", and "bash" is also the shell launcher's own title.
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "bash");
     await screen.findByText("bashful session");
     await screen.findByText("bashful workspace");
 
     // Typing resets selection to index 0 -> the first Sessions row is
     // highlighted by default. Two ArrowDowns walk Sessions -> Workspaces ->
     // Launchers (one flattened index across all three groups), then
-    // Enter should launch the bash command, not reopen the session or
-    // switch the workspace.
+    // Enter should open the launcher on the bash command (#3054), not reopen
+    // the session or switch the workspace.
     await user.keyboard("{ArrowDown}{ArrowDown}{Enter}");
 
-    expect(onCreateSession).toHaveBeenCalledWith(expect.objectContaining({ command: "bash" }));
+    expect(useDashboardStore.getState().launcherRequest?.target).toEqual({
+      projectId: PROJECT.id,
+      launcherId: "agent:bash",
+    });
+    expect(onCreateSession).not.toHaveBeenCalled();
     expect(onOpenSession).not.toHaveBeenCalled();
     expect(useDashboardStore.getState().activeWorkspaceId).not.toBe(3);
   });
@@ -1964,7 +1717,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -1982,8 +1734,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "bash");
     await screen.findByText("bashful session");
     await screen.findByText("bashful workspace");
 
@@ -2016,7 +1768,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2034,8 +1785,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "bash");
     await screen.findByText("bashful session");
     await screen.findByText("bashful workspace");
 
@@ -2061,7 +1812,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2079,7 +1829,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
+    await screen.findByText("New session…");
 
     expect(screen.queryByText("Sessions")).not.toBeInTheDocument();
     expect(screen.queryByText("Workspaces")).not.toBeInTheDocument();
@@ -2107,7 +1857,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2126,8 +1875,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "bashful");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "bashful");
     await screen.findByText("bashful workspace");
     await user.keyboard("{Enter}");
 
@@ -2150,7 +1899,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2169,8 +1917,8 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
       />,
     );
 
-    await screen.findByText("Launchers");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "clickable");
+    await screen.findByText("New session…");
+    await user.type(screen.getByPlaceholderText(/Run a command/), "clickable");
     await user.click(await screen.findByText("clickable workspace"));
 
     expect(onShowWorkspace).toHaveBeenCalledWith(4);
@@ -2235,7 +1983,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2262,14 +2009,13 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     expect(beta).not.toHaveTextContent("hosts");
   });
 
-  it("toggles the project picker open and closed when clicking the 'Launch in' chip", async () => {
+  it("toggles the project picker open and closed when clicking the project chip", async () => {
     const user = userEvent.setup();
     render(
       <CommandPalette
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2287,18 +2033,18 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
+    await screen.findByRole("button", { name: /New session…/ });
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     expect(targetButton).toHaveAttribute("aria-expanded", "false");
 
     await user.click(targetButton);
     expect(targetButton).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByText("Launch in which project?")).toBeInTheDocument();
+    expect(screen.getByText("Which project?")).toBeInTheDocument();
     expect(screen.getByText("beta-project")).toBeInTheDocument();
 
     await user.click(targetButton);
     expect(targetButton).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("Launch in which project?")).not.toBeInTheDocument();
+    expect(screen.queryByText("Which project?")).not.toBeInTheDocument();
   });
 
   it("styles the picker distinctly, marks the current project and shortens the home path", async () => {
@@ -2308,7 +2054,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2326,7 +2071,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
+    await screen.findByRole("button", { name: /New session…/ });
     await user.click(screen.getByRole("button", { name: /Target project:/ }));
 
     expect(screen.getByRole("listbox")).toHaveClass("project-picker");
@@ -2342,7 +2087,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2360,7 +2104,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
+    await screen.findByRole("button", { name: /New session…/ });
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
 
@@ -2380,7 +2124,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2398,24 +2141,31 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
+    // A typed query lists the target project's launchers, so the switch
+    // shows as one project's shell replacing the other's.
+    await screen.findByRole("button", { name: /New session…/ });
+    await user.type(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
     await screen.findByText("bash alpha");
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
 
     await user.click(screen.getByText("beta-project"));
-    expect(screen.queryByText("Launch in which project?")).not.toBeInTheDocument();
+    expect(screen.queryByText("Which project?")).not.toBeInTheDocument();
     await screen.findByText("bash beta");
+    expect(screen.queryByText("bash alpha")).not.toBeInTheDocument();
   });
 
   it("navigates projects with ArrowDown/ArrowUp and selects with Enter without launching background commands", async () => {
-    const onLaunched = vi.fn();
+    useDashboardStore.setState({ launcherRequest: null });
     const user = userEvent.setup();
     render(
       <CommandPalette
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={onLaunched}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2433,6 +2183,11 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
+    await screen.findByRole("button", { name: /New session…/ });
+    await user.type(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
     await screen.findByText("bash alpha");
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2442,7 +2197,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     await user.click(input);
     await user.keyboard("{ArrowDown}{Enter}");
 
-    expect(onLaunched).not.toHaveBeenCalled();
+    expect(useDashboardStore.getState().launcherRequest).toBeNull();
     await screen.findByText("bash beta");
   });
 
@@ -2454,7 +2209,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         scope="global"
         projectId={null}
         onClose={onClose}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2472,17 +2226,22 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
+    await screen.findByRole("button", { name: /New session…/ });
+    await user.type(
+      screen.getByPlaceholderText("Run a command, or find a session or agent…"),
+      "bash",
+    );
     await screen.findByText("bash alpha");
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
-    expect(screen.getByText("Launch in which project?")).toBeInTheDocument();
+    expect(screen.getByText("Which project?")).toBeInTheDocument();
 
     // Focus the search input so our onKeyDown intercepts Escape
     const input = screen.getByPlaceholderText("Filter projects…");
     await user.click(input);
     await user.keyboard("{Escape}");
     expect(onClose).not.toHaveBeenCalled();
-    expect(screen.queryByText("Launch in which project?")).not.toBeInTheDocument();
+    expect(screen.queryByText("Which project?")).not.toBeInTheDocument();
     expect(screen.getByText("bash alpha")).toBeInTheDocument();
   });
 
@@ -2493,7 +2252,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2511,10 +2269,11 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
-    const searchInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    const searchInput = await screen.findByPlaceholderText(
+      "Run a command, or find a session or agent…",
+    );
     await user.type(searchInput, "bash");
-    expect(screen.getByText("bash alpha")).toBeInTheDocument();
+    expect(await screen.findByText("bash alpha")).toBeInTheDocument();
 
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2525,10 +2284,10 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     // The main search box should show the pre-picker query ("bash"), not
     // the picker's own leftover filter text ("beta") — and the launcher
     // list should reflect that restored query rather than sitting empty.
-    const restoredInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    const restoredInput = screen.getByPlaceholderText("Run a command, or find a session or agent…");
     expect(restoredInput).toHaveValue("bash");
     await screen.findByText("bash beta");
-    expect(screen.queryByText("No matching launchers.")).not.toBeInTheDocument();
+    expect(screen.queryByText("No matching agents, shells or scripts.")).not.toBeInTheDocument();
   });
 
   it("restores the pre-picker search query after closing the picker with Escape", async () => {
@@ -2538,7 +2297,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2556,9 +2314,11 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
       />,
     );
 
-    await screen.findByText("bash alpha");
-    const searchInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    const searchInput = await screen.findByPlaceholderText(
+      "Run a command, or find a session or agent…",
+    );
     await user.type(searchInput, "bash");
+    await screen.findByText("bash alpha");
 
     const targetButton = screen.getByRole("button", { name: /Target project:/ });
     await user.click(targetButton);
@@ -2566,7 +2326,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     await user.type(filterInput, "beta");
     await user.keyboard("{Escape}");
 
-    const restoredInput = screen.getByPlaceholderText("Launch a session or run a command…");
+    const restoredInput = screen.getByPlaceholderText("Run a command, or find a session or agent…");
     expect(restoredInput).toHaveValue("bash");
     expect(screen.getByText("bash alpha")).toBeInTheDocument();
   });
@@ -2590,7 +2350,6 @@ describe("CommandPalette -> close affordance (issue: mobile 'esc' chip did nothi
         scope="project"
         projectId={PROJECT.id}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -2685,7 +2444,6 @@ describe("CommandPalette -> Project drill-in and command search", () => {
         scope="project"
         projectId={PROJECT.id}
         onClose={props.onClose ?? vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         {...o}
         {...props}
@@ -2709,9 +2467,9 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     renderPalette(openers());
 
     expect(await screen.findByText("Project: mullion")).toBeTruthy();
-    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
     expect(screen.queryByText("Git", { exact: true })).toBeNull();
-    expect(screen.queryByText("Preview", { exact: true })).toBeNull();
+    expect(screen.queryByText("Open browser: preview…", { exact: true })).toBeNull();
     expect(screen.queryByText("GitHub settings")).toBeNull();
     for (const hidden of [
       "Agent Rules",
@@ -2869,12 +2627,12 @@ describe("CommandPalette -> Project drill-in and command search", () => {
 
     await user.click(await screen.findByText("Project: mullion"));
     await user.keyboard("{Escape}");
-    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("New workspace")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
 
     await user.click(screen.getByText("Project: mullion"));
     await user.keyboard("{Backspace}");
-    expect(screen.getByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("New workspace")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -2883,7 +2641,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(o);
 
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "skills");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "skills");
 
     expect(screen.getByText("Project › Skills")).toBeTruthy();
     await user.keyboard("{Enter}");
@@ -2894,7 +2652,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(openers());
 
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "project");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "project");
 
     expect(screen.queryByText("Project: mullion")).toBeNull();
   });
@@ -2904,14 +2662,14 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     const { unmount } = renderPalette(openers(), { onToggleRightSidebar });
 
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "toggle right sidebar");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "toggle right sidebar");
     await user.click(await screen.findByText("Toggle right sidebar"));
     expect(onToggleRightSidebar).toHaveBeenCalledTimes(1);
     unmount();
 
     const again = vi.fn();
     renderPalette(openers(), { onToggleRightSidebar: again });
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "drawer");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "drawer");
     await user.keyboard("{Enter}");
     expect(again).toHaveBeenCalledTimes(1);
   });
@@ -2924,16 +2682,13 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       } as never,
     });
     const { unmount } = renderPalette(openers(), { onToggleRightSidebar: vi.fn() });
-    await user.type(
-      await screen.findByPlaceholderText(/Launch a session/),
-      "prune merged branches",
-    );
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "prune merged branches");
     await user.click(await screen.findByText("Prune merged branches"));
     expect(useDashboardStore.getState().rightSidebarPruneRequest?.projectId).toBe(PROJECT.id);
     unmount();
 
     renderPalette(openers(), { onToggleRightSidebar: vi.fn() });
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "pr 42");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "pr 42");
     await user.keyboard("{Enter}");
     expect(useDashboardStore.getState().githubOpenPrByProject[PROJECT.id]).toBe(42);
     expect(useDashboardStore.getState().rightSidebarView).toBe("github");
@@ -2945,7 +2700,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       .spyOn(api, "queueProjectIssue")
       .mockResolvedValue({ queued: true, label: "x" });
     const { unmount } = renderPalette(openers());
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "queue #7");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "queue #7");
     await user.keyboard("{Enter}");
     expect(queue).toHaveBeenCalledWith(PROJECT.id, 7);
     unmount();
@@ -2954,7 +2709,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const reportError = vi.fn();
     useDashboardStore.setState({ reportError } as never);
     renderPalette(openers());
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "queue 8");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "queue 8");
     await user.keyboard("{Enter}");
     await waitFor(() => expect(reportError).toHaveBeenCalled());
   });
@@ -2971,20 +2726,47 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     renderPalette(openers(), { scope: "global", projectId: undefined });
 
     expect(await screen.findByText("New workspace")).toBeTruthy();
-    expect(screen.queryByText("New preview tab")).toBeNull();
+    expect(screen.queryByText("Open browser: blank preview")).toBeNull();
     expect(screen.queryByText(/^Project:/)).toBeNull();
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
   });
 
-  it("labels the empty list Commands and Launchers, and has no Navigate group", async () => {
+  it("labels the empty list Create and Go to, and has no New session or Navigate group", async () => {
     renderPalette(openers());
 
-    expect(await screen.findByText("Launchers")).toBeTruthy();
-    expect(screen.getByText("Commands")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /New session…/ })).toBeTruthy();
+    expect(screen.getByText("Create")).toBeTruthy();
+    expect(screen.getByText("Go to")).toBeTruthy();
+    expect(document.querySelectorAll(".cmd-palette-group-label")).toHaveLength(2);
+    expect(screen.queryByText("New session")).toBeNull();
     expect(screen.queryByText("Navigate")).toBeNull();
     expect(screen.queryByText("Matching commands")).toBeNull();
     expect(screen.queryByText("Integrations")).toBeNull();
   });
+
+  it.each(["phone", "tablet", "desktop"] as const)(
+    "lists the same default rows, in the same two groups, on %s",
+    async (layoutTier) => {
+      renderPalette(openers(), { layoutTier, onOpenSettings: vi.fn() });
+
+      await screen.findByRole("button", { name: /New session…/ });
+      const rows = Array.from(
+        document.querySelectorAll(".cmd-palette-group-label, .cmd-palette-list button"),
+      ).map((el) =>
+        el.classList.contains("cmd-palette-group-label")
+          ? `# ${el.textContent}`
+          : (
+              el.querySelector(".cmd-palette-title, .cmd-palette-row-title")?.textContent ??
+              el.textContent ??
+              ""
+            ).trim(),
+      );
+      const text = rows.join("|");
+      expect(text).toMatch(
+        /^# Create\|New session….*\|New workspace.*\|# Go to\|Task board.*\|Browser.*\|Project: mullion.*\|Settings/,
+      );
+    },
+  );
 
   it("opens Devices, Hosts, and Settings through the same callbacks the rest of the UI uses", async () => {
     const onOpenDevices = vi.fn();
@@ -2994,19 +2776,19 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenDevices, onOpenHosts, onOpenSettings, onClose });
 
-    await user.clear(await screen.findByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "devices");
+    await user.clear(await screen.findByPlaceholderText(/Run a command/));
+    await user.type(screen.getByPlaceholderText(/Run a command/), "devices");
     await user.click(await screen.findByText(/^Devices$/));
     expect(onOpenDevices).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
 
-    await user.clear(await screen.findByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "hosts");
+    await user.clear(await screen.findByPlaceholderText(/Run a command/));
+    await user.type(screen.getByPlaceholderText(/Run a command/), "hosts");
     await user.click(screen.getByText(/^Hosts$/));
     expect(onOpenHosts).toHaveBeenCalledTimes(1);
 
-    await user.clear(await screen.findByPlaceholderText(/Launch a session/));
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "settings");
+    await user.clear(await screen.findByPlaceholderText(/Run a command/));
+    await user.type(screen.getByPlaceholderText(/Run a command/), "settings");
     await user.click(screen.getByText(/^Settings$/));
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(3);
@@ -3017,7 +2799,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenDevices });
 
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "devices");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "devices");
     expect(screen.getByText(/^Devices$/)).toBeTruthy();
     await user.keyboard("{Enter}");
     expect(onOpenDevices).toHaveBeenCalledTimes(1);
@@ -3049,10 +2831,125 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenTimeline, onClose });
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "session timeline");
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "session timeline");
     await user.click(await screen.findByText("Session timeline"));
     expect(onOpenTimeline).toHaveBeenCalledWith(expect.objectContaining({ id: 7, name: "hotfix" }));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // #3215: the pane menu's "Open browser", for the active session.
+  describe("Open browser", () => {
+    const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
+
+    afterEach(() => {
+      useDashboardStore.setState({
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "auto" },
+      });
+    });
+
+    it("is absent without an active terminal session", async () => {
+      useDashboardStore.setState({ sessions: [session], activePanelId: null, workspaces: [] });
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser: vi.fn() });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      expect(screen.queryByText(/agent's browser ·/)).toBeNull();
+    });
+
+    it("still finds the entry by its old words", async () => {
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: `session-${session.id}`,
+        workspaces: [],
+      });
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser: vi.fn() });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      expect(await screen.findByText("Open browser: agent's browser · hotfix")).toBeInTheDocument();
+    });
+
+    it.each(["preview browser", "open preview browser", "new blank preview browser"])(
+      "still finds the preview entries by the old words (%s)",
+      async (query) => {
+        useDashboardStore.setState({ sessions: [session], activePanelId: null, workspaces: [] });
+        const user = userEvent.setup();
+        renderPalette(openers());
+        await user.type(await screen.findByPlaceholderText(/Run a command/), query);
+        expect(
+          await screen.findAllByText(/^Open browser: (preview…|blank preview)$/),
+        ).not.toHaveLength(0);
+      },
+    );
+
+    it("opens the active session's Agent Browser pane, naming the session", async () => {
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: "session-7",
+        workspaces: [],
+      });
+      const onOpenAgentBrowser = vi.fn();
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser, onClose });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      await user.click(await screen.findByText("Open browser: agent's browser · hotfix"));
+      expect(onOpenAgentBrowser).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+      expect(onClose).toHaveBeenCalled();
+    });
+
+    it("opens the right sidebar's Browser view in a rails band instead of adding a pane", async () => {
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: "session-7",
+        workspaces: [],
+        rightSidebarView: "git",
+        rightSidebarOpen: false,
+        // The view was last in Preview (#3372): this entry asks for the agent's.
+        railBrowser: { mode: "preview", preview: null, rev: 1 },
+        // The "tablet" override resolves to the rails-halves band.
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "tablet" },
+      });
+      const onOpenAgentBrowser = vi.fn();
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      await user.click(await screen.findByText("Open browser: agent's browser · hotfix"));
+      expect(onOpenAgentBrowser).not.toHaveBeenCalled();
+      const state = useDashboardStore.getState();
+      expect(state.rightSidebarView).toBe("browser");
+      expect(state.rightSidebarOpen).toBe(true);
+      expect(state.rightSidebarProjectRequest?.projectId).toBe(PROJECT.id);
+      expect(state.railBrowser.mode).toBe("agent");
+    });
+  });
+
+  // #3370 — the palette and the pane menu share one band rule; rails-full
+  // (a grid presentation, but the rail's Browser view) opens the view too.
+  describe("Open browser by band (#3370)", () => {
+    const session = makeSession({ id: 7, projectId: PROJECT.id, name: "hotfix", nameLocked: true });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([
+      [750, "rails-full", true],
+      [1200, "desktop-narrow", false],
+    ])("at %ipx (%s) opens the rail view: %s", async (width, _band, railView) => {
+      stubPxWidth(width);
+      useDashboardStore.setState({
+        sessions: [session],
+        activePanelId: "session-7",
+        workspaces: [],
+        rightSidebarView: "git",
+        rightSidebarOpen: false,
+        settings: { ...useDashboardStore.getState().settings, layoutMode: "auto" },
+      });
+      const onOpenAgentBrowser = vi.fn();
+      const user = userEvent.setup();
+      renderPalette(openers(), { onOpenAgentBrowser });
+      await user.type(await screen.findByPlaceholderText(/Run a command/), "agent browser");
+      await user.click(await screen.findByText("Open browser: agent's browser · hotfix"));
+      expect(onOpenAgentBrowser).toHaveBeenCalledTimes(railView ? 0 : 1);
+      expect(useDashboardStore.getState().rightSidebarView).toBe(railView ? "browser" : "git");
+    });
   });
 
   it("asks for a workspace name, then creates and switches, and backs out without closing", async () => {
@@ -3080,12 +2977,12 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       expect(createWorkspace).not.toHaveBeenCalled();
 
       await user.keyboard("{Escape}");
-      expect(screen.getByText("GitHub")).toBeTruthy();
+      expect(screen.getByText("New workspace")).toBeTruthy();
       expect(onClose).not.toHaveBeenCalled();
 
       await user.click(screen.getByText("New workspace"));
       await user.keyboard("{Backspace}");
-      expect(screen.getByText("GitHub")).toBeTruthy();
+      expect(screen.getByText("New workspace")).toBeTruthy();
       expect(onClose).not.toHaveBeenCalled();
 
       await user.click(screen.getByText("New workspace"));
@@ -3176,7 +3073,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     }
   });
 
-  it("arrow keys reach the Commands group on a blank query", async () => {
+  it("arrow keys walk the Commands group on a blank query", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(() =>
@@ -3190,13 +3087,14 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(o, { onOpenSettings, layoutTier: "phone" });
 
-    // No claude in this list, so the default-agent seed lands on the first
-    // launcher. Commands are painted above it; ArrowUp walks into them
-    // from the bottom (Task board, then Settings).
-    const bash = await screen.findByRole("button", { name: /bash/ });
-    await waitFor(() => expect(bash).toHaveClass("selected"));
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.keyboard("{ArrowUp}{ArrowUp}{Enter}");
+    // The default rows are the whole arrow list. ArrowDown stops on the
+    // last row (Settings); one ArrowUp from there is Project, Enter on Settings runs it.
+    await screen.findByRole("button", { name: /New session…/ });
+    expect(screen.queryByRole("button", { name: /bash/ })).toBeNull();
+    await user.click(screen.getByPlaceholderText(/Run a command/));
+    await user.keyboard("{ArrowDown>12/}");
+    expect(screen.getByRole("button", { name: /^Settings/ })).toHaveClass("selected");
+    await user.keyboard("{Enter}");
 
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(o.onOpenTasks).not.toHaveBeenCalled();
@@ -3214,12 +3112,10 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenSettings: vi.fn(), layoutTier: "phone" });
 
-    // Same walk as the arrow-key test: the default seed is the first
-    // launcher, ArrowUp steps into Task board, then Settings.
-    const bash = await screen.findByRole("button", { name: /bash/ });
-    await waitFor(() => expect(bash).toHaveClass("selected"));
-    await user.click(screen.getByPlaceholderText(/Launch a session/));
-    await user.keyboard("{ArrowUp}{ArrowUp}");
+    // Same walk as the arrow-key test: down to the last row, Settings.
+    await screen.findByRole("button", { name: /New session…/ });
+    await user.click(screen.getByPlaceholderText(/Run a command/));
+    await user.keyboard("{ArrowDown>12/}");
 
     const footer = screen.getByText("navigate").closest(".cmd-palette-footer");
     expect(footer).toBeTruthy();
@@ -3267,7 +3163,6 @@ describe("CommandPalette -> default target follows the active pane", () => {
         scope="global"
         projectId={null}
         onClose={vi.fn()}
-        onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
         onOpenAgentRules={vi.fn()}
@@ -3318,8 +3213,8 @@ describe("CommandPalette -> default target follows the active pane", () => {
     const user = userEvent.setup();
     useDashboardStore.setState({ activePanelId: "session-9" });
     renderGlobal(onOpenBrowser);
-    await user.type(await screen.findByPlaceholderText(/Launch a session/), "preview");
-    await user.click(await screen.findByText(/^Preview$/));
+    await user.type(await screen.findByPlaceholderText(/Run a command/), "preview");
+    await user.click(await screen.findByText(/^Open browser: preview…$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(2);
   });
 });

@@ -111,6 +111,7 @@ describe("SHORTCUTS", () => {
       "right-sidebar",
       "git-view",
       "github-view",
+      "mode-switch",
       "dismiss",
     ]);
     expect(SHORTCUTS.map((shortcut) => shortcut.id)).toEqual([

@@ -21,6 +21,11 @@ import type {
   Task,
 } from "../api/index.js";
 import { makeProject, makeTask } from "../test/fixtures.js";
+import {
+  boardStoreStubs,
+  resetNewTaskFormStub,
+  useNewTaskFormTick,
+} from "../test/boardStoreStubs.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
 // UnifiedBoard reads value fields via a useShallow-grouped selector (the P1
@@ -65,6 +70,7 @@ function storeState() {
     projects,
     tasks,
     tasksLoaded,
+    ...boardStoreStubs,
     taskMasterEnabled,
     kanbanOrder,
     setKanbanColumnOrder,
@@ -87,6 +93,8 @@ function storeState() {
 
 vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector?: (s: unknown) => unknown) => {
+    // The new-task form's open state is the one reactive piece (#3288).
+    useNewTaskFormTick();
     const state = storeState();
     return selector ? selector(state) : state;
   };
@@ -98,6 +106,7 @@ vi.mock("../store/index.js", () => {
 });
 
 beforeEach(() => {
+  resetNewTaskFormStub();
   sessions = [];
   projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
   tasks = [];
@@ -190,6 +199,29 @@ describe("UnifiedBoard task create form", () => {
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(createTask).toHaveBeenCalledWith(1, "New local task");
+  });
+
+  // #3213 — where the row is narrow the button shows only its "+" (a
+  // container query jsdom does not run); its name and title do not depend on
+  // the label text being shown.
+  it("keeps New task's accessible name and title in the compact, icon-only form", async () => {
+    tasks = [makeTask({ id: 1 })];
+    const user = userEvent.setup();
+    const { container } = render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const label = container.querySelector(".task-filter-row .tasks-panel-new-label");
+    expect(label).toHaveTextContent("New task");
+    // The compact form hides the label; the name must survive that.
+    (label as HTMLElement).style.display = "none";
+    const button = screen.getByRole("button", { name: "New task" });
+    expect(button).toHaveAttribute("title", "New task");
+    // Beside the wrapping controls, not among them, so it stays on line one.
+    expect(button.parentElement).toHaveClass("task-filter-row");
+    expect(container.querySelector(".task-filter-controls")).not.toContainElement(button);
+    // And the inline form still opens under the row from it.
+    await user.click(button);
+    const form = screen.getByPlaceholderText("Task title");
+    expect(container.querySelector(".task-filter-row")).not.toContainElement(form);
+    expect(container.querySelector(".task-filter-bar")).toContainElement(form);
   });
 
   it("shows an error and re-enables Create when createTask rejects", async () => {

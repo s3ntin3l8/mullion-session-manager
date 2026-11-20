@@ -3,6 +3,7 @@ import { api } from "./api/index.js";
 import type { ResourceSeverity, SystemStats } from "./api/index.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { WarningTriangleIcon } from "./ui/icons.js";
+import { ActionBanner } from "./ActionBanner.js";
 
 const POLL_MS = 60_000;
 const DISMISS_MS = 24 * 60 * 60 * 1000;
@@ -51,51 +52,24 @@ export function ResourceAlertBanner({ onOpenStorage }: { onOpenStorage: () => vo
       .flatMap((filesystem) => filesystem.labels)
       .join(", ") ?? "server storage";
 
+  const dismiss = () => {
+    try {
+      localStorage.setItem(DISMISS_KEY, String(Date.now()));
+    } catch {
+      // The in-memory dismissal still applies when storage is blocked.
+    }
+    setDismissed(true);
+  };
+
   return (
-    <div
-      className={`update-banner resource-alert ${severity}`}
-      onClick={onOpenStorage}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") onOpenStorage();
-      }}
-    >
-      <WarningTriangleIcon size={16} style={{ flexShrink: 0 }} />
-      <span className="update-banner-title">
-        {severity === "critical" ? "Critical disk space" : "Low disk space"}: {affected}
-      </span>
-      <span className="update-banner-subtext">Open server settings</span>
-      {severity === "warning" && (
-        <span
-          className="update-banner-dismiss"
-          role="button"
-          tabIndex={0}
-          title="Dismiss for 24 hours"
-          onClick={(event) => {
-            event.stopPropagation();
-            try {
-              localStorage.setItem(DISMISS_KEY, String(Date.now()));
-            } catch {
-              // The in-memory dismissal still applies when storage is blocked.
-            }
-            setDismissed(true);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.stopPropagation();
-              try {
-                localStorage.setItem(DISMISS_KEY, String(Date.now()));
-              } catch {
-                // See click path above.
-              }
-              setDismissed(true);
-            }
-          }}
-        >
-          ×
-        </span>
-      )}
-    </div>
+    <ActionBanner
+      className={`resource-alert ${severity}`}
+      icon={<WarningTriangleIcon size={16} style={{ flexShrink: 0 }} />}
+      title={`${severity === "critical" ? "Critical disk space" : "Low disk space"}: ${affected}`}
+      subtext="Open server settings"
+      onOpen={onOpenStorage}
+      onDismiss={severity === "warning" ? dismiss : undefined}
+      dismissTitle="Dismiss for 24 hours"
+    />
   );
 }

@@ -13,14 +13,11 @@ import {
   closeFilePanelsUnder,
   filePanelId,
   openExternalFilePanel,
-  openProjectHubPanel,
-  migrateLegacyProjectPanels,
   closeLegacyPanels,
   dropSessionPanel,
   hasTiledPanels,
   isTiledGroup,
   isTiledPanel,
-  shouldWarnTabletPaneCap,
   tiledColumnCount,
   maximizeIfTiled,
   focusPanelForTier,
@@ -149,10 +146,9 @@ const PROJECTS = [
 
 // Tablet tier plan, PR 4 — every open-or-focus-by-stable-id helper takes an
 // explicit LayoutContext now instead of a boolean/live matchMedia() read.
-const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop", tabletPaneCap: 2 };
-const PHONE_LAYOUT: LayoutContext = { tier: "phone", tabletPaneCap: 2 };
-const TABLET_LAYOUT_CAP2: LayoutContext = { tier: "tablet", tabletPaneCap: 2 };
-const TABLET_LAYOUT_CAP3: LayoutContext = { tier: "tablet", tabletPaneCap: 3 };
+const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop" };
+const PHONE_LAYOUT: LayoutContext = { tier: "phone" };
+const TABLET_LAYOUT: LayoutContext = { tier: "tablet" };
 
 const EXISTING_SESSION: Session = {
   id: 1,
@@ -404,7 +400,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "session-1", component: "terminal", params: {} });
     (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "session-2", position: { direction: "right" } }),
@@ -421,7 +417,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "session-3", component: "terminal", params: {} });
     (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[2][0];
     expect(addCall.id).toBe("session-2");
@@ -464,7 +460,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "floating-1", component: "terminal", params: {}, floating: {} });
     (api as unknown as { activePanel: unknown }).activePanel = api.getPanel("floating-1");
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[3][0];
     expect(addCall.id).toBe("session-2");
@@ -488,7 +484,7 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     api.addPanel({ id: "session-3", component: "terminal", params: {} });
     (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-1" };
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     // Only 1 distinct group so far (< cap 2) -> still docks as its own
     // column, not a tab.
@@ -497,26 +493,10 @@ describe("tabletPositioning (via openSessionPanel)", () => {
     );
   });
 
-  it("respects a higher configured cap (3)", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "session-1", component: "terminal", params: {} });
-    (api.getPanel("session-1") as unknown as { group: { id: string } }).group = { id: "group-1" };
-    api.addPanel({ id: "session-3", component: "terminal", params: {} });
-    (api.getPanel("session-3") as unknown as { group: { id: string } }).group = { id: "group-2" };
-
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP3, PROJECTS);
-
-    // Only 2 distinct groups so far (< cap 3) -> still docks as its own
-    // column.
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "session-2", position: { direction: "right" } }),
-    );
-  });
-
   it("never floats on tablet, even under the cap — no floating-window touch interaction", () => {
     const api = mockDockviewApi();
 
-    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT_CAP2, PROJECTS);
+    openSessionPanel(api, NEW_SESSION, TABLET_LAYOUT, PROJECTS);
 
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(addCall).not.toHaveProperty("floating");
@@ -1000,7 +980,7 @@ describe("openOrFocusProjectPanel", () => {
   it("tablet: applyDesktopPositioning: false still suppresses positioning (bare add)", () => {
     const api = mockDockviewApi();
 
-    openOrFocusProjectPanel(api, 1, PROJECTS, TABLET_LAYOUT_CAP2, {
+    openOrFocusProjectPanel(api, 1, PROJECTS, TABLET_LAYOUT, {
       kind: "browser",
       titleLabel: "Preview",
       applyDesktopPositioning: false,
@@ -1024,7 +1004,7 @@ describe("closeLegacyPanels", () => {
     expect(panel.api.close).toHaveBeenCalledTimes(1);
   });
 
-  it("closes retired git panels by component kind, whatever their per-project id", () => {
+  it("closes retired git and github panels by component kind, whatever their per-project id", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "git-3", component: "git", params: { projectId: 3 } });
     api.addPanel({ id: "git-9", component: "git", params: { projectId: 9 } });
@@ -1042,10 +1022,40 @@ describe("closeLegacyPanels", () => {
     expect(swept).toEqual([
       ["git", 3],
       ["git", 9],
+      ["github", 3],
     ]);
     expect(api.getPanel("git-3")!.api.close).toHaveBeenCalledTimes(1);
     expect(api.getPanel("git-9")!.api.close).toHaveBeenCalledTimes(1);
-    expect(api.getPanel("github-3")!.api.close).not.toHaveBeenCalled();
+    expect(api.getPanel("github-3")!.api.close).toHaveBeenCalledTimes(1);
+  });
+
+  // #3406 — the retired Project panel and the five setup panels it replaced
+  // join the same by-kind sweep. Whether a swept kind opens anything is the
+  // caller's call (useWorkspacePersistence opens nothing for these).
+  it.each([
+    "project-hub",
+    "agent-rules",
+    "project-briefing",
+    "project-setup",
+    "dock-config",
+    "skills",
+  ])("sweeps a retired %s panel by kind and reports it, like git/github", (kind) => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: `${kind}-4`, component: kind, params: { projectId: 4 } });
+    api.addPanel({ id: "file-editor-4", component: "file-editor", params: { projectId: 4 } });
+    for (const p of api.panels) {
+      (p.api as unknown as { component: string }).component = (
+        p as unknown as { component: string }
+      ).component;
+    }
+    const onRetired = vi.fn();
+
+    const closed = closeLegacyPanels(api, onRetired);
+
+    expect(closed).toBe(true);
+    expect(api.getPanel(`${kind}-4`)!.api.close).toHaveBeenCalledTimes(1);
+    expect(api.getPanel("file-editor-4")!.api.close).not.toHaveBeenCalled();
+    expect(onRetired).toHaveBeenCalledWith(kind, 4);
   });
 
   it("is a no-op and reports false when no legacy panel is present", () => {
@@ -1305,24 +1315,6 @@ describe("tablet pane-cap notice (issue #1555)", () => {
     expect(
       tiledColumnCount([grid("a", "g1"), grid("b", "g1"), grid("c", "g2"), floating("d")]),
     ).toBe(2);
-  });
-
-  it("warns only on tablet, only past the cap, and only once", () => {
-    expect(
-      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 3, cap: 2, alreadyWarned: false }),
-    ).toBe(true);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 2, cap: 2, alreadyWarned: false }),
-    ).toBe(false);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "tablet", columnCount: 4, cap: 2, alreadyWarned: true }),
-    ).toBe(false);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "phone", columnCount: 4, cap: 2, alreadyWarned: false }),
-    ).toBe(false);
-    expect(
-      shouldWarnTabletPaneCap({ tier: "desktop", columnCount: 4, cap: 2, alreadyWarned: false }),
-    ).toBe(false);
   });
 });
 
@@ -2703,28 +2695,34 @@ describe("resolveActiveProjectId (issue #433's Source Control section)", () => {
 
 // U9 — App.tsx's global window-level Escape handler calls this directly
 // (see its own doc comment for why it lives here rather than as an
-// App.test.tsx mount test: App.tsx pulls in real dockview/xterm/WS
-// machinery this suite has never had to mock, so there's no existing
-// full-mount pattern to extend). The bug this closes: the handler used to
-// only clear `palette.open`, never `clearSplitRequest()` — but the palette
-// also renders for a pending split-right/split-down splitRequest
-// (App.tsx's own `paletteOpen = palette.open || (splitRequest !== null &&
-// ...)`), and the palette's OWN Escape handler only fires while focus is
-// inside its search input, so a split-triggered palette with focus moved
-// elsewhere inside it (the project picker, a launcher row, the worktree
-// checkbox, the base-ref dropdown) had no way to close via Escape at all.
+// App.test.tsx mount test). A split no longer opens the palette (#3054): it
+// opens the launcher, which closes through its own dialog or sheet.
 describe("handleGlobalEscape (U9)", () => {
-  it("clears the palette, closes settings, AND clears the split request", () => {
+  it("clears the palette, closes settings and asks Project settings to close", () => {
     const clearPalette = vi.fn();
     const closeSettings = vi.fn();
-    const clearSplitRequest = vi.fn();
+    const closeProjectSettings = vi.fn();
 
-    handleGlobalEscape({ clearPalette, closeSettings, clearSplitRequest });
+    handleGlobalEscape({ clearPalette, closeSettings, closeProjectSettings, overlayOpen: false });
 
     expect(clearPalette).toHaveBeenCalledTimes(1);
     expect(closeSettings).toHaveBeenCalledTimes(1);
-    // The actual regression: this used to never be called at all.
-    expect(clearSplitRequest).toHaveBeenCalledTimes(1);
+    expect(closeProjectSettings).toHaveBeenCalledTimes(1);
+  });
+
+  // #3406 — one Escape, one close: the palette or Settings above Project
+  // settings takes this Escape, and the project dialog stays.
+  it("leaves Project settings open while the palette or Settings sits above it", () => {
+    const closeProjectSettings = vi.fn();
+
+    handleGlobalEscape({
+      clearPalette: vi.fn(),
+      closeSettings: vi.fn(),
+      closeProjectSettings,
+      overlayOpen: true,
+    });
+
+    expect(closeProjectSettings).not.toHaveBeenCalled();
   });
 });
 
@@ -2980,133 +2978,6 @@ describe("openExternalFilePanel", () => {
       expect.objectContaining({ path: "/x/y.md", line: 8, rev: expect.any(Number) }),
     );
     expect(existing.api.setActive).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("openProjectHubPanel", () => {
-  it("opens a new project-hub panel on the requested tab", () => {
-    const api = mockDockviewApi();
-    openProjectHubPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "skills");
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "project-hub-1",
-        component: "project-hub",
-        title: "Project: project-alpha",
-        params: { projectId: 1, tab: "skills" },
-      }),
-    );
-  });
-
-  it("falls back to a bare title for an unknown project", () => {
-    const api = mockDockviewApi();
-    openProjectHubPanel(api, 99, PROJECTS, DESKTOP_LAYOUT);
-    expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ title: "Project" }));
-  });
-
-  it("re-targets and focuses an existing panel with a fresh rev instead of opening a second", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "project-hub-1", component: "project-hub", params: {} });
-    const existing = api.getPanel("project-hub-1")!;
-
-    openProjectHubPanel(api, 1, PROJECTS, DESKTOP_LAYOUT, "dock");
-
-    expect(api.addPanel).toHaveBeenCalledTimes(1);
-    expect(existing.api.updateParameters).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: 1, tab: "dock", rev: expect.any(Number) }),
-    );
-    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
-    expect(api.maximizeGroup).not.toHaveBeenCalled();
-  });
-
-  it("maximizes a re-targeted panel on phone", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "project-hub-1", component: "project-hub", params: {} });
-    const existing = api.getPanel("project-hub-1")!;
-    openProjectHubPanel(api, 1, PROJECTS, PHONE_LAYOUT, "dock");
-    expect(api.maximizeGroup).toHaveBeenCalledWith(existing);
-  });
-
-  it("maximizes a newly added panel on phone", () => {
-    const api = mockDockviewApi();
-    openProjectHubPanel(api, 1, PROJECTS, PHONE_LAYOUT);
-    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("migrateLegacyProjectPanels", () => {
-  it.each([
-    ["agent-rules-1", "agent-rules"],
-    ["project-briefing-1", "briefing"],
-    ["project-setup-1", "scaffold"],
-    ["dock-config-1", "dock"],
-    ["skills-1", "skills"],
-  ] as const)("replaces %s with the project hub on the %s tab, in the same group", (id, tab) => {
-    const api = mockDockviewApi();
-    api.addPanel({ id, component: id.replace(/-\d+$/, ""), params: { projectId: 1 } });
-    const legacy = api.getPanel(id)!;
-
-    const changed = migrateLegacyProjectPanels(api, PROJECTS);
-
-    expect(changed).toBe(true);
-    expect(api.addPanel).toHaveBeenLastCalledWith({
-      id: "project-hub-1",
-      component: "project-hub",
-      title: "Project: project-alpha",
-      params: { projectId: 1, tab },
-      position: { referencePanel: id, direction: "within" },
-    });
-    expect(legacy.api.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("merges several legacy panels of one project into a single hub (first one picks the tab)", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "skills-1", component: "skills", params: { projectId: 1 } });
-    api.addPanel({ id: "agent-rules-1", component: "agent-rules", params: { projectId: 1 } });
-    const skills = api.getPanel("skills-1")!;
-    const rules = api.getPanel("agent-rules-1")!;
-
-    expect(migrateLegacyProjectPanels(api, PROJECTS)).toBe(true);
-
-    const hubAdds = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c) => c[0].id === "project-hub-1",
-    );
-    expect(hubAdds).toHaveLength(1);
-    expect(hubAdds[0][0].params.tab).toBe("skills");
-    expect(skills.api.close).toHaveBeenCalledTimes(1);
-    expect(rules.api.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps an existing hub and just closes the legacy panel", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "project-hub-1", component: "project-hub", params: { projectId: 1 } });
-    api.addPanel({ id: "skills-1", component: "skills", params: { projectId: 1 } });
-    const legacy = api.getPanel("skills-1")!;
-
-    expect(migrateLegacyProjectPanels(api, PROJECTS)).toBe(true);
-
-    expect(api.addPanel).toHaveBeenCalledTimes(2); // the two seeded above, no third
-    expect(legacy.api.close).toHaveBeenCalledTimes(1);
-  });
-
-  it("titles the hub bare when the project is unknown, and keeps separate projects separate", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "skills-9", component: "skills", params: { projectId: 9 } });
-    api.addPanel({ id: "dock-config-2", component: "dock-config", params: { projectId: 2 } });
-
-    migrateLegacyProjectPanels(api, PROJECTS);
-
-    expect(api.getPanel("project-hub-9")).toMatchObject({ title: "Project" });
-    // Project 2 exists but has a null name — also falls back to the bare title.
-    expect(api.getPanel("project-hub-2")).toMatchObject({ title: "Project" });
-  });
-
-  it("is a no-op reporting false when no legacy project panel is present", () => {
-    const api = mockDockviewApi();
-    api.addPanel({ id: "github-1", component: "github", params: { projectId: 1 } });
-    api.addPanel({ id: "skills-notanid", component: "skills", params: {} });
-
-    expect(migrateLegacyProjectPanels(api, PROJECTS)).toBe(false);
-    expect(api.addPanel).toHaveBeenCalledTimes(2);
   });
 });
 

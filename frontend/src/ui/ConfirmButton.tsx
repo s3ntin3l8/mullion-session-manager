@@ -29,6 +29,7 @@ export function ConfirmButton({
   armedLabel,
   variant = "danger",
   compact = false,
+  className,
 }: {
   onConfirm: () => void;
   title: string;
@@ -58,6 +59,9 @@ export function ConfirmButton({
   // never widens it and shoves them sideways. The countdown is still in the
   // title, which is where assistive tech reads it from.
   compact?: boolean;
+  // Extra classes for the button, so a caller can keep its own look (the task
+  // detail's approve button keeps .notif-gate-btn) around the confirm step.
+  className?: string;
 }) {
   const [armed, setArmed] = useState(false);
   // Ticks 6 -> 5 -> ... -> 1 rather than sitting static for the whole arm
@@ -118,7 +122,7 @@ export function ConfirmButton({
       type="button"
       className={`${variant === "neutral" ? "confirm-neutral" : "danger"}${armed ? " armed" : ""}${
         armedLabel ? " confirm-btn-stable" : ""
-      }${compact ? " confirm-compact" : ""}`}
+      }${compact ? " confirm-compact" : ""}${className ? ` ${className}` : ""}`}
       disabled={disabled}
       // Independent review finding (PR #435) — armed used to replace `title`
       // outright with a generic "Click again to confirm", so a

@@ -23,7 +23,7 @@
   border-radius: 14px;
   box-shadow: 0 24px 70px -12px rgba(0, 0, 0, 0.6);
   overflow: hidden;
-  animation: cmuxPop 0.13s ease-out;
+  /* Enters and leaves from styles/motion.css (.motion-dialog). */
 }
 .cmd-palette-search {
   display: flex;
@@ -43,15 +43,7 @@
 .cmd-palette-target-strip.global {
   background: color-mix(in srgb, var(--accent-solid) 6%, transparent);
 }
-.cmd-palette-options-strip {
-  padding: 6px 15px;
-  border-bottom: 1px solid var(--border-soft);
-}
-.cmd-palette-options-strip.loading {
-  font-size: 0.75rem;
-  color: var(--dim);
-}
-/* Project picker: tinted like the open "Launch in" chip so it can't be
+/* Project picker: tinted like the open project chip so it can't be
    mistaken for the action/integration list. */
 .cmd-palette-list.project-picker {
   background: color-mix(in srgb, var(--accent-solid) 6%, transparent);
@@ -97,7 +89,7 @@
   background: color-mix(in srgb, var(--accent-solid) 18%, transparent);
 }
 .cmd-palette-target-chevron {
-  transition: transform 0.15s ease;
+  transition: transform var(--motion-fade) var(--motion-ease);
   flex-shrink: 0;
 }
 .cmd-palette-target-chevron.open {
@@ -138,7 +130,7 @@
 .cmd-palette-worktree-picker .settings-dropdown {
   width: 100%;
 }
-.cmd-palette-worktree-picker .settings-dropdown select {
+.cmd-palette-worktree-picker .settings-dropdown .ui-dropdown-field {
   width: 100%;
 }
 /* P9 — same shape as .task-detail-error (UnifiedBoard.tsx's own model for
@@ -148,12 +140,6 @@
   margin-top: 4px;
   font-size: 0.65625rem;
   color: var(--r);
-}
-.cmd-palette-launch-error {
-  padding: 8px 15px;
-  font-size: 0.6875rem;
-  color: var(--r);
-  border-bottom: 1px solid var(--border-soft);
 }
 .cmd-palette-worktree-toggle {
   display: inline-flex;
@@ -165,13 +151,6 @@
 }
 .cmd-palette-worktree-toggle input {
   accent-color: var(--accent-solid);
-}
-/* Issue #1424 — per-session model picker, sits below the skip-permissions
-   row inside the same options strip. */
-.cmd-palette-model-picker {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border-soft);
 }
 .cmd-palette-change-target {
   margin-left: auto;

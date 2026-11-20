@@ -19,10 +19,12 @@ import type { NotificationEvent, Project, Session } from "./api/index.js";
 import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
-import { panelPosition } from "./lib/notifPanelPosition.js";
+import { panelPosition, railPanelPosition } from "./lib/notifPanelPosition.js";
+import type { NotifPanelPosition } from "./lib/notifPanelPosition.js";
 import { TextInput } from "./ui/primitives.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
@@ -367,6 +369,12 @@ export function NotificationBell({
   onOpenBrowser,
   sheet = false,
   sheetClassName,
+  placement = "below",
+  triggerClassName = "toolbar-icon-btn",
+  label,
+  labelClassName,
+  iconSize = 17,
+  onOpenChange,
 }: {
   onOpenSession: (session: Session) => void;
   // Issue #270 — the roadmap's own framing is that the timeline (2.8) is
@@ -389,6 +397,22 @@ export function NotificationBell({
   sheet?: boolean;
   // Extra class on the sheet (e.g. the tablet variant that caps its width).
   sheetClassName?: string;
+  // Where the popover opens: under the bell (the phone's top bar) or beside it,
+  // growing upward from its bottom edge (the left rail's bottom cluster, #3009).
+  placement?: "below" | "beside";
+  // The trigger's class: the rail's icon button, or the phone tab bar's entry.
+  triggerClassName?: string;
+  // A visible label under the icon, which also names the trigger (the phone
+  // tab bar's "Inbox" entry, #3288). Without one the trigger is icon-only and
+  // named "Notifications".
+  label?: string;
+  // The visible label's class (the tab bar's own label style).
+  labelClassName?: string;
+  // The bell's size: the tab bar's entries draw theirs at 20.
+  iconSize?: number;
+  // Told when the feed opens or closes (the phone tab bar returns focus to
+  // its Inbox entry itself when the sheet closed while the bar was hidden).
+  onOpenChange?: (open: boolean) => void;
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
@@ -404,9 +428,19 @@ export function NotificationBell({
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   const [open, setOpen] = useState(false);
+  const onOpenChangeRef = useRef(onOpenChange);
+  useEffect(() => {
+    onOpenChangeRef.current = onOpenChange;
+  });
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (wasOpen.current === open) return;
+    wasOpen.current = open;
+    onOpenChangeRef.current?.(open);
+  }, [open]);
   // Sheet only: which sessions' groups the feed shows.
   const [filter, setFilter] = useState<"needs" | "all">("all");
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const [pos, setPos] = useState<NotifPanelPosition | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -535,6 +569,8 @@ export function NotificationBell({
     active: !sheet && open,
     containerRef: panelRef,
   });
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present: panelPresent, state: panelPresence } = usePresence(!sheet && open, panelRef);
   // The phone sheet's own suppressRestore (a separate useFocusTrap instance,
   // above) — written to by BottomSheet during render, read by the phone
   // row-tap handlers below, same U7 race useFocusTrap.ts's own doc comment
@@ -554,17 +590,20 @@ export function NotificationBell({
     onTrapKeyDown(e);
   };
 
-  // The toolbar's mobile breakpoint (styles.css's max-width:699px block)
-  // changes .toolbar-lead's width, so the bell can move under the panel on a
-  // resize/orientation-change while it's open — recompute rather than leave
+  // A resize or orientation change can move the bell (the phone's top bar,
+  // the left rail) while the panel is open — recompute rather than leave
   // it anchored to a stale rect. Issue #1399 — same for an iOS visual-viewport
   // pan/resize: since #1398 `.app` (toolbar and bell included) tracks the
   // visual viewport's offsetTop, which moves without a window `resize`.
   const reposition = useCallback(() => {
     if (!btnRef.current) return;
     const rect = btnRef.current.getBoundingClientRect();
-    setPos(panelPosition(rect, window.innerWidth));
-  }, []);
+    setPos(
+      placement === "beside"
+        ? railPanelPosition(rect, window.innerWidth, window.innerHeight)
+        : panelPosition(rect, window.innerWidth),
+    );
+  }, [placement]);
   useVisualViewportChange(open, reposition);
 
   // Advances every session with at least one unread feed item to that
@@ -589,7 +628,7 @@ export function NotificationBell({
     <>
       <button
         ref={btnRef}
-        className="toolbar-icon-btn"
+        className={triggerClassName}
         title={
           unreadCount > 0 ? `Notifications — ${unreadCount} unread` : "No unread notifications"
         }
@@ -604,20 +643,26 @@ export function NotificationBell({
         // triggers.
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={
-          unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications, none unread"
-        }
+        aria-label={`${label ?? "Notifications"}, ${unreadCount > 0 ? `${unreadCount} unread` : "none unread"}`}
         onClick={(e) => {
           e.stopPropagation();
+          // iOS does not focus a tapped button, and the sheet returns focus to
+          // what was focused when it opened: this trigger, then (#3288).
+          e.currentTarget.focus();
           if (!open && btnRef.current) {
-            const rect = btnRef.current.getBoundingClientRect();
-            setPos(panelPosition(rect, window.innerWidth));
+            reposition();
             openFilter();
           }
           setOpen((v) => !v);
         }}
       >
-        <BellIcon size={17} />
+        <BellIcon size={iconSize} aria-hidden="true" />
+        {/* The label before the badge, so "Inbox 3" reads in the name's order. */}
+        {label && (
+          <>
+            <span className={labelClassName}>{label}</span>{" "}
+          </>
+        )}
         {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}
       </button>
       {sheet && (
@@ -709,14 +754,25 @@ export function NotificationBell({
           </div>
         </BottomSheet>
       )}
-      {open &&
+      {panelPresent &&
         !sheet &&
         pos &&
         createPortal(
           <div
             ref={panelRef}
+            data-presence={panelPresence}
+            inert={panelPresence === "leaving"}
             className={themeClassName(theme, "pane-tab-overflow-menu", "notif-panel")}
-            style={{ position: "fixed", top: pos.top, left: pos.left }}
+            // Every side is set: the shared `.pane-tab-overflow-menu` shell
+            // (terminal.css) carries `top: 31px; right: 6px` for PaneTab's
+            // in-pane menu. The rail's bell sets only `bottom`, and with the
+            // panel's height capped by max-height a leftover `top` wins over
+            // `bottom`, which pinned the panel to the window's top edge
+            // instead of beside the bell (#3072).
+            style={{ position: "fixed", top: "auto", right: "auto", bottom: "auto", ...pos }}
+            // Opening upward from the rail's bell, it grows from its bottom
+            // edge (styles/motion.css), toward the bell it came from.
+            data-placement={placement === "beside" ? "top" : undefined}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={onPanelKeyDown}
             role="dialog"
@@ -1002,18 +1058,27 @@ function EventRow({
   return (
     <div
       className={`notif-event-row${item.read ? " read" : ""}`}
-      role="button"
-      tabIndex={0}
-      aria-label={
-        repeatCount > 1
-          ? `${label}: ${fullText} — ${age}, repeated ${repeatCount} times`
-          : `${label}: ${fullText} — ${age}`
-      }
+      // #3106 — a plain container, not a role="button": the row holds its own
+      // buttons (Approve/Deny, Session, Timeline, Mark read, Dismiss), and a
+      // control inside a control is axe's nested-interactive. A pointer still
+      // opens by clicking anywhere on it (each nested control stops its own
+      // click); the keyboard gets the one real button below, first in tab
+      // order, and the row's other controls are their own tab stops after it.
       onClick={open}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") open();
-      }}
     >
+      {/* No onClick of its own: Enter/Space fire a click that bubbles to the
+          row's onClick, so it opens exactly once. The name carries the full
+          text the row truncates; the button shows nothing itself, so there is
+          no visible text for the name to mismatch. */}
+      <button
+        type="button"
+        className="visually-hidden row-open-btn notif-event-open"
+        aria-label={
+          repeatCount > 1
+            ? `${label}: ${fullText} — ${age}, repeated ${repeatCount} times`
+            : `${label}: ${fullText} — ${age}`
+        }
+      />
       <span className={`notif-event-icon ${className}`}>{icon}</span>
       <span className="notif-event-body">
         {/* Suppressed when the pill would just repeat the row's own text
@@ -1036,9 +1101,6 @@ function EventRow({
               e.stopPropagation();
               onOpen(session);
             }}
-            // Same guard as the Timeline button below: the row's own
-            // onKeyDown would otherwise treat Enter/Space here as "open PR".
-            onKeyDown={(e) => e.stopPropagation()}
           >
             Session
           </button>
@@ -1050,10 +1112,6 @@ function EventRow({
               e.stopPropagation();
               onTimeline(session);
             }}
-            // The row's own onKeyDown treats Enter/Space anywhere inside it
-            // as "open this session" (the terminal) — same guard GateActions
-            // uses, or keyboard-activating this would open the wrong view.
-            onKeyDown={(e) => e.stopPropagation()}
           >
             Timeline
           </button>
@@ -1147,11 +1205,10 @@ function GateActions({ sessionId, gateId }: { sessionId: number; gateId: string 
       <span
         className="notif-gate-deny-form"
         onClick={(e) => e.stopPropagation()}
-        // The row this renders inside (EventRow) treats a Space/Enter
-        // keydown as "open this session" (its own keyboard-activation
-        // handler, mirroring its role="button"/tabIndex=0) — without this,
-        // typing a space into the reason field below bubbles up and closes
-        // the whole notifications panel mid-keystroke.
+        // Keeps the reason field's keystrokes to itself. The row this renders
+        // in used to open on Space/Enter anywhere inside it, which closed the
+        // panel mid-keystroke; since #3106 only its own open button does, but
+        // the panel above still reads keydowns (Escape closes it).
         onKeyDown={(e) => e.stopPropagation()}
       >
         <TextInput

@@ -35,6 +35,7 @@ function rowFor(item: MobileSessionItem, extra: Partial<MobileSessionRow> = {}):
     unreadCount: item.unreadCount,
     needsYou: false,
     workspace: null,
+    projectName: null,
     searchFields: [item.title],
     ...extra,
   };
@@ -288,6 +289,49 @@ describe("MobileSessionSwitcher", () => {
     expect(screen.getByText("Sessions (3)")).toBeInTheDocument();
   });
 
+  // #2996 — five unnamed sessions all read `claude`; the pin has no project
+  // heading, so each row names its project, visibly and in its button's name.
+  it("shows each 'Needs you' row's project, and only there", async () => {
+    const claudeA = rowFor(
+      { id: "s1", title: "claude", dotColor: "red", agentLogo: null, unreadCount: 0 },
+      { key: "session-1", panelId: null, needsYou: true, projectName: "runway" },
+    );
+    const claudeB = rowFor(
+      { id: "s2", title: "claude", dotColor: "red", agentLogo: null, unreadCount: 0 },
+      { key: "session-2", panelId: null, needsYou: true, projectName: "hermes" },
+    );
+    const noProject = rowFor(
+      { id: "s3", title: "orphan", dotColor: "red", agentLogo: null, unreadCount: 0 },
+      { key: "session-3", panelId: null, needsYou: true, projectName: null },
+    );
+    renderSwitcher({
+      sections: [
+        {
+          key: "needs-you",
+          label: "Needs you",
+          kind: "needs-you",
+          rows: [claudeA, claudeB, noProject],
+        },
+        { key: "project-1", label: "runway", kind: "project", rows: [{ ...claudeA, key: "r1" }] },
+        { key: "project-2", label: "hermes", kind: "project", rows: [{ ...claudeB, key: "r2" }] },
+      ],
+    });
+    await userEvent.setup().click(trigger());
+    const pin = screen
+      .getByRole("heading", { name: /Needs you/ })
+      .closest("section") as HTMLElement;
+    expect(within(pin).getByTitle("runway")).toHaveClass("mobile-session-project");
+    expect(within(pin).getByTitle("hermes")).toHaveClass("mobile-session-project");
+    expect(within(pin).getByRole("button", { name: "claude in runway" })).toBeInTheDocument();
+    expect(within(pin).getByRole("button", { name: "claude in hermes" })).toBeInTheDocument();
+    // No project: no secondary line, so no empty gap under the title.
+    const orphan = within(pin).getByRole("button", { name: "orphan" });
+    expect(orphan.querySelector(".mobile-session-project")).toBeNull();
+    expect(orphan.querySelector(".mobile-session-text")).toBeNull();
+    // Project sections already name the project in their heading.
+    expect(document.querySelectorAll(".mobile-session-project")).toHaveLength(2);
+  });
+
   it("shows no search box for a short list", async () => {
     renderSwitcher();
     const user = userEvent.setup();
@@ -365,7 +409,8 @@ describe("MobileSessionSwitcher", () => {
     });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /task-0/ }));
-    expect(screen.getByRole("heading", { name: /Needs you/ })).toBeInTheDocument();
+    // h2 under the app's h1: no skipped level (axe heading-order, #2886).
+    expect(screen.getByRole("heading", { name: /Needs you/, level: 2 })).toBeInTheDocument();
     await user.type(screen.getByLabelText("Search sessions"), "task-7");
     expect(screen.queryByRole("heading", { name: /Needs you/ })).toBeNull();
     expect(screen.getAllByText("task-7")).toHaveLength(1);

@@ -439,8 +439,9 @@ Set it with the project API — `placement: "auto"` on `POST /api/projects`, or
 on `PATCH /api/projects/:id` to switch a project in or out.
 
 **Launching on a host from the launcher.** For a project that reaches more than
-one host (its own plus the `hostCwds` hosts), the session launcher shows an
-**On** chip next to the project. Its options are the project's own host (the
+one host (its own plus the `hostCwds` hosts), the New session launcher shows a
+**Host** choice in its Where row, next to the project (the command palette shows
+the same choice as an **On** chip). Its options are the project's own host (the
 default, "this server" when it is local — a launch you do not touch behaves as
 before), each `hostCwds` host by name, then **Auto**. A host that is offline or
 parked is listed but disabled. Choosing a host sends `targetHostId`; choosing
@@ -752,7 +753,7 @@ existingName, existingHostId }` when the new `cwd` (or a `hostCwds` entry) is al
   `MERGE_LIVE_TASK_CONFLICT` (a live task for the same issue in both projects) and
   `MERGE_SAME_PROJECT`.
 - Browser-local state may still name the deleted project (dock pins, the active project, the
-  collapsed flags) and a saved layout may hold its `project-hub-<id>` / `file-editor-<id>` panels.
+  collapsed flags) and a saved layout may hold its `file-editor-<id>` panels (or a retired `project-hub-<id>` one).
   The backend never parses a layout, so the dock ignores unknown ids and the app closes such
   panels once the project list has loaded.
 

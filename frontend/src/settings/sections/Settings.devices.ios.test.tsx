@@ -11,6 +11,7 @@ import type { Device, DeviceHostEntry, IosSimulator } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";
+import * as dd from "../../test/dropdown.js";
 
 const IOS_SIMS_LOCAL: IosSimulator[] = [
   {
@@ -127,7 +128,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
     await user.click(await screen.findByText("Create a device"));
-    await screen.findByDisplayValue("pixel_7");
+    await dd.findDropdownByLabel("pixel_7");
     expect(screen.queryByRole("radio", { name: "iOS Simulator" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ New AVD" })).toBeInTheDocument();
   });
@@ -191,25 +192,24 @@ describe("Settings -> Devices iOS Simulator", () => {
     await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
 
     expect(screen.queryByRole("button", { name: "+ New AVD" })).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue("pixel_7")).not.toBeInTheDocument();
+    expect(dd.queryDropdownByLabel("pixel_7")).not.toBeInTheDocument();
 
     const hostPicker = screen.getByRole("combobox", { name: "Host" });
-    const hostOptions = within(hostPicker).getAllByRole("option") as HTMLOptionElement[];
-    expect(hostOptions.map((o) => o.textContent)).toEqual(["Primary", "Mac mini"]);
+    expect(dd.dropdownOptions(hostPicker).map((o) => o.label)).toEqual(["Primary", "Mac mini"]);
 
     const simPicker = await screen.findByRole("combobox", { name: "Simulator" });
-    const simOptions = within(simPicker).getAllByRole("option") as HTMLOptionElement[];
-    expect(simOptions.map((o) => [o.textContent, o.disabled])).toEqual([
+    expect(dd.dropdownOptions(simPicker).map((o) => [o.label, o.disabled])).toEqual([
       ["iPhone 16 Pro (iOS 18.2 · Shutdown) — already added", true],
       ["iPhone 15 (iOS 17.5 · Booted)", false],
     ]);
-    expect((simPicker as HTMLSelectElement).value).toBe("SIM-UDID-2");
+    expect(dd.dropdownValue(simPicker)).toBe("SIM-UDID-2");
 
-    await user.selectOptions(hostPicker, "h-mac");
-    const macSimPicker = await screen.findByRole("combobox", { name: "Simulator" });
+    dd.pickDropdownOption(hostPicker, "h-mac");
     await waitFor(() => {
-      const opts = within(macSimPicker).getAllByRole("option");
-      expect(opts.map((o) => o.textContent)).toEqual(["iPad Air (iOS 18.2 · Shutdown)"]);
+      const macSimPicker = screen.getByRole("combobox", { name: "Simulator" });
+      expect(dd.dropdownOptions(macSimPicker).map((o) => o.label)).toEqual([
+        "iPad Air (iOS 18.2 · Shutdown)",
+      ]);
     });
   });
 
@@ -249,11 +249,11 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     await user.click(await screen.findByText("Create a device"));
     await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Host" }), "h-mac");
+    dd.pickDropdownOption(screen.getByRole("combobox", { name: "Host" }), "h-mac");
     await waitFor(() => {
       expect(
-        screen.getByRole("option", { name: "iPad Air (iOS 18.2 · Shutdown)" }),
-      ).toBeInTheDocument();
+        dd.dropdownOptions(screen.getByRole("combobox", { name: "Simulator" })).map((o) => o.label),
+      ).toEqual(["iPad Air (iOS 18.2 · Shutdown)"]);
     });
     await user.click(screen.getByRole("button", { name: "Create" }));
 

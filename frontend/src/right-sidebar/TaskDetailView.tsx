@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
+import { useCanPopOutTask } from "../hooks/useOpenTask.js";
 import { DeleteTaskAction } from "../DeleteTaskAction.js";
 import { canDeleteTask } from "../lib/canDeleteTask.js";
 import { WorkflowChangeApproval } from "../WorkflowChangeApproval.js";
@@ -54,7 +55,9 @@ function SessionPill({
   /** The task names a session that is no longer in the store (the card says "ended"). */
   ended?: boolean;
 }) {
-  const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
+  // "Open session in Workspace" (#3009): from Tasks mode this switches to
+  // Workspace and opens the session there; this task stays in the sidebar.
+  const openSessionInWorkspace = useDashboardStore((s) => s.openSessionInWorkspace);
   if (!session)
     return (
       <span className="sb-dim">
@@ -65,8 +68,8 @@ function SessionPill({
   return (
     <StatusChip
       tone="info"
-      onClick={() => requestOpenSession(session.id)}
-      title={`Open the ${role} session`}
+      onClick={() => openSessionInWorkspace(session.id)}
+      title={`Open the ${role} session in Workspace`}
     >
       {role} · {formatStatusLabel(presentation, session.sessionStatusDetail, "compact")}
       <ExternalLinkIcon size={10} aria-hidden="true" />
@@ -149,6 +152,9 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
   const prsByProject = useDashboardStore((s) => s.prsByProject);
   const openTaskInSidebar = useDashboardStore((s) => s.openRightSidebarTask);
   const requestOpenTask = useDashboardStore((s) => s.requestOpenTask);
+  // The pop-out to a docked panel is offered from 1100px only (#3011, see
+  // useCanPopOutTask).
+  const canPopOut = useCanPopOutTask();
   const [bodyOpen, setBodyOpen] = useState(false);
   // A task is shown from outside the rail (a board card, a notification, a
   // task chip in the GitHub or Git views) as often as from inside it, and the
@@ -247,9 +253,11 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
         externalUrl={task.htmlUrl}
         externalLabel="Open the issue on GitHub"
         actions={
-          <IconButton label="Pop out to a docked panel" onClick={() => requestOpenTask(task.id)}>
-            <ExternalLinkIcon size={13} />
-          </IconButton>
+          canPopOut ? (
+            <IconButton label="Pop out to a docked panel" onClick={() => requestOpenTask(task.id)}>
+              <ExternalLinkIcon size={13} />
+            </IconButton>
+          ) : undefined
         }
       />
       <TaskStatusBlock
@@ -368,7 +376,7 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
       <WorkflowChangeApproval task={task} />
 
       <div className="sb-actions-block">
-        <TaskActions task={task} />
+        <TaskActions task={task} confirmApprove />
         {/* Same server-side restrictions and two-stage confirm as the retired
             TaskDetail view; a successful delete leaves the (now gone) task. */}
         {canDeleteTask(task) && (

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DockviewApi, IDockviewPanel } from "dockview";
 import { useDashboardStore } from "./store/index.js";
+import { selectSessionTitleContexts } from "./lib/sessionDisplay.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { MobileSessionSwitcher } from "./MobileSessionSwitcher.js";
 import type {
@@ -14,11 +15,10 @@ import { taskLinkedSessionIds } from "./boardLanes.js";
 import { sessionUnreadCount } from "./eventDescriptions.js";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { focusPanelForTier, panelSessionId } from "./panelUtils.js";
-import type { LayoutTier } from "./lib/layoutTier.js";
 import { resolveAgentLogo } from "./cliLogos.js";
 import { describeError } from "./lib/describeError.js";
 
-// Phone/tablet glue between App's dockview panels and MobileSessionSwitcher
+// The phone's glue between App's dockview panels and MobileSessionSwitcher
 // (which App renders into the toolbar in place of the old `.mobile-tabs`
 // strip). The sheet is a UNIVERSAL picker — every session the sidebar would
 // list, grouped by project (lib/mobileSessionPicker.ts), whichever workspace
@@ -36,14 +36,7 @@ export function MobileSessionBar({
   onNewSession,
   onOpenSession,
   onSelectWorkspace,
-  tier = "phone",
-  contextLabel,
 }: {
-  // Phone maximizes the picked pane (one group at a time); tablet just brings
-  // it to the front of whichever column it's in.
-  tier?: LayoutTier;
-  // Active workspace name, shown in the trigger on tablet.
-  contextLabel?: string;
   // Tiled panels only: maximizeGroup on a floating panel throws.
   panels: IDockviewPanel[];
   activePanelId: string | null;
@@ -53,8 +46,7 @@ export function MobileSessionBar({
   // switches to the workspace that already has it.
   onOpenSession: (session: Session) => void;
   // Issue #1882 — switch workspace without opening the session, from the row
-  // that names the workspace. Absent on tablet, which has a workspace
-  // switcher of its own.
+  // that names the workspace.
   onSelectWorkspace?: (workspaceId: number) => void;
 }) {
   const sessions = useDashboardStore((s) => s.sessions);
@@ -101,6 +93,7 @@ export function MobileSessionBar({
     return "var(--dim)";
   };
 
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const pickerSections = useMemo(
     () =>
       buildPickerSections({
@@ -120,6 +113,7 @@ export function MobileSessionBar({
         taskSessionIds,
         workspaces,
         activeWorkspaceId,
+        titleContexts,
       }),
     [
       sessions,
@@ -134,6 +128,7 @@ export function MobileSessionBar({
       taskSessionIds,
       workspaces,
       activeWorkspaceId,
+      titleContexts,
     ],
   );
 
@@ -150,6 +145,7 @@ export function MobileSessionBar({
       unreadCount: row.unreadCount,
       needsYou: row.needsYou,
       workspace: row.workspace,
+      projectName: row.projectName,
       searchFields: row.searchFields,
     })),
   }));
@@ -201,7 +197,8 @@ export function MobileSessionBar({
   const selectPanel = (id: string) => {
     const panel = findPanel(id);
     if (!panel) return;
-    if (dockviewApi) focusPanelForTier(dockviewApi, panel, tier);
+    // The phone shows one maximized group at a time.
+    if (dockviewApi) focusPanelForTier(dockviewApi, panel, "phone");
     else panel.api.setActive();
   };
 
@@ -233,12 +230,9 @@ export function MobileSessionBar({
     <MobileSessionSwitcher
       items={items}
       sections={sections}
-      contextLabel={contextLabel}
-      sheetClassName={tier === "tablet" ? "mobile-session-sheet--tablet" : undefined}
-      // Issue #1882 — the phone tier is the one without a workspace
-      // switcher, so it is the one whose rows have to say where a session
-      // lives. Tablet has the switcher in its navigator's Projects tab.
-      showWorkspaceChip={tier === "phone"}
+      // Issue #1882 — the phone has no workspace switcher, so its rows have
+      // to say where a session lives.
+      showWorkspaceChip
       onSelectWorkspace={onSelectWorkspace}
       unreadElsewhere={unreadElsewhere}
       activeId={activePanelId}

@@ -117,6 +117,27 @@ describe("BrowserPane", () => {
     expect(input.value).toBe("https://example.com/page");
   });
 
+  // #3215: a session with no page yet reports about:blank. The address bar
+  // shows its placeholder, and Go/Enter on it sends nothing, so the server's
+  // non-http(s) refusal never surfaces as an error toast.
+  it("shows a fresh about:blank page as an empty address and never navigates to it", () => {
+    const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+    openSocket();
+    emitControlMessage({ type: "url", url: "about:blank" });
+
+    const input = container.querySelector<HTMLInputElement>(".browser-panel-address")!;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("https://example.com");
+
+    fireEvent.click(container.querySelector(".browser-panel-go")!);
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "  ABOUT:BLANK " } });
+    fireEvent.click(container.querySelector(".browser-panel-go")!);
+
+    expect(fakeSocket.send).not.toHaveBeenCalled();
+    expect(container.querySelector(".browser-pane-error-toast")).toBeNull();
+  });
+
   it("calls onTitleChange on a title control message", () => {
     const onTitleChange = vi.fn();
     render(<BrowserPane params={{ sessionId: 1 }} onTitleChange={onTitleChange} />);
@@ -242,6 +263,47 @@ describe("BrowserPane", () => {
     });
     expect(sentTypes).toContainEqual({ type: "mouse", action: "up", button: "left" });
     expect(sentTypes).toContainEqual({ type: "mouse", action: "wheel", deltaX: 1, deltaY: 2 });
+  });
+
+  it("scrolls the page with a one-finger drag (#3012)", () => {
+    const { container } = render(<BrowserPane params={{ sessionId: 1 }} />);
+    openSocket();
+    const canvas = container.querySelector("canvas")!;
+    canvas.width = 200;
+    canvas.height = 200;
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 100,
+      right: 100,
+      bottom: 100,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.touchStart(canvas, { touches: [{ clientX: 10, clientY: 50 }] });
+    fireEvent.touchMove(canvas, { touches: [{ clientX: 10, clientY: 40 }] });
+    // A second finger is a pinch, not a scroll: ignored.
+    fireEvent.touchMove(canvas, {
+      touches: [
+        { clientX: 10, clientY: 30 },
+        { clientX: 50, clientY: 30 },
+      ],
+    });
+    // Lifting one finger of the pinch does not scroll from a stale point.
+    fireEvent.touchMove(canvas, { touches: [{ clientX: 10, clientY: 0 }] });
+    fireEvent.touchEnd(canvas, { touches: [] });
+    // After the finger lifts, a stray move sends nothing.
+    fireEvent.touchMove(canvas, { touches: [{ clientX: 10, clientY: 10 }] });
+
+    const sent = fakeSocket.send.mock.calls.map((c) => JSON.parse(c[0] as string));
+    // The start point (scaled to the frame's pixels) positions the pointer.
+    expect(sent).toContainEqual({ type: "mouse", action: "move", x: 20, y: 100 });
+    // Dragging up by 10 CSS px scrolls the page down by 20 frame px.
+    const wheels = sent.filter((m) => m.action === "wheel");
+    expect(wheels).toEqual([{ type: "mouse", action: "wheel", deltaX: 0, deltaY: 20 }]);
   });
 
   it("forwards keydown/keyup from the canvas", () => {
@@ -611,5 +673,60 @@ describe("BrowserPane", () => {
       expect(fakeSocket).not.toBe(first);
       expect(fakeSocket.addEventListener).not.toHaveBeenCalled();
     });
+  });
+});
+
+// #3373 — the Browser pane's ⇄ button: the page's address goes up, and an
+// address to open comes down, even before the socket has opened.
+describe("open in the other browser (#3373)", () => {
+  const navigates = () =>
+    fakeSocket.send.mock.calls
+      .map(([raw]) => JSON.parse(String(raw)) as Record<string, unknown>)
+      .filter((m) => m.type === "navigate");
+
+  it("reports the page's own address", () => {
+    const onUrlChange = vi.fn();
+    render(<BrowserPane params={{ sessionId: 1 }} onUrlChange={onUrlChange} />);
+    openSocket();
+    emitControlMessage({ type: "url", url: "http://localhost:5173/a" });
+    expect(onUrlChange).toHaveBeenLastCalledWith("http://localhost:5173/a");
+  });
+
+  it("holds an address asked for before the socket opens, and sends it once open", () => {
+    render(
+      <BrowserPane
+        params={{ sessionId: 1 }}
+        navigateTo={{ url: "http://localhost:5173/", rev: 1 }}
+      />,
+    );
+    expect(navigates()).toEqual([]);
+    openSocket();
+    expect(navigates()).toEqual([{ type: "navigate", url: "http://localhost:5173/" }]);
+  });
+
+  it("sends each new request once, on an open socket", () => {
+    const { rerender } = render(<BrowserPane params={{ sessionId: 1 }} />);
+    openSocket();
+    rerender(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "https://a.example/", rev: 1 }} />,
+    );
+    rerender(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "https://a.example/", rev: 1 }} />,
+    );
+    rerender(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "https://b.example/", rev: 2 }} />,
+    );
+    expect(navigates()).toEqual([
+      { type: "navigate", url: "https://a.example/" },
+      { type: "navigate", url: "https://b.example/" },
+    ]);
+  });
+
+  it("never sends an address that is not http or https", () => {
+    render(
+      <BrowserPane params={{ sessionId: 1 }} navigateTo={{ url: "file:///etc/passwd", rev: 1 }} />,
+    );
+    openSocket();
+    expect(navigates()).toEqual([]);
   });
 });

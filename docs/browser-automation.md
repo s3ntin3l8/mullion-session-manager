@@ -4,6 +4,8 @@ Mullion features an in-app controllable browser (Phase 3) that allows AI agents 
 
 The browser pane is fully integrated into the tiled Dockview layout (`BrowserPane.tsx`) as a WebSocket-driven canvas client.
 
+**Agent's browser or preview?** Mullion has two browsers that look alike. The **Agent's browser** described here is one session's server-side Chromium, the one its agent drives, streamed into the pane as a canvas. Open it from a session pane's menu ("Open browser") or from the command palette ("Open browser: agent's browser · <session>", offered while a terminal session is the active pane). On the phone and the rails layouts (below 1100px) the palette command opens the right sidebar's Browser view instead of a pane. Below 1100px the pane menu offers no browser item at all, `rails-full` included (#3370), so the pane menu and the palette agree on every band. The **Preview** ([browser-previews.md](browser-previews.md)) is an iframe embedding a project's dev server, a branch preview or any URL in your own browser; its palette entries read "Open browser: preview…", "Open browser: blank preview" and "Open browser: <label>". From 1100px the Agent's browser and the preview share one **Browser** pane: a switch in its toolbar flips between Preview and Agent's browser, and the pane's title says which ("Browser · Agent's browser: <session>"); see "One Browser pane, two modes" in [browser-previews.md](browser-previews.md). Flipping the switch to Agent's browser asks for the session's browser bindings first and never launches a browser on its own; only the pane menu, the palette or the pane's **Open browser** button attach (and so launch) one. A fresh Agent's browser starts on `about:blank`: the address bar shows its placeholder rather than that address, and Go on an empty address sends nothing.
+
 ---
 
 ## Architecture & Lifecycle
@@ -45,7 +47,7 @@ A browser belongs to an **execution target**: the project plus the **host** and 
 
 ---
 
-## 1. REST API for Agent Browser Control
+## 1. REST API for agent's browser control
 
 Agents control the session's bound browser by sending requests to the following endpoints. They share the same authentication and network boundaries as the rest of the Mullion API.
 

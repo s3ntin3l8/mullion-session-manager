@@ -27,18 +27,17 @@ import type { DependencyList } from "react";
 // *current* interval instance is torn down (a `deps` change or unmount)
 // onward — for a caller doing async work that must not apply a stale
 // response after that happens, same as the hand-rolled `cancelled` guard
-// Dock.tsx's own Docker-status poll had pre-extraction (that one restarts
-// on `dockConfigRefreshTrigger`, a real mid-lifetime restart, unlike most
-// other converted call sites whose `deps` never actually change under a
-// live instance — see each call site's own comment on whether it needs
-// this). Sites that don't need it just ignore the parameter.
+// Dock.tsx's own Docker-status poll had pre-extraction (that poll has since
+// moved out of this hook, to dock/dockProjectShared.ts, which shares one
+// poll per project; most converted call sites' `deps` never actually
+// change under a live instance — see each call site's own comment on
+// whether it needs this). Sites that don't need it just ignore the parameter.
 export interface UsePollingOptions {
   /** Extra values that restart the interval when they change — the same
    * role `useEffect`'s own dependency array plays, since `fn` itself is
    * deliberately NOT part of the restart trigger (see above). Defaults to
-   * `[]`. Needed by e.g. Dock.tsx's Docker-status poll, which must refetch
-   * immediately (not wait out the poll interval) when a dock config save
-   * bumps `dockConfigRefreshTrigger`. */
+   * `[]`. Needed by a poll that must refetch immediately (not wait out the
+   * interval) when some input changes. */
   deps?: DependencyList;
   /** Whether the interval runs at all. Included in the restart-trigger set
    * (unlike `pauseWhenHidden`, an `enabled` flip is expected to visibly

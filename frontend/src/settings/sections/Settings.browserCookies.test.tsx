@@ -7,6 +7,7 @@ import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
 import type { BrowserCookieProfile, GitHubIntegration, Project } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
+import { getDropdownByLabel, pickDropdownOption } from "../../test/dropdown.js";
 
 // Mirrors Settings.integrations.test.tsx / Settings.hosts.test.tsx's
 // fake-in-memory-backend pattern (issue #184) — a fake server over global
@@ -283,11 +284,10 @@ describe("Settings -> Integrations -> Import Browser Cookies", () => {
         importedAt: "2026-01-01T00:00:00.000Z",
       },
     ]);
-    const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="browser" />);
     await screen.findByText("No cookie profiles imported yet");
 
-    await user.selectOptions(screen.getByDisplayValue("project-a"), "project-b");
+    pickDropdownOption(getDropdownByLabel("project-a"), "project-b");
 
     expect(await screen.findByText("b-label")).toBeInTheDocument();
   });

@@ -4,6 +4,7 @@ import { render, screen } from "@testing-library/react";
 import { FileEditorPanel } from "./FileEditorPanel.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
+import { openDropdown } from "./test/dropdown.js";
 
 // The CodeMirror editor is not under test here; a stub keeps the import light.
 vi.mock("./components/CodeEditor.js", () => ({ CodeEditor: () => null }));
@@ -36,6 +37,7 @@ describe("FileEditorPanel across hosts", () => {
     );
     render(<FileEditorPanel params={{ projectId: 1 }} />);
     await screen.findByText(".env");
+    openDropdown(screen.getByRole("combobox", { name: "Root" }));
     expect(screen.getByRole("option", { name: "Worktree: proj on Mac mini" })).toBeInTheDocument();
     // The local session is in the project's own checkout: no root of its own.
     expect(screen.getAllByRole("option")).toHaveLength(2);

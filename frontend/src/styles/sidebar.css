@@ -1,37 +1,6 @@
 /* ============================================================ */
 /* Sidebar                                                        */
 /* ============================================================ */
-.cmux-scrim {
-  display: none;
-  position: fixed;
-  /* Issue #87 — matches .toolbar's own inset-aware height (base rule
-     above): a bare 44px here would paint the scrim over the toolbar's
-     lower safe-area-inset-top region on a notched device, and its top edge
-     would no longer align with .sidebar-wrapper's own matching top offset.
-     `--shell-top` (issue #1387, tablet.css) follows .app's own top down
-     when iOS pans the visual viewport with the keyboard open; 0px
-     otherwise. */
-  top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
-  left: 0;
-  right: 0;
-  bottom: 0;
-  /* Fallback declaration first, unconditionally: a browser with no
-     backdrop-filter support drops that whole declaration and keeps this
-     flat tint instead — same "plain value first, enhanced value second"
-     pattern as .toolbar's own env()-fallback height (toolbar.css). The
-     tint is lighter than the old flat 48% black specifically because the
-     blur below is doing most of the separation work now; keeping the old
-     48% on top of a blur would read as near-opaque. */
-  background: color-mix(in srgb, #000 30%, transparent);
-  z-index: 40;
-}
-@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-  .cmux-scrim {
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px);
-  }
-}
-
 .sidebar-wrapper {
   width: var(--sidebar-width, 288px);
   flex-shrink: 0;
@@ -41,102 +10,29 @@
   display: flex;
   flex-direction: column;
   position: relative;
-  transition: width 0.16s ease;
+  /* No width transition (#3015, docs/motion.md): the docked sidebar's width
+     is the terminal grid's width too, so an eased collapse re-flowed every
+     terminal and resized its PTY on each frame. It snaps; the grid beside it
+     takes its final size at once. */
 }
 
-/* Floating-sidebar redesign — phone and tablet tiers, not a raw viewport
-   width. `.app[data-tier]` follows `layoutMode`, so a forced tablet in a
-   wide window still floats the sidebar and a forced desktop on a narrow
-   window stays docked (issue #1531). Was a `max-width: 1279.98px` query,
-   which only matched the JS tier in `auto`. `:where()` adds no specificity,
-   so a descendant rule written inside it (`.sidebar-wrapper`) still ties
-   the way that query did, and later files (mobile.css's full-bleed phone
-   drawer, compact.css's tablet width) win where they used to. An `&` rule
-   does not: `&` expands to `:is(:where(...))`, so `&.sb-open .sidebar-wrapper`
-   is one class lighter than the old `.app.sb-open .sidebar-wrapper`. Nothing
-   else targets those state classes, so the computed result still matches. */
-:where(.app[data-tier="phone"], .app[data-tier="tablet"]) {
-  .sidebar-wrapper {
-    position: fixed !important;
-    /* Matches .toolbar's own inset-aware height (its base rule, near the
-       top of toolbar.css) — a bare 44px here would let the drawer start
-       under the (now taller, on a notched device) toolbar. */
-    top: calc(44px + env(safe-area-inset-top) + var(--shell-top, 0px));
-    left: 0;
-    bottom: 0;
-    width: min(310px, 84vw) !important;
-    padding-left: env(safe-area-inset-left);
-    padding-bottom: env(safe-area-inset-bottom);
-    z-index: 45;
-    transform: translateX(-101%);
-    /* The closed drawer is off-screen but not inert in browsers without
-       `inert` support (Safari < 15.5), so its session rows, filter input
-       and kebab menus would still be tabbable and still be read by a
-       screen reader. `visibility: hidden` takes them out of both: an
-       element that is not visible is not focusable.
-
-       `visibility` rather than `display: none` on purpose — the drawer's
-       scroll container is what the session list's virtualizer measures, and
-       `display: none` would give it a zero-height box and break the row
-       count. The delayed visibility transition keeps the drawer visible for
-       the length of the slide-out, so closing still animates. */
-    visibility: hidden;
-    transition:
-      transform 0.24s ease,
-      visibility 0s linear 0.24s;
-    box-shadow: 0 0 50px rgba(0, 0, 0, 0.55);
-  }
-  &.sb-open .sidebar-wrapper {
-    transform: none;
-    visibility: visible;
-    /* No delay on the way in — the drawer must be visible as it slides. */
-    transition:
-      transform 0.24s ease,
-      visibility 0s;
-  }
-  &.sb-open .cmux-scrim {
-    display: block !important;
-  }
-
-  /* No reserved-sidebar-width column to line the toolbar's lead section up
-     with once the sidebar floats instead of docking — same treatment the
-     phone-only block already gave this before tablet shared the overlay. */
-  .toolbar-lead {
-    width: auto !important;
-  }
-}
-
-/* Desktop-only collapse — genuinely docked-sidebar-only behavior, unlike
-   the overlay above: a persisted `sidebarCollapsed` preference from a
-   previous desktop session has no CSS effect on the phone or tablet tier
-   (`toggleSidebar` itself stops writing to it off desktop too — see that
-   function's own comment). The `&` rules below are one class lighter than
-   the old `.app.sidebar-collapsed` selectors (`&` inside `:where()` is
-   `:is(:where(...))`); nothing else competes with them. */
-:where(.app[data-tier="desktop"]) {
-  &.sidebar-collapsed .sidebar-wrapper {
-    width: 0;
-    border-right: none;
-    overflow: hidden;
-  }
-
-  /* Toolbar tracks the collapsed sidebar (issue #90). Lead shrinks to fit
-     its three icons; the center divider is removed because there is no
-     longer a sidebar edge for it to line up with. */
-  &.sidebar-collapsed .toolbar-lead {
-    width: auto;
-  }
-  &.sidebar-collapsed .toolbar-center {
-    border-left: none;
-  }
-  /* Mirror the toggle glyph so its panel line reads as "collapsed". */
-  &.sidebar-collapsed .toolbar-lead button[data-toggle-sidebar] svg {
-    transform: scaleX(-1);
-  }
+/* The docked sidebar's collapse, from 1100px (#3041): App.tsx sets
+   `.sidebar-collapsed` only where the sidebar is docked (from 1280px from the
+   persisted preference, from 1100 to 1279px from that band's own
+   collapsed-by-default flag), so the rule needs no width or tier gate.
+   App.tsx also makes the collapsed wrapper `inert`; `visibility: hidden` is
+   the fallback for browsers without it (a hidden element is not focusable),
+   rather than `display: none`, which would give the session list's
+   virtualizer a zero-height box. */
+.app.sidebar-collapsed .sidebar-wrapper {
+  width: 0;
+  border-right: none;
+  overflow: hidden;
+  visibility: hidden;
 }
 
 /* Resize handle on the sidebar's right edge — hover-revealed, same pattern
-   as .dock-resize-handle. Hidden when sidebar is collapsed.
+   as .dock-resize-handle. App.tsx renders it only while the sidebar shows.
 
    Must lie fully INSIDE the wrapper's padding box (no negative `right`):
    .sidebar-wrapper sets `overflow-y: auto` with no overflow-x, so per the
@@ -170,9 +66,6 @@
 }
 .sidebar-resize-handle:hover::after {
   background: var(--ring, var(--muted));
-}
-.app.sidebar-collapsed .sidebar-resize-handle {
-  display: none;
 }
 .app.sidebar-resizing .sidebar-wrapper {
   transition: none;
@@ -226,7 +119,7 @@
   color: var(--dim);
   font-weight: 700;
   flex: 1;
-  /* This is an <h3> — the sidebar's section headings — and nothing resets
+  /* This is a heading (Projects is an <h2>, #2886) and nothing resets
      the UA's heading margins, so the default `margin: 1em 0` has to go or
      the header row gains a gap above and below the title. */
   margin: 0;
@@ -254,11 +147,66 @@
   font-size: 0.65625rem;
   color: var(--dim);
 }
+/* #2075 — the collapsible "Other projects" section header: a real button,
+   styled as a section header. */
+.sidebar-other-projects-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 15px 6px 16px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--dim);
+}
+.sidebar-other-projects-header:focus-visible {
+  outline: 2px solid var(--b);
+  outline-offset: -2px;
+}
 /* Sidebar declutter (issue #1465) — WorkspaceSwitcher's own collapse toggle
    on `.sidebar-section-header`, same "own modifier class, not the shared
    base" posture as `.source-control-header` (empty-states.css) — Devices'
    and Tasks' own headers reuse the base class without a click handler, so
    the pointer cursor/hover can't live there. */
+/* #2886 — the one real button in a workspace row, group header or the
+   WORKSPACES header (WorkspaceSwitcher.tsx), which are no longer buttons
+   themselves. It looks like the text it wraps. */
+.ws-row-btn {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.ws-row-btn:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+/* On the active row's --accent-fill the accent ring disappears (the two are
+   one colour in the light theme), and this is where the palette puts focus
+   after a workspace switch: the ring takes the row's own text colour. */
+.workspace-item.active .ws-row-btn:focus-visible {
+  outline-color: currentColor;
+}
+.ws-section-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ws-group-toggle {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
 .ws-section-header {
   cursor: pointer;
 }
@@ -318,9 +266,8 @@
   flex-wrap: wrap;
   gap: 5px;
 }
-/* Same on/off shape as .toolbar-icon-btn.active (HierarchyToggle's own
-   segmented toggle) — a text pill instead of an icon square, since each
-   chip needs its own label. */
+/* Same on/off shape as .toolbar-icon-btn.active — a text pill instead of
+   an icon square, since each chip needs its own label. */
 .sidebar-filter-chip {
   padding: 3px 9px;
   border: 1px solid var(--border);
@@ -373,7 +320,7 @@
 }
 .ws-group-chevron {
   flex-shrink: 0;
-  transition: transform 0.15s;
+  transition: transform var(--motion-fade) var(--motion-ease);
   color: currentColor;
 }
 .ws-group-chevron.collapsed {
@@ -599,7 +546,7 @@
      The hover lift below still brings it to full strength, so the
      de-emphasis survives: the handle is quiet until the row is engaged. */
   opacity: 0.75;
-  transition: opacity 0.1s;
+  transition: opacity var(--motion-press) var(--motion-ease-press);
   user-select: none;
 }
 .ws-group-header:hover .ws-drag-handle,
@@ -608,6 +555,13 @@
 }
 .ws-drag-handle:active {
   cursor: grabbing;
+}
+/* #3224 — the switcher's drag is a pointer drag (hooks/usePointerReorder.ts):
+   a finger on the handle drags rather than scrolling the sidebar. The handle
+   only, so a swipe on the row still scrolls. Scoped to the workspace row:
+   Settings' bridges list reuses `.ws-drag-handle` with the native drag. */
+.workspace-item .ws-drag-handle {
+  touch-action: none;
 }
 
 /* The ACTIVE workspace row is a FILL surface, not a flat one: it paints
@@ -900,6 +854,14 @@
 .session-item:active {
   cursor: grabbing;
 }
+/* #3106 — the row's one keyboard control is a visually hidden "Open session"
+   button (SessionRow.tsx): show its focus on the row, not on a 1px clipped
+   box. The project header's hidden disclosure button does the same. */
+.session-item:has(.session-item-open:focus-visible),
+.project-row-header:has(.project-row-toggle:focus-visible) {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: -2px;
+}
 .session-item:hover {
   background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
@@ -937,25 +899,35 @@
    an element with its descendants into one translucent layer, so a child
    cannot opt back out — the fade has to stop short of the label.
 
-   The label lives in `.session-status-group` (Sidebar.tsx), a direct child
-   of `.session-item-row`. Fading every other direct child of the row, and
-   every direct child of that strip except the group, keeps the name, the
-   dot, the meta lines and the actions at half strength — the same fade the
-   whole row used to have — so an ended session still reads as quieter than
-   a live one. The host badge shares the group, so it keeps its own
-   `opacity: 0.75` instead of being multiplied by the row fade a second time.
-   That extra multiply was the same failure the label had.
+   Since issue #3286 the label lives in `.session-meta-line` (SessionRow.tsx),
+   the row's second line and a direct child of `.session-item`; it is not
+   faded, and neither are its host and branch (the host badge's old
+   `opacity: 0.75` is gone for the same reason).
+
+   Issue #3106 — the same multiplication put the rest of the row's text
+   under the 4.5:1 that text needs: the agent's name (`--dim` at half
+   strength, 2.7:1 dark, 2.2:1 light) and, in the light theme, the title
+   (3.3:1). So the fade now reaches only what is not text: the title strip's
+   dot, logo and controls (`.session-row-control`, Header.tsx). The title is
+   quieter by colour instead, `--dim` rather than `--fg` (7.0:1 dark, 6.5:1
+   light), and the now line, the details and the meta line keep the colours
+   they have on a live row.
 
    Only `.status-exited`. `rowClassNameForSeverity` never returns
    `.status-killed` — a killed session is filtered out before a row is
    built — so a killed half of this rule could not match. */
-.session-item.status-exited > :not(.session-item-row),
-.session-item.status-exited .session-item-row > :not(.session-status-group) {
+.session-item.status-exited .session-dot-wrap,
+.session-item.status-exited .session-agent-logo,
+.session-item.status-exited .session-row-control {
   opacity: 0.5;
 }
-.session-item.status-exited:hover > :not(.session-item-row),
-.session-item.status-exited:hover .session-item-row > :not(.session-status-group) {
+.session-item.status-exited:hover .session-dot-wrap,
+.session-item.status-exited:hover .session-agent-logo,
+.session-item.status-exited:hover .session-row-control {
   opacity: 0.7;
+}
+.session-item.status-exited .session-name {
+  color: var(--dim);
 }
 /* Issue #319 — a session whose status can't be confirmed by its agent's
    hook capabilities renders with a dotted inset border + dimmed dot to
@@ -1020,6 +992,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Issue #3286 — the session's pane is already in this workspace. The word
+   "open" used to say so beside the status; the title's weight says it now,
+   and the row's aria-label says it in words. */
+.session-name.open {
+  font-weight: 600;
+}
 .session-name.mono {
   font-family: "Geist Mono", monospace;
 }
@@ -1035,7 +1013,16 @@
 .session-agent-text {
   font-size: 0.78125rem;
   color: var(--dim);
-  flex-shrink: 0;
+  /* Issue #3286 — an agent with no logo shows its binary's name here. It
+     used to refuse to shrink, so a long one (a script name) took the title's
+     whole width and pushed the row's controls past the sidebar's edge. It
+     now gives way first, up to a cap, and the title keeps the rest. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .session-status-label {
   font-size: 0.625rem;
@@ -1069,15 +1056,64 @@
 .session-status-label.suspended {
   color: var(--dim);
 }
-/* Issue #1727 / roadmap 8.13 — the status label and the host badge sit
-   together in one inline-flex group, so the badge can sit TIGHT against the
-   label instead of picking up the row's own 8px gap. min-width: 0 lets the
-   group shrink with the sidebar, and the label inside it still ellipsis. */
-.session-status-group {
-  display: inline-flex;
+/* Issue #3286 — the row's second line: status word · host · branch, in the
+   dim colour and a smaller size, under the title. Its own line so the title
+   on line 1 takes all the width the controls leave. Indented past the dot
+   column (14px dot + the row's 8px gap) so it lines up under the logo and
+   title. Each part shrinks and ellipsis on its own; the separators and the
+   status word do not shrink before the branch does. */
+.session-meta-line {
+  display: flex;
   align-items: center;
-  gap: 5px;
   min-width: 0;
+  /* Keep equal to .session-now-line's indent: the row's continuation lines
+     line up under the title. */
+  padding-left: 22px;
+  font-size: 0.65625rem;
+  line-height: 1.3;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.session-meta-line > .session-status-label {
+  flex-shrink: 0;
+  max-width: 60%;
+  font-size: inherit;
+}
+/* The tone colours are tuned for the flat sidebar. On this line the status
+   word is always on show at 10.5px, often over a tinted row (active,
+   hovered, attention, finished), and there most tones fall under AA's 4.5:1:
+   light --g on the active+hovered row is 3.42:1, dark --r on the attention
+   row 3.41:1. Mixing each tone 30% toward --fg darkens it in the light
+   theme and lightens it in the dark one, so one rule set lifts every tone
+   past 4.5:1 on every row tint in both themes; the hue stays recognisable.
+   test/scripts/session-meta-line-contrast.test.ts pins the ratios. */
+.session-meta-line > .session-status-label.attention {
+  color: color-mix(in srgb, var(--ring) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.working {
+  color: color-mix(in srgb, var(--g) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.error {
+  color: color-mix(in srgb, var(--r) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.plan {
+  color: color-mix(in srgb, var(--o) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.permission {
+  color: color-mix(in srgb, var(--p) 70%, var(--fg));
+}
+.session-meta-line > .session-status-label.finished {
+  color: color-mix(in srgb, var(--c) 70%, var(--fg));
+}
+.session-meta-sep {
+  flex-shrink: 0;
+  white-space: pre;
+}
+.session-meta-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The host a session runs on. Quiet by design — small, dim, and never for a
    local session (the sidebar already carries a per-PROJECT host badge for
@@ -1087,14 +1123,16 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 0.59375rem;
   color: var(--dim);
-  opacity: 0.75;
   min-width: 0;
-  /* A long host name must not push the row wider than the sidebar — the
-     same cap the row's other chips use (100-110px). The NAME ellipsis
-     inside it; the icon never shrinks. */
-  max-width: 110px;
+  flex: 0 1 auto;
+  /* A long host name must not push the line wider than the sidebar. The
+     NAME ellipsis inside it; the icon and a host's state never shrink. */
+  max-width: 45%;
+}
+.session-host-badge .host-derived-status {
+  flex-shrink: 0;
+  margin-left: 3px;
 }
 .session-host-badge-name {
   min-width: 0;
@@ -1104,18 +1142,6 @@
 }
 .session-host-badge svg {
   flex-shrink: 0;
-}
-/* Issue #1877 — the session's terminal pane is already in this workspace.
-   The word is the whole signal: a dot alone would not say that clicking
-   the row focuses the pane you already have. */
-.session-open-label {
-  flex-shrink: 0;
-  font-size: 0.59375rem;
-  line-height: 14px;
-  color: var(--dim);
-  border: 1px solid var(--border-soft);
-  border-radius: 999px;
-  padding: 0 5px;
 }
 .session-status-label.killed {
   color: var(--r);
@@ -1193,6 +1219,7 @@
   font-size: 0.6875rem;
   font-style: italic;
   color: var(--dim);
+  /* Keep equal to .session-meta-line's indent (#3286). */
   padding-left: 22px;
   white-space: nowrap;
   overflow: hidden;
@@ -1907,7 +1934,7 @@ button.discover-header:hover {
 .mobile-session-backdrop {
   position: fixed;
   inset: 0;
-  /* Above the drawer (45) and overlay backdrop (50); below Settings (60) and
+  /* Above the overlay backdrop (50); below Settings (60) and
      modals (70). */
   z-index: 55;
   display: flex;
@@ -1949,6 +1976,12 @@ button.discover-header:hover {
   font-weight: 600;
   color: var(--muted);
   border-bottom: 1px solid var(--border);
+  /* The header is the sheet's drag handle (ui/BottomSheet.tsx, #3008): the
+     browser must not pan or select text under a finger that is pulling the
+     sheet down. Taps on its buttons are unaffected. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 /* ui/BottomSheet.tsx's own trailing flex group (headerActions + the close
    button) — one item against `.mobile-session-sheet-header`'s own
@@ -2055,6 +2088,24 @@ button.discover-header:hover {
 }
 .mobile-session-row.active .mobile-session-row-main {
   font-weight: 600;
+}
+/* Issue #2996 — a "Needs you" row stacks its project under the title: the
+   pin has no project heading, and titles are often just `claude`. */
+.mobile-session-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.mobile-session-project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--dim);
 }
 /* Issue #1882 — the workspace a picker's session lives in.
    The phone tier has no workspace switcher, so this chip is the only place
@@ -2334,6 +2385,32 @@ button.discover-header:hover {
   cursor: pointer;
   user-select: none;
 }
+/* The banner's one keyboard control (ActionBanner, #2886): a real <button>
+   around the icon and text, reset so it lays out as the banner's own flex
+   items did. */
+.update-banner-open {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: inherit;
+}
+.update-banner:has(.update-banner-open:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.update-banner-open:focus-visible {
+  outline: none;
+}
 .update-banner-title {
   font-size: 0.78125rem;
   font-weight: 600;
@@ -2356,48 +2433,12 @@ button.discover-header:hover {
   color: var(--dim);
   border-radius: 6px;
   cursor: pointer;
+  padding: 0;
+  font-family: inherit;
   font-size: 1rem;
   line-height: 1;
 }
 .update-banner-dismiss:hover {
-  background: color-mix(in srgb, var(--o) 18%, transparent);
-  color: var(--fg);
-}
-
-/* Issue #1555 — one-shot, not a persistent alarm. Explicit splits on tablet
-   bypass the pane cap; this says so once, then the timer or the dismiss
-   removes it. */
-.pane-cap-notice {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  background: color-mix(in srgb, var(--o) 13%, var(--chrome));
-  border-bottom: 1px solid color-mix(in srgb, var(--o) 25%, transparent);
-}
-.pane-cap-notice-title {
-  font-size: 0.78125rem;
-  font-weight: 600;
-  color: var(--fg);
-}
-.pane-cap-notice-dismiss {
-  margin-left: auto;
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: transparent;
-  color: var(--dim);
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 1rem;
-  line-height: 1;
-  font-family: inherit;
-}
-.pane-cap-notice-dismiss:hover {
   background: color-mix(in srgb, var(--o) 18%, transparent);
   color: var(--fg);
 }

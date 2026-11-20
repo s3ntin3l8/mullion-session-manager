@@ -1,5 +1,5 @@
 import type { NotificationEvent, Theme as ThemePreference } from "../api/index.js";
-import { STORAGE_KEYS, readBool, readJSON, readNumber, readString } from "../lib/persistedState.js";
+import { STORAGE_KEYS, readJSON, readNumber, readString } from "../lib/persistedState.js";
 import {
   EVENTS_PER_SESSION_CAP,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
@@ -34,10 +34,6 @@ export function readStoredActiveWorkspaceId(): number | null {
 
 export function readStoredViewMode(): ViewMode {
   return readString(STORAGE_KEYS.viewMode, "list") === "kanban" ? "kanban" : "list";
-}
-
-export function readStoredHierarchicalView(): boolean {
-  return readBool(STORAGE_KEYS.hierarchicalView, false);
 }
 
 /**

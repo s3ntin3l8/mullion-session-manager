@@ -44,6 +44,8 @@ function endedRowStylesheetCss(extra?: {
 
 /** The floor the issue asks of the label. Not WCAG AA's 4.5:1 for text. */
 const LABEL_MIN_RATIO = 3;
+/** #3106 — WCAG AA for the row's other text: the title and the agent's name. */
+const TEXT_MIN_RATIO = 4.5;
 
 interface ElementNode {
   classes: string[];
@@ -77,23 +79,26 @@ function chain(classLists: string[][]): ElementNode {
 function endedRow(rowClass: string): {
   label: ElementNode;
   name: ElementNode;
+  agentText: ElementNode;
   nowLine: ElementNode;
+  dot: ElementNode;
+  control: ElementNode;
 } {
   const row = ["session-item", rowClass];
   return {
-    // Sidebar.tsx wraps the label in `.session-status-group`, inside
-    // Header.tsx's `.session-item-row`, inside `.session-item`. Header.test.tsx
+    // Since #3286 SessionRow.tsx puts the label in `.session-meta-line`, the
+    // row's second line, a direct child of `.session-item`. Header.test.tsx
     // renders that nesting; this chain is the same shape. The exited tone is
     // the one an ended session actually paints (sessionStatus.ts).
     // `.status-killed` is not a row class `rowClassNameForSeverity` returns.
-    label: chain([
-      row,
-      ["session-item-row"],
-      ["session-status-group"],
-      ["session-status-label", "exited"],
-    ]),
+    label: chain([row, ["session-meta-line"], ["session-status-label", "exited"]]),
     name: chain([row, ["session-item-row"], ["session-name"]]),
+    agentText: chain([row, ["session-item-row"], ["session-agent-text"]]),
     nowLine: chain([row, ["session-now-line"]]),
+    // #3106 — what the fade still reaches: the dot, and the wrapper Header.tsx
+    // puts around each of the title strip's controls.
+    dot: chain([row, ["session-item-row"], ["session-dot-wrap"]]),
+    control: chain([row, ["session-item-row"], ["session-row-control"]]),
   };
 }
 
@@ -348,20 +353,22 @@ describe("ended session status label contrast (#1886)", () => {
       // --dim at opacity 1, and the same colour at the old row opacity of
       // 0.5. Pinned so a token edit that moves the composite is visible
       // here, not only the 3:1 floor.
-      resting: 5.29,
-      faded: 2.26,
+      resting: 6.98,
+      faded: 2.68,
       liveName: 15.45,
-      endedName: 4.68,
+      // #3106 — --dim at full strength; it was --fg at 0.5, 4.68.
+      endedName: 6.98,
     },
     {
       name: "light",
       dim: tokenHex(lightBlock, "dim"),
       fg: tokenHex(lightBlock, "fg"),
       sidebar: tokenHex(lightBlock, "sidebar"),
-      resting: 5.21,
-      faded: 2.04,
+      resting: 6.46,
+      faded: 2.21,
       liveName: 16.28,
-      endedName: 3.33,
+      // #3106 — was --fg at 0.5, 3.33: under 4.5:1.
+      endedName: 6.46,
     },
   ] as const;
 
@@ -398,7 +405,7 @@ describe("ended session status label contrast (#1886)", () => {
   }
 
   describe(".session-item.status-exited", () => {
-    const { label, name, nowLine } = endedRow("status-exited");
+    const { label, name, agentText, nowLine, dot, control } = endedRow("status-exited");
 
     it("does not let a row opacity cover the status label, at rest or hovered", () => {
       // Any opacity on the label OR an ancestor fails this. That is the
@@ -414,11 +421,17 @@ describe("ended session status label contrast (#1886)", () => {
       }
     });
 
-    it("still fades the name and the meta line relative to a live row", () => {
-      expect(effectiveOpacity(rules, name, false)).toBe(0.5);
-      expect(effectiveOpacity(rules, name, true)).toBe(0.7);
-      expect(effectiveOpacity(rules, nowLine, false)).toBe(0.5);
-      expect(effectiveOpacity(rules, nowLine, true)).toBe(0.7);
+    it("fades the dot and the controls, not the row's text (#3106)", () => {
+      for (const [hovered, faded] of [
+        [false, 0.5],
+        [true, 0.7],
+      ] as const) {
+        expect(effectiveOpacity(rules, dot, hovered)).toBe(faded);
+        expect(effectiveOpacity(rules, control, hovered)).toBe(faded);
+        expect(effectiveOpacity(rules, name, hovered)).toBe(1);
+        expect(effectiveOpacity(rules, agentText, hovered)).toBe(1);
+        expect(effectiveOpacity(rules, nowLine, hovered)).toBe(1);
+      }
     });
   });
 
@@ -455,13 +468,32 @@ describe("ended session status label contrast (#1886)", () => {
     }
   });
 
+  it("paints the ended row's title and agent name at 4.5:1 or more in both themes (#3106)", () => {
+    const { name, agentText } = endedRow("status-exited");
+    expect(winningValue(rules, name, "color", false)).toBe("var(--dim)");
+    expect(winningValue(rules, agentText, "color", false)).toBe("var(--dim)");
+    for (const node of [name, agentText]) {
+      for (const hovered of [false, true]) {
+        const opacity = effectiveOpacity(rules, node, hovered);
+        for (const theme of themes) {
+          const sample = renderSample({
+            color: theme.dim,
+            layers: [parseColor(theme.sidebar)],
+            opacity,
+          });
+          expect(sample.ratio).toBeGreaterThanOrEqual(TEXT_MIN_RATIO);
+        }
+      }
+    }
+  });
+
   it("keeps an ended row's name quieter than a live row's name", () => {
     const { name } = endedRow("status-exited");
     const opacity = effectiveOpacity(rules, name, false);
-    expect(opacity).toBeLessThan(1);
     for (const theme of themes) {
+      // Quieter by colour now (--dim), not by opacity.
       const ended = renderSample({
-        color: theme.fg,
+        color: theme.dim,
         layers: [parseColor(theme.sidebar)],
         opacity,
       });

@@ -7,7 +7,7 @@ import {
 } from "./settingsSections.js";
 
 // Issue #1880 — the settings filter, shared by the desktop nav rail
-// (Settings.tsx) and the phone's navigator list (PhoneNavigator.tsx).
+// (Settings.tsx) and the phone list (Settings.tsx, `phone`).
 //
 // The two have to agree: the phone's list had no filter at all, so finding
 // one of the sections meant scrolling past all of them, while the desktop's

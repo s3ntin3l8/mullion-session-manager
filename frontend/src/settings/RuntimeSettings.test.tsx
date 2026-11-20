@@ -19,6 +19,12 @@ import { DEFAULT_SETTINGS } from "../api/index.js";
 import type { AppSettings, ServerInfo } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { SERVER_INFO_FIXTURE } from "../test/serverInfoFixture.js";
+import {
+  dropdownLabel,
+  dropdownOptions,
+  getDropdownByLabel,
+  pickDropdownOption,
+} from "../test/dropdown.js";
 
 function stubFetch(info: ServerInfo = SERVER_INFO_FIXTURE) {
   vi.stubGlobal(
@@ -123,12 +129,11 @@ describe("runtime settings controls", () => {
   });
 
   it("offers the server default as the first log level and saves a chosen level", async () => {
-    const user = userEvent.setup();
     render(<LogLevelSetting />);
     const select = within(rowFor("Log level")).getByRole("combobox");
-    expect(within(select).getAllByRole("option")[0]).toHaveTextContent("Server default (Info)");
+    expect(dropdownOptions(select)[0]?.label).toBe("Server default (Info)");
 
-    await user.selectOptions(select, "debug");
+    pickDropdownOption(select, "debug");
     expect(useDashboardStore.getState().settings.server.logLevel).toBe("debug");
   });
 
@@ -171,7 +176,7 @@ describe("runtime settings controls", () => {
     setSettings({ browser: { ...DEFAULT_SETTINGS.browser, enabled: "inherit" } });
     render(<BrowserEnabledSetting />);
     await waitFor(() => expect(screen.getByText("Enable browser")).toBeInTheDocument());
-    expect(screen.getByDisplayValue("Server default (Off)")).toBeInTheDocument();
+    expect(getDropdownByLabel("Server default (Off)")).toBeInTheDocument();
     expect(screen.queryByText(/Restart required/)).toBeNull();
   });
 
@@ -188,28 +193,26 @@ describe("runtime settings controls", () => {
   });
 
   it("stores an emulator window and GPU override for the next launch", async () => {
-    const user = userEvent.setup();
     render(
       <>
         <EmulatorWindowSetting />
         <EmulatorGpuSetting />
       </>,
     );
-    expect(await screen.findByLabelText("Emulator window")).toHaveDisplayValue(/Headless/);
-    expect(screen.getByLabelText("Emulator GPU")).toHaveDisplayValue(/swiftshader_indirect/);
+    expect(dropdownLabel(await screen.findByLabelText("Emulator window"))).toMatch(/Headless/);
+    expect(dropdownLabel(screen.getByLabelText("Emulator GPU"))).toMatch(/swiftshader_indirect/);
 
-    await user.selectOptions(screen.getByLabelText("Emulator window"), "off");
-    await user.selectOptions(screen.getByLabelText("Emulator GPU"), "host");
+    pickDropdownOption(screen.getByLabelText("Emulator window"), "off");
+    pickDropdownOption(screen.getByLabelText("Emulator GPU"), "host");
 
     expect(useDashboardStore.getState().settings.devices.emulatorHeadless).toBe("off");
     expect(useDashboardStore.getState().settings.devices.emulatorGpu).toBe("host");
   });
 
   it("sends null when the GPU override returns to the server default", async () => {
-    const user = userEvent.setup();
     setSettings({ devices: { ...DEFAULT_SETTINGS.devices, emulatorGpu: "host" } });
     render(<EmulatorGpuSetting />);
-    await user.selectOptions(await screen.findByLabelText("Emulator GPU"), "inherit");
+    pickDropdownOption(await screen.findByLabelText("Emulator GPU"), "inherit");
     expect(useDashboardStore.getState().settings.devices.emulatorGpu).toBeNull();
     await waitFor(() => {
       const patch = vi

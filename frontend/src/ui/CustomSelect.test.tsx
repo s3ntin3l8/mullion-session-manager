@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CustomSelect } from "./CustomSelect.js";
 import {
@@ -254,6 +254,14 @@ describe("ui/CustomSelect's searchable menu (issue #2495)", () => {
     expect(screen.getByRole("listbox")).toBeInTheDocument();
   });
 
+  it("a press on the filter input still focuses it; a press on an option does not take the focus", async () => {
+    await openSearchable();
+    // #3245: the shared list keeps the focus where it is on a press, except
+    // in the filter input, which has to be focusable by the pointer.
+    expect(fireEvent.mouseDown(screen.getByRole("combobox"))).toBe(true);
+    expect(fireEvent.mouseDown(screen.getAllByRole("option")[0]!)).toBe(false);
+  });
+
   it("puts the focus in the filter input, so typing filters right away", async () => {
     await openSearchable();
     expect(screen.getByRole("combobox")).toHaveFocus();
@@ -371,5 +379,34 @@ describe("ui/CustomSelect's searchable menu (issue #2495)", () => {
     // The full name is still there — for the tooltip and for assistive tech.
     expect(option).toHaveAttribute("title", LONG_BRANCH);
     expect(option).toHaveAttribute("aria-label", LONG_BRANCH);
+  });
+});
+
+// #3015 — the same leaving shape as the other menus (KebabMenu, PaneActionsMenu,
+// the notification panel, the workspace popover): mounted while its exit
+// plays, unreachable, then gone.
+describe("ui/CustomSelect exit", () => {
+  it("stays mounted while it leaves, then unmounts", async () => {
+    const { installExitAnimations } = await import("../test/exitAnimations.js");
+    const exits = installExitAnimations();
+    try {
+      const user = userEvent.setup();
+      render(<CustomSelect value="a" onChange={vi.fn()} options={OPTIONS} label="Pick" />);
+      const trigger = screen.getByRole("button", { name: "Pick" });
+      await user.click(trigger);
+      const menu = document.querySelector(".custom-select-menu") as HTMLElement;
+      expect(menu).toHaveAttribute("data-presence", "open");
+      expect(menu).toHaveAttribute("data-placement", "bottom");
+
+      await user.click(trigger);
+      expect(menu).toBeInTheDocument();
+      expect(menu).toHaveAttribute("data-presence", "leaving");
+      expect(menu).toHaveAttribute("inert");
+
+      await exits.finishExits();
+      expect(menu).not.toBeInTheDocument();
+    } finally {
+      exits.restore();
+    }
   });
 });

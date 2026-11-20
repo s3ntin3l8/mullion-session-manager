@@ -210,6 +210,17 @@ export function FolderIcon(props: IconProps) {
   );
 }
 
+// #3055 — the right rail's Project view. A briefcase, since the gear means
+// Settings on the left rail and the folder is the Files view.
+export function BriefcaseIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.6} {...props}>
+      <rect x="3" y="7" width="18" height="13" rx="2" />
+      <path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M3 13h18" />
+    </Svg>
+  );
+}
+
 export function CloseIcon(props: IconProps) {
   return (
     <Svg strokeWidth={2} strokeLinecap="round" {...props}>

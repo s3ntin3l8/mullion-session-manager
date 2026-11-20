@@ -28,7 +28,6 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     prune: vi.fn(),
   };
   const context: PaletteCommandContext = {
-    layoutTier: "desktop",
     projectId: 5,
     projectName: "mullion",
     favoriteUrls: [],
@@ -49,7 +48,7 @@ describe("buildPaletteCommands", () => {
   it("lists each placement in title order, with setup entries under the Project drill-in", () => {
     const commands = buildPaletteCommands(ctx().context);
 
-    expect(titles("top", commands)).toEqual(["GitHub", "New workspace", "Project: mullion"]);
+    expect(titles("top", commands)).toEqual(["New workspace", "Browser", "Project: mullion"]);
     expect(titles("project", commands)).toEqual([
       "Agent Rules",
       "Dock",
@@ -60,6 +59,117 @@ describe("buildPaletteCommands", () => {
       "Skills",
     ]);
     expect(commands.filter((c) => c.drillIn).map((c) => c.id)).toEqual(["project"]);
+  });
+
+  it("offers New session… as a top command wired to its opener", () => {
+    const { context } = ctx();
+    const newSession = vi.fn();
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, newSession },
+    });
+    const command = commands.find((c) => c.id === "new-session")!;
+
+    expect(command.placement).toBe("top");
+    expect(command.title).toBe("New session…");
+    expect(command.subtitle).toBe("Choose an agent, shell or script");
+    command.run();
+    expect(newSession).toHaveBeenCalledTimes(1);
+  });
+
+  // The order is declared (Create, then Go to), not the title order.
+  it("lists the default rows in the declared order", () => {
+    const { context } = ctx();
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, newSession: vi.fn() },
+    });
+
+    expect(commands.filter((c) => c.placement === "top").map((c) => c.id)).toEqual([
+      "new-session",
+      "new-workspace",
+      "browser",
+      "project",
+    ]);
+  });
+
+  // No tier input exists any more, so the list cannot differ by tier.
+  it("lists exactly the default rows, with every opener wired", () => {
+    {
+      const { context } = ctx();
+      const commands = buildPaletteCommands({
+        ...context,
+        open: {
+          ...context.open,
+          newSession: vi.fn(),
+          tasks: vi.fn(),
+          settings: vi.fn(),
+          devices: vi.fn(),
+          hosts: vi.fn(),
+          toggleRightSidebar: vi.fn(),
+        },
+      });
+      expect(commands.filter((c) => c.placement === "top").map((c) => c.title)).toEqual([
+        "New session…",
+        "New workspace",
+        "Task board",
+        "Browser",
+        "Project: mullion",
+        "Settings",
+      ]);
+    }
+  });
+
+  it("Browser opens the agent's browser for the active session, else the preview targets", () => {
+    const { context, open } = ctx();
+    const session = makeSession({ id: 1 });
+    const agentBrowser = vi.fn();
+    const withAgent = {
+      ...context,
+      activeSession: session,
+      open: { ...context.open, agentBrowser },
+    };
+    buildPaletteCommands(withAgent)
+      .find((c) => c.id === "browser")!
+      .run();
+    expect(agentBrowser).toHaveBeenCalledWith(session);
+    expect(open.browser).not.toHaveBeenCalled();
+
+    // Server browser feature off: the project's preview targets.
+    buildPaletteCommands({ ...withAgent, browserFeature: false })
+      .find((c) => c.id === "browser")!
+      .run();
+    expect(open.browser).toHaveBeenCalledWith(5);
+    expect(agentBrowser).toHaveBeenCalledTimes(1);
+    // No active session: same.
+    buildPaletteCommands(context)
+      .find((c) => c.id === "browser")!
+      .run();
+    expect(open.browser).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps GitHub and the specific browser rows findable by typing, not listed", () => {
+    const { context } = ctx();
+    const commands = buildPaletteCommands({
+      ...context,
+      favoriteUrls: [{ id: 1, url: "http://localhost:3000", label: "Docs" }],
+      activeSession: makeSession({ id: 1 }),
+      open: { ...context.open, agentBrowser: vi.fn() },
+    });
+    const byId = Object.fromEntries(commands.map((c) => [c.id, c]));
+    for (const id of ["github", "preview", "url-1", "blank-browser", "agent-browser"])
+      expect(byId[id].placement).toBe("search");
+    expect(searchPaletteCommands(commands, "github").map((c) => c.id)).toContain("github");
+    const found = searchPaletteCommands(commands, "browser").map((c) => c.id);
+    expect(found).toEqual(
+      expect.arrayContaining(["preview", "blank-browser", "agent-browser", "browser"]),
+    );
+  });
+
+  it("omits New session… when no opener is given", () => {
+    const commands = buildPaletteCommands(ctx().context);
+
+    expect(commands.some((c) => c.id === "new-session")).toBe(false);
   });
 
   it("wires each command to its opener with the project id", () => {
@@ -101,7 +211,7 @@ describe("buildPaletteCommands", () => {
     });
     const url = buildPaletteCommands(context).find((c) => c.id === "url-1")!;
 
-    expect(url.title).toBe("App");
+    expect(url.title).toBe("Open browser: App");
     expect(url.subtitle).toBe("http://localhost:3000");
     url.run();
     expect(open.browserUrl).toHaveBeenCalledWith(5, "http://localhost:3000", "App");
@@ -115,9 +225,9 @@ describe("buildPaletteCommands", () => {
   it("offers only the project-independent entries when there is no project", () => {
     const commands = buildPaletteCommands(ctx({ projectId: null, projectName: null }).context);
     expect(commands.map((c) => c.id)).toEqual([
+      "new-workspace",
       "settings-github",
       "blank-browser",
-      "new-workspace",
       "settings-review-relay",
       "settings-runway",
     ]);
@@ -152,10 +262,11 @@ describe("buildPaletteCommands", () => {
       .filter((c) => c.movesFocus)
       .map((c) => c.id);
     expect(ids).toEqual([
+      "browser",
       "settings-github",
       "blank-browser",
-      "external-file",
       "preview",
+      "external-file",
       "settings-review-relay",
       "settings-runway",
     ]);
@@ -167,6 +278,55 @@ describe("buildPaletteCommands", () => {
     for (const id of ["settings", "devices", "hosts"]) {
       expect(wired.find((command) => command.id === id)?.movesFocus).toBe(true);
     }
+  });
+
+  it("offers the active session's Agent Browser only when wired and a session is active (#3215)", () => {
+    const { context } = ctx();
+    const agentBrowser = vi.fn();
+    const session = makeSession({ id: 9, projectId: 5, name: "hotfix", nameLocked: true });
+    expect(
+      buildPaletteCommands({ ...context, activeSession: session }).some(
+        (c) => c.id === "agent-browser",
+      ),
+    ).toBe(false);
+    expect(
+      buildPaletteCommands({ ...context, open: { ...context.open, agentBrowser } }).some(
+        (c) => c.id === "agent-browser",
+      ),
+    ).toBe(false);
+
+    const command = buildPaletteCommands({
+      ...context,
+      activeSession: session,
+      open: { ...context.open, agentBrowser },
+    }).find((c) => c.id === "agent-browser")!;
+    expect(command.title).toBe("Open browser: agent's browser · hotfix");
+    command.run();
+    expect(agentBrowser).toHaveBeenCalledWith(session);
+  });
+
+  it("names the session in the Agent Browser and timeline rows by its pane title", () => {
+    const { context } = ctx();
+    const session = makeSession({ id: 9, projectId: 5, name: "hotfix", lastTitle: "vim" });
+    const byId = Object.fromEntries(
+      buildPaletteCommands({
+        ...context,
+        activeSession: session,
+        open: { ...context.open, agentBrowser: vi.fn(), timeline: vi.fn() },
+      }).map((c) => [c.id, c]),
+    );
+    expect(byId["agent-browser"].title).toBe("Open browser: agent's browser · vim");
+    expect(byId["session-timeline"].subtitle).toBe("vim");
+  });
+
+  it("labels every embedded-browser entry as a preview (#3215)", () => {
+    const commands = buildPaletteCommands(
+      ctx({ favoriteUrls: [{ id: 1, url: "http://localhost:3000", label: "App" }] }).context,
+    );
+    const byId = Object.fromEntries(commands.map((c) => [c.id, c.title]));
+    expect(byId["preview"]).toBe("Open browser: preview…");
+    expect(byId["blank-browser"]).toBe("Open browser: blank preview");
+    expect(byId["url-1"]).toBe("Open browser: App");
   });
 
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {
@@ -221,10 +381,13 @@ describe("buildPaletteCommands", () => {
     });
     expect(noSession.some((c) => c.id === "session-timeline")).toBe(false);
 
-    const top = titles("top", wired);
-    expect(top).toEqual(
-      [...top].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
-    );
+    expect(titles("top", wired)).toEqual([
+      "New workspace",
+      "Task board",
+      "Browser",
+      "Project: mullion",
+      "Settings",
+    ]);
   });
 });
 
@@ -353,14 +516,12 @@ describe("git / GitHub deep-link commands", () => {
   });
 });
 
-describe("tier-specific command placement", () => {
-  it.each(["phone", "tablet", "desktop"] as const)(
-    "keeps only general Settings visible on %s",
-    (layoutTier) => {
+describe("command placement", () => {
+  it("keeps only the default rows listed, and the rest search-only", () => {
+    {
       const { context } = ctx();
       const commands = buildPaletteCommands({
         ...context,
-        layoutTier,
         activeSession: makeSession({ id: 1 }),
         open: {
           ...context.open,
@@ -372,7 +533,7 @@ describe("tier-specific command placement", () => {
         },
       });
       const byId = Object.fromEntries(commands.map((command) => [command.id, command]));
-      expect(byId.settings.placement).toBe(layoutTier === "phone" ? "top" : "search");
+      expect(byId.settings.placement).toBe("top");
       for (const id of [
         "devices",
         "hosts",
@@ -383,15 +544,13 @@ describe("tier-specific command placement", () => {
       ])
         expect(byId[id].placement).toBe("search");
       expect(byId.git).toBeUndefined();
-    },
-  );
+    }
+  });
   it.each([null, "phone-tier", "coarse-pointer"] as const)(
-    "offers Preview according to Dock availability %s",
+    "keeps Preview search-only whatever the Dock availability %s",
     (dockUnavailable) => {
       const commands = buildPaletteCommands(ctx({ dockUnavailable }).context);
-      expect(commands.find((command) => command.id === "preview")?.placement).toBe(
-        dockUnavailable ? "top" : "search",
-      );
+      expect(commands.find((command) => command.id === "preview")?.placement).toBe("search");
     },
   );
 });

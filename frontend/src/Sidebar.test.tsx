@@ -1,22 +1,14 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useSyncExternalStore } from "react";
-import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
 import type { SidebarProps } from "./Sidebar.js";
 import { ApiError } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
-import type {
-  Device,
-  GitPullReason,
-  GitStatus,
-  Host,
-  Project,
-  Session,
-  Task,
-} from "./api/index.js";
+import type { Device, GitStatus, Host, Project, Session, Task } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
 import { STORAGE_KEYS } from "./lib/persistedState.js";
 import { writeDockManualProjectIds } from "./dock/dockHelpers.js";
@@ -31,7 +23,8 @@ import { useDashboardStore } from "./store/index.js";
 // selector(state), .getState() -> whole state, plus setState so a test can
 // publish a host-health change) since Sidebar reads the store the same ways
 // across its own body and the child components it mounts (ProjectHeader,
-// SessionRow, HierarchyToggle).
+// SessionRow).
+let workspaceCounter = 0;
 let projects: Project[];
 let sessions: Session[];
 let hosts: Host[];
@@ -45,6 +38,7 @@ let gitStatuses: Record<number, GitStatus | null>;
 // failed (audit finding 14).
 let projectsLoaded: boolean;
 let projectsError: string | null;
+let activeWorkspaceId: number | null;
 const setShowTaskSessions = vi.fn();
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
@@ -61,7 +55,6 @@ const deleteSession = vi.fn().mockResolvedValue(undefined);
 const renameSession = vi.fn().mockResolvedValue(undefined);
 const subscribeToGitHubProject = vi.fn();
 const unsubscribeFromGitHubProject = vi.fn();
-const setHierarchicalView = vi.fn();
 const setViewMode = vi.fn();
 // The app-wide failure channel (store/slices/toasts.ts) — the sidebar
 // reports a failed rename through it.
@@ -80,8 +73,6 @@ function storeState() {
     setShowTaskSessions,
     settings: { sessions: { confirmBeforeKill: false }, projectRoots: [] },
     settingsLoaded: true,
-    hierarchicalView: false,
-    setHierarchicalView,
     viewMode,
     setViewMode,
     theme: "dark",
@@ -109,6 +100,7 @@ function storeState() {
     toggleSessionMute: vi.fn(),
     projectsLoaded,
     projectsError,
+    activeWorkspaceId,
     reportError,
   };
 }
@@ -184,11 +176,8 @@ const NOOP_PROPS = {
   onSessionEnded: vi.fn(),
   onOpenProjectLauncher: vi.fn(),
   onOpenSettingsProjects: vi.fn(),
-  onOpenTasks: vi.fn(),
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
-  onOpenDevice: vi.fn(),
-  onOpenGlobalLauncher: vi.fn(),
   showSourceControl: false,
 };
 
@@ -200,7 +189,7 @@ const NOOP_PROPS = {
 // mount VirtualizedProjectTree at all.
 function renderSidebar(
   props: Partial<typeof NOOP_PROPS> &
-    Partial<Pick<SidebarProps, "phoneSection" | "workspaceProjectIds" | "openSessionIds">> = {},
+    Partial<Pick<SidebarProps, "workspaceProjectIds" | "openSessionIds">> = {},
 ) {
   return render(
     <div className="sidebar-wrapper">
@@ -293,6 +282,9 @@ beforeEach(() => {
   gitStatuses = {};
   projectsLoaded = true;
   projectsError = null;
+  // A fresh workspace per test: the Other-projects open state is kept per
+  // workspace for the page's lifetime.
+  activeWorkspaceId = ++workspaceCounter;
   reportError.mockClear();
   renameSession.mockReset();
   renameSession.mockResolvedValue(undefined);
@@ -362,48 +354,16 @@ describe("VirtualizedProjectTree size math (independent review, PR #583)", () =>
   });
 });
 
-describe("Sidebar Tasks entry — Tasks-as-a-destination", () => {
-  it("is not marked active when viewMode is not kanban", () => {
+// #3072 — Tasks is a mode on the left rail's mode switch (LeftRail.tsx), so
+// the sidebar no longer carries its own "Tasks" row, in either view mode.
+describe("Sidebar has no Tasks entry", () => {
+  it.each(["list", "kanban"] as const)("renders no Tasks button in %s view", (mode) => {
+    viewMode = mode;
     renderSidebar();
-    const entry = screen.getByRole("button", { name: /Tasks/ });
-    expect(entry).not.toHaveClass("active");
-    expect(entry).toHaveAttribute("aria-pressed", "false");
-  });
-
-  it("is marked active while the Tasks board is the active view", () => {
-    viewMode = "kanban";
-    renderSidebar();
-    const entry = screen.getByRole("button", { name: /Tasks/ });
-    expect(entry).toHaveClass("active");
-    expect(entry).toHaveAttribute("aria-pressed", "true");
-  });
-
-  // Issue: this entry already advertised itself as a toggle via
-  // aria-pressed, but the click handler only ever called onOpenTasks
-  // (always -> "kanban"), so clicking it a second time while already in
-  // Tasks did nothing — the Toolbar's "Back" chevron was the only way out.
-  it("clicking it while already in Tasks switches back to list view instead of calling onOpenTasks again", async () => {
-    viewMode = "kanban";
-    const onOpenTasks = vi.fn();
-    const user = userEvent.setup();
-    renderSidebar({ onOpenTasks });
-
-    await user.click(screen.getByRole("button", { name: /Tasks/ }));
-
-    expect(setViewMode).toHaveBeenCalledWith("list");
-    expect(onOpenTasks).not.toHaveBeenCalled();
-  });
-
-  it("clicking it while NOT in Tasks still calls onOpenTasks, not setViewMode directly", async () => {
-    viewMode = "list";
-    const onOpenTasks = vi.fn();
-    const user = userEvent.setup();
-    renderSidebar({ onOpenTasks });
-
-    await user.click(screen.getByRole("button", { name: /Tasks/ }));
-
-    expect(onOpenTasks).toHaveBeenCalled();
-    expect(setViewMode).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
+    // Scoped to the sidebar's top level, where the row sat: the class itself
+    // lives on as SidebarDevices' device-row class.
+    expect(document.querySelector(".sidebar > .sidebar-tasks-entry")).toBeNull();
   });
 });
 
@@ -415,6 +375,32 @@ describe("blocked tasks in the sidebar (issue #2437)", () => {
     renderSidebar();
     expect(screen.queryByRole("region", { name: "Blocked tasks" })).toBeNull();
     expect(screen.queryByText("Wait on the API")).toBeNull();
+  });
+});
+
+// #3214 — hierarchical is the only grouping: no store flag, no toggle.
+describe("Sidebar session grouping (#3214)", () => {
+  it("nests a child under its parent without any store flag", () => {
+    sessions = [
+      makeSession({ id: 2, command: "child task", parentSessionId: 1 }),
+      makeSession({ id: 3, command: "unrelated" }),
+      makeSession({ id: 1, command: "parent agent" }),
+    ];
+    renderSidebar();
+    const parent = screen.getByText("parent agent").closest(".session-item") as HTMLElement;
+    const child = screen.getByText("child task").closest(".session-item") as HTMLElement;
+    // The child follows its parent directly, one level in.
+    const rows = Array.from(document.querySelectorAll(".session-item"));
+    expect(rows.indexOf(child)).toBe(rows.indexOf(parent) + 1);
+    expect(child.style.getPropertyValue("--session-depth")).toBe("1");
+    expect(parent.style.getPropertyValue("--session-depth")).toBe("");
+  });
+
+  it("renders no Session grouping control", () => {
+    renderSidebar();
+    expect(screen.queryByRole("group", { name: "Session grouping" })).toBeNull();
+    expect(screen.queryByTitle("Flat view")).toBeNull();
+    expect(screen.queryByTitle("Hierarchical view")).toBeNull();
   });
 });
 
@@ -560,11 +546,12 @@ describe("Sidebar task session visibility (#9)", () => {
 
   it("shows a currently task-linked session when showTaskSessions is on", () => {
     sessions = [makeSession({ id: 1, command: "task worker session" })];
-    tasks = [makeTask({ id: 7, sessionId: 1 })];
+    tasks = [makeTask({ id: 7, sessionId: 1, title: "Fix the login form" })];
     showTaskSessions = true;
     renderSidebar();
 
-    expect(screen.getByText("task worker session")).toBeTruthy();
+    // A Task Master worker's row is titled by its task (#3285).
+    expect(screen.getByText("Fix the login form")).toBeTruthy();
   });
 
   it("a session not linked to any task is unaffected by the toggle either way", () => {
@@ -709,6 +696,25 @@ describe("Sidebar virtualization (U3, above VIRTUALIZE_SESSION_THRESHOLD)", () =
     Object.defineProperty(dragStart, "dataTransfer", { value: dataTransfer });
     firstRow.dispatchEvent(dragStart);
     expect(dataTransfer.getData("application/x-mullion-session")).toBe("1000");
+  });
+
+  it("puts the Other projects header and rows in the virtualized row model", async () => {
+    projects = [makeProject({ id: 901, name: "alpha" }), makeProject({ id: 902, name: "beta" })];
+    sessions = Array.from({ length: 25 }, (_, i) =>
+      makeSession({ id: 1000 + i, projectId: 901, command: `session-${i}` }),
+    );
+    const onOpenProjectLauncher = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ workspaceProjectIds: [901], onOpenProjectLauncher });
+
+    // Collapse alpha (own ids: the collapse state is module-level) so the section header falls inside the stubbed viewport.
+    await user.click(screen.getByText("alpha"));
+    const toggle = screen.getByRole("button", { name: /Other projects/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    const betaRow = screen.getByText("beta").closest(".project-row") as HTMLElement;
+    await user.click(within(betaRow).getByTitle("New session in project"));
+    expect(onOpenProjectLauncher).toHaveBeenCalledWith(902);
   });
 
   it("still threads the remote-host badge through the virtualized project header", () => {
@@ -1025,58 +1031,6 @@ describe("Sidebar git pull kebab entry", () => {
 
     expect(await screen.findByText(/Pull failed/i)).toBeInTheDocument();
   });
-
-  // Closes the formatPullReasonMessage coverage hole (was 1/8 reasons
-  // exercised). One case per GitPullReason, plus the unknown-reason default —
-  // cheap, locks down copy drift.
-  describe("formatPullReasonMessage copy", () => {
-    // The record is EXHAUSTIVE on purpose, and typed as GitPullReason: a
-    // new member of the union with no case here is a COMPILE error, not a
-    // silent fall-through to the default branch — which would tell the user
-    // the pull FAILED for a reason that is not a failure (issue #1896's
-    // "busy"). The union is the shared thing; the two renderers' copy is
-    // deliberately their own.
-    const unionCases: Record<GitPullReason, RegExp> = {
-      "not-a-repo": /Not a git repository/i,
-      "unborn-head": /unborn branch/i,
-      "detached-head": /detached HEAD/i,
-      "no-upstream": /no upstream/i,
-      "dirty-tree": /Working tree has uncommitted changes/i,
-      "not-fast-forward": /diverged from origin/i,
-      "already-up-to-date": /Already up to date/i,
-      "pull-failed": /The pull operation failed/i,
-      busy: /already running/i,
-      "stale-lock": /leftover git lock/i,
-    };
-
-    const cases: Array<{
-      reason: string;
-      detail?: string;
-      matches: RegExp;
-    }> = [
-      ...Object.entries(unionCases).map(([reason, matches]) => ({ reason, matches })),
-      {
-        reason: "pull-failed",
-        detail: "conflict on README.md",
-        matches: /conflict on README\.md/i,
-      },
-      { reason: "totally-unknown-reason", detail: "boom", matches: /Pull failed: boom/i },
-      { reason: "totally-unknown-reason", matches: /Pull failed/i },
-    ];
-
-    for (const c of cases) {
-      it(`surfaces copy for ${c.reason}${c.detail ? ` (with detail "${c.detail}")` : ""}`, async () => {
-        gitStatuses = { [PROJECT.id]: makeGitStatus({ behind: 1 }) };
-        pullProjectGit.mockResolvedValueOnce({ pulled: false, reason: c.reason, detail: c.detail });
-        renderSidebar();
-        const user = userEvent.setup();
-        await user.click(screen.getByTitle("More…"));
-        await user.click(await screen.findByText("Git pull"));
-
-        expect(await screen.findByText(c.matches)).toBeInTheDocument();
-      });
-    }
-  });
 });
 
 // Phase 4 (issue #1205's plan, Gap F) — "Scaffold Mullion" used to be
@@ -1221,10 +1175,10 @@ describe("Sidebar section header count (issue #1889)", () => {
     expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("3 sessions");
   });
 
-  it("counts the phone's Projects section too", () => {
+  it("counts a single session in the singular", () => {
     projects = [PROJECT];
     sessions = [makeSession({ id: 1 })];
-    renderSidebar({ phoneSection: "projects" });
+    renderSidebar();
 
     expect(document.querySelector(".sidebar-section-count")?.textContent).toBe("1 session");
   });
@@ -1496,10 +1450,11 @@ describe("DiscoverProjects — the disclosure header (issue #1893)", () => {
       }),
     ];
     const { header } = await renderWithCandidate();
-    const select = header.parentElement!.querySelector("select") as HTMLSelectElement;
+    const select = header.parentElement!.querySelector<HTMLElement>(".ui-dropdown-field")!;
     expect(select).not.toBeNull();
 
     // The picker is outside the button, so it is still a combobox.
+    expect(select).toHaveAttribute("role", "combobox");
     expect(select.closest('[role="button"]')).toBeNull();
 
     fireEvent.keyDown(select, { key: "Enter" });
@@ -1536,8 +1491,8 @@ describe("project-row New-session button (issue #730 — no launch from Task vie
   });
 });
 
-describe("Sidebar phoneSection (phone navigator tabs)", () => {
-  const renderSection = (phoneSection?: "projects" | "devices") => {
+describe("Sidebar sections", () => {
+  const renderSection = () => {
     // SidebarDevices renders nothing without at least one device.
     devices = [
       {
@@ -1555,7 +1510,7 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
     ] as unknown as typeof devices;
     return render(
       <div className="sidebar-wrapper">
-        <Sidebar {...NOOP_PROPS} phoneSection={phoneSection} />
+        <Sidebar {...NOOP_PROPS} />
       </div>,
     );
   };
@@ -1577,40 +1532,29 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
     expect(screen.getByTestId("source-control")).toBeInTheDocument();
   });
 
-  it("renders everything when unset (desktop/tablet)", () => {
+  it("renders the project tree, with no Tasks entry and no Devices section", () => {
     renderSection();
-    expect(screen.getByRole("button", { name: /Tasks/ })).toBeInTheDocument();
-    expect(screen.getByText("Projects")).toBeInTheDocument();
-    expect(document.querySelector(".sidebar-devices")).not.toBeNull();
-  });
-
-  it("'projects' hides the Tasks entry and Devices, keeping the project tree", () => {
-    renderSection("projects");
     expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
     expect(screen.getByText("Projects")).toBeInTheDocument();
+    // Devices moved to the right sidebar (#3012): its one home.
     expect(document.querySelector(".sidebar-devices")).toBeNull();
-  });
-
-  it("'devices' shows only Devices — no Tasks entry, no project header or tree", () => {
-    renderSection("devices");
-    expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
-    expect(screen.queryByText("Projects")).toBeNull();
-    expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+    expect(screen.queryByTestId("device-row-1")).toBeNull();
   });
 
   // Issue #1877 — the phone tier has no workspaces. App passes null for the
   // scope props there; the tree must stay the full project list, not the
   // desktop's "only what's tiled" filter.
-  it("keeps every project on the phone projects tab when no workspace scope is passed", () => {
+  it("keeps every project when no workspace scope is passed (phone)", () => {
     projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
     render(
       <div className="sidebar-wrapper">
-        <Sidebar {...NOOP_PROPS} phoneSection="projects" />
+        <Sidebar {...NOOP_PROPS} />
       </div>,
     );
     expect(screen.getByText("alpha")).toBeInTheDocument();
     expect(screen.getByText("beta")).toBeInTheDocument();
     expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Other projects/ })).toBeNull();
   });
 });
 
@@ -1634,14 +1578,15 @@ describe("sidebar workspace scope (issue #1877)", () => {
     expect(screen.queryByText("beta")).toBeNull();
   });
 
-  it("does not claim the dashboard is empty when the workspace simply has nothing tiled", () => {
+  it("lists every project in an empty workspace, with no empty state, and expands the Other projects section", () => {
     projects = [makeProject({ id: 1, name: "alpha" })];
     renderSidebar({ workspaceProjectIds: [] });
 
-    expect(screen.getByText("Nothing tiled in this workspace")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
     expect(screen.queryByText("Welcome to Mullion")).toBeNull();
-    expect(screen.queryByText("alpha")).toBeNull();
-    expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+    const toggle = screen.getByRole("button", { name: /Other projects/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("alpha")).toBeInTheDocument();
   });
 
   // App passes null until sessionsLoaded && the restored workspace match.
@@ -1688,17 +1633,91 @@ describe("sidebar workspace scope (issue #1877)", () => {
     expect(names).toEqual(["alpha", "beta"]);
   });
 
-  it("opens the global launcher from the empty workspace, the toolbar's own opener", async () => {
-    projects = [makeProject({ id: 1, name: "alpha" })];
-    const onOpenGlobalLauncher = vi.fn();
-    const user = userEvent.setup();
-    renderSidebar({ workspaceProjectIds: [], onOpenGlobalLauncher });
+  describe("Other projects section (#2075)", () => {
+    const toggle = () => screen.getByRole("button", { name: /Other projects/ });
+    const rerenderScoped = (view: ReturnType<typeof renderSidebar>, ids: number[]) =>
+      view.rerender(
+        <div className="sidebar-wrapper">
+          <Sidebar {...NOOP_PROPS} workspaceProjectIds={ids} />
+        </div>,
+      );
+    beforeEach(() => {
+      projects = [
+        makeProject({ id: 1, name: "alpha" }),
+        makeProject({ id: 2, name: "beta" }),
+        makeProject({ id: 3, name: "gamma" }),
+      ];
+      sessions = [
+        makeSession({ id: 10, projectId: 1, command: "claude code" }),
+        makeSession({ id: 20, projectId: 2, command: "other ws session" }),
+      ];
+    });
 
-    await user.click(screen.getByRole("button", { name: "Launch a session" }));
-    expect(onOpenGlobalLauncher).toHaveBeenCalledTimes(1);
+    it("lists the tiled project first and the rest in a collapsed section with a count", () => {
+      renderSidebar({ workspaceProjectIds: [1] });
+      expect(toggle()).toHaveAttribute("aria-expanded", "false");
+      expect(toggle().textContent).toBe("Other projects 2");
+    });
+
+    it("expands on click, keeps session lists scoped, and collapses again", async () => {
+      const user = userEvent.setup();
+      renderSidebar({ workspaceProjectIds: [1] });
+      await user.click(toggle());
+
+      expect(toggle()).toHaveAttribute("aria-expanded", "true");
+      expect(screen.queryByText("other ws session")).toBeNull();
+      // Plain content, not a button wrapped around the + and the menu.
+      const header = screen.getByText("beta").closest(".project-row-header");
+      expect(header?.getAttribute("role")).toBeNull();
+      expect(header?.hasAttribute("aria-expanded")).toBe(false);
+
+      await user.click(toggle());
+      expect(screen.queryByText("beta")).toBeNull();
+    });
+
+    it("is keyboard operable and remembers the choice per workspace", async () => {
+      const user = userEvent.setup();
+      const first = renderSidebar({ workspaceProjectIds: [1] });
+      toggle().focus();
+      await user.keyboard("{Enter}");
+      expect(screen.getByText("beta")).toBeInTheDocument();
+      first.unmount();
+
+      renderSidebar({ workspaceProjectIds: [1] });
+      expect(screen.getByText("beta")).toBeInTheDocument();
+    });
+
+    it("opens the launcher for an other project from its +", async () => {
+      const onOpenProjectLauncher = vi.fn();
+      const user = userEvent.setup();
+      renderSidebar({ workspaceProjectIds: [1], onOpenProjectLauncher });
+      await user.click(toggle());
+
+      const betaRow = screen.getByText("beta").closest(".project-row") as HTMLElement;
+      await user.click(within(betaRow).getByTitle("New session in project"));
+      expect(onOpenProjectLauncher).toHaveBeenCalledWith(2);
+    });
+
+    it("does not latch the default off a project list that has not loaded", () => {
+      const all = projects;
+      projectsLoaded = false;
+      projects = [];
+      const view = renderSidebar({ workspaceProjectIds: [1] });
+      projectsLoaded = true;
+      projects = all;
+      rerenderScoped(view, [1]);
+      expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    });
+
+    it("does not collapse on its own when a project gets tiled", () => {
+      const view = renderSidebar({ workspaceProjectIds: [] });
+      expect(screen.getByText("beta")).toBeInTheDocument();
+      rerenderScoped(view, [1]);
+      expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    });
   });
 
-  it("marks a session whose terminal pane is already open, in words and in the accessible name", () => {
+  it("marks a session whose terminal pane is already open by a heavier title and in the accessible name", () => {
     sessions = [
       makeSession({ id: 7, projectId: 1, command: "claude code" }),
       makeSession({ id: 8, projectId: 1, command: "npm run build" }),
@@ -1706,11 +1725,14 @@ describe("sidebar workspace scope (issue #1877)", () => {
     renderSidebar({ workspaceProjectIds: [1], openSessionIds: [7] });
 
     const openRow = screen.getByRole("button", {
-      name: "Open session claude code, already open in this workspace",
-    });
-    expect(openRow.querySelector(".session-open-label")?.textContent).toBe("open");
-    const closedRow = screen.getByRole("button", { name: "Open session npm run build" });
-    expect(closedRow.querySelector(".session-open-label")).toBeNull();
+      name: /^Open session claude code, .*, already open in this workspace$/,
+    }).parentElement!; // #3106 — the row's hidden open button carries the name
+    // #3286 — the word "open" is gone; the title's weight carries it.
+    expect(openRow.querySelector(".session-name")).toHaveClass("open");
+    expect(openRow).not.toHaveTextContent(/\bopen\b/);
+    const closedOpen = screen.getByRole("button", { name: /^Open session npm run build, / });
+    expect(closedOpen.getAttribute("aria-label")).not.toMatch(/already open/);
+    expect(closedOpen.parentElement!.querySelector(".session-name")).not.toHaveClass("open");
   });
 
   it("activates an already-open session through onOpenSession, the path that focuses the existing pane", async () => {
@@ -1724,7 +1746,7 @@ describe("sidebar workspace scope (issue #1877)", () => {
 
     await user.click(
       screen.getByRole("button", {
-        name: "Open session already tiled, already open in this workspace",
+        name: /^Open session already tiled, .*, already open in this workspace$/,
       }),
     );
 
@@ -1734,9 +1756,10 @@ describe("sidebar workspace scope (issue #1877)", () => {
 
   it("does not mark sessions when no open-session set is passed (phone)", () => {
     sessions = [makeSession({ id: 7, projectId: 1, command: "claude code" })];
-    renderSidebar({ phoneSection: "projects" });
-    expect(document.querySelector(".session-open-label")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open session claude code" })).toBeInTheDocument();
+    renderSidebar({ openSessionIds: null });
+    expect(document.querySelector(".session-name.open")).toBeNull();
+    const row = screen.getByRole("button", { name: /^Open session claude code, / });
+    expect(row.getAttribute("aria-label")).not.toMatch(/already open/);
   });
 
   it("marks an already-open session on the virtualized path too", () => {
@@ -1747,9 +1770,9 @@ describe("sidebar workspace scope (issue #1877)", () => {
     renderSidebar({ workspaceProjectIds: [1], openSessionIds: [1000] });
 
     const openRow = screen.getByRole("button", {
-      name: "Open session session-0, already open in this workspace",
-    });
-    expect(openRow.querySelector(".session-open-label")?.textContent).toBe("open");
+      name: /^Open session session-0, .*, already open in this workspace$/,
+    }).parentElement!;
+    expect(openRow.querySelector(".session-name")).toHaveClass("open");
   });
 });
 

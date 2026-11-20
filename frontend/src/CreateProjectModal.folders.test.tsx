@@ -8,6 +8,7 @@ import { DEFAULT_SETTINGS } from "./api/index.js";
 import { api } from "./api/index.js";
 import { makeHost } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
+import { pickDropdownOption } from "./test/dropdown.js";
 
 vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -29,14 +30,14 @@ vi.mock("./api/index.js", async (importOriginal) => {
 });
 
 // Both dropdowns share the same detected-launcher options, so a page-wide
-// role/label query is ambiguous — scope to the specific field's own <select>
+// role/label query is ambiguous — scope to the specific field's own field
 // via its field-label span, same .closest()+querySelector precedent
 // Settings.sessions.test.tsx already uses for disambiguating repeated rows.
-function fieldSelect(labelText: string): HTMLSelectElement {
+function fieldSelect(labelText: string): HTMLElement {
   return screen
     .getByText(labelText, { selector: ".create-modal-field-label" })
     .closest(".create-modal-field")!
-    .querySelector("select")!;
+    .querySelector<HTMLElement>(".ui-dropdown-field")!;
 }
 
 beforeEach(() => {
@@ -132,7 +133,7 @@ describe("CreateProjectModal folder picker", () => {
         onCreate={vi.fn()}
       />,
     );
-    await user.selectOptions(fieldSelect("Host"), "remote");
+    pickDropdownOption(fieldSelect("Host"), "remote");
     expect(screen.getByRole("button", { name: "Browse…" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Browse…" }));
     expect(await screen.findByRole("button", { name: "app/" })).toBeInTheDocument();
@@ -152,7 +153,7 @@ describe("CreateProjectModal folder picker", () => {
         onCreate={vi.fn()}
       />,
     );
-    await user.selectOptions(fieldSelect("Host"), "remote");
+    pickDropdownOption(fieldSelect("Host"), "remote");
     await user.click(screen.getByRole("button", { name: "Browse…" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Host remote is unreachable");
   });
@@ -174,8 +175,8 @@ describe("CreateProjectModal folder picker", () => {
     );
     await user.click(screen.getByRole("button", { name: "Browse…" }));
     await screen.findByRole("button", { name: "Select this folder" });
-    await user.selectOptions(fieldSelect("Host"), "remote");
-    await user.selectOptions(fieldSelect("Host"), "local");
+    pickDropdownOption(fieldSelect("Host"), "remote");
+    pickDropdownOption(fieldSelect("Host"), "local");
     expect(screen.getByRole("button", { name: "Browse…" })).toBeEnabled();
     expect(
       screen.queryByRole("region", { name: "Choose repository folder" }),
@@ -194,5 +195,30 @@ describe("CreateProjectModal folder picker", () => {
     expect(
       screen.queryByRole("region", { name: "Choose repository folder" }),
     ).not.toBeInTheDocument();
+  });
+
+  // #3287 — under a coarse pointer the form opens without focusing the path
+  // field, but coming back from the picker the user asked for that field.
+  it("closing the picker focuses the path field under a coarse pointer too", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    try {
+      const user = userEvent.setup();
+      vi.mocked(api.listDirectories).mockRejectedValue(new Error("Folder is unreadable"));
+      render(<CreateProjectModal initialPath="/x" onClose={vi.fn()} onCreate={vi.fn()} />);
+      expect(screen.getByPlaceholderText("~/code/my-project")).not.toHaveFocus();
+      await user.click(screen.getByRole("button", { name: "Browse…" }));
+      await user.click(await screen.findByRole("button", { name: "Close picker" }));
+      expect(screen.getByPlaceholderText("~/code/my-project")).toHaveFocus();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

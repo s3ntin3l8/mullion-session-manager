@@ -1,43 +1,40 @@
 import { useCallback, useEffect } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { Device, Project, Session, Task, Workspace } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
+import { selectSessionTitleContexts } from "../lib/sessionDisplay.js";
 import { randomPanelId } from "../random-id.js";
 import {
   findSessionWorkspaces,
   focusPanelForTier,
+  presentNewPanel,
   isTiledPanel,
-  maximizeIfTiled,
   openExternalFilePanel,
   openFileOnlyPanel,
   closeFilePanelsUnder,
   openDevicePanel,
   openOrFocusProjectPanel,
-  openProjectHubPanel,
   openSessionPanel,
   openTaskDetailPanel,
   openTimelinePanel,
+  openBrowserPanePanel,
+  focusOpenBrowserPane,
 } from "../panelUtils.js";
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
 import { subscribeFilePathGone } from "../lib/filePathEvents.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
-import type { ProjectHubTab } from "../ProjectHubPanel.js";
+import { BROWSER_PREVIEW_TITLE, browserPreviewTitle } from "../lib/browserTitles.js";
+import { previewOpensInRail } from "../right-sidebar/viewBands.js";
+import { previewResetPatch } from "../lib/browserHandoff.js";
 
-// The near-identical project-scoped panel kinds (GitHub, Agent
+// The near-identical project-scoped panel kinds (Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
 // header comment in panelUtils.ts for the shared open-or-focus shape these
 // configs drive. Module-level (not created per-render) so each is a stable
 // object identity, same as any other constant App.tsx or its hooks close
 // over — this is what lets onOpenGitHub/onOpenGit/etc. below list only the
-// values that can actually change (dockviewApi/projects/layout/
-// setSidebarOpen) in their own useCallback dependency arrays, with no need
+// values that can actually change (dockviewApi/projects/layout) in their own useCallback dependency arrays, with no need
 // to also list the config object itself.
-const GITHUB_CONFIG: ProjectPanelKindConfig = {
-  kind: "github",
-  titleLabel: "GitHub",
-  applyDesktopPositioning: true,
-};
 const FILE_EDITOR_CONFIG: ProjectPanelKindConfig = {
   kind: "file-editor",
   titleLabel: "Files",
@@ -56,7 +53,7 @@ const FILE_EDITOR_CONFIG: ProjectPanelKindConfig = {
 // it could before.
 const BROWSER_CONFIG: ProjectPanelKindConfig = {
   kind: "browser",
-  titleLabel: "Preview",
+  titleLabel: BROWSER_PREVIEW_TITLE,
   applyDesktopPositioning: false,
 };
 
@@ -78,18 +75,6 @@ export interface UsePanelOpenerParams {
   // effect dependency array relies on exactly this (see its own doc comment
   // on `onOpenSession`) — adding `sessions` here to "look something up"
   // would silently break that.
-  // Must be the raw `useState` setter (stable identity forever) — same
-  // requirement as useDockviewDrop's `setSidebarOpen`/useWorkspacePersistence's
-  // `setPanelsVersion`/useLayoutPresentation's `setLayoutTier` (see those
-  // hooks' own param comments). Listed in every callback below's own dependency array
-  // purely because eslint's exhaustive-deps rule can no longer statically
-  // prove a function-parameter's identity is stable the way it can for a
-  // bare `useState` call in this same file — not because it ever actually
-  // changes. Since it never does, this is a lint-satisfying addition to each
-  // callback's dependency array relative to App.tsx's pre-extraction
-  // versions (which read the local `useState` setter directly and so didn't
-  // need to list it), not a behavior or identity-stability change.
-  setSidebarOpen: Dispatch<SetStateAction<boolean>>;
 }
 
 export interface UsePanelOpenerResult {
@@ -110,16 +95,19 @@ export interface UsePanelOpenerResult {
   // Issue #270 — notification-row click opens the timeline instead of the
   // terminal.
   onOpenTimeline: (session: Session) => void;
-  // Opens (or focuses) a project's GitHub panel.
+  // The command palette's "Open browser" (#3215): the same pane the
+  // pane menu's item opens, the session's server-side browser.
+  onOpenAgentBrowser: (session: Session) => void;
+  // Opens the GitHub view in the right sidebar for a project (the grid panel
+  // it used to open is retired — see GitHubPanelRedirect.tsx).
   onOpenGitHub: (projectId: number) => void;
   // Opens the Source Control view in the right sidebar for a project (the
   // dock Git panel it used to open is retired — see GitPanelRedirect.tsx).
   onOpenGit: (projectId: number) => void;
-  // Opens (or focuses) a project's tabbed Project panel, optionally on a
-  // specific tab (Agent Rules, Briefing, Scaffold, Dock, Skills).
-  onOpenProjectHub: (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => void;
-  // Opens (or focuses) a project's agent-rules editor (issue #431) — the
-  // Project panel's Agent Rules tab.
+  // Agent Rules, Briefing, Scaffold and Dock open the project's Project
+  // settings dialog on that section; Skills opens the sidebar's Project view
+  // on its Skills drill-in (#3406).
+  // The agent-rules editor (issue #431).
   onOpenAgentRules: (projectId: number) => void;
   // Opens (or focuses) a project's file editor (tree + CodeMirror).
   onOpenFileEditor: (projectId: number) => void;
@@ -127,14 +115,13 @@ export interface UsePanelOpenerResult {
   // Opens a specific file (project-relative path) in the project's file
   // editor — the right sidebar's Files view.
   onOpenFile: (projectId: number, path: string, sessionId?: number) => void;
-  // Opens (or focuses) a project's DB-backed Mullion briefing editor.
+  // The DB-backed Mullion briefing editor.
   onOpenProjectBriefing: (projectId: number) => void;
-  // PR-6 — opens (or focuses) a project's "scaffold Mullion integration as
-  // a PR" setup panel.
+  // PR-6 — the "scaffold Mullion integration as a PR" wizard.
   onOpenProjectSetup: (projectId: number) => void;
-  // U4 — opens (or focuses) a project's dock-config editor.
+  // U4 — the dock-config editor, optionally on its Previews list.
   onOpenDockConfig: (projectId: number, view?: "previews") => void;
-  // Opens (or focuses) a project's (read-only) skills panel (issue #432).
+  // The skills list (issue #432).
   onOpenSkills: (projectId: number) => void;
   // Opens (or focuses) a project's dev-server browser preview pane (issue
   // #28). See BROWSER_CONFIG's own comment above for the one respect in
@@ -172,6 +159,8 @@ export interface UsePanelOpenerResult {
   // panelUtils.ts. Also starts a stopped device on the way in; see the
   // implementation below.
   onOpenDevice: (device: Device) => void;
+  // #3403 — the right rail's Browser icon from 1100px. See the implementation.
+  onOpenRailBrowser: (projectId: number, session: Session | null) => void;
 }
 
 // Extracted from App.tsx (PR 34h of the hook-extraction series, the final PR
@@ -194,14 +183,14 @@ export interface UsePanelOpenerResult {
 // hook at the exact position `onOpenSession`'s own declaration used to
 // occupy, before both of those.
 //
-// Five of the twelve (onOpenGitHub/onOpenAgentRules/
-// onOpenDockConfig/onOpenSkills/onOpenBrowser) share one truly identical
+// Four of the twelve (onOpenAgentRules/onOpenDockConfig/onOpenSkills/
+// onOpenBrowser) share one truly identical
 // shape (open-or-focus-by-`<kind>-<projectId>`, float-if-tiled-else-dock,
 // project-derived title) and are built from one shared pure helper,
 // openOrFocusProjectPanel (panelUtils.ts), parameterized by the config
 // table above — same "pure function in panelUtils.ts, wrapped in a
 // useCallback here" split as openSessionPanel/openTimelinePanel already
-// use. The other seven (onOpenGit, onOpenSession, onOpenSessionAsFloat, onOpenTimeline,
+// use. The other eight (onOpenGitHub, onOpenGit, onOpenSession, onOpenSessionAsFloat, onOpenTimeline,
 // onOpenTasks, onOpenBrowserUrl, onOpenBlankBrowser) each have genuinely
 // distinct logic — see their own doc comments below — and stay as
 // individually-written callbacks rather than being forced through a shared
@@ -212,7 +201,6 @@ export function usePanelOpener({
   projects,
   workspaces,
   activeWorkspaceId,
-  setSidebarOpen,
 }: UsePanelOpenerParams): UsePanelOpenerResult {
   // Issue: opening any dockview panel while the Tasks board (UnifiedBoard,
   // a z-index 100 overlay on top of the dockview grid — see App.tsx's own
@@ -280,9 +268,8 @@ export function usePanelOpener({
           openSessionPanel(dockviewApi, session, layout, projects);
         }
       }
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, projects, workspaces, activeWorkspaceId, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, projects, workspaces, activeWorkspaceId, leaveTaskView],
   );
 
   const onOpenSessionAsFloat = useCallback(
@@ -290,29 +277,45 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openSessionPanel(dockviewApi, session, layout, projects);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, projects, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, projects, leaveTaskView],
   );
 
   const onOpenTimeline = useCallback(
     (session: Session) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openTimelinePanel(dockviewApi, session, layout);
-      setSidebarOpen(false);
+      openTimelinePanel(
+        dockviewApi,
+        session,
+        layout,
+        selectSessionTitleContexts(useDashboardStore.getState()).get(session.id),
+      );
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
+  );
+
+  const onOpenAgentBrowser = useCallback(
+    (session: Session) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      openBrowserPanePanel(
+        dockviewApi,
+        session,
+        layout,
+        selectSessionTitleContexts(useDashboardStore.getState()).get(session.id),
+      );
+    },
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenGitHub = useCallback(
     (projectId: number) => {
-      if (!dockviewApi) return;
+      // A right-sidebar view, not a dock panel: no dockviewApi to wait for.
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, GITHUB_CONFIG);
-      setSidebarOpen(false);
+      useDashboardStore.getState().openRightSidebarView("github", projectId);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [leaveTaskView],
   );
 
   const onOpenGit = useCallback(
@@ -321,42 +324,34 @@ export function usePanelOpener({
       // no dockviewApi to wait for.
       leaveTaskView();
       useDashboardStore.getState().openRightSidebarView("git", projectId);
-      setSidebarOpen(false);
     },
-    [setSidebarOpen, leaveTaskView],
+    [leaveTaskView],
   );
 
-  const onOpenProjectHub = useCallback(
-    (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => {
-      if (!dockviewApi) return;
-      leaveTaskView();
-      openProjectHubPanel(dockviewApi, projectId, projects, layout, tab, dockView);
-      setSidebarOpen(false);
-    },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
-  );
-
-  // The five setup panels are tabs of one Project panel now; these keep their
-  // old single-argument shape so existing callers (Sidebar, App) don't churn.
+  // #3406 — the four editors are sections of the Project settings dialog and
+  // Skills a drill-in of the sidebar's Project view: none needs dockview or
+  // leaves Tasks mode, so they work from every mode and tier.
   const onOpenAgentRules = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "agent-rules"),
-    [onOpenProjectHub],
+    (projectId: number) =>
+      useDashboardStore.getState().openProjectSettings(projectId, "agent-rules"),
+    [],
   );
   const onOpenProjectBriefing = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "briefing"),
-    [onOpenProjectHub],
+    (projectId: number) => useDashboardStore.getState().openProjectSettings(projectId, "briefing"),
+    [],
   );
   const onOpenProjectSetup = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "scaffold"),
-    [onOpenProjectHub],
+    (projectId: number) => useDashboardStore.getState().openProjectSettings(projectId, "scaffold"),
+    [],
   );
   const onOpenDockConfig = useCallback(
-    (projectId: number, view?: "previews") => onOpenProjectHub(projectId, "dock", view),
-    [onOpenProjectHub],
+    (projectId: number, view?: "previews") =>
+      useDashboardStore.getState().openProjectSettings(projectId, "dock", view),
+    [],
   );
   const onOpenSkills = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "skills"),
-    [onOpenProjectHub],
+    (projectId: number) => useDashboardStore.getState().openProjectSkills(projectId),
+    [],
   );
 
   const onOpenFileEditor = useCallback(
@@ -364,9 +359,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, FILE_EDITOR_CONFIG);
-      setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   const onOpenExternalFile = useCallback(
@@ -374,9 +368,8 @@ export function usePanelOpener({
       if (!dockviewApi) return;
       leaveTaskView();
       openExternalFilePanel(dockviewApi, projectId, projects, layout, {});
-      setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   const onOpenFile = useCallback(
@@ -399,20 +392,30 @@ export function usePanelOpener({
 
   const onOpenBrowser = useCallback(
     (projectId: number) => {
+      // Below 1100px every preview opens in the rail's Browser view, never a
+      // pane (#3372): the left half stays a session.
+      if (previewOpensInRail()) {
+        leaveTaskView();
+        useDashboardStore.getState().openRailBrowserPreview(null, projectId);
+        return;
+      }
       if (!dockviewApi) return;
       leaveTaskView();
       openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, BROWSER_CONFIG);
-      setSidebarOpen(false);
+      // An open project pane may show Agent's browser by now (#3371); the
+      // preview was asked for. And ⇄ may have opened another address in it
+      // (#3373): the project's own preview was asked for.
+      const panel = dockviewApi.getPanel(`browser-${projectId}`);
+      const reset = previewResetPatch(panel?.api.getParameters?.(), { projectId });
+      panel?.api.updateParameters({ ...reset, mode: "preview" });
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, projects, layout, leaveTaskView],
   );
 
   const onOpenTasks = useCallback(() => {
     useDashboardStore.getState().setViewMode("kanban");
-    // Phone and tablet show the board inside the navigator, so it stays open
-    // there; only desktop's grid overlay needs the sidebar out of the way.
-    if (layout.tier === "desktop") setSidebarOpen(false);
-  }, [layout.tier, setSidebarOpen]);
+    // Tasks mode is the board over the grid on every tier.
+  }, []);
 
   const onOpenTask = useCallback(
     (task: Task) => {
@@ -421,19 +424,25 @@ export function usePanelOpener({
       // Same leave-the-board step every other opener takes.
       leaveTaskView();
       openTaskDetailPanel(dockviewApi, task, layout);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenBrowserUrl = useCallback(
     (projectId: number, url: string, label: string) => {
+      if (previewOpensInRail()) {
+        leaveTaskView();
+        useDashboardStore
+          .getState()
+          .openRailBrowserPreview({ kind: "external", url, projectId }, projectId);
+        return;
+      }
       if (!dockviewApi) return;
       leaveTaskView();
       const panel = dockviewApi.addPanel({
         id: `browser-url-${projectId}-${randomPanelId()}`,
         component: "browser",
-        title: label,
+        title: browserPreviewTitle(label),
         params: { kind: "external", url, projectId },
       });
       // Bug fix (independent review) — no explicit position/floating option
@@ -442,32 +451,68 @@ export function usePanelOpener({
       // a workspace with no tiled panels), making a bare `maximizeGroup`
       // throw the same way applyMobilePresentation's own fix (panelUtils.ts)
       // prevents elsewhere.
-      if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
-      setSidebarOpen(false);
+      presentNewPanel(dockviewApi, panel, layout.tier);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenPreviewTargets = useCallback((projectId: number) => {
     useDashboardStore.getState().requestPreviewPicker(projectId);
   }, []);
 
+  // The rail's Browser icon from 1100px (#3403): one entry point, so it
+  // never stacks a second Browser pane. An open pane is focused; else the
+  // followed session's agent browser, as the pane kebab opens it; else the
+  // project's preview, as the palette's "Open browser: preview…" does.
+  const onOpenRailBrowser = useCallback(
+    (projectId: number, session: Session | null) => {
+      // The followed session's pane, or one of this project's, before any
+      // other project's.
+      const sessions = useDashboardStore.getState().sessions;
+      const prefer = (params: Record<string, unknown>) => {
+        if (session && params.sessionId === session.id) return true;
+        if (params.projectId === projectId) return true;
+        const owner = sessions.find((s) => s.id === params.sessionId);
+        return owner?.projectId === projectId;
+      };
+      if (dockviewApi && focusOpenBrowserPane(dockviewApi, layout, prefer)) {
+        leaveTaskView();
+        return;
+      }
+      if (session) onOpenAgentBrowser(session);
+      else onOpenPreviewTargets(projectId);
+    },
+    [dockviewApi, layout, leaveTaskView, onOpenAgentBrowser, onOpenPreviewTargets],
+  );
+
   const onOpenBlankBrowser = useCallback(() => {
+    if (previewOpensInRail()) {
+      // An empty address, on whatever project the rail follows.
+      leaveTaskView();
+      useDashboardStore.getState().openRailBrowserPreview({ kind: "external" });
+      return;
+    }
     if (!dockviewApi) return;
     leaveTaskView();
     const panel = dockviewApi.addPanel({
       id: `browser-ext-${randomPanelId()}`,
       component: "browser",
-      title: "Preview",
+      title: BROWSER_PREVIEW_TITLE,
       params: { kind: "external" },
     });
     // Same guard as onOpenBrowserUrl above — see its own comment.
-    if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
-    setSidebarOpen(false);
-  }, [dockviewApi, layout, setSidebarOpen, leaveTaskView]);
+    presentNewPanel(dockviewApi, panel, layout.tier);
+  }, [dockviewApi, layout, leaveTaskView]);
 
   const onOpenPreview = useCallback(
     (projectId: number, slug: string, branch: string | null, targetName?: string) => {
+      if (previewOpensInRail()) {
+        leaveTaskView();
+        useDashboardStore
+          .getState()
+          .openRailBrowserPreview({ projectId, previewSlug: slug, targetName }, projectId);
+        return;
+      }
       if (!dockviewApi) return;
       leaveTaskView();
       const id = `browser-preview-${slug}`;
@@ -481,24 +526,27 @@ export function usePanelOpener({
             targetName,
             targetRev: Date.now(),
           });
-        existing.api.setActive();
+        // The pane may show Agent's browser by now (#3371), or another
+        // address ⇄ opened in it (#3373).
+        const reset = previewResetPatch(existing.api.getParameters?.(), {
+          projectId,
+          previewSlug: slug,
+          targetName,
+        });
+        existing.api.updateParameters({ ...reset, mode: "preview" });
+        focusPanelForTier(dockviewApi, existing, layout.tier);
       } else {
         const panel = dockviewApi.addPanel({
           id,
           component: "browser",
-          title: targetName
-            ? `Preview · ${targetName}`
-            : branch
-              ? `Preview · ${branch}`
-              : "Preview",
+          title: browserPreviewTitle(targetName ?? branch),
           params: { projectId, previewSlug: slug, targetName },
         });
         // Same guard as onOpenBrowserUrl above — see its own comment.
-        if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
+        presentNewPanel(dockviewApi, panel, layout.tier);
       }
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   const onOpenDevice = useCallback(
@@ -524,18 +572,17 @@ export function usePanelOpener({
           .catch(() => {});
       }
       openDevicePanel(dockviewApi, device, layout);
-      setSidebarOpen(false);
     },
-    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+    [dockviewApi, layout, leaveTaskView],
   );
 
   return {
     onOpenSession,
     onOpenSessionAsFloat,
     onOpenTimeline,
+    onOpenAgentBrowser,
     onOpenGitHub,
     onOpenGit,
-    onOpenProjectHub,
     onOpenAgentRules,
     onOpenFileEditor,
     onOpenExternalFile,
@@ -552,5 +599,6 @@ export function usePanelOpener({
     onOpenPreviewTargets,
     onOpenPreview,
     onOpenDevice,
+    onOpenRailBrowser,
   };
 }

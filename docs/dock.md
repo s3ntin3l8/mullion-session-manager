@@ -20,7 +20,7 @@ A project's own section can also show:
 
 - **GitHub status** — open issue/PR counts and a CI status dot, if a
   GitHub account is connected and the project has a `github.com` origin
-  remote. Clicking opens the GitHub panel. See
+  remote. Clicking opens the GitHub view in the right sidebar. See
   [`docs/github-integration.md`](github-integration.md).
 - **Browser preview** — a shortcut to open the project's dev server URL
   in a dockview panel, if one is configured. Clicking opens the browser
@@ -32,7 +32,7 @@ A project's own section can also show:
 
 ## Quick start
 
-Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root) — or, from the dashboard itself, open the project's **Dock** tab (the project hub in the right sidebar) or the Command Palette → **Dock: \<project\>** and use the built-in editor (see [Editing from the UI](#editing-from-the-ui) below); either way produces the same file:
+Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root) — or, from the dashboard itself, open **Project settings → Dock** (the **Dock** row of the right sidebar's Project view, or the Command Palette → **Project › Dock**) and use the built-in editor (see [Editing from the UI](#editing-from-the-ui) below); either way produces the same file:
 
 ```json
 {
@@ -224,8 +224,9 @@ persisting something the merge would later have to shrug off as empty.
 
 ### Editing from the UI
 
-Open the Command Palette (project scope) and choose **Dock: \<project\>** to
-edit a project's own `.crs/dock.json` from the dashboard — a structured
+Open the project's **Project settings** dialog on its **Dock** section (the
+right sidebar's Project view → **Dock**, or the Command Palette → **Project ›
+Dock**) to edit a project's own `.crs/dock.json` from the dashboard — a structured
 form (add/remove a monitor, edit its fields) rather than a raw-JSON editor,
 since `dock.json` is small, fixed-shape data. A few things to know:
 
@@ -235,7 +236,7 @@ since `dock.json` is small, fixed-shape data. A few things to know:
   Adding only edits the draft; nothing is written until you Save.
 - **Only the project-scope file.** The global `<configDir>/dock.json`
   default (see [Global vs. per-project config](#global-vs-per-project-config)
-  below) isn't editable from this panel yet — hand-edit it on the host, same
+  below) isn't editable from this section yet — hand-edit it on the host, same
   as today.
 - **Whole-file replace, not a per-control patch.** Saving writes the
   editor's full monitor list back to `.crs/dock.json`; it never merges in
@@ -503,8 +504,8 @@ sessions, and only ever offers a suggestion for the manual `devServerUrl`
 field. If you start a dev server by hand in an ordinary "+ Session"
 terminal instead of a dock control, Mullion separately watches that
 session's output for the same startup banner and, once it appears, raises
-a **"Dev server detected"** notification (bell icon, in the toolbar's
-notification panel) offering **"Use this port"** / **"Ignore port"**.
+a **"Dev server detected"** notification (the bell's notification panel:
+the left rail's bell, or the phone tab bar's Inbox) offering **"Use this port"** / **"Ignore port"**.
 
 Accepting the offer does **not** spawn a second session or a dock
 control — the dev server is already running live in your plain terminal,
@@ -566,7 +567,7 @@ out the dock's own width — that's what this design replaces.
 | **Collapse/expand a project's section**     | Click the chevron on that project's own rail header                                                                                    |
 | **Pin a project into the dock**             | Use the "+ Add project" dropdown in the Dock header                                                                                    |
 | **Remove a pinned project**                 | Click the "x" on a manually pinned section (not shown for workspace-derived ones)                                                      |
-| **Open GitHub panel**                       | Click the GitHub status glance on a project's own header row                                                                           |
+| **Open GitHub (sidebar view)**              | Click the GitHub status glance on a project's own header row                                                                           |
 | **Open browser preview**                    | Click the browser URL row in a project's section                                                                                       |
 | **Check/pull a Docker service**             | Click the ⋯ menu on a discovered Docker monitor                                                                                        |
 | **Pin a second log pane**                   | Click the "pin" tag on any row — in ANY tiled project, not just the active one — other than the row currently driving the primary pane |
@@ -620,6 +621,78 @@ survives a reload (or any other transient resize that hides it), via
 tiled or the previously-pinned control's identity no longer matches any row
 in it.
 
+## The Dock view in the right sidebar (below 1100px)
+
+Where the window is between 700 and 1099px wide (the rails layouts, among
+them a foldable unfolded, where the screen is a session with its
+companions beside it), the right rail has a **Dock** view. On a phone the
+"⋯" sheet lists it with the rail's other views, and it opens full screen for
+the current session's project; its log is read only there too, so the key
+bar never types into it. From 1100px it is
+not registered and the Dock stays the bottom panel described above.
+
+The view shows the project the right sidebar follows:
+
+- **Commands**: one section for the `dock.json` controls.
+- **One section per Compose stack**, headed by its compose project's name,
+  so a dev and a prod stack stay apart. A service that belongs to no stack,
+  and an orphaned log stream, go under **Other containers**.
+- **Selecting a row** (a tap) shows its actions as buttons and its log
+  under the list. Selecting never starts a command; **Start** does.
+  Selecting a Compose service starts its log stream if it is off, as the
+  bottom Dock does.
+- **A command's actions**: Restart, Stop or Start, and the branch picker
+  when the project has more than one checkout. Stop asks for a second tap
+  when Settings → Session management → "Confirm before kill" is on.
+- **A service's actions**: Restart, Stop (two taps) or Start, and Check for
+  update. The image tag stays on the row and is tinted when an update is
+  available. While the service's log stream runs, **Stop log** ends the
+  stream (its `docker-logs:<container>` session) and leaves the container
+  running; like a command's Stop, it asks for a second tap when "Confirm
+  before kill" is on. Tap the row again to start the stream again.
+- **A stack's own actions** (Restart stack, Apply config, Pull & restart,
+  Rebuild & restart, Stop stack) open from the "⋯" on the stack's heading as
+  a sheet with touch-size rows. Pull, rebuild and stop take a second tap.
+- The port-in-use message, held (recreating) rows and orphaned rows work as
+  in the bottom Dock.
+
+The view leaves out the bottom Dock's GitHub row and its **Preview ▾**
+shortcut: GitHub and Browser are right-rail views of their own.
+
+**"Auto-attach Docker logs" runs on exactly one surface per project**
+(#3031). The bottom Dock runs it while it is mounted for the project; the
+view runs it when the bottom Dock is not: on a touch screen and on the phone
+tier (where the bottom Dock is never mounted), while the bottom Dock is
+collapsed, and in Tasks mode. With a mouse at these widths both can be on
+screen for one project, and the view then leaves it to the bottom Dock. The
+choice is made in one place, `useDockProject` (its `surface` option): the
+bottom Dock registers itself for the project (`frontend/src/dock/dockAutoAttach.ts`) while its `DockProjectGroup` is
+mounted. Which containers have already been attached is kept per project,
+not per surface, and outlives both: the surface that takes the effect over
+does not attach a container a second time, and a view that remounts (another
+rail view, another project and back) does not bring back a stream ended with
+**Stop log**.
+
+**The log is read only.** The bottom Dock is not mounted under a touch
+pointer, because the mobile key bar sends input by session and cannot tell a
+session's own pane from a Dock monitor of the same session. The view shows
+the log in a read-only terminal (`TerminalPane`'s `readOnly`): it never
+registers as a key-bar target, sends nothing typed or pasted to the PTY, and
+raises no on-screen keyboard. Selecting, copying and find still work. To type
+into a monitor, open it as a session.
+
+Both surfaces run the same data and actions: `frontend/src/dock/useDockProject.ts`
+holds a project's controls, grouping, polling and every action, and the
+bottom Dock's `DockProjectGroup` and the view's `DockSidebarView` are two
+layouts over it. **The poll is shared per project**
+(`frontend/src/dock/dockProjectShared.ts`, #3036): every mounted
+`useDockProject` for a project reads one `GET .../dock` poll, so the bottom
+Dock and the view together still make one request every 15 s and show the
+same container state after each fetch. The first surface to mount starts the
+poll, the last one to unmount stops it, and a dock config save re-fetches
+once for all of them. What is per surface stays per surface: held rows, a
+stack action's rows, the selection and an armed kill.
+
 ## Troubleshooting
 
 - **Monitors don't appear.** Check that `.crs/dock.json` is valid JSON
@@ -629,7 +702,8 @@ in it.
   [Editing from the UI](#editing-from-the-ui) above) takes effect
   immediately — no wait. A **hand** edit to either `.crs/dock.json` or the
   global `<configDir>/dock.json` doesn't go through that same immediate
-  path, so it shows up once every tiled/pinned project's own poll catches up:
+  path, so it shows up once every tiled/pinned project's poll catches up (one per
+  project, shared by the bottom Dock and the Dock view):
   `GET .../dock` every ~15s (issue #73's own Docker-discovery poll, which
   re-fetches the FULL merged list — configured controls included, not just
   discovered ones). Re-navigating to the project still works too, for an

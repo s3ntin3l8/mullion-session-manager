@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { api } from "./api/index.js";
@@ -12,6 +12,8 @@ import {
   installFakeVisualViewport,
   uninstallFakeVisualViewport,
 } from "./test/fakeVisualViewport.js";
+import { stubPxWidth } from "./test/appHarness.js";
+import { clearHeaderSplitHidden, setHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
 
 // Code review finding on PR #613 — PaneActionsMenu is now a standalone
 // component (api/params/containerApi/onRename/triggerClassName, not
@@ -77,7 +79,6 @@ function storeState() {
     settings: {
       sessions: { confirmBeforeKill: false },
       layoutMode: layoutModeSetting,
-      tabletPaneCap: 2,
     },
     promoteSession: promoteSessionMock,
     declinePromote: vi.fn().mockResolvedValue(undefined),
@@ -262,6 +263,45 @@ describe("PaneActionsMenu", () => {
     expect(closeSpy).toHaveBeenCalledTimes(1);
   });
 
+  // #3053 — a fold half's header has no "x": its menu closes the pane.
+  it("offers Close pane above Kill session only when given onClose, and leaves the session running", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const { rerender } = render(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="half-header-btn"
+        onClose={onClose}
+      />,
+    );
+
+    await user.click(screen.getByTitle("More…"));
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent);
+    const close = items.indexOf("Close pane");
+    expect(close).toBeGreaterThanOrEqual(0);
+    expect(close).toBeLessThan(items.findIndex((t) => t?.startsWith("Kill session")));
+    await user.click(screen.getByRole("menuitem", { name: "Close pane" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(deleteSession).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    // A tab strip has its own "x": no Close pane there.
+    rerender(
+      <PaneActionsMenu
+        api={makeApi()}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+    await user.click(screen.getByTitle("More…"));
+    expect(screen.queryByRole("menuitem", { name: "Close pane" })).toBeNull();
+  });
+
   // Issue: narrow headers overflow — fallback for PaneHeaderActions.tsx's
   // own split-right/split-down buttons, which hide entirely below a certain
   // group width; this menu item is what keeps split reachable from a pane
@@ -282,7 +322,7 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
       await user.click(screen.getByText("Split right"));
 
-      expect(requestSplit).toHaveBeenCalledWith("session-42", "right");
+      expect(requestSplit).toHaveBeenCalledWith("session-42", "right", 1);
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     });
 
@@ -301,12 +341,12 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
       await user.click(screen.getByText("Split down"));
 
-      expect(requestSplit).toHaveBeenCalledWith("session-42", "below");
+      expect(requestSplit).toHaveBeenCalledWith("session-42", "below", 1);
     });
   });
 
   // Manual repair for the fold/unfold pane-skew bug — offered from every
-  // panel type (no `session` gate), same as "Move" above, since it acts on
+  // panel type (no `session` gate), since it acts on
   // the whole tiled grid rather than this specific pane.
   describe("Move between panes (tablet only)", () => {
     const openMenu = async (apiOverrides: Partial<DockviewPanelApi> = {}) => {
@@ -324,9 +364,15 @@ describe("PaneActionsMenu", () => {
       return user;
     };
     const ownGroup = { id: "g1", panels: [{}, {}], api: { location: { type: "grid" } } };
+    // 750px: the tablet tier, still presented as a grid (#3214).
+    const useGridTablet = () => {
+      layoutModeSetting = "auto";
+      stubPxWidth(750);
+    };
+    afterEach(() => vi.unstubAllGlobals());
 
     it("offers one 'Move to other pane' for a single target and moves into it", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       const target = { id: "g2" };
       otherTiledGroups.mockReturnValue([{ group: target, number: 2 }]);
       const moveTo = vi.fn();
@@ -337,7 +383,7 @@ describe("PaneActionsMenu", () => {
     });
 
     it("numbers the targets when there are several", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       otherTiledGroups.mockReturnValue([
         { group: { id: "g2" }, number: 2 },
         { group: { id: "g3" }, number: 3 },
@@ -348,7 +394,7 @@ describe("PaneActionsMenu", () => {
     });
 
     it("splits a tab out into a new pane to the right when its group has several tabs", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       const moveTo = vi.fn();
       const user = await openMenu({ group: ownGroup, moveTo } as never);
       await user.click(screen.getByText("Move to new pane"));
@@ -356,7 +402,7 @@ describe("PaneActionsMenu", () => {
     });
 
     it("hides 'Move to new pane' for a group's only tab", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       await openMenu({
         group: { id: "g1", panels: [{}], api: { location: { type: "grid" } } },
         moveTo: vi.fn(),
@@ -365,11 +411,19 @@ describe("PaneActionsMenu", () => {
     });
 
     it("hides 'Move to new pane' for a floating group", async () => {
-      layoutModeSetting = "tablet";
+      useGridTablet();
       await openMenu({
         group: { id: "g1", panels: [{}, {}], api: { location: { type: "floating" } } },
         moveTo: vi.fn(),
       } as never);
+      expect(screen.queryByText("Move to new pane")).toBeNull();
+    });
+
+    it("offers neither in the two halves (the tablet override)", async () => {
+      layoutModeSetting = "tablet";
+      otherTiledGroups.mockReturnValue([{ group: { id: "g2" }, number: 2 }]);
+      await openMenu({ group: ownGroup, moveTo: vi.fn() } as never);
+      expect(screen.queryByText("Move to other pane")).toBeNull();
       expect(screen.queryByText("Move to new pane")).toBeNull();
     });
 
@@ -462,10 +516,10 @@ describe("PaneActionsMenu", () => {
   // Hermes review, PR #613 — Rename and Kill must be GATED on session, not
   // just left to silently no-op: ungated, Rename opened an input whose
   // commit silently discarded the typed name, and Kill was a no-op button
-  // that looked destructive but did nothing. Only the always-disabled
-  // "Move" item is session-independent by design.
+  // that looked destructive but did nothing. "Reset pane sizes" is
+  // session-independent by design.
   describe("panel with no resolvable session (non-terminal panel)", () => {
-    it("hides Rename, the kill divider, and Kill session — shows only the disabled Move item", async () => {
+    it("hides Rename, the kill divider, and Kill session — shows only Reset pane sizes", async () => {
       const user = userEvent.setup();
       render(
         <PaneActionsMenu
@@ -485,12 +539,13 @@ describe("PaneActionsMenu", () => {
       // Rename/Kill above.
       expect(screen.queryByText("Split right")).not.toBeInTheDocument();
       expect(screen.queryByText("Split down")).not.toBeInTheDocument();
-      const moveItem = screen.getByText("Move (drag tab)").closest("button");
-      expect(moveItem).toHaveAttribute("aria-disabled", "true");
-      expect(moveItem).not.toBeDisabled();
+      expect(screen.queryByText("Move (drag tab)")).not.toBeInTheDocument();
+      expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
+        "Reset pane sizes",
+      ]);
     });
 
-    it("hides View timeline, Open Agent Browser, and Promote to worktree", async () => {
+    it("hides View timeline, Open browser, and Promote to worktree", async () => {
       const user = userEvent.setup();
       render(
         <PaneActionsMenu
@@ -505,7 +560,7 @@ describe("PaneActionsMenu", () => {
       await user.click(screen.getByTitle("More…"));
 
       expect(screen.queryByText("View timeline")).not.toBeInTheDocument();
-      expect(screen.queryByText("Open Agent Browser")).not.toBeInTheDocument();
+      expect(screen.queryByText("Open browser")).not.toBeInTheDocument();
       expect(screen.queryByText("Promote to worktree…")).not.toBeInTheDocument();
     });
   });
@@ -631,13 +686,117 @@ describe("PaneActionsMenu", () => {
     expect(openOrFocusSessionPanel).toHaveBeenCalledWith(
       CONTAINER_API,
       newSession,
-      { tier: "desktop", tabletPaneCap: 2 },
+      { tier: "desktop" },
       projects,
     );
   });
 });
 
 // #719 — per-session mute toggle in the overflow menu.
+// #3214 — the whole item list per presentation: split entries only while the
+// pane's header hides its own split buttons, and no grid actions (split, move,
+// reset sizes, a browser pane) in the two halves or on the phone.
+describe("PaneActionsMenu — items per layout (#3214)", () => {
+  const GROUP = { id: "g-3214", panels: [{}], api: { location: { type: "grid" } } };
+
+  async function itemLabels(onClose?: () => void) {
+    projects = [{ id: 1 } as Project];
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi({ id: "session-1", group: GROUP } as never)}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        onClose={onClose}
+        triggerClassName="pane-tab-btn"
+      />,
+    );
+    await user.click(screen.getByTitle("More…"));
+    return screen.getAllByRole("menuitem").map((el) => el.textContent);
+  }
+
+  afterEach(() => clearHeaderSplitHidden(GROUP.id));
+
+  it("grid, header split buttons showing: no split entries", async () => {
+    setHeaderSplitHidden(GROUP.id, false);
+    expect(await itemLabels()).toEqual([
+      "Rename↵",
+      "Reset pane sizes",
+      "View timeline",
+      "Open browser",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Kill session",
+    ]);
+  });
+
+  it("grid, header split buttons hidden: the split entries are the fallback", async () => {
+    setHeaderSplitHidden(GROUP.id, true);
+    expect(await itemLabels()).toEqual([
+      "Rename↵",
+      "Split right",
+      "Split down",
+      "Reset pane sizes",
+      "View timeline",
+      "Open browser",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Kill session",
+    ]);
+  });
+
+  it("the two halves: no grid actions, Close pane kept", async () => {
+    layoutModeSetting = "tablet";
+    setHeaderSplitHidden(GROUP.id, true);
+    otherTiledGroups.mockReturnValue([{ group: { id: "g2" }, number: 2 }]);
+    expect(await itemLabels(vi.fn())).toEqual([
+      "Rename↵",
+      "View timeline",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Close pane",
+      "Kill session",
+    ]);
+  });
+
+  it("the phone: no grid actions", async () => {
+    layoutModeSetting = "phone";
+    setHeaderSplitHidden(GROUP.id, true);
+    expect(await itemLabels()).toEqual([
+      "Rename↵",
+      "View timeline",
+      "Promote to worktree…",
+      "Mute notifications",
+      "Kill session",
+    ]);
+  });
+
+  // #3370 — the entry follows the band, not the presentation: rails-full
+  // presents a grid but has the rail's Browser view, so no entry there.
+  it.each([
+    [1400, "desktop", true],
+    [1200, "desktop-narrow", true],
+    [900, "rails-halves", false],
+    [750, "rails-full", false],
+    [500, "phone", false],
+  ])("at %ipx (%s) Open browser shown: %s", async (width, _band, shown) => {
+    layoutModeSetting = "auto";
+    stubPxWidth(width);
+    try {
+      setHeaderSplitHidden(GROUP.id, false);
+      const labels = await itemLabels();
+      expect(labels.includes("Open browser")).toBe(shown);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("never lists Move (drag tab)", async () => {
+    expect(await itemLabels()).not.toContain("Move (drag tab)");
+  });
+});
+
 describe("PaneActionsMenu — mute notifications (#719)", () => {
   it("offers 'Mute notifications' and toggles the session on click", async () => {
     const user = userEvent.setup();
@@ -931,5 +1090,143 @@ describe("failed kill (audit finding 11)", () => {
       expect(deleteSession).toHaveBeenCalledWith(session.id);
     });
     expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+// #3054 — under a coarse pointer the menu is a bottom sheet: the same items
+// as rows of at least 44px (styles/terminal.css), portaled to the body so no
+// tab strip or phone session sheet clips it. A fine pointer keeps the popover.
+describe("PaneActionsMenu -> touch sheet (#3054)", () => {
+  function stubPointer(coarse: boolean) {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: coarse && query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  }
+
+  function renderMenu(onRename = vi.fn()) {
+    render(
+      <div data-testid="tab-strip" style={{ overflow: "hidden" }}>
+        <PaneActionsMenu
+          api={makeApi({ id: "session-42" })}
+          params={{ sessionId: session.id }}
+          containerApi={CONTAINER_API}
+          onRename={onRename}
+          triggerClassName="mobile-tab-btn"
+        />
+      </div>,
+    );
+    return onRename;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens as a sheet of menu rows outside the trigger's container under a coarse pointer", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    renderMenu();
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(trigger);
+
+    const sheet = screen.getByRole("dialog", { name: "claude code actions" });
+    expect(sheet).toHaveClass("mobile-session-sheet", "pane-actions-sheet");
+    expect(screen.getByTestId("tab-strip")).not.toContainElement(sheet);
+    const menu = within(sheet).getByRole("menu", { name: "claude code actions" });
+    expect(menu).toHaveClass("pane-actions-sheet-menu");
+    expect(within(menu).getByRole("menuitem", { name: /Rename/ })).toHaveClass(
+      "pane-tab-overflow-item",
+    );
+    expect(document.querySelector(".pane-tab-overflow-menu")).toBeNull();
+  });
+
+  it("an item acts and closes the sheet; the close button and Escape close it too", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    renderMenu();
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: /Split right/ }));
+    expect(requestSplit).toHaveBeenCalledWith("session-42", "right", 1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("button", { name: "Close pane actions" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("arrow keys move between the sheet's items", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    renderMenu();
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const items = within(screen.getByRole("menu")).getAllByRole("menuitem");
+    items[0]!.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(items[1]).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(items[items.length - 1]).toHaveFocus();
+  });
+
+  it("Rename hands focus to the rename field instead of back to the trigger", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    const onRename = renderMenu();
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: /Rename/ }));
+    expect(onRename).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(trigger).not.toHaveFocus();
+  });
+
+  // #3053's "Close pane" (a fold half's header) is in the shared items, so
+  // the touch sheet offers it too.
+  it("offers Close pane in the sheet when given onClose", async () => {
+    stubPointer(true);
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <PaneActionsMenu
+        api={makeApi({ id: "session-42" })}
+        params={{ sessionId: session.id }}
+        containerApi={CONTAINER_API}
+        onRename={vi.fn()}
+        onClose={onClose}
+        triggerClassName="half-header-btn half-header-menu"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const sheet = screen.getByRole("dialog", { name: "claude code actions" });
+    await user.click(within(sheet).getByRole("menuitem", { name: "Close pane" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("stays a popover under a fine pointer", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    renderMenu();
+
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    await user.click(trigger);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("menu")).toHaveClass("pane-tab-overflow-menu");
   });
 });

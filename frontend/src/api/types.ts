@@ -40,7 +40,6 @@ import type {
   SidebarDensity,
   SoundName,
   LayoutMode,
-  TabletPaneCap,
   IssueTriageState,
   RelayReviewState,
   ReviewSummary,
@@ -1113,6 +1112,15 @@ export interface EventHistoryPage {
   persistenceEnabled: boolean;
   events: StoredEventRow[];
   nextCursor: number | null;
+}
+
+/** #3033 — a session opened in a workspace on the fold or the phone, waiting
+ * for a desktop client to add its pane (GET /api/workspaces/:id/pending-opens). */
+export interface PendingOpen {
+  sessionId: number;
+  /** The session the new one replaced in its half on the fold; null if none. */
+  referenceSessionId: number | null;
+  createdAt: string;
 }
 
 export interface Workspace {
@@ -2372,7 +2380,6 @@ export interface AppSettings {
   // Tablet tier plan (.claude/plans/another-thing-to-investigate-lively-
   // kitten.md, PR 4) — see shared/types.ts's own doc comment on LayoutMode.
   layoutMode: LayoutMode;
-  tabletPaneCap: TabletPaneCap;
   balancePanesOnDrop: boolean;
   projectRoots: string[];
   // Issue #2090 — opt-in (default off): map each project onto a host's

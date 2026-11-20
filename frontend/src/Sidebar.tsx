@@ -13,16 +13,15 @@ import type { VirtualItem } from "@tanstack/react-virtual";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { CreateProjectModal } from "./CreateProjectModal.js";
-import type { Device, Host, Project, Session } from "./api/index.js";
-import { SidebarDevices } from "./SidebarDevices.js";
+import type { Host, Project, Session } from "./api/index.js";
 import { projectSpansHosts } from "./lib/hostBadge.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { TextInput } from "./ui/primitives.js";
 import { EmptyState, EmptyStateActions, EmptyStateBody, EmptyStateTitle } from "./ui/EmptyState.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import {
+  ChevronDownIcon,
   CloseIcon,
-  LayersIcon,
   PlusIcon,
   RefreshIcon,
   SearchIcon,
@@ -36,12 +35,15 @@ import {
   subscribeDockManualProjectIds,
 } from "./dock/dockHelpers.js";
 import { taskLinkedSessionIds } from "./boardLanes.js";
-import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
 import { columnForSession } from "./kanban.js";
 import type { KanbanColumnId } from "./kanban.js";
-import { isListedSession, sessionMatchesSearch } from "./lib/sessionDisplay.js";
+import {
+  isListedSession,
+  selectSessionTitleContexts,
+  sessionMatchesSearch,
+} from "./lib/sessionDisplay.js";
 import { estimateSidebarRowHeight } from "./lib/sidebarRowSizing.js";
 import { DiscoverProjects } from "./sidebar/DiscoverProjects.js";
 import { ProjectHeader } from "./sidebar/ProjectHeader.js";
@@ -77,25 +79,18 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
 export interface SidebarProps {
-  // Phone navigator only: render just one of the sidebar's two areas (the
-  // full-screen navigator shows Projects and Devices as separate tabs).
-  // Unset — desktop and tablet — renders the whole sidebar exactly as before.
-  phoneSection?: "projects" | "devices";
-  // Source Control lives in the right sidebar on desktop and tablet; only the
-  // phone navigator (which has no right sidebar) still renders it here.
+  // Source Control lives in the right sidebar from 700px; only the phone's
+  // hidden sidebar (the phone has no right sidebar) still renders it here.
   showSourceControl: boolean;
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
-  // Opens the command palette scoped to this project (design's project-row
-  // "+" button) — cwd is bound implicitly, no target-picker step needed.
+  // Opens the New session launcher with this project preselected (design's
+  // project-row "+" button); the project stays changeable there.
   onOpenProjectLauncher: (projectId: number) => void;
   // "Configure search roots" in the discovery empty state (design section
   // 03·1C) opens Settings straight to the Projects tab.
   onOpenSettingsProjects: () => void;
-  // Phase 6 (6.5/#218) — opens (or focuses) the global task board, replacing
-  // 2.5's own ad hoc TasksSection list.
-  onOpenTasks: () => void;
   // Issue #433 scope B — SourceControlSection's own "Open Git Panel" action.
   // App.tsx already had this callback (for Source Control's own command-palette
   // entry, issue #76) but never threaded it down to Sidebar until now.
@@ -105,9 +100,6 @@ export interface SidebarProps {
   // callback (for the palette's own entry) but never threaded it down to
   // Sidebar until now, so the project's own kebab menu can offer it too.
   onOpenProjectSetup: (projectId: number) => void;
-  // Issue #1326 — opens (or focuses) an Android device's video/input panel.
-  // See SidebarDevices.tsx for why this lives here rather than Settings.
-  onOpenDevice: (device: Device) => void;
   // Issue #1877 — the Dock's workspaceProjectIds (App.tsx, via
   // workspaceProjectIdsFromPanels): the projects with a session open in
   // the live layout. null means "do not scope" — the phone tier, which has
@@ -122,27 +114,19 @@ export interface SidebarProps {
   // these still goes through onOpenSession, which focuses the existing pane
   // rather than opening a second one — see usePanelOpener.
   openSessionIds?: number[] | null;
-  // The empty workspace state has no project rows left, so it has no
-  // per-project "+" either. This is App's openGlobalLauncher — the
-  // toolbar's launcher / Ctrl-K — not the project-scoped opener above.
-  onOpenGlobalLauncher: () => void;
 }
 
 export function Sidebar({
-  phoneSection,
   showSourceControl,
   onOpenSession,
   onOpenSessionAsFloat,
   onSessionEnded,
   onOpenProjectLauncher,
   onOpenSettingsProjects,
-  onOpenTasks,
   onOpenGit,
   onOpenProjectSetup,
-  onOpenDevice,
   workspaceProjectIds = null,
   openSessionIds = null,
-  onOpenGlobalLauncher,
 }: SidebarProps) {
   const { run: retryProjects, busy: retryingProjects } = useBusyAction(() =>
     useDashboardStore.getState().refreshProjects(),
@@ -161,10 +145,9 @@ export function Sidebar({
     showTaskSessions,
     settings,
     settingsLoaded,
-    hierarchicalView,
-    viewMode,
     projectsLoaded,
     projectsError,
+    activeWorkspaceId,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
@@ -175,14 +158,13 @@ export function Sidebar({
       showTaskSessions: s.showTaskSessions,
       settings: s.settings,
       settingsLoaded: s.settingsLoaded,
-      hierarchicalView: s.hierarchicalView,
-      viewMode: s.viewMode,
       // The three states an empty project list can be in — still loading,
       // loaded-and-empty, and failed. Without these, "Welcome to Mullion"
       // covered all three, so a failed fetch looked like a fresh install
       // (audit finding 14).
       projectsLoaded: s.projectsLoaded,
       projectsError: s.projectsError,
+      activeWorkspaceId: s.activeWorkspaceId,
     })),
   );
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -250,19 +232,11 @@ export function Sidebar({
     void store.refreshSessions();
     void store.refreshHosts();
     // Loaded on mount alongside everything else above rather than waiting
-    // for startLiveRefresh's ~60s-throttled tick to reach it first — this is
-    // what lets the Tasks nav entry's count badge below be accurate right
-    // away.
+    // for startLiveRefresh's ~60s-throttled tick to reach it first, so the
+    // task-linked session filter below is right from the first render.
     void store.refreshTasks();
   }, []);
 
-  // Phase 6 (6.5/#218) — count of tasks needing human attention right now:
-  // "ready" (claimable) and "reviewing" (awaiting Approve/Reject). Neither
-  // "claimed"/"in_progress" (the agent is already working, nothing for a
-  // human to do yet) nor "done"/"failed"/"backlog" belong in this count.
-  const actionableTaskCount = tasks.filter(
-    (t) => t.status === "ready" || t.status === "reviewing",
-  ).length;
   // #9 — a "killed" task session is already excluded by the `s.status !==
   // "killed"` check above/below regardless of this toggle (see PR 8's own
   // cleanup, which flips a superseded task session to "killed" rather than
@@ -295,6 +269,31 @@ export function Sidebar({
     }
     return scoped;
   }, [projects, workspaceProjectIds, manualProjectIds]);
+  // #2075 — every project the tree does not list as tiled/pinned. They
+  // follow in the collapsible "Other projects" section, header rows only:
+  // session lists stay scoped to this workspace.
+  const otherProjects = useMemo(() => {
+    if (workspaceProjectIds == null) return [];
+    const scopedIds = new Set(treeProjects.map((p) => p.id));
+    return projects.filter((p) => !scopedIds.has(p.id));
+  }, [projects, treeProjects, workspaceProjectIds]);
+  const emptyWorkspace = workspaceProjectIds != null && treeProjects.length === 0;
+  const [, setOtherVersion] = useState(0);
+  const otherKey = activeWorkspaceId ?? "none";
+  // A section nobody has touched starts open when the workspace has nothing
+  // tiled, so the tree is never blank; a manual choice wins and sticks per
+  // workspace. The default is latched once the scope AND the project list
+  // are known (not off a still-loading empty list), so tiling a project
+  // later never collapses the section on its own.
+  if (workspaceProjectIds != null && projectsLoaded && !otherProjectsExpandedState.has(otherKey)) {
+    otherProjectsExpandedState.set(otherKey, emptyWorkspace);
+  }
+  const otherExpanded = otherProjectsExpandedState.get(otherKey) ?? false;
+  const toggleOtherProjects = useCallback(() => {
+    otherProjectsExpandedState.set(otherKey, !(otherProjectsExpandedState.get(otherKey) ?? false));
+    setOtherVersion((v) => v + 1);
+  }, [otherKey]);
+  const showOtherProjects = otherProjects.length > 0 && !filterActive;
   const openSessionIdSet = useMemo(
     () => (openSessionIds == null ? null : new Set(openSessionIds)),
     [openSessionIds],
@@ -349,6 +348,10 @@ export function Sidebar({
   );
   const shouldVirtualize = totalBaseSessionCount > VIRTUALIZE_SESSION_THRESHOLD;
 
+  // The same task titles and numbers the rows show (#3285), so the search
+  // matches the text a row displays.
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
+
   const filteredSessionsByProject = useMemo(() => {
     const map = new Map<number, Session[]>();
     const query = searchQuery.trim();
@@ -362,13 +365,13 @@ export function Sidebar({
         project.id,
         base.filter(
           (s) =>
-            (query === "" || sessionMatchesSearch(s, project, query)) &&
+            (query === "" || sessionMatchesSearch(s, project, query, titleContexts.get(s.id))) &&
             (selectedChips.size === 0 || selectedChips.has(columnForSession(s))),
         ),
       );
     }
     return map;
-  }, [treeProjects, baseSessionsByProject, searchQuery, selectedChips]);
+  }, [treeProjects, baseSessionsByProject, searchQuery, selectedChips, titleContexts]);
 
   // U3 — a project with zero matches while a filter is active is skipped
   // entirely, not shown collapsed or with an empty body: the same "nothing
@@ -489,52 +492,42 @@ export function Sidebar({
       // ProjectSection's own `rows.map(...)` below the threshold (see that
       // component's matching comment).
       const filtered = filteredSessionsByProject.get(project.id) ?? [];
-      const hRows = hierarchicalView
-        ? buildHierarchicalRows(filtered)
-        : filtered.map((session) => ({ session, depth: 0 }));
-      for (const { session, depth } of hRows) {
+      for (const { session, depth } of buildHierarchicalRows(filtered)) {
         rows.push({ key: `s-${session.id}`, type: "session", session, project, depth });
+      }
+    }
+    if (showOtherProjects) {
+      rows.push({
+        key: "other-header",
+        type: "other-header",
+        count: otherProjects.length,
+        expanded: otherExpanded,
+      });
+      if (otherExpanded) {
+        for (const project of otherProjects) {
+          rows.push({ key: `o-${project.id}`, type: "other-project", project });
+        }
       }
     }
     return rows;
   }, [
+    showOtherProjects,
+    otherProjects,
+    otherExpanded,
     shouldVirtualize,
     visibleProjects,
     baseSessionsByProject,
     filteredSessionsByProject,
     filterActive,
     collapseVersion,
-    hierarchicalView,
   ]);
 
   return (
     <div className="sidebar">
-      {phoneSection === undefined && (
-        <button
-          className={`sidebar-tasks-entry${viewMode === "kanban" ? " active" : ""}`}
-          aria-pressed={viewMode === "kanban"}
-          // Issue: this already claimed to be a toggle via aria-pressed, but
-          // onOpenTasks only ever set viewMode to "kanban" — clicking it a
-          // second time while already in Tasks did nothing, leaving the
-          // Toolbar's "Back" chevron as the only way out. Honoring what the
-          // a11y attribute already advertised.
-          onClick={() =>
-            viewMode === "kanban" ? useDashboardStore.getState().setViewMode("list") : onOpenTasks()
-          }
-        >
-          <LayersIcon size={14} />
-          <span className="sidebar-tasks-entry-label">Tasks</span>
-          {actionableTaskCount > 0 && (
-            <span className="project-attn-pill">{actionableTaskCount}</span>
-          )}
-        </button>
-      )}
-      {phoneSection !== "projects" && <SidebarDevices onOpenDevice={onOpenDevice} />}
-      {phoneSection !== "devices" && (
-        <>
-          <div className="sidebar-section-header">
-            <h3 className="sidebar-section-title">Projects</h3>
-            {/* Issue #1889 — this caption was the bare word "sessions":
+      <>
+        <div className="sidebar-section-header">
+          <h2 className="sidebar-section-title">Projects</h2>
+          {/* Issue #1889 — this caption was the bare word "sessions":
                 a label with no number, or a number that never got filled
                 in. It is the count now, with its unit, so it reads as the
                 total of the per-project numbers below it.
@@ -543,135 +536,134 @@ export function Sidebar({
                 declutter rule the per-project badge follows ("a project
                 with no sessions at all doesn't need a '0' sitting in its
                 header"). */}
-            {sectionSessionCount > 0 && (
-              <span className="sidebar-section-count">
-                <span className="sidebar-section-count-value">{sectionSessionCount}</span>{" "}
-                <span className="sidebar-section-count-unit">
-                  {sectionSessionCount === 1 ? "session" : "sessions"}
-                </span>
+          {sectionSessionCount > 0 && (
+            <span className="sidebar-section-count">
+              <span className="sidebar-section-count-value">{sectionSessionCount}</span>{" "}
+              <span className="sidebar-section-count-unit">
+                {sectionSessionCount === 1 ? "session" : "sessions"}
               </span>
-            )}
-            <HierarchyToggle />
-            <button
-              className="toolbar-icon-btn"
-              style={{ width: 22, height: 22 }}
-              title="Add project"
-              onClick={openAddProject}
-            >
-              <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
-            </button>
-          </div>
-          {/* The list below is the last-known-good one when a refresh
+            </span>
+          )}
+          <button
+            className="toolbar-icon-btn"
+            style={{ width: 22, height: 22 }}
+            title="Add project"
+            onClick={openAddProject}
+          >
+            <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
+          </button>
+        </div>
+        {/* The list below is the last-known-good one when a refresh
               failed, which is the right thing to keep on screen — but the
               user has to be told it is stale, or a project added on another
               device silently never appears here. */}
-          {projectsError && projects.length > 0 && (
-            <ErrorText style={{ margin: "0 0 6px" }}>
-              Could not refresh projects — showing the last known list. {projectsError}
-            </ErrorText>
-          )}
-          {/* U3 — sticky at the top of the scrollable sidebar (see
+        {projectsError && projects.length > 0 && (
+          <ErrorText style={{ margin: "0 0 6px" }}>
+            Could not refresh projects — showing the last known list. {projectsError}
+          </ErrorText>
+        )}
+        {/* U3 — sticky at the top of the scrollable sidebar (see
         .sidebar-filter-bar's own `position: sticky` rule in styles.css) so
         it stays reachable while scrolled deep into a long session list —
         exactly the scenario ("past ~20 sessions") this filter exists for.
         Only shown once the section is actually listing a project — an empty
         dashboard, and a workspace with nothing tiled into it, have nothing
         to filter. */}
-          {treeProjects.length > 0 && (
-            <div className="sidebar-filter-bar">
-              <div className="sidebar-filter-search ui-input-wrap">
-                <SearchIcon size={13} strokeWidth={1.9} />
-                <TextInput
-                  small
-                  placeholder="Filter sessions…"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  aria-label="Filter sessions"
-                />
-                {searchQuery !== "" && (
-                  <button
-                    type="button"
-                    className="sidebar-filter-clear"
-                    title="Clear filter"
-                    onClick={() => setSearchQuery("")}
-                  >
-                    <CloseIcon size={10} />
-                  </button>
-                )}
-              </div>
-              <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
-                {SIDEBAR_FILTER_CHIPS.map((chip) => (
-                  <button
-                    key={chip.id}
-                    type="button"
-                    className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
-                    aria-pressed={selectedChips.has(chip.id)}
-                    onClick={() => toggleChip(chip.id)}
-                  >
-                    {chip.label}
-                  </button>
-                ))}
-              </div>
+        {treeProjects.length > 0 && (
+          <div className="sidebar-filter-bar">
+            <div className="sidebar-filter-search ui-input-wrap">
+              <SearchIcon size={13} strokeWidth={1.9} />
+              <TextInput
+                small
+                placeholder="Filter sessions…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                aria-label="Filter sessions"
+              />
+              {searchQuery !== "" && (
+                <button
+                  type="button"
+                  className="sidebar-filter-clear"
+                  title="Clear filter"
+                  onClick={() => setSearchQuery("")}
+                >
+                  <CloseIcon size={10} />
+                </button>
+              )}
             </div>
-          )}
-          {projects.length === 0 ? (
-            projectsError ? (
-              // The fetch FAILED — not "you have no projects". This used to
-              // render the "Welcome to Mullion" first-run state forever,
-              // which told a user with a working dashboard and a flaky
-              // connection that they had never added a project (audit
-              // finding 14).
-              <EmptyState>
-                <WarningTriangleIcon size={26} className="ui-empty-state-mark" />
-                <EmptyStateTitle>Could not load your projects</EmptyStateTitle>
-                <ErrorText style={{ marginBottom: 8 }}>{projectsError}</ErrorText>
-                <EmptyStateActions>
-                  <button
-                    className="ui-empty-state-btn-primary"
-                    disabled={retryingProjects}
-                    aria-busy={retryingProjects || undefined}
-                    onClick={retryProjects}
-                  >
-                    <RefreshIcon size={12} strokeWidth={2} />
-                    {retryingProjects ? "Retrying…" : "Retry"}
-                  </button>
-                </EmptyStateActions>
-              </EmptyState>
-            ) : !projectsLoaded ? (
-              // Still loading — the first run's "Welcome to Mullion" is the
-              // wrong thing to show for a list that is on its way.
-              <EmptyState>
-                <MullionMark size={32} className="ui-empty-state-mark" />
-                <EmptyStateTitle>Loading projects…</EmptyStateTitle>
-              </EmptyState>
-            ) : (
-              <EmptyState>
-                <MullionMark size={32} className="ui-empty-state-mark" />
-                <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
-                <EmptyStateBody>
-                  Add a project folder to start — sessions run there and survive across restarts.
-                </EmptyStateBody>
-                <EmptyStateActions>
-                  <button
-                    className="ui-empty-state-btn-primary"
-                    onClick={() => setAddProjectOpen(true)}
-                  >
-                    <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-                    Add a project
-                  </button>
-                  <button
-                    className="ui-empty-state-btn-secondary"
-                    onClick={() => setDiscoverCollapsed(false)}
-                  >
-                    <SearchIcon size={12} strokeWidth={2} />
-                    Scan for repos
-                  </button>
-                </EmptyStateActions>
-              </EmptyState>
-            )
+            <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
+              {SIDEBAR_FILTER_CHIPS.map((chip) => (
+                <button
+                  key={chip.id}
+                  type="button"
+                  className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
+                  aria-pressed={selectedChips.has(chip.id)}
+                  onClick={() => toggleChip(chip.id)}
+                >
+                  {chip.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {projects.length === 0 ? (
+          projectsError ? (
+            // The fetch FAILED — not "you have no projects". This used to
+            // render the "Welcome to Mullion" first-run state forever,
+            // which told a user with a working dashboard and a flaky
+            // connection that they had never added a project (audit
+            // finding 14).
+            <EmptyState>
+              <WarningTriangleIcon size={26} className="ui-empty-state-mark" />
+              <EmptyStateTitle>Could not load your projects</EmptyStateTitle>
+              <ErrorText style={{ marginBottom: 8 }}>{projectsError}</ErrorText>
+              <EmptyStateActions>
+                <button
+                  className="ui-empty-state-btn-primary"
+                  disabled={retryingProjects}
+                  aria-busy={retryingProjects || undefined}
+                  onClick={retryProjects}
+                >
+                  <RefreshIcon size={12} strokeWidth={2} />
+                  {retryingProjects ? "Retrying…" : "Retry"}
+                </button>
+              </EmptyStateActions>
+            </EmptyState>
+          ) : !projectsLoaded ? (
+            // Still loading — the first run's "Welcome to Mullion" is the
+            // wrong thing to show for a list that is on its way.
+            <EmptyState>
+              <MullionMark size={32} className="ui-empty-state-mark" />
+              <EmptyStateTitle>Loading projects…</EmptyStateTitle>
+            </EmptyState>
           ) : (
-            <>
-              {/* U3 — the live GitHub CI subscription used to live inside
+            <EmptyState>
+              <MullionMark size={32} className="ui-empty-state-mark" />
+              <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
+              <EmptyStateBody>
+                Add a project folder to start — sessions run there and survive across restarts.
+              </EmptyStateBody>
+              <EmptyStateActions>
+                <button
+                  className="ui-empty-state-btn-primary"
+                  onClick={() => setAddProjectOpen(true)}
+                >
+                  <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+                  Add a project
+                </button>
+                <button
+                  className="ui-empty-state-btn-secondary"
+                  onClick={() => setDiscoverCollapsed(false)}
+                >
+                  <SearchIcon size={12} strokeWidth={2} />
+                  Scan for repos
+                </button>
+              </EmptyStateActions>
+            </EmptyState>
+          )
+        ) : (
+          <>
+            {/* U3 — the live GitHub CI subscription used to live inside
             ProjectSection's own effect, one per mounted instance. Split out
             so it has exactly one owner regardless of which rendering path
             below is active (ProjectSection isn't mounted at all once
@@ -679,80 +671,79 @@ export function Sidebar({
             unconditionally (not just `visibleProjects`) since a filtered-out
             project's CI status should keep updating in the background, the
             same as it always has. */}
-              {projects.map((project) => (
-                <ProjectGitHubSubscription key={project.id} projectId={project.id} />
-              ))}
-              {treeProjects.length === 0 ? (
-                // Issue #1877 — the dashboard HAS projects; none of them are
-                // tiled into this workspace or pinned to the Dock. "Welcome
-                // to Mullion" would be a lie here (that state is the
-                // projects.length === 0 branch above). Same membership as
-                // the Dock's columns: a session open in the live layout, or
-                // a "+ Add project" pin.
-                <EmptyState>
-                  <EmptyStateTitle>Nothing tiled in this workspace</EmptyStateTitle>
-                  <EmptyStateBody>
-                    A project shows up here once one of its sessions is open in this layout, or you
-                    pin it from the Dock. Launch a session to put one here.
-                  </EmptyStateBody>
-                  <EmptyStateActions>
-                    <button className="ui-empty-state-btn-primary" onClick={onOpenGlobalLauncher}>
-                      <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-                      Launch a session
-                    </button>
-                  </EmptyStateActions>
-                </EmptyState>
-              ) : filterActive && visibleProjects.length === 0 ? (
-                <EmptyState>
-                  <EmptyStateTitle>No sessions match</EmptyStateTitle>
-                  <EmptyStateBody>
-                    Try a different search, or clear the status filters above.
-                  </EmptyStateBody>
-                </EmptyState>
-              ) : shouldVirtualize ? (
-                <VirtualizedProjectTree
-                  rows={flatRows}
+            {projects.map((project) => (
+              <ProjectGitHubSubscription key={project.id} projectId={project.id} />
+            ))}
+            {filterActive && visibleProjects.length === 0 ? (
+              <EmptyState>
+                <EmptyStateTitle>No sessions match</EmptyStateTitle>
+                <EmptyStateBody>
+                  Try a different search, or clear the status filters above.
+                </EmptyStateBody>
+              </EmptyState>
+            ) : shouldVirtualize ? (
+              <VirtualizedProjectTree
+                rows={flatRows}
+                hosts={hosts}
+                spansHostsByProject={spansHostsByProject}
+                openSessionIds={openSessionIdSet}
+                onOpenSession={onOpenSession}
+                onOpenSessionAsFloat={onOpenSessionAsFloat}
+                onSessionEnded={onSessionEnded}
+                onOpenProjectLauncher={onOpenProjectLauncher}
+                onToggleCollapsed={toggleProjectCollapsedVirtualized}
+                onToggleOtherProjects={toggleOtherProjects}
+                onOpenProjectSetup={onOpenProjectSetup}
+              />
+            ) : (
+              visibleProjects.map((project) => (
+                <ProjectSection
+                  key={project.id}
+                  project={project}
                   hosts={hosts}
-                  spansHostsByProject={spansHostsByProject}
-                  openSessionIds={openSessionIdSet}
-                  onOpenSession={onOpenSession}
                   onOpenSessionAsFloat={onOpenSessionAsFloat}
+                  sessions={filteredSessionsByProject.get(project.id) ?? []}
+                  allSessions={baseSessionsByProject.get(project.id) ?? []}
+                  spansHosts={spansHostsByProject.get(project.id) ?? false}
+                  onOpenSession={onOpenSession}
                   onSessionEnded={onSessionEnded}
-                  onOpenProjectLauncher={onOpenProjectLauncher}
-                  onToggleCollapsed={toggleProjectCollapsedVirtualized}
-                  onOpenProjectSetup={onOpenProjectSetup}
+                  onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                  onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
+                  forceExpanded={filterActive}
+                  openSessionIds={openSessionIdSet}
                 />
-              ) : (
-                visibleProjects.map((project) => (
-                  <ProjectSection
-                    key={project.id}
-                    project={project}
-                    hosts={hosts}
-                    onOpenSessionAsFloat={onOpenSessionAsFloat}
-                    sessions={filteredSessionsByProject.get(project.id) ?? []}
-                    allSessions={baseSessionsByProject.get(project.id) ?? []}
-                    spansHosts={spansHostsByProject.get(project.id) ?? false}
-                    onOpenSession={onOpenSession}
-                    onSessionEnded={onSessionEnded}
-                    onOpenLauncher={() => onOpenProjectLauncher(project.id)}
-                    onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
-                    hierarchicalView={hierarchicalView}
-                    forceExpanded={filterActive}
-                    openSessionIds={openSessionIdSet}
-                  />
-                ))
-              )}
-            </>
-          )}
-          {showSourceControl && <SourceControlSection onOpenGit={onOpenGit} />}
-          <DiscoverProjects
-            collapsed={discoverCollapsed}
-            onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
-            onOpenSettingsProjects={onOpenSettingsProjects}
-            hosts={hosts}
-          />
-        </>
-      )}
+              ))
+            )}
+            {!shouldVirtualize && showOtherProjects && (
+              <div className="sidebar-other-projects">
+                <OtherProjectsHeader
+                  count={otherProjects.length}
+                  expanded={otherExpanded}
+                  onToggle={toggleOtherProjects}
+                />
+                {otherExpanded &&
+                  otherProjects.map((project) => (
+                    <OtherProjectRow
+                      key={project.id}
+                      project={project}
+                      hosts={hosts}
+                      onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                      onSessionEnded={onSessionEnded}
+                      onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
+                    />
+                  ))}
+              </div>
+            )}
+          </>
+        )}
+        {showSourceControl && <SourceControlSection onOpenGit={onOpenGit} />}
+        <DiscoverProjects
+          collapsed={discoverCollapsed}
+          onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
+          onOpenSettingsProjects={onOpenSettingsProjects}
+          hosts={hosts}
+        />
+      </>
       {addProjectOpen && (
         <CreateProjectModal
           hosts={hosts}
@@ -910,6 +901,17 @@ interface ProjectHeaderFlatRow {
   // current" without also needing its own copy of the derivation rule.
   derivedDefault: boolean;
 }
+interface OtherHeaderFlatRow {
+  key: string;
+  type: "other-header";
+  count: number;
+  expanded: boolean;
+}
+interface OtherProjectFlatRow {
+  key: string;
+  type: "other-project";
+  project: Project;
+}
 interface SessionFlatRow {
   key: string;
   type: "session";
@@ -917,7 +919,73 @@ interface SessionFlatRow {
   project: Project;
   depth: number;
 }
-type SidebarFlatRow = ProjectHeaderFlatRow | SessionFlatRow;
+type SidebarFlatRow =
+  ProjectHeaderFlatRow | SessionFlatRow | OtherHeaderFlatRow | OtherProjectFlatRow;
+
+// #2075 — whether the "Other projects" section is open, per workspace, for
+// the lifetime of the page. In memory on purpose: no persisted key.
+const otherProjectsExpandedState = new Map<number | "none", boolean>();
+
+const EMPTY_SESSIONS: Session[] = [];
+
+function OtherProjectsHeader({
+  count,
+  expanded,
+  onToggle,
+}: {
+  count: number;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="sidebar-other-projects-header"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <ChevronDownIcon
+        size={12}
+        className={expanded ? "ws-group-chevron" : "ws-group-chevron collapsed"}
+        aria-hidden="true"
+      />
+      <span className="sidebar-section-title">Other projects</span>{" "}
+      <span className="sidebar-section-count">
+        <span className="sidebar-section-count-value">{count}</span>
+      </span>
+    </button>
+  );
+}
+
+// A project with nothing tiled here: header only (its "+" and ⋯ menu), no
+// session body — session lists stay scoped to the workspace.
+function OtherProjectRow({
+  project,
+  hosts,
+  onOpenLauncher,
+  onSessionEnded,
+  onOpenProjectSetup,
+}: {
+  project: Project;
+  hosts: Host[];
+  onOpenLauncher: () => void;
+  onSessionEnded: (session: Session) => void;
+  onOpenProjectSetup: () => void;
+}) {
+  return (
+    <div className="project-row">
+      <ProjectHeader
+        project={project}
+        sessions={EMPTY_SESSIONS}
+        hosts={hosts}
+        collapsed
+        onOpenLauncher={onOpenLauncher}
+        onSessionEnded={onSessionEnded}
+        onOpenProjectSetup={onOpenProjectSetup}
+      />
+    </div>
+  );
+}
 
 // P9 — the identical onEnd / onPromoted pair used by ProjectSection and
 // VirtualizedProjectTree. Returns the promise (not `void`-discarded) so
@@ -958,7 +1026,6 @@ export function ProjectSection({
   onSessionEnded,
   onOpenLauncher,
   onOpenProjectSetup,
-  hierarchicalView,
   forceExpanded = false,
   openSessionIds = null,
 }: {
@@ -980,7 +1047,6 @@ export function ProjectSection({
   onSessionEnded: (session: Session) => void;
   onOpenLauncher: () => void;
   onOpenProjectSetup: () => void;
-  hierarchicalView: boolean;
   // U3 — set by Sidebar while its search/chip filter is active: reveals a
   // matching session inside an otherwise manually-collapsed project rather
   // than leaving it hidden behind a stale collapse state the user set
@@ -1018,16 +1084,10 @@ export function ProjectSection({
     setProjectCollapsedPersisted(project.id, next);
   };
 
-  // Phase 5 (Track B, issue #195 5.5b) — flat mode keeps today's exact
-  // depth-0 order; hierarchical mode nests children under their parent (see
-  // buildHierarchicalRows's own doc comment for the orphan rule).
-  const rows = useMemo(
-    () =>
-      hierarchicalView
-        ? buildHierarchicalRows(sessions)
-        : sessions.map((session) => ({ session, depth: 0 })),
-    [sessions, hierarchicalView],
-  );
+  // Children nest under their parent (see buildHierarchicalRows's own doc
+  // comment for the orphan rule). #3214: the only grouping; the flat view
+  // and its toggle are gone.
+  const rows = useMemo(() => buildHierarchicalRows(sessions), [sessions]);
 
   return (
     <div className="project-row">
@@ -1106,6 +1166,7 @@ function VirtualizedProjectTree({
   onSessionEnded,
   onOpenProjectLauncher,
   onToggleCollapsed,
+  onToggleOtherProjects,
   onOpenProjectSetup,
 }: {
   rows: SidebarFlatRow[];
@@ -1117,6 +1178,7 @@ function VirtualizedProjectTree({
   onSessionEnded: (session: Session) => void;
   onOpenProjectLauncher: (projectId: number) => void;
   onToggleCollapsed: (projectId: number, derivedDefault: boolean) => void;
+  onToggleOtherProjects: () => void;
   onOpenProjectSetup: (projectId: number) => void;
 }) {
   // The scroll container is `.sidebar-wrapper` (App.tsx), an ANCESTOR of
@@ -1191,7 +1253,21 @@ function VirtualizedProjectTree({
               transform: `translateY(${virtualRow.start - rowVirtualizer.options.scrollMargin}px)`,
             }}
           >
-            {row.type === "header" ? (
+            {row.type === "other-header" ? (
+              <OtherProjectsHeader
+                count={row.count}
+                expanded={row.expanded}
+                onToggle={onToggleOtherProjects}
+              />
+            ) : row.type === "other-project" ? (
+              <OtherProjectRow
+                project={row.project}
+                hosts={hosts}
+                onOpenLauncher={() => onOpenProjectLauncher(row.project.id)}
+                onSessionEnded={onSessionEnded}
+                onOpenProjectSetup={() => onOpenProjectSetup(row.project.id)}
+              />
+            ) : row.type === "header" ? (
               <div className="project-row">
                 <ProjectHeader
                   project={row.project}

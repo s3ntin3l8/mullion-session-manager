@@ -1,8 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { GitHubPanel } from "../GitHubPanel.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
-import { usePrList } from "../hooks/useGitHubData.js";
 import { useDashboardStore } from "../store/index.js";
 import { RefreshIcon } from "../ui/icons.js";
 import { ExternalLinkOwnedContext } from "../ui/sidebar/index.js";
@@ -15,9 +14,15 @@ const REFRESH_MAX_MS = 5000;
 
 // The real GitHub panel, embedded — one source of truth for PRs, checks,
 // issues and releases. Refresh is the one primary action; the GitHub link for
-// whatever is showing and pop-out to a full dock panel sit behind the ⋯ menu.
-export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps) {
+// whatever is showing sits behind the ⋯ menu.
+export function GitHubSidebarView({ projectId }: RightSidebarViewProps) {
   const [link, setLink] = useState<{ url: string; label: string } | null>(null);
+  // What the panel's PR section shows, which leaves the release PR out.
+  // Keyed by project: this view is not remounted on a project switch, and the
+  // new project's panel reports only after its first paint.
+  const [reported, setReported] = useState<{ projectId: number; count: number } | null>(null);
+  const onPrCount = useCallback((count: number) => setReported({ projectId, count }), [projectId]);
+  const prCount = reported?.projectId === projectId ? reported.count : 0;
   const [refreshing, setRefreshing] = useState(false);
   // Busy from the click until this project's GitHub requests have settled (the
   // mounted views refetch after refreshGithubProject), for at least
@@ -50,8 +55,6 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
       clearTimeout(minHandle);
     };
   }, [refreshing, projectId]);
-  // The same list the panel renders (the live store wins over the cached fetch).
-  const prCount = usePrList(projectId)?.prs.length ?? 0;
   return (
     <div className="github-sidebar-view">
       <SidebarHeader
@@ -78,17 +81,18 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
               if (link) window.open(link.url, "_blank", "noopener,noreferrer");
             },
           },
-          {
-            key: "open-panel",
-            label: "Open GitHub panel",
-            onClick: () => actions.onOpenGitHub(projectId),
-          },
         ]}
       />
       <ExternalLinkOwnedContext.Provider value={true}>
         {/* Keyed on the project: the panel's own state (the release row, the open
             PR) belongs to one repo and must not carry over to the next. */}
-        <GitHubPanel key={projectId} params={{ projectId }} embedded onExternalLink={setLink} />
+        <GitHubPanel
+          key={projectId}
+          params={{ projectId }}
+          embedded
+          onExternalLink={setLink}
+          onPrCount={onPrCount}
+        />
       </ExternalLinkOwnedContext.Provider>
     </div>
   );

@@ -1,7 +1,13 @@
-import { useRef } from "react";
-import type { ReactNode, RefObject, KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef } from "react";
+import type {
+  ReactNode,
+  RefObject,
+  MutableRefObject,
+  KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
-import { CloseIcon } from "./icons.js";
+import { useDismissExit } from "../hooks/usePresence.js";
+import { ChevronLeftIcon, CloseIcon } from "./icons.js";
 
 // PR 24 pilot — the shared shell behind the `create-modal-*` family
 // (`CreateGroupModal`, `CreateProjectModal`, `CreateHostModal`,
@@ -91,6 +97,21 @@ export interface ModalProps {
   // reach it regardless). Not `disabled`: that would drop focus out of the
   // dialog the moment the button was the last focusable thing in it.
   closeDisabled?: boolean;
+  // Receives the focus trap's `suppressRestore` — same contract as
+  // BottomSheet's prop of the same name. A caller whose action moves focus on
+  // purpose (the New session launcher focusing the new terminal) calls it
+  // before closing, so the trap's restore-to-opener doesn't win the race.
+  suppressRestoreRef?: MutableRefObject<(() => void) | null>;
+  // #3071 — "embedded": no backdrop and no dialog of its own. The header,
+  // body and footer render in place inside the surface that holds them (the
+  // New session launcher's body), with a Back control where the close button
+  // is; `onClose` is then "back". The caller's own dialog keeps the focus
+  // trap and the modal semantics. `ariaLabel` names the embedded group and
+  // `closeDisabled` holds Back and Escape; the dialog-shell props
+  // (`backdropClassName`, `modalClassName`, `headerClassName`,
+  // `bodyClassName`, `footerClassName`, `headerContent`, `suppressRestoreRef`)
+  // are modal-only and ignored there.
+  surface?: "modal" | "embedded";
 }
 
 export function Modal({
@@ -109,18 +130,94 @@ export function Modal({
   footerClassName = "create-modal-footer",
   headerContent,
   closeDisabled = false,
+  suppressRestoreRef,
+  surface = "modal",
 }: ModalProps) {
+  if (surface === "embedded") {
+    return (
+      <EmbeddedForm
+        onClose={onClose}
+        ariaLabel={ariaLabel}
+        closeDisabled={closeDisabled}
+        icon={icon}
+        title={title}
+        subtitle={subtitle}
+        footer={footer}
+        initialFocusRef={initialFocusRef}
+      >
+        {children}
+      </EmbeddedForm>
+    );
+  }
+  return (
+    <DialogModal
+      onClose={onClose}
+      icon={icon}
+      title={title}
+      subtitle={subtitle}
+      footer={footer}
+      ariaLabel={ariaLabel}
+      initialFocusRef={initialFocusRef}
+      backdropClassName={backdropClassName}
+      modalClassName={modalClassName}
+      headerClassName={headerClassName}
+      bodyClassName={bodyClassName}
+      footerClassName={footerClassName}
+      headerContent={headerContent}
+      closeDisabled={closeDisabled}
+      suppressRestoreRef={suppressRestoreRef}
+    >
+      {children}
+    </DialogModal>
+  );
+}
+
+// The dialog itself (hooks and all), split from `Modal` so the embedded
+// surface above does not run a focus trap or an exit for a dialog it is not.
+function DialogModal({
+  onClose,
+  icon,
+  title,
+  subtitle,
+  children,
+  footer,
+  ariaLabel,
+  initialFocusRef,
+  backdropClassName = "create-modal-backdrop",
+  modalClassName = "create-modal",
+  headerClassName = "create-modal-header",
+  bodyClassName = "create-modal-body",
+  footerClassName = "create-modal-footer",
+  headerContent,
+  closeDisabled = false,
+  suppressRestoreRef,
+}: Omit<ModalProps, "surface">) {
   const modalRef = useRef<HTMLDivElement>(null);
-  const { onKeyDown: onTrapKeyDown } = useFocusTrap({
+  const backdropRef = useRef<HTMLDivElement>(null);
+  // #3015 — Escape, the backdrop and the close button play the exit
+  // (styles/motion.css) before `onClose`; the caller unmounts a dialog that
+  // has already gone. A dialog that must not close right now (`closeDisabled`)
+  // skips it: its caller guards `onClose` and keeps it, and an exit that
+  // came back would only flicker.
+  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
+  // Not `inert` while leaving (the menus are): that would blur the focused
+  // control, and a caller that refuses the close would get its dialog back
+  // with focus stranded on <body>. motion.css's `pointer-events: none` on a
+  // leaving overlay is enough to keep a stray click from landing.
+  const requestClose = closeDisabled ? onClose : dismiss;
+  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: true,
     containerRef: modalRef,
     initialFocusRef,
   });
+  useEffect(() => {
+    if (suppressRestoreRef) suppressRestoreRef.current = suppressRestore;
+  }, [suppressRestoreRef, suppressRestore]);
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      onClose();
+      requestClose();
       return;
     }
     onTrapKeyDown(e);
@@ -136,10 +233,15 @@ export function Modal({
     // that overrides `backdropClassName` to something that ISN'T a full-page
     // backdrop would need to override this too — none of the seven
     // `create-modal-*` target modals do.
-    <div className={backdropClassName} onClick={onClose}>
+    <div
+      ref={backdropRef}
+      className={`${backdropClassName} motion-scrim`}
+      data-presence={presence}
+      onClick={requestClose}
+    >
       <div
         ref={modalRef}
-        className={modalClassName}
+        className={`${modalClassName} motion-dialog`}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKeyDown}
         role="dialog"
@@ -157,7 +259,7 @@ export function Modal({
             </span>
             <button
               className="create-modal-close"
-              onClick={closeDisabled ? undefined : onClose}
+              onClick={closeDisabled ? undefined : requestClose}
               aria-disabled={closeDisabled || undefined}
               aria-label="Close dialog"
             >
@@ -170,6 +272,79 @@ export function Modal({
 
         {footer && <div className={footerClassName}>{footer}</div>}
       </div>
+    </div>
+  );
+}
+
+// #3071 — the embedded shell: Modal's header, body and footer laid out in
+// place, with a Back control where the dialog has its close button. Focus
+// moves into the form when it appears; Escape goes back (typed input is at
+// stake, so it does not close whatever surrounds the form).
+function EmbeddedForm({
+  onClose,
+  ariaLabel,
+  closeDisabled = false,
+  icon,
+  title,
+  subtitle,
+  children,
+  footer,
+  initialFocusRef,
+}: Pick<
+  ModalProps,
+  | "onClose"
+  | "ariaLabel"
+  | "closeDisabled"
+  | "icon"
+  | "title"
+  | "subtitle"
+  | "children"
+  | "footer"
+  | "initialFocusRef"
+>) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // Once, as the form replaces what was there (a ref object is stable).
+    const target =
+      initialFocusRef?.current ??
+      rootRef.current?.querySelector<HTMLElement>("input, select, textarea, button");
+    target?.focus();
+  }, [initialFocusRef]);
+  return (
+    <div
+      ref={rootRef}
+      className="embedded-form"
+      role="group"
+      aria-label={ariaLabel ?? (typeof title === "string" ? title : undefined)}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          // Held, not passed on: Escape must not close the surrounding
+          // launcher while the form is busy either.
+          e.stopPropagation();
+          e.preventDefault();
+          if (!closeDisabled) onClose();
+        }
+      }}
+    >
+      <div className="create-modal-header embedded-form-header">
+        <button
+          type="button"
+          className="embedded-form-back"
+          // aria-disabled, not disabled: focus must not drop out of the form.
+          aria-disabled={closeDisabled || undefined}
+          onClick={closeDisabled ? undefined : onClose}
+        >
+          <ChevronLeftIcon size={15} aria-hidden="true" />
+          Back
+        </button>
+        {icon && <span className="create-modal-icon">{icon}</span>}
+        <span className="create-modal-header-text">
+          <span className="create-modal-title">{title}</span>
+          {subtitle && <span className="create-modal-subtitle">{subtitle}</span>}
+        </span>
+      </div>
+      <div className="create-modal-body embedded-form-body">{children}</div>
+      {footer && <div className="create-modal-footer embedded-form-footer">{footer}</div>}
     </div>
   );
 }

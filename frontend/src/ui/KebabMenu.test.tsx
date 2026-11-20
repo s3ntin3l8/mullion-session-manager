@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { KebabMenu } from "./KebabMenu.js";
@@ -472,5 +472,332 @@ describe('ui/KebabMenu menuPlacement="auto"', () => {
       uninstallFakeVisualViewport();
       Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
     }
+  });
+});
+
+// #3015 — the menu stays mounted while it leaves, then goes.
+describe("ui/KebabMenu exit", () => {
+  it("leaves the way it came, unreachable while it goes, then unmounts", async () => {
+    const { installExitAnimations } = await import("../test/exitAnimations.js");
+    const exits = installExitAnimations();
+    try {
+      const user = userEvent.setup();
+      render(<KebabMenu items={[{ key: "a", label: "Item", onClick: vi.fn() }]} />);
+      const trigger = screen.getByRole("button");
+      await user.click(trigger);
+      const menu = screen.getByRole("menu");
+      expect(menu).toHaveAttribute("data-presence", "open");
+      expect(menu).toHaveAttribute("data-placement", "bottom");
+
+      await user.keyboard("{Escape}");
+      expect(menu).toBeInTheDocument();
+      expect(menu).toHaveAttribute("data-presence", "leaving");
+      expect(menu).toHaveAttribute("inert");
+      expect(trigger).toHaveFocus();
+
+      await exits.finishExits();
+      expect(menu).not.toBeInTheDocument();
+    } finally {
+      exits.restore();
+    }
+  });
+
+  it("marks an upward menu so it grows from the edge nearest its trigger", async () => {
+    const user = userEvent.setup();
+    render(
+      <KebabMenu items={[{ key: "a", label: "Item", onClick: vi.fn() }]} menuPlacement="top" />,
+    );
+    await user.click(screen.getByRole("button"));
+    expect(screen.getByRole("menu")).toHaveAttribute("data-placement", "top");
+  });
+});
+
+// #3071 — the opt-in touch variant and the outside press that must not strand
+// focus on <body>.
+describe("ui/KebabMenu sheet variant and focus", () => {
+  function stubPointer(coarse: boolean) {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: coarse && query === "(pointer: coarse)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  }
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const SHEET = { title: "mullion", closeLabel: "Close project actions" };
+
+  it("opens a sheet under a coarse pointer, with the same items, and runs one", async () => {
+    stubPointer(true);
+    const onClick = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <KebabMenu
+        title="Manage mullion"
+        menuLabel="mullion actions"
+        items={[{ key: "edit", label: "Edit", onClick }]}
+        sheet={SHEET}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Manage mullion" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(trigger);
+    const sheet = screen.getByRole("dialog", { name: "mullion actions" });
+    expect(document.querySelector(".pane-tab-overflow-menu")).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Edit" }));
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(sheet).not.toBeInTheDocument();
+  });
+
+  it("keeps the popover under a fine pointer, and without `sheet` on any pointer", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <KebabMenu
+        title="Manage"
+        items={[{ key: "a", label: "A", onClick: vi.fn() }]}
+        sheet={SHEET}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    expect(document.querySelector(".pane-tab-overflow-menu")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    unmount();
+
+    stubPointer(true);
+    render(<KebabMenu title="Plain" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />);
+    const plain = screen.getByRole("button", { name: "Plain" });
+    expect(plain).toHaveAttribute("aria-haspopup", "menu");
+    await user.click(plain);
+    expect(screen.getByRole("menu", { name: "Plain" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("arrow keys move between items in the sheet", async () => {
+    stubPointer(true);
+    const user = userEvent.setup();
+    render(
+      <KebabMenu
+        title="Manage"
+        items={[
+          { key: "a", label: "A", onClick: vi.fn() },
+          { key: "b", label: "B", onClick: vi.fn() },
+        ]}
+        sheet={SHEET}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    screen.getByRole("menuitem", { name: "A" }).focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "B" })).toHaveFocus();
+  });
+
+  it("a press outside on nothing focusable closes the popover and keeps focus on the trigger", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    render(
+      <div>
+        <p>Plain text</p>
+        <KebabMenu title="Manage" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "Manage" });
+    await user.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.click(screen.getByText("Plain text"));
+    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(trigger).toHaveFocus();
+  });
+
+  it("a press outside on a control lets that control take focus", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    render(
+      <div>
+        <input aria-label="Elsewhere" />
+        <KebabMenu title="Manage" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    await user.click(screen.getByRole("textbox", { name: "Elsewhere" }));
+    expect(screen.getByRole("textbox", { name: "Elsewhere" })).toHaveFocus();
+  });
+
+  it("a press outside on a tabindex=-1 container lets it take focus (a dockview pane)", async () => {
+    stubPointer(false);
+    const user = userEvent.setup();
+    render(
+      <div>
+        <div tabIndex={-1} data-testid="pane">
+          <p>Pane text</p>
+        </div>
+        <KebabMenu title="Manage" items={[{ key: "a", label: "A", onClick: vi.fn() }]} />
+      </div>,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    await user.click(screen.getByText("Pane text"));
+    expect(screen.getByTestId("pane")).toHaveFocus();
+  });
+});
+
+// #3073 — "side" opens the menu beside its trigger (the workspace picker's
+// row "⋯"), so the popover the trigger sits in stays visible.
+describe('ui/KebabMenu menuPlacement="side"', () => {
+  const items = [{ key: "only", label: "Only item", onClick: vi.fn() }];
+
+  function mockGeometry(
+    trigger: { top: number; left: number },
+    viewport: { width: number; height: number },
+  ) {
+    const original = { width: window.innerWidth, height: window.innerHeight };
+    Object.defineProperty(window, "innerWidth", { value: viewport.width, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: viewport.height, configurable: true });
+    const rect = {
+      top: trigger.top,
+      bottom: trigger.top + 20,
+      left: trigger.left,
+      right: trigger.left + 20,
+      width: 20,
+      height: 20,
+      x: trigger.left,
+      y: trigger.top,
+      toJSON: () => ({}),
+    };
+    const spies = [
+      vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rect),
+      vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        return this.classList.contains("pane-tab-overflow-menu") ? 180 : 0;
+      }),
+      vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        return this.classList.contains("pane-tab-overflow-menu") ? 214 : 0;
+      }),
+    ];
+    return () => {
+      spies.forEach((s) => s.mockRestore());
+      Object.defineProperty(window, "innerWidth", { value: original.width, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: original.height, configurable: true });
+    };
+  }
+
+  const openMenu = async () => {
+    const user = userEvent.setup();
+    render(<KebabMenu items={items} menuPlacement="side" menuClassName="extra-menu" />);
+    await user.click(screen.getByRole("button"));
+    return screen.getByRole("menu");
+  };
+
+  it("opens to the right of the trigger, top-aligned with it, with the extra class", async () => {
+    const restore = mockGeometry({ top: 100, left: 300 }, { width: 1024, height: 800 });
+    try {
+      const menu = await openMenu();
+      expect(menu).toHaveClass("pane-tab-overflow-menu", "extra-menu");
+      expect(menu).toHaveAttribute("data-placement", "side");
+      expect(menu.style.left).toBe("324px");
+      expect(menu.style.right).toBe("auto");
+      expect(menu.style.top).toBe("96px");
+      expect(menu.style.bottom).toBe("auto");
+    } finally {
+      restore();
+    }
+  });
+
+  it("opens to the left when the right has no room", async () => {
+    const restore = mockGeometry({ top: 100, left: 300 }, { width: 500, height: 800 });
+    try {
+      const menu = await openMenu();
+      expect(menu.style.left).toBe("auto");
+      expect(menu.style.right).toBe("204px");
+      // Grows from the trigger's edge, which is now its right.
+      expect(menu).toHaveAttribute("data-placement", "side-left");
+    } finally {
+      restore();
+    }
+  });
+
+  it("follows its trigger when a list it sits in scrolls", async () => {
+    const restore = mockGeometry({ top: 100, left: 300 }, { width: 1024, height: 800 });
+    const rectAt = (top: number) => ({
+      top,
+      bottom: top + 20,
+      left: 300,
+      right: 320,
+      width: 20,
+      height: 20,
+      x: 300,
+      y: top,
+      toJSON: () => ({}),
+    });
+    try {
+      const menu = await openMenu();
+      expect(menu.style.top).toBe("96px");
+      // The same spy mockGeometry installed: the row scrolled up 60px.
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(rectAt(40));
+      act(() => {
+        document.body.dispatchEvent(new Event("scroll"));
+      });
+      expect(menu.style.top).toBe("36px");
+      // The menu's own scroll moves nothing it is anchored to.
+      vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue(rectAt(300));
+      act(() => {
+        menu.dispatchEvent(new Event("scroll"));
+      });
+      expect(menu.style.top).toBe("36px");
+    } finally {
+      restore();
+    }
+  });
+
+  it("moves up to stay on screen for a trigger near the bottom", async () => {
+    const restore = mockGeometry({ top: 700, left: 300 }, { width: 1024, height: 800 });
+    try {
+      const menu = await openMenu();
+      // 800 - 8 - 180: the menu's bottom edge 8px above the viewport's.
+      expect(menu.style.top).toBe("612px");
+      expect(menu.style.maxHeight).toBe("180px");
+    } finally {
+      restore();
+    }
+  });
+});
+
+// PR #3081 review — an `opensOverlay` confirm item suppresses the focus
+// restore only on the click that fires it: arming it and then cancelling
+// still returns focus to the trigger.
+describe("ui/KebabMenu confirm + opensOverlay", () => {
+  it("returns focus to the trigger when an armed item is cancelled", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    render(
+      <KebabMenu
+        title="Manage"
+        items={[
+          {
+            key: "delete",
+            label: "Delete",
+            armLabel: "Click again to delete",
+            confirm: true,
+            opensOverlay: true,
+            onClick,
+          },
+        ]}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Manage" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(screen.getByRole("menuitem", { name: /Click again/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(onClick).not.toHaveBeenCalled();
   });
 });

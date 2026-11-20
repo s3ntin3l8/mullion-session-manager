@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { expectNameHasVisibleText } from "./test/a11y.js";
 import { PaneTab } from "./PaneTab.js";
 import { api } from "./api/index.js";
 import type { GitStatus, Host, NotificationEvent, Project, Session } from "./api/index.js";
@@ -84,10 +85,18 @@ const requestSplit = vi.fn();
 // is reported through.
 const renameSession = vi.fn();
 const reportError = vi.fn();
+// #3122 — panels marked "new" by useApplyPendingOpens. Mutable, like the
+// real slice, so clearPanelNew's effect shows on the next render.
+let newPanelIds: string[] = [];
+const clearPanelNew = vi.fn((id: string) => {
+  newPanelIds = newPanelIds.filter((x) => x !== id);
+});
 
 function storeState() {
   return {
     sessions: [session, ...extraSessions],
+    // #3285 — the timeline/browser openers name the pane by the session's task.
+    tasks: [],
     // Issue #1727 — the fleet's hosts, for the per-session host badge.
     hosts,
     projects,
@@ -104,11 +113,12 @@ function storeState() {
     settings: {
       sessions: { confirmBeforeKill: false },
       layoutMode: "desktop",
-      tabletPaneCap: 2,
     },
     markEventSeen,
     requestSplit,
     ackAttention,
+    newPanelIds,
+    clearPanelNew,
   };
 }
 
@@ -129,11 +139,21 @@ vi.mock("./store/index.js", () => {
 // simulate dockview firing it (the "tab became active" transition PaneTab
 // clears its badge on).
 let activeChangeHandler: ((e: { isActive: boolean }) => void) | null;
+let visibilityChangeHandler: ((e: { isVisible: boolean }) => void) | null;
+let titleChangeHandler: ((e: { title: string }) => void) | null;
+let groupChangeHandler: (() => void) | null;
 
 function makeProps(
-  overrides: { isActive?: boolean; groupPanels?: Partial<IDockviewPanel>[] } = {},
+  overrides: {
+    isActive?: boolean;
+    isVisible?: boolean;
+    groupPanels?: Partial<IDockviewPanel>[];
+  } = {},
 ): IDockviewPanelHeaderProps<TerminalPaneParams> {
   activeChangeHandler = null;
+  visibilityChangeHandler = null;
+  titleChangeHandler = null;
+  groupChangeHandler = null;
   return {
     api: {
       // Split (PaneActionsMenu.tsx's "Split right"/"Split down" items)
@@ -149,7 +169,21 @@ function makeProps(
         activeChangeHandler = cb;
         return { dispose: vi.fn() };
       }),
-      group: { panels: overrides.groupPanels ?? [] },
+      isVisible: overrides.isVisible ?? false,
+      onDidVisibilityChange: vi.fn((cb: (e: { isVisible: boolean }) => void) => {
+        visibilityChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+      onDidTitleChange: vi.fn((cb: (e: { title: string }) => void) => {
+        titleChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+      onDidGroupChange: vi.fn((cb: () => void) => {
+        groupChangeHandler = cb;
+        return { dispose: vi.fn() };
+      }),
+      onDidLocationChange: vi.fn(() => ({ dispose: vi.fn() })),
+      group: { panels: overrides.groupPanels ?? [], api: { isVisible: true } },
     },
     // A stable marker object, not a real DockviewApi — the "View timeline"
     // test below only asserts this exact reference was forwarded to
@@ -252,6 +286,8 @@ beforeEach(() => {
   lastSeenSeq = {};
   dismissedEventKeys = {};
   mutedSessionIds = [];
+  newPanelIds = [];
+  clearPanelNew.mockClear();
   hosts = [makeHost({ id: "mac-mini", name: "mac-mini" })];
   markEventSeen.mockClear();
   requestSplit.mockClear();
@@ -886,10 +922,13 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByTitle("More…"));
       await userEvent.click(screen.getByText("View timeline"));
 
-      expect(openTimelinePanel).toHaveBeenCalledWith(props.containerApi, session, {
-        tier: "desktop",
-        tabletPaneCap: 2,
-      });
+      expect(openTimelinePanel).toHaveBeenCalledWith(
+        props.containerApi,
+        session,
+        { tier: "desktop" },
+        // The session's title context (#3285): none, it has no task or number.
+        undefined,
+      );
     });
   });
 
@@ -904,7 +943,7 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByTitle("More…"));
       await userEvent.click(screen.getByText("Split right"));
 
-      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "right");
+      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "right", 1);
     });
 
     it("calls requestSplit with this tab's own api.id and 'below'", async () => {
@@ -914,7 +953,7 @@ describe("PaneTab", () => {
       await userEvent.click(screen.getByTitle("More…"));
       await userEvent.click(screen.getByText("Split down"));
 
-      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "below");
+      expect(requestSplit).toHaveBeenCalledWith(props.api.id, "below", 1);
     });
   });
 
@@ -1253,5 +1292,202 @@ describe("failed rename (audit finding 9)", () => {
       expect(props.api.setTitle).toHaveBeenCalledWith("renamed");
     });
     expect(reportError).not.toHaveBeenCalled();
+  });
+});
+
+// #3106 — dockview names its tab element with an aria-label of the bare
+// title, but the tab shows more than that (the branch, the status badge);
+// axe's label-content-name-mismatch. The tab is named by what it shows.
+describe("dock tab name (#3106)", () => {
+  it("names dockview's tab by its visible content, not by the bare title", () => {
+    session.liveBranch = "feat/login";
+    const { container } = render(
+      <div className="dv-tab" role="tab" aria-label="claude code">
+        <PaneTab {...makeProps()} />
+      </div>,
+    );
+    const tab = screen.getByRole("tab");
+    const leading = container.querySelector<HTMLElement>(".pane-tab-leading")!;
+    expect(tab).toHaveAttribute("aria-labelledby", leading.id);
+    expect(leading).toHaveTextContent("feat/login");
+    expectNameHasVisibleText(tab, leading);
+    // The close and actions buttons are not part of it.
+    expect(tab).not.toHaveAccessibleName(/close pane|more actions/i);
+  });
+
+  it("names the new tab element dockview builds when the pane moves to another group", () => {
+    vi.useFakeTimers();
+    try {
+      const first = document.createElement("div");
+      first.className = "dv-tab";
+      document.body.appendChild(first);
+      render(<PaneTab {...makeProps()} />, { container: first });
+      const content = first.querySelector(".pane-tab")!;
+      // What dockview does: a new tab element in the new group, this
+      // component's element moved into it, no remount.
+      const second = document.createElement("div");
+      second.className = "dv-tab";
+      document.body.appendChild(second);
+      second.appendChild(content);
+      act(() => {
+        groupChangeHandler?.();
+        vi.runOnlyPendingTimers();
+      });
+      expect(second).toHaveAttribute("aria-labelledby");
+      expect(first).not.toHaveAttribute("aria-labelledby");
+      // Back where React put it, so the test's own unmount finds it.
+      first.appendChild(content);
+      second.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("names the tab a frame later when it mounts before dockview attaches it", () => {
+    vi.useFakeTimers();
+    try {
+      const loose = document.createElement("div");
+      document.body.appendChild(loose);
+      render(<PaneTab {...makeProps()} />, { container: loose });
+      const tab = document.createElement("div");
+      tab.className = "dv-tab";
+      document.body.appendChild(tab);
+      tab.appendChild(loose);
+      act(() => {
+        vi.runOnlyPendingTimers();
+      });
+      expect(tab).toHaveAttribute("aria-labelledby");
+      document.body.appendChild(loose);
+      tab.remove();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("drops the reference when the tab unmounts", () => {
+    const host = document.createElement("div");
+    host.className = "dv-tab";
+    document.body.appendChild(host);
+    const { unmount } = render(<PaneTab {...makeProps()} />, { container: host });
+    expect(host).toHaveAttribute("aria-labelledby");
+    unmount();
+    expect(host).not.toHaveAttribute("aria-labelledby");
+    host.remove();
+  });
+});
+
+// #3122 — a pane a fold or phone open added here in the background carries a
+// "new" dot until it is first shown on this desktop.
+describe("new-pane mark (#3122)", () => {
+  const panelId = () => `session-${BASE_SESSION.id}`;
+  // dockview's own tab element, which it names with the bare title. #3106 —
+  // the tab is named by its visible content instead (the title, then the
+  // status badge; jsdom has no layout, so it runs the parts together).
+  const inDvTab = (props: ReturnType<typeof makeProps>) => (
+    <div className="dv-tab" role="tab" aria-label="claude code">
+      <PaneTab {...props} />
+    </div>
+  );
+
+  it("shows the dot and ', new' in the tab's name while marked", () => {
+    newPanelIds = [panelId()];
+    const { container } = render(inDvTab(makeProps()));
+    expect(container.querySelector(".pane-tab-new-dot")).not.toBeNull();
+    expect(screen.getByRole("tab", { name: /^claude code.*, new$/ })).toBeInTheDocument();
+  });
+
+  it("shows neither when the pane is not marked", () => {
+    const { container } = render(inDvTab(makeProps()));
+    expect(container.querySelector(".pane-tab-new-dot")).toBeNull();
+    expect(screen.getByRole("tab", { name: /^claude code(?!.*new)/ })).toBeInTheDocument();
+  });
+
+  it("clears both when the tab is activated", async () => {
+    newPanelIds = [panelId()];
+    const props = makeProps();
+    const { container, rerender } = render(inDvTab(props));
+    expect(screen.getByRole("tab", { name: /^claude code.*, new$/ })).toBeInTheDocument();
+    expect(clearPanelNew).not.toHaveBeenCalled();
+    (props.api as { isActive: boolean }).isActive = true;
+    act(() => activeChangeHandler?.({ isActive: true }));
+    await waitFor(() => expect(clearPanelNew).toHaveBeenCalledWith(panelId()));
+    rerender(inDvTab(props));
+    expect(container.querySelector(".pane-tab-new-dot")).toBeNull();
+    expect(screen.getByRole("tab", { name: /^claude code(?!.*new)/ })).toBeInTheDocument();
+  });
+
+  it("clears when a background tab becomes its group's visible one", () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps()} />);
+    act(() => visibilityChangeHandler?.({ isVisible: false }));
+    expect(clearPanelNew).not.toHaveBeenCalled();
+    act(() => visibilityChangeHandler?.({ isVisible: true }));
+    expect(clearPanelNew).toHaveBeenCalledWith(panelId());
+  });
+
+  it("keeps ', new' in the name when dockview rewrites the label on a title change", () => {
+    newPanelIds = [panelId()];
+    const props = makeProps();
+    const { container } = render(inDvTab(props));
+    const dvTab = container.querySelector<HTMLElement>(".dv-tab")!;
+    // What dockview's own Tab listener does: the label is no longer the name.
+    dvTab.setAttribute("aria-label", "renamed by the agent");
+    act(() => titleChangeHandler?.({ title: "renamed by the agent" }));
+    expect(dvTab).toHaveAccessibleName(/^claude code.*, new$/);
+  });
+
+  it("keeps the mark on a split pane its group hides and shows again", () => {
+    newPanelIds = [panelId()];
+    const props = makeProps({ isVisible: true });
+    render(<PaneTab {...props} />);
+    // Another group maximized: this group, and so this pane, hidden.
+    (props.api.group.api as { isVisible: boolean }).isVisible = false;
+    act(() => visibilityChangeHandler?.({ isVisible: false }));
+    (props.api.group.api as { isVisible: boolean }).isVisible = true;
+    act(() => visibilityChangeHandler?.({ isVisible: true }));
+    expect(clearPanelNew).not.toHaveBeenCalled();
+  });
+
+  it("clears a split pane shown again after another tab of its group was in front", () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps({ isVisible: true })} />);
+    act(() => visibilityChangeHandler?.({ isVisible: false }));
+    act(() => visibilityChangeHandler?.({ isVisible: true }));
+    expect(clearPanelNew).toHaveBeenCalledWith(panelId());
+  });
+
+  it("clears on a pane that is already the active one", async () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps({ isActive: true })} />);
+    await waitFor(() => expect(clearPanelNew).toHaveBeenCalledWith(panelId()));
+  });
+
+  // A click on another tab of the same group activates the group, and so
+  // this panel, for an instant before the clicked tab takes over.
+  it("keeps the mark through a momentary activation", async () => {
+    newPanelIds = [panelId()];
+    render(<PaneTab {...makeProps()} />);
+    act(() => {
+      activeChangeHandler?.({ isActive: true });
+      activeChangeHandler?.({ isActive: false });
+    });
+    act(() => activeChangeHandler?.({ isActive: true }));
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+    expect(clearPanelNew).not.toHaveBeenCalled();
+  });
+
+  it("shows the mark and the attention state together, neither hiding the other", () => {
+    newPanelIds = [panelId()];
+    session = {
+      ...BASE_SESSION,
+      attention: true,
+      sessionStatus: "needs_input",
+      sessionStatusAttentionRequired: true,
+    } as Session;
+    const { container } = render(<PaneTab {...makeProps()} />);
+    const tab = container.querySelector(".pane-tab")!;
+    expect(tab).toHaveClass("attention-ring");
+    expect(container.querySelector(".pane-tab-new-dot")).not.toBeNull();
+    expect(container.querySelector(".pane-tab-badge")).not.toBeNull();
   });
 });

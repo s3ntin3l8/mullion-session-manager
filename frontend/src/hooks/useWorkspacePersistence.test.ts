@@ -41,9 +41,12 @@ let devicesLoaded = false;
 // (testSetup.ts stubs `matches: false` for every query) staying that way.
 let layoutMode: "auto" | "phone" | "tablet" | "desktop" = "desktop";
 
+const noTasks: never[] = [];
+
 function storeState() {
   return {
     sessions,
+    tasks: noTasks,
     projects,
     devices,
     devicesLoaded,
@@ -400,6 +403,9 @@ describe("useWorkspacePersistence", () => {
     // No `params.sessionId` — falls back to parsing the id itself; session 4
     // isn't in `sessions` at all, so this must close as an orphan.
     const orphanBrowserPanePanel = addPanel("browserPane-4");
+    // #3371 — a Browser pane with a project is kept: it switches itself to
+    // Preview when its session ends.
+    const exitedBrowserWithProject = addPanel("browserPane-3", { sessionId: 3, projectId: 7 });
     const workspace = makeWorkspace();
     const setPanelsVersion = makeSetPanelsVersion();
 
@@ -416,6 +422,7 @@ describe("useWorkspacePersistence", () => {
     expect(killedSessionPanel.api.close).toHaveBeenCalledTimes(1);
     expect(exitedTimelinePanel.api.close).toHaveBeenCalledTimes(1);
     expect(orphanBrowserPanePanel.api.close).toHaveBeenCalledTimes(1);
+    expect(exitedBrowserWithProject.api.close).not.toHaveBeenCalled();
     expect(activeSessionPanel.api.close).not.toHaveBeenCalled();
 
     // The closes above happened while restoringRef.current was still true,
@@ -430,34 +437,62 @@ describe("useWorkspacePersistence", () => {
     expect(saveWorkspaceLayout).toHaveBeenCalledWith(1, { panels: {} });
   });
 
-  it("migrates a restored legacy project panel into the project hub, then persists the cleaned layout", () => {
+  // #3406 — the Project panel and the five setup panels it replaced are
+  // retired: swept silently (no dialog, no sidebar view), then persisted.
+  it.each(["project-hub", "skills"])(
+    "sweeps a restored retired %s panel without opening anything, then persists the cleaned layout",
+    (kind) => {
+      vi.useFakeTimers();
+      openRightSidebarView.mockClear();
+      const { api, addPanel } = makeMockApi();
+      projects = [{ id: 3, name: "demo" }];
+      const retired = addPanel(`${kind}-3`, { projectId: 3 });
+      (retired.api as unknown as { component: string }).component = kind;
+      const workspace = makeWorkspace();
+
+      renderHook(() =>
+        useWorkspacePersistence({
+          dockviewApi: api,
+          activeWorkspaceId: 1,
+          workspaces: [workspace],
+          layoutTier: "desktop",
+          setPanelsVersion: makeSetPanelsVersion(),
+        }),
+      );
+
+      expect(retired.api.close).toHaveBeenCalledTimes(1);
+      expect(api.addPanel).not.toHaveBeenCalledWith(
+        expect.objectContaining({ component: "project-hub" }),
+      );
+      expect(openRightSidebarView).not.toHaveBeenCalled();
+      // Done while restoringRef was true, so — like the stale-panel sweep — the
+      // restore effect must persist the cleaned layout itself.
+      expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(0);
+      vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
+      expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("sweeps a restored retired github grid panel and opens the GitHub sidebar view for it", () => {
     vi.useFakeTimers();
+    openRightSidebarView.mockClear();
     const { api, addPanel } = makeMockApi();
-    projects = [{ id: 3, name: "demo" }];
-    const legacy = addPanel("skills-3", { projectId: 3 });
-    const workspace = makeWorkspace();
+    const gh = addPanel("github-5", { projectId: 5 });
+    (gh.api as unknown as { component: string }).component = "github";
 
     renderHook(() =>
       useWorkspacePersistence({
         dockviewApi: api,
         activeWorkspaceId: 1,
-        workspaces: [workspace],
+        workspaces: [makeWorkspace()],
         layoutTier: "desktop",
         setPanelsVersion: makeSetPanelsVersion(),
       }),
     );
 
-    expect(api.addPanel).toHaveBeenCalledWith({
-      id: "project-hub-3",
-      component: "project-hub",
-      title: "Project: demo",
-      params: { projectId: 3, tab: "skills" },
-      position: { referencePanel: "skills-3", direction: "within" },
-    });
-    expect(legacy.api.close).toHaveBeenCalledTimes(1);
-    // Done while restoringRef was true, so — like the stale-panel sweep — the
-    // restore effect must persist the migrated layout itself.
-    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+    expect(gh.api.close).toHaveBeenCalledTimes(1);
+    expect(openRightSidebarView).toHaveBeenCalledWith("github", 5);
     vi.advanceTimersByTime(0);
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(saveWorkspaceLayout).toHaveBeenCalledTimes(1);
@@ -1062,13 +1097,80 @@ describe("useWorkspacePersistence — issue #1426 (phone never saves)", () => {
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
     expect(api.toJSON).not.toHaveBeenCalled();
 
-    // Unfold: tier flips and the presentation hook lifts the taint.
-    layoutMode = "tablet";
+    // Unfold to a width that shows the grid (a forced "tablet" is now the
+    // two halves, #3010, which are read-only too), and the presentation hook
+    // lifts the taint.
+    layoutMode = "desktop";
     act(() => result.current.liftPhoneTaint());
     fireLayoutChange();
     vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS);
 
     expect(api.toJSON).toHaveBeenCalled();
+  });
+
+  // #3010 — the two halves (800-1099px; a forced "tablet" resolves to them)
+  // are a device-local view like the phone: maximizing the left half's group,
+  // hiding headers and adding a pane to show it on a half never reach the
+  // saved layout desktop shares.
+  it("never saves while the two halves are on screen, restore or edit", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange } = makeMockApi();
+    layoutMode = "tablet";
+    const setPanelsVersion = makeSetPanelsVersion();
+    renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "tablet",
+        setPanelsVersion,
+      }),
+    );
+    vi.advanceTimersByTime(0);
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS * 2);
+    expect(api.toJSON).not.toHaveBeenCalled();
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  // #3033 — a session opened and closed on the fold reaches the desk through
+  // the server's pending opens, never through the saved layout.
+  it("opening and closing a session on the fold never calls the workspace save", () => {
+    vi.useFakeTimers();
+    const { api, fireLayoutChange, addPanel } = makeMockApi();
+    layoutMode = "tablet";
+    const { result } = renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "tablet",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+    vi.advanceTimersByTime(0);
+    expect(result.current.isSaveSuspended()).toBe(true);
+    addPanel("session-5", { sessionId: 5 });
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS * 2);
+    // Closing it is another layout change.
+    fireLayoutChange();
+    vi.advanceTimersByTime(AUTOSAVE_DEBOUNCE_MS * 2);
+    expect(saveWorkspaceLayout).not.toHaveBeenCalled();
+  });
+
+  it("reports saves as not suspended on the desk", () => {
+    const { api } = makeMockApi();
+    const { result } = renderHook(() =>
+      useWorkspacePersistence({
+        dockviewApi: api,
+        activeWorkspaceId: 1,
+        workspaces: [makeWorkspace()],
+        layoutTier: "desktop",
+        setPanelsVersion: makeSetPanelsVersion(),
+      }),
+    );
+    expect(result.current.isSaveSuspended()).toBe(false);
   });
 
   it("resumes saving once the SAME workspace is restored again at a non-phone tier", () => {

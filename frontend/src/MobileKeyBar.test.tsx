@@ -61,7 +61,7 @@ describe("MobileKeyBar", () => {
   });
 
   it.each([
-    ["Escape", "\x1b"],
+    ["Esc", "\x1b"],
     ["Tab", "\t"],
     ["Shift+Tab", "\x1b[Z"],
     ["Newline (no submit)", "\x1b\r"],
@@ -119,7 +119,7 @@ describe("MobileKeyBar", () => {
   // code review, PR #616).
   it("prevents the default pointerdown action so the tap can't blur the terminal", () => {
     render(<MobileKeyBar sessionId={SESSION_ID} />);
-    const button = screen.getByRole("button", { name: "Escape" });
+    const button = screen.getByRole("button", { name: "Esc" });
 
     const event = new PointerEvent("pointerdown", { bubbles: true, cancelable: true });
     const prevented = !button.dispatchEvent(event);
@@ -135,7 +135,7 @@ describe("MobileKeyBar", () => {
   // tests pointerleave as a defensive fallback.
   it("applies the JS-driven 'pressed' class on pointerdown and clears it on pointerup/cancel/leave", () => {
     render(<MobileKeyBar sessionId={SESSION_ID} />);
-    const button = screen.getByRole("button", { name: "Escape" });
+    const button = screen.getByRole("button", { name: "Esc" });
     expect(button.className).not.toContain("pressed");
 
     fireEvent.pointerDown(button);
@@ -157,7 +157,7 @@ describe("MobileKeyBar", () => {
 
   it("the 'pressed' class is exclusive to the key currently being pressed", () => {
     render(<MobileKeyBar sessionId={SESSION_ID} />);
-    const esc = screen.getByRole("button", { name: "Escape" });
+    const esc = screen.getByRole("button", { name: "Esc" });
     const tab = screen.getByRole("button", { name: "Tab" });
 
     fireEvent.pointerDown(esc);
@@ -199,7 +199,7 @@ describe("MobileKeyBar", () => {
     const user = userEvent.setup();
     render(<MobileKeyBar sessionId={SESSION_ID} />);
 
-    await expect(user.click(screen.getByRole("button", { name: "Escape" }))).resolves.not.toThrow();
+    await expect(user.click(screen.getByRole("button", { name: "Esc" }))).resolves.not.toThrow();
   });
 
   it("routes Paste and Copy through the terminal handle", async () => {

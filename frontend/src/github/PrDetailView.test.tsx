@@ -1175,24 +1175,23 @@ describe("PrDetailView", () => {
       );
     });
 
-    it("drops the branch line from the sticky header once the view scrolls", async () => {
-      let notify: (e: Partial<IntersectionObserverEntry>[]) => void = () => {};
-      class FakeObserver {
-        constructor(cb: (e: Partial<IntersectionObserverEntry>[]) => void) {
-          notify = cb;
-        }
-        observe() {}
-        disconnect() {}
-      }
-      vi.stubGlobal("IntersectionObserver", FakeObserver);
+    it("keeps the branch line in the header however the view scrolls", async () => {
+      // The header sits in the drawer's fixed row (or stays whole inline), so
+      // there is no scroll-driven collapse and no observer behind the view.
+      const observe = vi.fn();
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          observe = observe;
+          disconnect() {}
+        },
+      );
       try {
         stub(PR);
-        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        const { container } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
         expect(await screen.findByText(`${PR.baseBranch} ← ${PR.headBranch}`)).toBeInTheDocument();
-        act(() => notify([{ isIntersecting: false }]));
-        expect(screen.queryByText(`${PR.baseBranch} ← ${PR.headBranch}`)).toBeNull();
-        act(() => notify([{ isIntersecting: true }]));
-        expect(screen.getByText(`${PR.baseBranch} ← ${PR.headBranch}`)).toBeInTheDocument();
+        expect(observe).not.toHaveBeenCalled();
+        expect(container.querySelector(".pr-top-sentinel")).toBeNull();
       } finally {
         vi.unstubAllGlobals();
       }

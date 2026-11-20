@@ -42,7 +42,30 @@ export interface DockConfigPanelParams {
 // route replaces `.crs/dock.json` wholesale on every PUT, same "send the
 // full already-edited list" contract agent-rules.ts's PUT has for a single
 // target's content.
-export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
+export function DockConfigPanel({
+  params,
+  onDirtyChange,
+}: {
+  params: DockConfigPanelParams;
+  // Whether either editor (monitors or previews) holds unsaved edits, so the
+  // Project settings dialog can ask before closing over them (#3406).
+  onDirtyChange?: (dirty: boolean) => void;
+}) {
+  const [dirtyParts, setDirtyParts] = useState({ previews: false, monitors: false });
+  const reportPreviews = useCallback(
+    (dirty: boolean) =>
+      setDirtyParts((p) => (p.previews === dirty ? p : { ...p, previews: dirty })),
+    [],
+  );
+  const reportMonitors = useCallback(
+    (dirty: boolean) =>
+      setDirtyParts((p) => (p.monitors === dirty ? p : { ...p, monitors: dirty })),
+    [],
+  );
+  const anyDirty = dirtyParts.previews || dirtyParts.monitors;
+  useEffect(() => {
+    onDirtyChange?.(anyDirty);
+  }, [anyDirty, onDirtyChange]);
   const [showPreviews, setShowPreviews] = useState(params.view === "previews");
   const [mounted, setMounted] = useState({ previews: showPreviews, monitors: !showPreviews });
   if (showPreviews && !mounted.previews) setMounted({ ...mounted, previews: true });
@@ -63,16 +86,24 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
         </button>
       </div>
       <div className="dock-settings-view" hidden={!showPreviews}>
-        {mounted.previews && <PreviewTargetsEditor projectId={params.projectId} />}
+        {mounted.previews && (
+          <PreviewTargetsEditor projectId={params.projectId} onDirtyChange={reportPreviews} />
+        )}
       </div>
       <div className="dock-settings-view" hidden={showPreviews}>
-        {mounted.monitors && <MonitorsEditor params={params} />}
+        {mounted.monitors && <MonitorsEditor params={params} onDirtyChange={reportMonitors} />}
       </div>
     </div>
   );
 }
 
-function MonitorsEditor({ params }: { params: DockConfigPanelParams }) {
+function MonitorsEditor({
+  params,
+  onDirtyChange,
+}: {
+  params: DockConfigPanelParams;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
   const [invalid, setInvalid] = useState<{ reason: string | null } | null>(null);
   // Hermes fresh-review nit on PR #586 — this panel otherwise mirrors
   // AgentRulesPanel closely, but its read side had no isSymlink equivalent:
@@ -86,6 +117,9 @@ function MonitorsEditor({ params }: { params: DockConfigPanelParams }) {
   const [loadError, setLoadError] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange(dirty);
+  }, [dirty, onDirtyChange]);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   // Same "read the LIVE value after an await, not the one closed over at

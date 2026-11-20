@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { makeProject, makeSession, makeWorkspace } from "../test/fixtures.js";
+import { makeProject, makeSession, makeTask, makeWorkspace } from "../test/fixtures.js";
 import type { NotificationEvent } from "../api/index.js";
 import { buildPickerSections } from "./mobileSessionPicker.js";
 import type { PickerInput } from "./mobileSessionPicker.js";
+import { buildSessionTitleContexts } from "./sessionDisplay.js";
 
 const attention = (seq: number): NotificationEvent => ({
   seq,
@@ -63,10 +64,12 @@ describe("buildPickerSections", () => {
       panels: [{ id: "session-1", title: "ended one", sessionId: 1 }],
     });
     expect(open[0].rows.map((r) => r.session?.id)).toEqual([1]);
-    expect(open[0].rows[0]).toMatchObject({ panelId: "session-1", title: "ended one" });
+    expect(open[0].rows[0]).toMatchObject({ panelId: "session-1", title: "claude code" });
   });
 
-  it("marks a row open only when a panel exists, and titles it from the panel", () => {
+  // #3285 — a row shows the title the sidebar shows, not the open panel's
+  // tab title (which follows the live terminal title).
+  it("marks a row open only when a panel exists, and titles it as the sidebar does", () => {
     const [section] = buildPickerSections(
       input({
         sessions: [
@@ -79,8 +82,9 @@ describe("buildPickerSections", () => {
     expect(section.rows[0]).toMatchObject({
       key: "session-1",
       panelId: "session-1",
-      title: "Tab title",
+      title: "from osc",
     });
+    expect(section.rows[0].searchFields).toContain("Tab title");
     expect(section.rows[1]).toMatchObject({ key: "session-2", panelId: null, title: "closed one" });
   });
 
@@ -113,6 +117,37 @@ describe("buildPickerSections", () => {
     expect(sections.map((s) => s.kind)).toEqual(["needs-you", "project", "project"]);
     expect(sections[0].rows.map((r) => r.session?.id)).toEqual([2]);
     expect(sections[2].rows.map((r) => r.session?.id)).toEqual([2]);
+  });
+
+  // #2996 — the Needs you pin has no project heading, so its rows carry
+  // their project's name to tell same-titled sessions apart.
+  it("gives every session row its project's name, and null when it has none", () => {
+    const sections = buildPickerSections(
+      input({
+        sessions: [
+          makeSession({ id: 1, projectId: 1, attention: true }),
+          makeSession({ id: 2, projectId: 2, attention: true }),
+          makeSession({ id: 3, projectId: 999, attention: true }),
+        ],
+        panels: [
+          { id: "git-1", title: "Git" },
+          { id: "session-3", title: "orphan", sessionId: 3 },
+        ],
+      }),
+    );
+    const pin = sections.find((s) => s.kind === "needs-you");
+    expect(pin?.rows.map((r) => [r.session?.id, r.projectName])).toEqual([
+      [1, "runway"],
+      [2, "hermes"],
+      [3, null],
+    ]);
+    const panes = sections.find((s) => s.kind === "panes");
+    expect(panes?.rows.map((r) => [r.panelId, r.projectName])).toEqual([
+      ["git-1", null],
+      ["session-3", null],
+    ]);
+    const runway = sections.find((s) => s.key === "project-1");
+    expect(runway?.rows[0].projectName).toBe("runway");
   });
 
   it("derives needs-you and unread from events, and mute suppresses both", () => {
@@ -149,7 +184,7 @@ describe("buildPickerSections", () => {
     const panes = sections.find((s) => s.kind === "panes");
     expect(panes?.rows.map((r) => r.panelId)).toEqual(["browserPane-1"]);
     const project = sections.find((s) => s.kind === "project");
-    expect(project?.rows[0]).toMatchObject({ panelId: "session-1", title: "shell" });
+    expect(project?.rows[0]).toMatchObject({ panelId: "session-1", title: "claude code" });
   });
 
   // #1440 (c) — an open session panel whose project isn't in `projects`
@@ -197,7 +232,7 @@ describe("buildPickerSections", () => {
         panels: [{ id: "session-1", title: "renamed tab", sessionId: 1 }],
       }),
     );
-    expect(section.rows[0]).toMatchObject({ title: "renamed tab" });
+    expect(section.rows[0]).toMatchObject({ title: "locked name" });
     expect(section.rows[0].searchFields).toEqual(["locked name", "codex", "renamed tab", "runway"]);
   });
 
@@ -321,5 +356,22 @@ describe("buildPickerSections", () => {
       const row = sections.flatMap((s) => s.rows).find((r) => r.session?.id === 7);
       expect(row?.workspace).toEqual({ id: 1, name: "Default", isCurrent: true });
     });
+  });
+});
+
+describe("buildPickerSections — session titles (#3285)", () => {
+  it("titles a row with the task title and number it is given", () => {
+    const sessions = [
+      makeSession({ id: 1, projectId: 1, command: "claude" }),
+      makeSession({ id: 2, projectId: 1, command: "claude" }),
+      makeSession({ id: 3, projectId: 1, command: "claude" }),
+    ];
+    const tasks = [makeTask({ id: 5, sessionId: 3, title: "Fix the login form" })];
+    const titleContexts = buildSessionTitleContexts(sessions, tasks);
+    const [section] = buildPickerSections(
+      input({ sessions, showTaskSessions: true, titleContexts }),
+    );
+    expect(section.rows.map((r) => r.title)).toEqual(["claude", "claude 2", "Fix the login form"]);
+    expect(section.rows[1].searchFields).toContain("claude 2");
   });
 });

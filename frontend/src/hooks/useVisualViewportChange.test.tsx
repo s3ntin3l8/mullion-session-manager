@@ -130,7 +130,13 @@ describe("visibleViewport", () => {
     const originalInnerHeight = window.innerHeight;
     Object.defineProperty(window, "innerHeight", { value: 640, configurable: true });
     try {
-      expect(visibleViewport()).toEqual({ top: 0, bottom: 640, height: 640 });
+      expect(visibleViewport()).toEqual({
+        top: 0,
+        bottom: 640,
+        height: 640,
+        left: 0,
+        right: window.innerWidth,
+      });
     } finally {
       Object.defineProperty(window, "innerHeight", {
         value: originalInnerHeight,
@@ -141,7 +147,24 @@ describe("visibleViewport", () => {
 
   it("reports offsetTop + height when visualViewport exists", () => {
     installFakeVisualViewport(400, 100);
-    expect(visibleViewport()).toEqual({ top: 100, bottom: 500, height: 400 });
+    // The fake carries no horizontal fields: the full width.
+    expect(visibleViewport()).toEqual({
+      top: 100,
+      bottom: 500,
+      height: 400,
+      left: 0,
+      right: window.innerWidth,
+    });
+  });
+
+  it("reports offsetLeft + width for a panned or zoomed visual viewport", () => {
+    const vv = installFakeVisualViewport(400, 100) as unknown as {
+      offsetLeft: number;
+      width: number;
+    };
+    vv.offsetLeft = 50;
+    vv.width = 300;
+    expect(visibleViewport()).toMatchObject({ left: 50, right: 350 });
   });
 });
 

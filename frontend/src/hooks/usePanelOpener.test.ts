@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { SetStateAction } from "react";
 import { usePanelOpener } from "./usePanelOpener.js";
 import type { DockviewApi } from "dockview-react";
 import type { Device } from "../api/index.js";
@@ -18,15 +17,32 @@ const setViewMode = vi.fn();
 const openRightSidebarView = vi.fn();
 const startDevice = vi.fn();
 const requestPreviewPicker = vi.fn();
+const openRailBrowserPreview = vi.fn();
+const openProjectSettings = vi.fn();
+const openProjectSkills = vi.fn();
+// The band the preview openers read at the moment of opening (#3372). An
+// explicit "desktop" needs no matchMedia; atBand() below stubs it for "auto".
+let layoutMode: "auto" | "desktop" = "desktop";
+
+// What selectSessionTitleContexts reads (#3285): the Agent Browser pane is
+// named the way the sidebar names its session.
+let titleTasks: ReturnType<typeof makeTask>[] = [];
+const titleSessions: ReturnType<typeof makeSession>[] = [];
 
 function storeState() {
   return {
+    sessions: titleSessions,
+    tasks: titleTasks,
     triggerPanelHighlight,
     setActiveWorkspaceId,
     setViewMode,
     openRightSidebarView,
     startDevice,
     requestPreviewPicker,
+    openRailBrowserPreview,
+    openProjectSettings,
+    openProjectSkills,
+    settings: { layoutMode },
   };
 }
 
@@ -52,6 +68,7 @@ function mockPanel(id: string, locationType: "grid" | "floating" = "grid", overr
       close: vi.fn(),
       updateParameters: vi.fn(),
       location: { type: locationType },
+      component: (overrides as { component?: string }).component,
     },
     ...overrides,
   } as unknown as ReturnType<DockviewApi["getPanel"]>;
@@ -78,7 +95,7 @@ const SESSION = makeSession({ id: 1, projectId: 1 });
 // Same shape as panelUtils.test.ts's own TEST_DEVICE — that file already
 // covers openDevicePanel's own branching (focus-vs-add, tier positioning,
 // name fallback); these tests only need to prove usePanelOpener wires it up
-// correctly (dockviewApi guard, leaveTaskView, setSidebarOpen).
+// correctly (dockviewApi guard, leaveTaskView).
 const DEVICE: Device = {
   id: 1,
   hostId: "local",
@@ -92,14 +109,15 @@ const DEVICE: Device = {
   live: null,
 };
 
-let setSidebarOpen: ReturnType<typeof vi.fn<(value: SetStateAction<boolean>) => void>>;
-
 beforeEach(() => {
-  setSidebarOpen = vi.fn<(value: SetStateAction<boolean>) => void>();
+  layoutMode = "desktop";
+  openRailBrowserPreview.mockClear();
   triggerPanelHighlight.mockClear();
   setActiveWorkspaceId.mockClear();
   setViewMode.mockClear();
   openRightSidebarView.mockClear();
+  openProjectSettings.mockClear();
+  openProjectSkills.mockClear();
   startDevice.mockReset();
   startDevice.mockResolvedValue(undefined);
 });
@@ -112,8 +130,8 @@ interface SetupProps {
   activeWorkspaceId: number | null;
 }
 
-const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop", tabletPaneCap: 2 };
-const PHONE_LAYOUT: LayoutContext = { tier: "phone", tabletPaneCap: 2 };
+const DESKTOP_LAYOUT: LayoutContext = { tier: "desktop" };
+const PHONE_LAYOUT: LayoutContext = { tier: "phone" };
 
 function setup(overrides: Partial<SetupProps> = {}) {
   const initialProps: SetupProps = {
@@ -124,7 +142,7 @@ function setup(overrides: Partial<SetupProps> = {}) {
     activeWorkspaceId: 1,
     ...overrides,
   };
-  return renderHook((props: SetupProps) => usePanelOpener({ ...props, setSidebarOpen }), {
+  return renderHook((props: SetupProps) => usePanelOpener(props), {
     initialProps,
   });
 }
@@ -139,7 +157,6 @@ describe("usePanelOpener — onOpenSession", () => {
 
     expect(triggerPanelHighlight).toHaveBeenCalledWith("session-1");
     expect(setActiveWorkspaceId).not.toHaveBeenCalled();
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
   it("maximizes an already-open panel on phone, but only activates it elsewhere", () => {
@@ -319,7 +336,6 @@ describe("usePanelOpener — onOpenSession", () => {
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenSession(SESSION)).not.toThrow();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
   // Tablet tier plan, PR 4 — proves `layout` (not just a boolean) actually
@@ -328,11 +344,11 @@ describe("usePanelOpener — onOpenSession", () => {
   // bare add. tabletPositioning's own branching (at/under the cap, grouping
   // by group.id not panel count) is covered directly in panelUtils.test.ts
   // — this only proves the wiring.
-  it("docks a new panel as its own column on tablet, under the pane cap", () => {
+  it("docks a new panel as its own column on tablet, under the column limit", () => {
     const api = mockDockviewApi();
     const { result } = setup({
       dockviewApi: api,
-      layout: { tier: "tablet", tabletPaneCap: 2 },
+      layout: { tier: "tablet" },
     });
 
     result.current.onOpenSession(SESSION);
@@ -399,13 +415,11 @@ describe("usePanelOpener — onOpenSessionAsFloat", () => {
     expect(setActiveWorkspaceId).not.toHaveBeenCalled();
     expect(triggerPanelHighlight).not.toHaveBeenCalled();
     expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "session-1" }));
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenSessionAsFloat(SESSION)).not.toThrow();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -419,13 +433,122 @@ describe("usePanelOpener — onOpenTimeline", () => {
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "timeline-1", component: "timeline" }),
     );
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenTimeline(SESSION)).not.toThrow();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
+  });
+
+  it("names the timeline after the session's task, as the sidebar does (#3285)", () => {
+    titleTasks = [makeTask({ id: 9, sessionId: SESSION.id, title: "Fix the login form" })];
+    try {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+
+      result.current.onOpenTimeline(SESSION);
+
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Timeline: Fix the login form" }),
+      );
+    } finally {
+      titleTasks = [];
+    }
+  });
+});
+
+describe("usePanelOpener — onOpenAgentBrowser (#3215)", () => {
+  it("opens the session's Agent Browser pane", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenAgentBrowser(SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "browserPane-1", component: "browserPane" }),
+    );
+  });
+
+  it("names the pane after the session's task, as the sidebar does (#3285)", () => {
+    titleTasks = [makeTask({ id: 9, sessionId: SESSION.id, title: "Fix the login form" })];
+    try {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+
+      result.current.onOpenAgentBrowser(SESSION);
+
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Browser · Agent's browser: Fix the login form" }),
+      );
+    } finally {
+      titleTasks = [];
+    }
+  });
+
+  it("no-ops when dockviewApi is null", () => {
+    const { result } = setup({ dockviewApi: null });
+    expect(() => result.current.onOpenAgentBrowser(SESSION)).not.toThrow();
+  });
+});
+
+describe("usePanelOpener — onOpenRailBrowser (#3403)", () => {
+  beforeEach(() => requestPreviewPicker.mockClear());
+
+  it("opens the followed session's agent browser when no Browser pane is open", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenRailBrowser(1, SESSION);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "browserPane-1", component: "browserPane" }),
+    );
+    expect(requestPreviewPicker).not.toHaveBeenCalled();
+  });
+
+  it.each(["browserPane", "browser"])(
+    "focuses an open %s panel instead of adding a second one",
+    (component) => {
+      const api = mockDockviewApi();
+      const existing = api.addPanel({ id: "browser-9", component } as never);
+      (api.addPanel as ReturnType<typeof vi.fn>).mockClear();
+      const { result } = setup({ dockviewApi: api });
+
+      result.current.onOpenRailBrowser(1, SESSION);
+
+      expect(existing.api.setActive).toHaveBeenCalled();
+      expect(api.addPanel).not.toHaveBeenCalled();
+      expect(requestPreviewPicker).not.toHaveBeenCalled();
+    },
+  );
+
+  it("focuses this project's pane before another project's", () => {
+    const api = mockDockviewApi();
+    const withParams = (id: string, params: Record<string, unknown>) => {
+      const panel = api.addPanel({ id, component: "browser" } as never);
+      (panel.api as unknown as { getParameters: () => unknown }).getParameters = () => params;
+      return panel;
+    };
+    const other = withParams("browser-2", { projectId: 2 });
+    const own = withParams("browser-1", { projectId: 1 });
+    (api.addPanel as ReturnType<typeof vi.fn>).mockClear();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenRailBrowser(1, null);
+
+    expect(own.api.setActive).toHaveBeenCalled();
+    expect(other.api.setActive).not.toHaveBeenCalled();
+    expect(api.addPanel).not.toHaveBeenCalled();
+  });
+
+  it("opens the project's preview with no followed session", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenRailBrowser(1, null);
+
+    expect(requestPreviewPicker).toHaveBeenCalledWith(1);
+    expect(api.addPanel).not.toHaveBeenCalled();
   });
 });
 
@@ -435,24 +558,40 @@ describe("usePanelOpener — onOpenTimeline", () => {
 // branching itself is panelUtils.test.ts's concern (openOrFocusProjectPanel
 // is exercised for real, not mocked, here).
 describe("usePanelOpener — project-scoped panel kinds", () => {
-  it.each([
-    ["onOpenGitHub", "github", "GitHub: project-alpha"],
-    ["onOpenBrowser", "browser", "Preview: project-alpha"],
-  ] as const)("%s opens a %s-<projectId> panel titled %s", (fnName, kind, title) => {
+  it.each([["onOpenBrowser", "browser", "Browser · Preview: project-alpha"]] as const)(
+    "%s opens a %s-<projectId> panel titled %s",
+    (fnName, kind, title) => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+
+      (result.current[fnName] as (projectId: number) => void)(1);
+
+      expect(api.addPanel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: `${kind}-1`,
+          component: kind,
+          title,
+          params: { projectId: 1 },
+        }),
+      );
+    },
+  );
+
+  it("onOpenGitHub opens the GitHub sidebar view, adding no dock panel", () => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
 
-    (result.current[fnName] as (projectId: number) => void)(1);
+    result.current.onOpenGitHub(1);
 
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: `${kind}-1`,
-        component: kind,
-        title,
-        params: { projectId: 1 },
-      }),
-    );
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+    expect(openRightSidebarView).toHaveBeenCalledWith("github", 1);
+    expect(api.addPanel).not.toHaveBeenCalled();
+    expect(setViewMode).toHaveBeenCalledWith("list");
+  });
+
+  it("onOpenGitHub works without a dockviewApi (the sidebar needs none)", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenGitHub(1);
+    expect(openRightSidebarView).toHaveBeenCalledWith("github", 1);
   });
 
   it("onOpenGit opens the Source Control sidebar view, not a dock panel", () => {
@@ -464,7 +603,6 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(openRightSidebarView).toHaveBeenCalledWith("git", 1);
     expect(api.addPanel).not.toHaveBeenCalled();
     expect(setViewMode).toHaveBeenCalledWith("list");
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
   it("onOpenGit works without a dockviewApi (the sidebar needs none)", () => {
@@ -473,43 +611,36 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(openRightSidebarView).toHaveBeenCalledWith("git", 1);
   });
 
-  // Agent Rules / Briefing / Scaffold / Dock / Skills are tabs of one Project
-  // panel now — every legacy opener must land on `project-hub-<id>` with its
-  // own tab, not open a panel of the old kind.
+  // #3406 — the four editors open the Project settings dialog on their
+  // section, Skills the sidebar's Project view. None needs dockview or leaves
+  // the current mode, so they work from Tasks mode and on the phone.
   it.each([
     ["onOpenAgentRules", "agent-rules"],
     ["onOpenProjectBriefing", "briefing"],
     ["onOpenProjectSetup", "scaffold"],
     ["onOpenDockConfig", "dock"],
-    ["onOpenSkills", "skills"],
-  ] as const)("%s opens the Project panel on its %s tab", (fnName, tab) => {
+  ] as const)("%s opens Project settings on its %s section", (fnName, section) => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
 
     (result.current[fnName] as (projectId: number) => void)(1);
 
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "project-hub-1",
-        component: "project-hub",
-        title: "Project: project-alpha",
-        params: { projectId: 1, tab },
-      }),
-    );
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+    expect(openProjectSettings.mock.calls[0].slice(0, 2)).toEqual([1, section]);
+    expect(api.addPanel).not.toHaveBeenCalled();
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 
-  it("opens preview management through the normal navigation path and leaves Task view", () => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
+  it("onOpenDockConfig carries the Previews view through", () => {
+    const { result } = setup({ dockviewApi: null });
     result.current.onOpenDockConfig(1, "previews");
-    expect(setViewMode).toHaveBeenCalledWith("list");
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ projectId: 1, tab: "dock", dockView: "previews" }),
-      }),
-    );
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+    expect(openProjectSettings).toHaveBeenCalledWith(1, "dock", "previews");
+  });
+
+  it("onOpenSkills opens the sidebar's Project view on Skills, without a dockview", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenSkills(1);
+    expect(openProjectSkills).toHaveBeenCalledWith(1);
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 
   it("offers preview selection without changing the current task or monitor state", () => {
@@ -517,38 +648,6 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     result.current.onOpenPreviewTargets(1);
     expect(requestPreviewPicker).toHaveBeenCalledWith(1);
     expect(setViewMode).not.toHaveBeenCalled();
-  });
-
-  it("onOpenProjectHub without a tab opens the panel with no tab preference", () => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
-
-    result.current.onOpenProjectHub(1);
-
-    expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "project-hub-1", params: { projectId: 1, tab: undefined } }),
-    );
-  });
-
-  it("onOpenProjectHub re-targets an already-open panel instead of adding a second", () => {
-    const api = mockDockviewApi();
-    const { result } = setup({ dockviewApi: api });
-    result.current.onOpenProjectHub(1, "dock");
-
-    result.current.onOpenProjectHub(1, "skills");
-
-    expect(api.addPanel).toHaveBeenCalledTimes(1);
-    const panel = api.getPanel("project-hub-1")!;
-    expect(panel.api.updateParameters).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: 1, tab: "skills", rev: expect.any(Number) }),
-    );
-    expect(panel.api.setActive).toHaveBeenCalled();
-  });
-
-  it("onOpenProjectHub no-ops when dockviewApi is null", () => {
-    const { result } = setup({ dockviewApi: null });
-    expect(() => result.current.onOpenProjectHub(1)).not.toThrow();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
   it("onOpenFile opens an editor-only panel per file and focuses it on a repeat", () => {
@@ -624,31 +723,27 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
     expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
   });
 
-  it("every other panel kind DOES apply desktop positioning with a tiled panel present", () => {
+  // The file editor is the project panel kind that applies desktop
+  // positioning now that Agent Rules and the rest open the Project settings
+  // dialog (#3406) and GitHub a sidebar view (#3405).
+  it("the file editor (a project panel kind) DOES apply desktop positioning with a tiled panel present", () => {
     const api = mockDockviewApi();
     api.addPanel({ id: "session-1", component: "terminal", params: {} }); // tiled
     const { result } = setup({ dockviewApi: api });
 
-    result.current.onOpenGitHub(1);
+    result.current.onOpenFileEditor(1);
 
-    const githubCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call) => call[0].id === "github-1",
+    const editorCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[0].id === "file-editor-1",
     )![0];
     // An explicit size, not dockview's own cramped 300x300 default — see
     // panelUtils.ts's desktopPositioning/DEFAULT_FLOATING_PANEL_SIZE.
-    expect(githubCall).toHaveProperty("floating", { width: 720, height: 460 });
+    expect(editorCall).toHaveProperty("floating", { width: 720, height: 460 });
   });
 
-  it.each([
-    "onOpenGitHub",
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s no-ops when dockviewApi is null", (fnName) => {
+  it.each(["onOpenBrowser"] as const)("%s no-ops when dockviewApi is null", (fnName) => {
     const { result } = setup({ dockviewApi: null });
     expect(() => (result.current[fnName] as (projectId: number) => void)(1)).not.toThrow();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -659,17 +754,12 @@ describe("usePanelOpener — onOpenTasks", () => {
     result.current.onOpenTasks();
 
     expect(setViewMode).toHaveBeenCalledWith("kanban");
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
-  it.each([
-    ["phone", PHONE_LAYOUT],
-    ["tablet", { tier: "tablet", tabletPaneCap: 2 } as LayoutContext],
-  ])("keeps the sidebar (the navigator) open on %s, where the board lives in it", (_n, layout) => {
-    const { result } = setup({ dockviewApi: null, layout });
+  it("phone: switches to Tasks mode, the board over the grid (#3014)", () => {
+    const { result } = setup({ dockviewApi: null, layout: PHONE_LAYOUT });
     result.current.onOpenTasks();
     expect(setViewMode).toHaveBeenCalledWith("kanban");
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
   it("is the one opener that does NOT reset viewMode to list", () => {
@@ -695,7 +785,6 @@ describe("usePanelOpener — onOpenTask", () => {
     expect(api.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({ id: "task-detail-9", component: "task-detail" }),
     );
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
   it("focuses the existing panel instead of opening a second one", () => {
@@ -713,7 +802,6 @@ describe("usePanelOpener — onOpenTask", () => {
     const { result } = setup({ dockviewApi: null });
     result.current.onOpenTask(task);
     expect(setViewMode).not.toHaveBeenCalled();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 });
 
@@ -763,30 +851,21 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
-  it.each([
-    "onOpenGitHub",
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s resets viewMode to list before opening", (fnName) => {
+  it.each(["onOpenBrowser"] as const)("%s resets viewMode to list before opening", (fnName) => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
     (result.current[fnName] as (projectId: number) => void)(1);
     expect(setViewMode).toHaveBeenCalledWith("list");
   });
 
-  it.each([
-    "onOpenGitHub",
-    "onOpenAgentRules",
-    "onOpenDockConfig",
-    "onOpenSkills",
-    "onOpenBrowser",
-  ] as const)("%s does NOT reset viewMode when dockviewApi is null (a true no-op)", (fnName) => {
-    const { result } = setup({ dockviewApi: null });
-    (result.current[fnName] as (projectId: number) => void)(1);
-    expect(setViewMode).not.toHaveBeenCalled();
-  });
+  it.each(["onOpenBrowser"] as const)(
+    "%s does NOT reset viewMode when dockviewApi is null (a true no-op)",
+    (fnName) => {
+      const { result } = setup({ dockviewApi: null });
+      (result.current[fnName] as (projectId: number) => void)(1);
+      expect(setViewMode).not.toHaveBeenCalled();
+    },
+  );
 
   it("onOpenBrowserUrl resets viewMode to list before opening", () => {
     const api = mockDockviewApi();
@@ -817,7 +896,7 @@ describe("usePanelOpener — onOpenBrowserUrl", () => {
     expect(firstCall[0]).toEqual(
       expect.objectContaining({
         component: "browser",
-        title: "Example",
+        title: "Browser · Preview: Example",
         params: { kind: "external", url: "https://example.com", projectId: 1 },
       }),
     );
@@ -876,7 +955,7 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
     expect(firstCall[0]).toEqual(
       expect.objectContaining({
         component: "browser",
-        title: "Preview",
+        title: "Browser · Preview",
         params: { kind: "external" },
       }),
     );
@@ -895,7 +974,6 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenBlankBrowser()).not.toThrow();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
   // Same scenario as onOpenBrowserUrl's own test above — see its comment.
@@ -915,7 +993,7 @@ describe("usePanelOpener — onOpenBlankBrowser", () => {
 // Self-review (code-review high) — every other opener in this hook gets its
 // own describe block; onOpenDevice had none.
 describe("usePanelOpener — onOpenDevice", () => {
-  it("opens the device's panel and closes the sidebar", () => {
+  it("opens the device's panel", () => {
     const api = mockDockviewApi();
     const { result } = setup({ dockviewApi: api });
 
@@ -929,7 +1007,6 @@ describe("usePanelOpener — onOpenDevice", () => {
         params: { deviceId: 1 },
       }),
     );
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
   });
 
   it("focuses an already-open panel instead of adding a second one", () => {
@@ -948,7 +1025,6 @@ describe("usePanelOpener — onOpenDevice", () => {
   it("no-ops when dockviewApi is null", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenDevice(DEVICE)).not.toThrow();
-    expect(setSidebarOpen).not.toHaveBeenCalled();
   });
 
   // Deliberate open of a STOPPED device must bring it up (otherwise the
@@ -999,7 +1075,7 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
       expect.objectContaining({
         id: "browser-preview-s1",
         component: "browser",
-        title: "Preview · feat/x",
+        title: "Browser · Preview: feat/x",
         params: { projectId: 1, previewSlug: "s1" },
       }),
     );
@@ -1007,9 +1083,13 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
     result.current.onOpenPreview(1, "s1", "feat/x");
     expect(api.addPanel).toHaveBeenCalledTimes(1);
     expect(panel.api.setActive).toHaveBeenCalled();
+    // #3371 — the pane may show Agent's browser by now; the preview was asked for.
+    expect(panel.api.updateParameters).toHaveBeenCalledWith({ mode: "preview" });
 
     result.current.onOpenPreview(1, "s2", null);
-    expect((api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0].title).toBe("Preview");
+    expect((api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0].title).toBe(
+      "Browser · Preview",
+    );
   });
 
   it("preserves target identity when reopening a named preview", () => {
@@ -1036,5 +1116,141 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
     const phone = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
     phone.result.current.onOpenPreview(1, "s1", "x");
     expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #3372, decision 2: below 1100px every preview entry point opens the rail's
+// Browser view in Preview on its target, and no pane.
+const BAND_QUERY: Record<"phone" | "rails-full" | "rails-halves" | "desktop-narrow", string> = {
+  phone: "(max-width: 699.98px)",
+  "rails-full": "(min-width: 700px) and (max-width: 799.98px)",
+  "rails-halves": "(min-width: 800px) and (max-width: 1099.98px)",
+  "desktop-narrow": "(min-width: 1100px) and (max-width: 1279.98px)",
+};
+
+function atBand(band: keyof typeof BAND_QUERY) {
+  layoutMode = "auto";
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({ matches: query === BAND_QUERY[band], media: query })),
+  );
+}
+
+describe("usePanelOpener — previews below 1100px open the rail's Browser view (#3372)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  describe.each(["rails-halves", "rails-full", "phone"] as const)("in %s", (band) => {
+    beforeEach(() => atBand(band));
+
+    it("the project's preview (Dock, Inbox, picker's default)", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenBrowser(2);
+      expect(openRailBrowserPreview).toHaveBeenCalledWith(null, 2);
+      expect(api.addPanel).not.toHaveBeenCalled();
+      expect(setViewMode).toHaveBeenCalledWith("list");
+    });
+
+    it("a saved URL from the palette", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenBrowserUrl(1, "https://example.com/", "Example");
+      expect(openRailBrowserPreview).toHaveBeenCalledWith(
+        { kind: "external", url: "https://example.com/", projectId: 1 },
+        1,
+      );
+      expect(api.addPanel).not.toHaveBeenCalled();
+    });
+
+    it("a blank preview, on whatever project the rail follows", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenBlankBrowser();
+      expect(openRailBrowserPreview).toHaveBeenCalledWith({ kind: "external" });
+      expect(api.addPanel).not.toHaveBeenCalled();
+    });
+
+    it("a branch or PR preview, and a named target from the picker", () => {
+      const api = mockDockviewApi();
+      const { result } = setup({ dockviewApi: api });
+      result.current.onOpenPreview(1, "s1", "feat/x");
+      expect(openRailBrowserPreview).toHaveBeenLastCalledWith(
+        { projectId: 1, previewSlug: "s1", targetName: undefined },
+        1,
+      );
+      result.current.onOpenPreview(1, "t1", null, "Docker web");
+      expect(openRailBrowserPreview).toHaveBeenLastCalledWith(
+        { projectId: 1, previewSlug: "t1", targetName: "Docker web" },
+        1,
+      );
+      expect(api.addPanel).not.toHaveBeenCalled();
+    });
+
+    it("works before the grid exists", () => {
+      const { result } = setup({ dockviewApi: null });
+      result.current.onOpenBrowser(1);
+      expect(openRailBrowserPreview).toHaveBeenCalledWith(null, 1);
+    });
+  });
+
+  it("from 1100px a preview stays a grid pane", () => {
+    atBand("desktop-narrow");
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    result.current.onOpenBlankBrowser();
+    expect(api.addPanel).toHaveBeenCalledTimes(2);
+    expect(openRailBrowserPreview).not.toHaveBeenCalled();
+  });
+});
+
+// #3373 — ⇄ can open another address in a preview pane. An opener that
+// focuses that pane asked for the pane's own target, so it resets it.
+describe("usePanelOpener — a preview pane ⇄ retargeted (#3373)", () => {
+  function withParams(api: DockviewApi, id: string, params: Record<string, unknown>) {
+    const panel = api.getPanel(id)!;
+    (panel.api as unknown as { getParameters: () => unknown }).getParameters = () => params;
+    return panel;
+  }
+
+  it("onOpenPreview resets a pane that ⇄ pointed at an external address", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    const panel = withParams(api, "browser-preview-s1", {
+      projectId: 1,
+      kind: "external",
+      url: "https://example.com/",
+    });
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    expect(panel.api.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mode: "preview",
+        projectId: 1,
+        previewSlug: "s1",
+        kind: undefined,
+        url: undefined,
+        previewRev: expect.any(Number),
+      }),
+    );
+  });
+
+  it("onOpenBrowser resets the project's pane, and leaves one showing its preview alone", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenBrowser(1);
+    const panel = withParams(api, "browser-1", { projectId: 1 });
+    result.current.onOpenBrowser(1);
+    expect(panel.api.updateParameters).toHaveBeenLastCalledWith({ mode: "preview" });
+    withParams(api, "browser-1", { projectId: 1, previewSlug: "br", previewPath: "/x" });
+    result.current.onOpenBrowser(1);
+    expect(panel.api.updateParameters).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mode: "preview",
+        previewSlug: undefined,
+        previewPath: undefined,
+        previewRev: expect.any(Number),
+      }),
+    );
   });
 });

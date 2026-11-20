@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-// Right sidebar state: open/close/pin/width actions must write through to
-// localStorage (persistedState.ts) and clamp the width, and a pinned drawer —
-// and only a pinned one — must come back open after a reload.
+// Right sidebar state: open/close/width actions must write through to
+// localStorage (persistedState.ts) and clamp the width, and the always-docked
+// panel must come back after a reload the way it was left (#3006).
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useDashboardStore } from "./index.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "./constants.js";
@@ -11,7 +11,6 @@ beforeEach(() => {
   useDashboardStore.setState({
     rightSidebarView: "git",
     rightSidebarOpen: false,
-    rightSidebarPinned: false,
     rightSidebarWidth: 340,
   });
 });
@@ -213,13 +212,6 @@ describe("right sidebar actions", () => {
     expect(localStorage.getItem("crs.rightSidebarOpen")).toBe("0");
   });
 
-  it("setRightSidebarPinned persists the flag", () => {
-    useDashboardStore.getState().setRightSidebarPinned(true);
-
-    expect(useDashboardStore.getState().rightSidebarPinned).toBe(true);
-    expect(localStorage.getItem("crs.rightSidebarPinned")).toBe("1");
-  });
-
   it("setRightSidebarWidth clamps to the min/max and persists the clamped value", () => {
     useDashboardStore.getState().setRightSidebarWidth(10);
     expect(useDashboardStore.getState().rightSidebarWidth).toBe(RIGHT_SIDEBAR_MIN_WIDTH);
@@ -236,8 +228,7 @@ describe("right sidebar hydration", () => {
     return (await import("./index.js")).useDashboardStore;
   }
 
-  it("reopens a drawer that was pinned and open", async () => {
-    localStorage.setItem("crs.rightSidebarPinned", "1");
+  it("reopens a panel that was open, whatever the old pin flag says (#3006)", async () => {
     localStorage.setItem("crs.rightSidebarOpen", "1");
     localStorage.setItem("crs.rightSidebarView", "github");
     localStorage.setItem("crs.rightSidebarWidth", "400");
@@ -245,15 +236,16 @@ describe("right sidebar hydration", () => {
     const s = (await freshStore()).getState();
 
     expect(s).toMatchObject({
-      rightSidebarPinned: true,
       rightSidebarOpen: true,
       rightSidebarView: "github",
       rightSidebarWidth: 400,
     });
+    expect("rightSidebarPinned" in s).toBe(false);
   });
 
-  it("does not reopen an unpinned overlay", async () => {
-    localStorage.setItem("crs.rightSidebarOpen", "1");
+  it("stays closed when it was closed, even with a stale pin flag stored", async () => {
+    localStorage.setItem("crs.rightSidebarPinned", "1");
+    localStorage.setItem("crs.rightSidebarOpen", "0");
 
     const s = (await freshStore()).getState();
 

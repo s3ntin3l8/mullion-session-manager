@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import { normalizeAgentId } from "../api/index.js";
 import type { Launcher, Project, Session, Workspace } from "../api/index.js";
 import { matchesQuery } from "../matchQuery.js";
+import { useDashboardStore } from "../store/index.js";
+import { selectSessionTitleContexts, sessionDisplayTitle } from "../lib/sessionDisplay.js";
+import { isHiddenAgent } from "../launchers/launcherList.js";
 import { searchPaletteCommands } from "../paletteCommands.js";
 import type { PaletteCommand } from "../paletteCommands.js";
 
@@ -45,13 +47,13 @@ export interface UseCommandSearchResult {
    * selection at the top of the (new) combined list. */
   setQuery: (query: string) => void;
   selectedIndex: number;
-  /** Raw setter, exposed alongside `setQuery` above — CommandPalette's own
-   * launcher-fetch effect needs to seed a specific default index (the
-   * configured default agent's row, or 0) on a project switch, not just the
-   * +/-1-against-`activeIndex` nav this hook's callers do inline. */
+  /** Raw setter, exposed alongside `setQuery` above — CommandPalette moves
+   * the selection itself: arrow keys, row hover, and back to the first
+   * result when a launcher fetch settles under a typed query. */
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   /** Launchers matching the current query, with hidden agents stripped —
-   * renders as "Launchers". */
+   * renders as "New session" (#3054: they open the launcher). Empty on a
+   * blank query (#3069). */
   filtered: Launcher[];
   /** Live, non-killed terminal sessions matching the current query — empty
    * on a blank query (this is search, not an always-on browse list; the
@@ -110,13 +112,15 @@ export function useCommandSearch({
   // raw id lookup, which won't match the Settings toggle's always-bare stored
   // names — an acknowledged edge case that only affects projects with custom
   // actions.json overrides.
+  // #3069 — nothing on a blank query: the blank view offers one "New
+  // session…" command instead of the launcher's whole list.
   const filtered = useMemo(
     () =>
-      launchers.filter(
-        (l) =>
-          (!(l.kind === "agent") || !hiddenAgents?.includes(normalizeAgentId(l.id))) &&
-          (query.trim() === "" || matchesQuery([l.title, l.command], query)),
-      ),
+      query.trim() === ""
+        ? []
+        : launchers.filter(
+            (l) => !isHiddenAgent(l, hiddenAgents) && matchesQuery([l.title, l.command], query),
+          ),
     [launchers, query, hiddenAgents],
   );
 
@@ -127,6 +131,7 @@ export function useCommandSearch({
   // nameLocked-gated `title`: an un-locked, auto-generated title is still a
   // perfectly good thing to find a session by here. Project name and the
   // best-known live branch extend the match beyond the title alone.
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const matchingSessions = useMemo(() => {
     if (query.trim() === "") return [];
     return sessions
@@ -147,13 +152,15 @@ export function useCommandSearch({
       .filter((s) => {
         const project = projects.find((p) => p.id === s.projectId);
         const title = s.name || s.lastTitle || s.command;
-        return matchesQuery([title, s.command, project?.name, s.liveBranch], query);
+        // Plus the title the row shows (#3285): a task's title or "claude 2".
+        const shown = sessionDisplayTitle(s, titleContexts.get(s.id));
+        return matchesQuery([title, shown, s.command, project?.name, s.liveBranch], query);
       });
     // Deliberately NOT filtered by the global "hide ended sessions" setting
     // the way Sidebar.tsx's tree is — typing a query here is explicit search
     // intent, not passive browsing, so an exited session the user is
     // actively looking for should still surface.
-  }, [sessions, projects, query, scope, effectiveProjectId]);
+  }, [sessions, projects, query, scope, effectiveProjectId, titleContexts]);
 
   // Same "only once there's a real query" gate as matchingSessions above —
   // dumping every workspace into an unscoped list on open would just
@@ -171,8 +178,7 @@ export function useCommandSearch({
   // Sessions, Workspaces, Launchers and Commands render as separate groups
   // but share ONE selection index across all of them for arrow-key nav —
   // this flattens the result arrays into one ordered list purely for index
-  // math. Commands come last so the launcher offsets (and the default-agent
-  // selection seed) are unchanged.
+  // math. Commands come last so the launcher offsets are unchanged.
   const entries = useMemo<PaletteEntry[]>(
     () => [
       ...matchingSessions.map((session): PaletteEntry => ({ type: "session", session })),

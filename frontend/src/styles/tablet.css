@@ -63,8 +63,8 @@
 
      Routed through `--shell-top`, defined only inside this pointer-coarse
      block, so the other fixed-position surfaces that line up with the
-     toolbar's bottom edge (.sidebar-wrapper/.cmux-scrim, sidebar.css)
-     and the bottom-sheet backdrops can
+     toolbar's bottom edge (the right sidebar's full-width view) and the
+     bottom-sheet backdrops can
      follow the same pan with a plain `var(--shell-top, 0px)` that resolves
      to 0 on a fine pointer, where `.app` itself doesn't move either. */
   :root {
@@ -247,29 +247,6 @@
     min-width: 44px;
     min-height: 44px;
     padding: 0 12px;
-  }
-  /* Independent code review, PR #621 (originally mobile.css) —
-     .view-mode-toggle/.hierarchy-toggle's own `.toolbar-icon-btn` override
-     (two-class selector, styles.css) outranks the plain `.toolbar-icon-btn`
-     bump above regardless of source order — CSS specificity, not cascade
-     position, decides here — so both toggles were silently staying at
-     26x26 without this. ViewModeToggle.tsx always renders in
-     .toolbar-actions and HierarchyToggle.tsx renders in the sidebar drawer
-     (Sidebar.tsx) — both need their own, equally-specific override. */
-  .hierarchy-toggle .toolbar-icon-btn {
-    width: 44px;
-    height: 44px;
-  }
-  /* Same specificity/source-order hazard the comment above documents —
-     .toolbar-back-to-workspace's own `width: auto` (toolbar.css) loses to
-     the plain .toolbar-icon-btn 44px bump above (equal one-class
-     specificity, later source) without this. ViewModeToggle.tsx used to be
-     the only way back to the workspace on mobile (Toolbar.tsx's own
-     comment); this button is what replaced it, so it has to stay reachable
-     here too, not squeezed into a 44px square its "Back" label can't fit. */
-  .toolbar-back-to-workspace {
-    width: auto;
-    height: 44px;
   }
   /* The card itself is a drag-and-drop reorder handle (out of scope on
      touch — see the plan's "Explicitly out of scope"), not a tap target;

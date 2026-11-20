@@ -656,6 +656,155 @@ export`/`import --standalone`, re-keying the imported session to the
   session model / opaque-blob / ESM / config / migration / worktree
   invariants).
 
+## The frontend shell: two modes, two rails, five widths
+
+The design is `docs/design/tasks-mode/mockup.html` (epic #2976); this is what
+the code does.
+
+**Width, not device.** `lib/layoutTier.ts` resolves the width into one of five
+bands (`LayoutBand`, exposed as `data-band` on `.app`) and a coarser tier
+(`LayoutTier`, `data-tier`) that most code reads. Settings → Appearance →
+Layout mode (`settings.layoutMode`) can force a tier.
+
+| Band             | Width        | Tier      | Shell                                                                        |
+| ---------------- | ------------ | --------- | ---------------------------------------------------------------------------- |
+| `phone`          | under 700    | `phone`   | top bar, one pane at a time, a five-entry tab bar; no rails                  |
+| `rails-full`     | 700 to 799   | `tablet`  | left rail, grid, right rail; an open right-sidebar view takes the full width |
+| `rails-halves`   | 800 to 1099  | `tablet`  | two halves, a rail each (`useLayoutPresentation` returns `"halves"`)         |
+| `desktop-narrow` | 1100 to 1279 | `tablet`  | the desktop shell, with the left sidebar collapsed by default                |
+| `desktop`        | 1280 and up  | `desktop` | left rail, docked left sidebar, grid, docked right sidebar, bottom Dock      |
+
+A coarse pointer changes target sizes (44px), adds the terminal key bar, turns
+popovers into sheets and drops hover-only controls at any width; it does not
+change the layout. It also turns the bottom Dock off (`lib/dockAvailability.ts`;
+see [`dock.md`](dock.md)).
+
+**Two modes.** `viewMode` in the store (`"list"` is Workspace, `"kanban"` is
+Tasks; `data-mode` on `.app`, remembered per device) switches between the
+dockview grid and the task board (`KanbanBoardOverlay`, an overlay over the
+grid, so the grid and its terminals stay mounted). Tasks mode hides the left
+sidebar (from 1100px, where there is one) and the Dock from 700px. See [`tasks.md`](tasks.md).
+
+**Left rail** (`LeftRail.tsx`, from 700px): the mode switch, the left
+sidebar's toggle (from 1100px only), the workspace chip and list
+(`rail/WorkspaceChip.tsx`), the open panes with a "+" while the left sidebar is
+not showing (`rail/RailPaneList.tsx`), and at the bottom the command box (the
+⌘K palette), the notification bell and Settings.
+
+**Left sidebar** (projects and their sessions, workspaces; `Sidebar.tsx` with
+`WorkspaceSwitcher.tsx`): docked from 1100px, pushing the grid, never
+floating. From 1280px it is open by default and the rail's toggle flips the
+persisted `sidebarCollapsed`; from 1100 to 1279px it is collapsed by default
+and the toggle flips a flag local to that band (App.tsx's
+`narrowSidebarShown`, reset each time the window enters the band), so the
+wider preference is not touched. From 700 to 1099px there is no left sidebar
+and no toggle: the rail's workspace chip switches workspaces, its pane list
+and "+" reach the open panes and the launcher, and the launcher (its Where row,
+and its Open existing tab under a coarse pointer) and the ⌘K palette's
+session search reach any project's sessions (#3041). Like the phone's, the
+sidebar still mounts there, hidden, because it loads projects, sessions, hosts
+and tasks and owns the GitHub subscriptions. A forced `tablet` layout mode
+resolves to the two-halves band, so it gets no left sidebar either.
+
+**Right rail and sidebar** (`right-sidebar/`): docked at every width from
+700px, never floating. The rail's views are Git, History, GitHub, Tasks (when
+Task Master is on), Files, Project and Devices, plus **Browser** and **Dock**
+below 1100px (`viewBands.ts`), where there is no room for a browser pane or the
+bottom Dock beside the grid. From 1100px the Browser icon stays on the rail as
+a button that opens or focuses the grid Browser pane (`railButtonOutsideBands`,
+#3403); Dock has no icon there. A view's detail (a task, a PR, an issue) opens
+inside the sidebar; the task detail is that one surface on every width, with a
+pop-out to a docked panel from 1100px (`useCanPopOutTask`).
+
+**Two halves** (800 to 1099px, `fold/`, `lib/foldHalves.ts`): the left half is
+the grid with the left rail's panes, the right half shows one session or one
+right-sidebar view, so at most two sessions are on screen. Which pane shows on
+which half is device-local (`crs.foldHalves`) and never written into the saved
+workspace layout.
+
+**A session opened on the fold or the phone joins the shared workspace**
+(#3033). Both are device-local views and never save `workspaces.layout`
+(`useWorkspacePersistence` suspends saves there). Instead,
+`useFoldHalves` diffs the panes it sees and records each session opened
+there on the server (`POST /api/workspaces/:id/pending-opens`, the
+`workspace_pending_opens` table, with the session it replaced on its half as
+the reference). A client that saves the layout (the grid presentation)
+polls `GET …/pending-opens` (`useApplyPendingOpens`, every 5s while the
+tab is visible), adds each pane with its own dockview API, not activated, and
+acknowledges it (`POST …/pending-opens/:sessionId/ack`, one atomic
+delete). The usual autosave then persists the pane. The hook uses the same
+gates as `useAutoOpenChildPanels`: the restore has finished, `restoringRef` is
+down, and saves are not suspended. A session already open, or one that has
+ended, is acknowledged without adding anything. A session the client has not
+listed yet is left for a later poll. An open older than a day is left out of
+the list and deleted on the next record or acknowledge (the polled GET stays a
+plain read), so a long stretch on the phone does not land at the desk as a
+burst of panes. The backend never reads the layout for any of this.
+
+Closing a pane on the fold or the phone stays local: the desk's pane stays,
+and a pending open not yet applied is withdrawn (`DELETE
+…/pending-opens/:sessionId`). Killing a session there removes its pane at the
+desk as well. `killSession` drops its pending opens, a killed session cannot
+be recorded, and `useCloseKilledSessionPanels` closes the desk's pane.
+
+The placement rule is `placePendingOpen` in `panelUtils.ts`, a pure function
+over the tiled groups' rects. The user's own column count limits the width,
+each column may be split once into two rows, and after that new sessions
+become tabs:
+
+1. One pane: the new session opens to its right, 50/50.
+2. Two or more columns: no column is added. A column with a single row is
+   split `below`, so two columns fill to 2x2 and three to 3x2.
+3. When every column has two rows, or a split would break the size floor, the
+   new session becomes a tab.
+4. The pane split is the reference session's, if rule 2 allows it. Otherwise
+   it is the largest pane rule 2 allows. A tab goes to the reference
+   session's pane, otherwise to the pane last active.
+5. A split only happens when the axis it halves keeps at least 40 columns (a
+   split to the right) or 10 rows (a split below) of the desktop's terminal
+   font (`terminalCellPx`) in both resulting panes. The other axis does not
+   change and is not checked. The floor only stops slivers in a small window:
+   2x2 fills on a 1440px laptop even with both sidebars open (a grid of about
+   900 x 700px).
+6. The added pane is not activated, so the desk keeps showing what it showed.
+   The issue's attention marker until first activation is not implemented: no
+   such marker exists yet, and the pane shows only the session's own status
+   badge.
+
+An empty workspace gets the session as its single pane. A layout whose
+columns are not plain stacks of rows counts its leaf panes: with fewer than
+2 x columns, and room above the floor, the largest pane is split `below`;
+otherwise the new session is a tab.
+
+**Phone** (under 700px): the top bar (`Toolbar.tsx`: the session switcher and,
+in Workspace mode, the palette) and the tab bar at the bottom
+(`PhoneModeBar.tsx`, #3288): Workspace · Tasks · New · Inbox · More, each an
+icon over its label. New is the mode's primary action (the new-session
+launcher, or the Tasks board's new-task form, whose open state is in the store
+for that reason); Inbox is the phone's one `NotificationBell`, its feed a
+bottom sheet; More opens a sheet that lists exactly the right rail's views and
+Settings. The bar is hidden, not unmounted, while the on-screen keyboard is up,
+so the Inbox sheet survives a field in it raising the keyboard. A view opens
+over the workspace down to the tab bar, which stays visible and is the way out
+(#3216): More shows as the active entry, Workspace or Tasks closes the view,
+and another view from the sheet replaces it. The view's head names it, with no
+back control of its own; a pushed detail (a task, a PR) keeps its Back.
+There is no drawer: the left sidebar still mounts, hidden, because it loads
+projects, sessions and their GitHub subscriptions. Android's back gesture
+closes the topmost sheet, then a detail, then the view
+(`hooks/usePhoneBackStack.ts`).
+
+**Where Devices, Browser and the Dock live.** Devices: the right sidebar's
+Devices view on every width (the phone through "⋯"), plus a device's own
+dockview pane. Browser: a dockview browser pane from 1100px, the Browser view
+below. The grid's Browser pane (`BrowserPaneHost.tsx` around `BrowserShell.tsx`)
+hosts both browsers behind a Preview / Agent's browser switch; both panel
+components a saved layout can hold, `browser` and `browserPane`, load it, one
+starting in Preview and the other in Agent's browser, and the mode lives in the
+panel's params, so the backend still stores the layout as an opaque blob. Dock: the bottom Dock under a fine pointer from 700px (under the left half on
+the two halves), and the read-only Dock view below 1100px; under a coarse
+pointer from 1100px there is no Dock yet (a decision still open).
+
 ## Terminal WebSocket backpressure and resync
 
 `/ws/terminal` carries raw binary frames (PTY bytes) plus JSON control frames

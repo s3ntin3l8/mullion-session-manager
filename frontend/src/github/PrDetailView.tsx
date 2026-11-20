@@ -314,19 +314,6 @@ export function PrDetailView({
     readPersistedSection(CONVERSATION_KEY, true),
   );
   const openThreadsRef = useRef<HTMLDivElement>(null);
-  // The branch line under the title only shows while the view is at the top:
-  // a zero-height-ish sentinel above the sticky header leaves the viewport
-  // as soon as the user scrolls.
-  const topSentinelRef = useRef<HTMLDivElement>(null);
-  const [scrolled, setScrolled] = useState(false);
-  const loaded = pr != null;
-  useEffect(() => {
-    const el = topSentinelRef.current;
-    if (!el || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(([e]) => setScrolled(!e.isIntersecting));
-    io.observe(el);
-    return () => io.disconnect();
-  }, [loaded]);
   // The same PR list the panel joins on, so the row and the detail agree on
   // linked sessions before the WS push has filled the store.
   const links = useMullionLinks(projectId, { prs: usePrList(projectId)?.prs });
@@ -656,7 +643,6 @@ export function PrDetailView({
 
   return (
     <div className="gh-detail pr-detail sb-detail">
-      <div ref={topSentinelRef} className="pr-top-sentinel" aria-hidden="true" />
       <div className="pr-detail-top">
         <DetailHeader
           onBack={goBack}
@@ -665,7 +651,7 @@ export function PrDetailView({
               <span className="mono">#{pr.number}</span> · {pr.title}
             </>
           }
-          subtitle={scrolled ? undefined : `${pr.baseBranch} ← ${pr.headBranch}`}
+          subtitle={`${pr.baseBranch} ← ${pr.headBranch}`}
           actions={
             <IconButton label="Refresh" busy={reloading} onClick={runReload}>
               <RefreshIcon size={14} />
@@ -734,7 +720,9 @@ export function PrDetailView({
             <TaskStatusBlock
               task={entry.task}
               actions={
-                hasStripActions(entry.task) ? <TaskActions task={entry.task} overflow /> : undefined
+                hasStripActions(entry.task) ? (
+                  <TaskActions task={entry.task} overflow confirmApprove />
+                ) : undefined
               }
               onOpenTask={() =>
                 useDashboardStore

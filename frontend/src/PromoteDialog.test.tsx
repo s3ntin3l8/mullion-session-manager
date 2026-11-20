@@ -6,6 +6,7 @@ import { PromoteDialog } from "./PromoteDialog.js";
 import { ApiError } from "./api/index.js";
 import type { Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+import { dropdownLabel, pickDropdownOption } from "./test/dropdown.js";
 
 // Issue #271 — PromoteDialog reads two store actions directly; everything
 // else it needs (project/session/onClose) comes via props.
@@ -145,8 +146,8 @@ describe("PromoteDialog (issue #271)", () => {
       await screen.findByText("Move this session's work into a fresh, isolated worktree."),
     ).toBeInTheDocument();
     expect(screen.getByText("Cancel")).toBeInTheDocument();
-    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
-    expect(select).toHaveDisplayValue("origin/main (default)");
+    const select = await screen.findByRole("combobox");
+    expect(dropdownLabel(select)).toBe("origin/main (default)");
   });
 
   // Issue #271 follow-up — a repo with no resolvable default (older
@@ -171,8 +172,8 @@ describe("PromoteDialog (issue #271)", () => {
     );
     render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={vi.fn()} />);
 
-    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
-    expect(select).toHaveDisplayValue("main (current)");
+    const select = await screen.findByRole("combobox");
+    expect(dropdownLabel(select)).toBe("main (current)");
   });
 
   it("submits baseRef/branchName/seedPrompt to promoteSession and closes on success", async () => {
@@ -181,7 +182,7 @@ describe("PromoteDialog (issue #271)", () => {
     render(<PromoteDialog session={makeSession()} project={PROJECT} onClose={onClose} />);
 
     await screen.findByRole("combobox");
-    await user.selectOptions(screen.getByRole("combobox"), "feature/x");
+    pickDropdownOption(screen.getByRole("combobox"), "feature/x");
     await user.type(screen.getByPlaceholderText(/mullion\/session-42/), "my-branch");
     await user.type(screen.getByPlaceholderText(/sent as its first message/i), "resume here");
     await user.click(screen.getByText("Create worktree"));
@@ -347,8 +348,8 @@ describe("PromoteDialog (issue #271)", () => {
     // (issue #271 follow-up, layered on top of #680's fix, not a reversal
     // of it), and the suggestion surfaces as a distinct, user-applied hint
     // instead.
-    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
-    expect(select).toHaveDisplayValue("origin/main (default)");
+    const select = await screen.findByRole("combobox");
+    expect(dropdownLabel(select)).toBe("origin/main (default)");
     expect(screen.getByText("feature/x", { selector: "code" })).toBeInTheDocument();
     expect(screen.getByText("use it")).toBeInTheDocument();
   });
@@ -366,12 +367,12 @@ describe("PromoteDialog (issue #271)", () => {
       />,
     );
 
-    const select = (await screen.findByRole("combobox")) as HTMLSelectElement;
-    expect(select).toHaveDisplayValue("origin/main (default)");
+    const select = await screen.findByRole("combobox");
+    expect(dropdownLabel(select)).toBe("origin/main (default)");
 
     await user.click(screen.getByText("use it"));
 
-    expect(select).toHaveDisplayValue("feature/x");
+    expect(dropdownLabel(select)).toBe("feature/x");
     expect(screen.queryByText("use it")).not.toBeInTheDocument();
   });
 

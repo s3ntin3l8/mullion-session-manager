@@ -129,12 +129,82 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
     });
   }
 
+  // #3045/#3055 — rows paint a --seg hover tint of --fg over the sidebar, and
+  // some stack a second one (a workspace section header's 5% under its
+  // button's --seg). --dim and --muted were 3.58:1 / 3.87:1 on that stack, the
+  // root of every "--dim below 4.5" finding verify-ui's C3 reported.
+  it("--dim and --muted clear AA on a hover tint, and on two stacked", () => {
+    const fg = resolve(vars, "--fg");
+    const sidebar = resolve(vars, "--sidebar");
+    const seg = Number(vars.get("--seg")!.match(/(\d+)%/)![1]);
+    const hovered = tint(fg, sidebar, seg);
+    const stacked = tint(fg, tint(fg, sidebar, 5), seg);
+    for (const [label, bg] of [
+      ["--seg over --sidebar", hovered],
+      ["--seg over a 5% header hover", stacked],
+    ] as const) {
+      for (const name of ["--dim", "--muted"]) {
+        expect(contrast(resolve(vars, name), bg), `${name} on ${label}`).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+    }
+  });
+
+  it("--muted stays a step stronger than --dim", () => {
+    const sidebar = resolve(vars, "--sidebar");
+    expect(contrast(resolve(vars, "--muted"), sidebar)).toBeGreaterThan(
+      contrast(resolve(vars, "--dim"), sidebar) + 0.5,
+    );
+  });
+
   it("--border is visibly stronger than the old ~1.1:1 hairline", () => {
     const sidebar = resolve(vars, "--sidebar");
     expect(contrast(resolve(vars, "--border"), sidebar)).toBeGreaterThanOrEqual(1.3);
     expect(contrast(resolve(vars, "--border"), sidebar)).toBeGreaterThan(
       contrast(resolve(vars, "--border-soft"), sidebar),
     );
+  });
+
+  // #3015 — sheets and popovers are a translucent layer (--material) over
+  // whatever is behind them: a white web preview under the dark theme, a
+  // black terminal under the light one. Compositing is monotone, so pure white
+  // and pure black are the worst backdrops (blur and saturation stay inside
+  // that range). The invariant: over either, material is never closer to the
+  // theme's text than solid --chrome is. Then every colour that clears AA on
+  // --chrome clears it on material, whether it is listed here or not.
+  it("material over any backdrop is never closer to the text than --chrome", () => {
+    const raw = vars.get("--material") ?? "";
+    const m = raw.match(/^color-mix\(in srgb,\s*var\((--[\w-]+)\)\s+(\d+)%,\s*transparent\)$/);
+    expect(m, `--material is a translucent mix: ${raw}`).not.toBeNull();
+    const [, base, percent] = m!;
+    expect(Number(percent)).toBeLessThan(100);
+    const chrome = luminance(resolve(vars, "--chrome"));
+    // Light text (dark theme) wants a surface no lighter than --chrome; dark
+    // text (light theme) one no darker.
+    const lightText = luminance(resolve(vars, "--fg")) > chrome;
+    for (const backdrop of [
+      [255, 255, 255],
+      [0, 0, 0],
+    ] as Rgb[]) {
+      const surface = luminance(tint(resolve(vars, base), backdrop, Number(percent)));
+      const where = `--material over rgb(${backdrop.join(",")})`;
+      if (lightText) expect(surface, where).toBeLessThanOrEqual(chrome);
+      else expect(surface, where).toBeGreaterThanOrEqual(chrome);
+    }
+    // And so, for the text roles that sit on it:
+    for (const fg of ["--fg", "--muted", "--dim", "--accent", "--r"]) {
+      if (contrast(resolve(vars, fg), resolve(vars, "--chrome")) < 4.5) continue;
+      for (const backdrop of [
+        [255, 255, 255],
+        [0, 0, 0],
+      ] as Rgb[]) {
+        const surface = tint(resolve(vars, base), backdrop, Number(percent));
+        expect(contrast(resolve(vars, fg), surface), `${fg} on material`).toBeGreaterThanOrEqual(
+          4.5,
+        );
+      }
+    }
   });
 
   it("defines eight graph lanes", () => {

@@ -8,6 +8,7 @@ import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch, type RouteTable } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";
+import { pickDropdownOption } from "../../test/dropdown.js";
 
 // Closes the gap Hermes flagged on PR #35 (issue #26, phase 4): "the
 // non-trivial 409 -> cascade retry path is entirely unverified." Exercises
@@ -222,11 +223,10 @@ describe("Settings -> Hosts", () => {
     });
 
     it("sets a remote host to burst from its role select", async () => {
-      const user = userEvent.setup();
       render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
       const row = await screen.findByTestId("host-row-remote-1");
-      await user.selectOptions(within(row).getByRole("combobox", { name: /^Role of/ }), "burst");
+      pickDropdownOption(within(row).getByRole("combobox", { name: /^Role of/ }), "burst");
 
       await waitFor(() => expect(hostsDb[0].role).toBe("burst"));
     });

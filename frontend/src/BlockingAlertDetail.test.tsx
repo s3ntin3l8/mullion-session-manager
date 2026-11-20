@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { BlockingAlertDetail } from "./BlockingAlertDetail.js";
+import { dropdownValue, pickDropdownOption } from "./test/dropdown.js";
 import type { BlockingAlertsResponse } from "./api/blocking-alerts-types.js";
 
 const getBlockingAlerts = vi.fn();
@@ -133,7 +134,7 @@ describe("BlockingAlertDetail", () => {
       expect(screen.getByTestId("blocking-alert-dismiss-form")).toHaveTextContent(
         "js/path-injection at src/routes/fs.ts:10",
       );
-      expect(screen.getByLabelText("Dismissal reason")).toHaveValue("false positive");
+      expect(dropdownValue(screen.getByLabelText("Dismissal reason"))).toBe("false positive");
       expect(confirm()).toBeDisabled();
       const box = screen.getByLabelText("Dismissal comment");
       fireEvent.change(box, { target: { value: "   " } });
@@ -168,9 +169,7 @@ describe("BlockingAlertDetail", () => {
         },
       });
       await openConfirm();
-      fireEvent.change(screen.getByLabelText("Dismissal reason"), {
-        target: { value: "won't fix" },
-      });
+      pickDropdownOption(screen.getByLabelText("Dismissal reason"), "won't fix");
       fireEvent.change(screen.getByLabelText("Dismissal comment"), { target: { value: " ok " } });
       fireEvent.click(confirm());
       expect(await screen.findByTestId("blocking-alert-audit")).toHaveTextContent(

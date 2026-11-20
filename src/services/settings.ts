@@ -13,14 +13,7 @@ import type { getDb } from "../db/client.js";
 // AppSettings itself stays declared here — see shared/types.ts's own doc
 // comment for why (its notificationMatrix field is a real, deliberate
 // backend/frontend type divergence, not cosmetic drift).
-import type {
-  Theme,
-  CursorStyle,
-  SidebarDensity,
-  SoundName,
-  LayoutMode,
-  TabletPaneCap,
-} from "../shared/types.js";
+import type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode } from "../shared/types.js";
 import {
   buildWorkflowConventionsText,
   WORKFLOW_CONVENTION_QUESTIONS,
@@ -32,7 +25,7 @@ import {
   toActivityIntervals,
 } from "./runtime-config.js";
 
-export type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode, TabletPaneCap };
+export type { Theme, CursorStyle, SidebarDensity, SoundName, LayoutMode };
 
 // Shared shape + defaults for the server-persisted Settings blob (the
 // Settings modal's "Everything wired now" rework). One JSON blob, same
@@ -93,7 +86,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   sidebarDensity: "comfortable",
   layoutMode: "auto",
-  tabletPaneCap: 2,
   balancePanesOnDrop: true,
   projectRoots: [],
   autoDetectHostCheckouts: false,
@@ -516,7 +508,7 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
     // skipPermissions below — deepMerge only proves these are *a* string/
     // number, not a value the frontend's layout-tier switch actually
     // branches on; an unrecognized value falls back rather than reaching
-    // resolveLayoutTier/tabletPositioning as a silent no-op.
+    // resolveLayoutTier as a silent no-op.
     layoutMode:
       settings.layoutMode === "auto" ||
       settings.layoutMode === "phone" ||
@@ -524,7 +516,6 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       settings.layoutMode === "desktop"
         ? settings.layoutMode
         : DEFAULT_SETTINGS.layoutMode,
-    tabletPaneCap: settings.tabletPaneCap === 3 ? 3 : 2,
     externalReadRoots: sanitizeExternalReadRoots(settings.externalReadRoots),
     // A patch can only ever replace the array wholesale; drop anything that
     // isn't an allowlisted cache id so it can't be persisted, let alone acted on.

@@ -12,3 +12,14 @@
 // `import type { LayoutTier } from "./lib/layoutTier.js"` keeps working —
 // only the definition moved.
 export type LayoutTier = "phone" | "tablet" | "desktop";
+
+// The finer, five-way split of the width (Tasks mode redesign, design
+// section 9.1). `LayoutTier` above stays the coarse three-way answer every
+// existing consumer reads; the band is a separate value for the slices that
+// need to tell a narrow tablet from a foldable's two-halves width.
+//   phone          under 700
+//   rails-full     700 to 799.98: rails, an open view takes the full width
+//   rails-halves   800 to 1099.98: rails, two halves side by side
+//   desktop-narrow 1100 to 1279.98: desktop structure, left sidebar collapsed
+//   desktop        1280 and up
+export type LayoutBand = "phone" | "rails-full" | "rails-halves" | "desktop-narrow" | "desktop";

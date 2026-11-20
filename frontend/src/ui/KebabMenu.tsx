@@ -2,9 +2,13 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
+import type { LayoutMode } from "../api/index.js";
 import { themeClassName } from "../store/theme.js";
 import { OverflowIcon } from "./icons.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { useCoarsePointer, useLayoutTier } from "../lib/layoutTier.js";
+import { BottomSheet } from "./BottomSheet.js";
+import { usePresence } from "../hooks/usePresence.js";
 import {
   useVisualViewportChange,
   visibleViewport,
@@ -61,32 +65,78 @@ export interface KebabMenuItem {
   opensOverlay?: boolean;
 }
 
+// #3071 — opt-in touch variant. Under a coarse pointer a menu given `sheet`
+// opens its items as a bottom sheet (rows of 44px and more, never clipped by
+// a dialog or a sheet it sits in), the split PaneActionsMenu.tsx makes; under
+// a fine pointer it stays the anchored popover. Menus without it keep the
+// popover on every pointer.
+export interface KebabMenuSheet {
+  // The sheet's visible title (the menu's subject: a project's name).
+  title: string;
+  // The sheet's close button.
+  closeLabel: string;
+}
+
+// Anything a press would focus, including a `tabindex="-1"` container (a
+// dockview pane activates its group when its content takes focus).
+const FOCUSABLE_TARGET =
+  "button, [href], input, select, textarea, [tabindex], [contenteditable]:not([contenteditable='false'])";
+
 export function KebabMenu({
   items,
   title = "More…",
   trigger,
   menuPlacement = "bottom",
   menuAlign = "right",
+  triggerClassName = "kebab-trigger-btn",
+  menuLabel,
+  menuClassName,
+  sheet,
 }: {
   items: KebabMenuItem[];
   title?: string;
   trigger?: ReactNode;
+  // Replaces the trigger's default chrome (a launcher-sized "⋯").
+  triggerClassName?: string;
+  // The menu's accessible name; defaults to `title`.
+  menuLabel?: string;
+  // Extra class on the portaled popover (not the sheet), e.g. to stack it
+  // above the popover its trigger sits in.
+  menuClassName?: string;
+  sheet?: KebabMenuSheet;
   // "top" grows the portaled menu upward from the trigger instead of
   // dropping it down — for a trigger pinned near the bottom of the
   // viewport (the Dock), a downward menu can run off-screen with no way to
   // scroll to its lower items. "auto" measures the rendered menu and opens
   // upward when it cannot fit below and there is more room above — useful
-  // for sidebar rows whose position changes as the user scrolls.
-  menuPlacement?: "bottom" | "top" | "auto";
+  // for sidebar rows whose position changes as the user scrolls. "side"
+  // (#3073) opens it beside the trigger, to its right (to its left when the
+  // right has no room), top-aligned with it and kept on screen: for a
+  // trigger inside a popover, whose list a dropped-down menu would cover.
+  menuPlacement?: "bottom" | "top" | "auto" | "side";
   menuAlign?: "left" | "right";
 }) {
   const theme = useDashboardStore((s) => s.theme);
+  const coarse = useCoarsePointer();
+  // The sheet's width modifier only. Read defensively: KebabMenu renders in
+  // plenty of places (and tests) whose store carries no settings, and only a
+  // `sheet` menu needs the tier at all.
+  const tier = useLayoutTier(
+    useDashboardStore(
+      (s) => (s as { settings?: { layoutMode?: LayoutMode } }).settings?.layoutMode,
+    ) ?? "auto",
+  );
+  const asSheet = sheet !== undefined && coarse;
   const [open, setOpen] = useState(false);
+  const popoverOpen = open && !asSheet;
+  // The sheet's own focus-restore suppressor (BottomSheet owns that trap).
+  const sheetSuppressRestoreRef = useRef<(() => void) | null>(null);
   // DOMRect (not just {top,right}) to mirror CustomSelect's own triggerRect
   // — getMenuStyle below needs rect.top for the "top" placement's `bottom:`
   // calc, which the old {top,right} shape didn't carry.
   const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
   const [menuHeight, setMenuHeight] = useState(0);
+  const [menuWidth, setMenuWidth] = useState(0);
   const [armedKey, setArmedKey] = useState<string | null>(null);
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting static
   // for the whole arm window — a countdown that doesn't move reads as stuck.
@@ -111,19 +161,35 @@ export function KebabMenu({
   // `useFocusTrap` is the same shared primitive PaneActionsMenu uses for
   // its overflow menu — see that component for why Escape is scoped to the
   // menu's own `onKeyDown` rather than a window listener.
-  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: open,
+  const { onKeyDown: onTrapKeyDown, suppressRestore: suppressPopoverRestore } = useFocusTrap({
+    active: popoverOpen,
     containerRef: menuRef,
   });
+  const suppressRestore = () => {
+    if (asSheet) sheetSuppressRestoreRef.current?.();
+    else suppressPopoverRestore();
+  };
+  // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
+  const { present, state: presence } = usePresence(popoverOpen, menuRef);
+
+  const close = () => {
+    clearArmTimer();
+    setOpen(false);
+    setArmedKey(null);
+  };
 
   const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
-      setOpen(false);
-      setArmedKey(null);
-      clearArmTimer();
+      close();
       return;
     }
+    if (onMenuArrowKeys(e)) return;
+    onTrapKeyDown(e);
+  };
+  // Arrows only — in the sheet, BottomSheet owns Escape and the Tab trap.
+  // Returns whether it handled the key.
+  const onMenuArrowKeys = (e: ReactKeyboardEvent<HTMLDivElement>): boolean => {
     // APG menu pattern — ArrowUp/ArrowDown (and Home/End) move focus among
     // the `role="menuitem"` children. The shared hook's Tab-trap alone
     // doesn't provide that.
@@ -131,7 +197,7 @@ export function KebabMenu({
       const items = menuRef.current
         ? Array.from(menuRef.current.querySelectorAll<HTMLElement>('[role="menuitem"]'))
         : [];
-      if (items.length === 0) return;
+      if (items.length === 0) return false;
       e.preventDefault();
       const currentIndex = items.indexOf(document.activeElement as HTMLElement);
       const nextIndex =
@@ -147,9 +213,9 @@ export function KebabMenu({
                 ? items.length - 1
                 : (currentIndex - 1 + items.length) % items.length;
       items[nextIndex]?.focus();
-      return;
+      return true;
     }
-    onTrapKeyDown(e);
+    return false;
   };
 
   const clearArmTimer = () => {
@@ -167,45 +233,76 @@ export function KebabMenu({
   );
 
   useEffect(() => {
-    if (!open) return;
+    if (!popoverOpen) return;
     const onOutsideClick = (e: MouseEvent) => {
       const target = e.target as Node;
       if (btnRef.current?.contains(target)) return;
       if (menuRef.current?.contains(target)) return;
+      // #3071 — a press on nothing focusable would move focus to <body> as
+      // its default action, after the trap has put it back on the trigger.
+      // Keep it on the trigger. A press on a control still focuses that
+      // control: that is where the user meant to go.
+      if (!(target instanceof Element && target.closest(FOCUSABLE_TARGET))) e.preventDefault();
       clearArmTimer();
       setOpen(false);
       setArmedKey(null);
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [open]);
+  }, [popoverOpen]);
 
   // Issue #1399 — re-read the trigger's rect when the iOS visual viewport
   // pans/resizes while open: `.app` (and this trigger with it) moves with the
   // visual viewport since #1398, and getMenuStyle below derives everything
   // from `triggerRect`, so refreshing it is enough to keep the menu attached.
-  useVisualViewportChange(open, () => {
+  useVisualViewportChange(popoverOpen, () => {
     if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
   });
+  // A "side" menu belongs to a row inside a scrolling list (the workspace
+  // picker, #3073): follow the row when that list scrolls.
+  useEffect(() => {
+    if (!popoverOpen || menuPlacement !== "side") return;
+    const onScroll = (e: Event) => {
+      // The menu's own scrolling moves nothing it is anchored to.
+      if (menuRef.current?.contains(e.target as Node) || !btnRef.current) return;
+      const next = btnRef.current.getBoundingClientRect();
+      // Most scrolls (a terminal behind the menu) move nothing: returning the
+      // same rect skips the re-render and the layout effect's measurement.
+      setTriggerRect((prev) =>
+        prev &&
+        prev.top === next.top &&
+        prev.left === next.left &&
+        prev.bottom === next.bottom &&
+        prev.right === next.right
+          ? prev
+          : next,
+      );
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
+  }, [popoverOpen, menuPlacement]);
 
   // Re-clamp after rendering, as PaneActionsMenu does for its measured
   // width. scrollHeight includes content hidden by maxHeight; measuring the
   // capped bounding rect would mistake a tiny scroll box for a menu that fits.
   // A layout effect corrects the first placement before the browser paints.
   useLayoutEffect(() => {
-    if (open && menuPlacement === "auto" && menuRef.current) {
+    if (popoverOpen && (menuPlacement === "auto" || menuPlacement === "side") && menuRef.current) {
       setMenuHeight(menuRef.current.scrollHeight);
+      setMenuWidth(menuRef.current.offsetWidth);
     }
-  }, [open, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
+  }, [popoverOpen, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
 
   const handleItemClick = (item: KebabMenuItem) => {
     if (item.disabled) return;
     // The action is about to take focus somewhere else (another overlay).
     // Tell the focus trap not to pull it back to this menu's trigger when
-    // the menu closes — see `opensOverlay` on KebabMenuItem.
-    if (item.opensOverlay) suppressRestore();
+    // the menu closes — see `opensOverlay` on KebabMenuItem. Only on the
+    // click that runs the action: an arming click that is then cancelled
+    // (Escape, a press outside) must still return focus to the trigger.
     if (item.confirm) {
       if (armedKey === item.key) {
+        if (item.opensOverlay) suppressRestore();
         clearArmTimer();
         setArmedKey(null);
         setOpen(false);
@@ -228,6 +325,7 @@ export function KebabMenu({
       }
       return;
     }
+    if (item.opensOverlay) suppressRestore();
     setOpen(false);
     item.onClick();
   };
@@ -255,6 +353,7 @@ export function KebabMenu({
   const getMenuStyle = (): React.CSSProperties | null => {
     const rect = triggerRect;
     if (!rect) return null;
+    if (menuPlacement === "side") return getSideMenuStyle(rect);
     const style: React.CSSProperties = {
       position: "fixed",
       right: menuAlign === "left" ? "auto" : window.innerWidth - rect.right,
@@ -280,19 +379,78 @@ export function KebabMenu({
     }
     return style;
   };
-  const menuStyle = getMenuStyle();
+  // "side": beside the trigger rather than under it. Before the first
+  // measurement the width is unknown (0), which reads as "fits on the right";
+  // the layout effect above corrects it before paint.
+  const getSideMenuStyle = (rect: DOMRect): React.CSSProperties => {
+    // The visible viewport's right edge (a panned or zoomed iOS visual
+    // viewport), not the layout viewport's.
+    const visible = visibleViewport();
+    const gap = 4;
+    const fitsRight = rect.right + gap + menuWidth <= visible.right - 8;
+    const top = Math.max(
+      visible.top + 8,
+      Math.min(rect.top - gap, visible.bottom - 8 - menuHeight),
+    );
+    return {
+      position: "fixed",
+      left: fitsRight ? rect.right + gap : "auto",
+      right: fitsRight ? "auto" : window.innerWidth - rect.left + gap,
+      top,
+      bottom: "auto",
+      maxWidth: window.innerWidth - 16,
+      maxHeight: menuMaxHeight(visible.bottom - top - 8),
+      overflowY: "auto",
+    };
+  };
+  const menuStyle = asSheet ? null : getMenuStyle();
+  const menuItems = (
+    <>
+      {items.map((item) => (
+        <button
+          key={item.key}
+          className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
+            armedKey === item.key ? " armed" : ""
+          }`}
+          role="menuitem"
+          // Issue #1106 — `aria-disabled`, not the native `disabled`
+          // attribute: a disabled button doesn't receive pointer
+          // events, which is exactly what makes a `title` on it
+          // unreliable across engines. handleItemClick's own
+          // `if (item.disabled) return` above is what actually keeps
+          // this inert; aria-disabled is presentation + a11y only.
+          aria-disabled={item.disabled || undefined}
+          title={item.title}
+          onClick={() => handleItemClick(item)}
+        >
+          {item.icon}
+          <span style={{ flex: 1 }}>
+            {armedKey === item.key && item.armLabel ? item.armLabel : item.label}
+          </span>
+          {armedKey === item.key && (
+            <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
+              {armSecondsLeft}s
+            </span>
+          )}
+        </button>
+      ))}
+    </>
+  );
+  // An upward menu has its `top` resolved to "auto" (see getMenuStyle).
+  const opensUpward = menuStyle?.top === "auto";
 
   return (
     <>
       <button
         ref={btnRef}
-        className="kebab-trigger-btn"
+        className={triggerClassName}
         title={title}
         // The trigger is an icon-only button, so `title` alone would be its
         // only accessible name — and a tooltip is not a reliable one. The
         // label states what the menu does for this row.
         aria-label={title}
-        aria-haspopup="menu"
+        // Under a coarse pointer a sheet menu opens in a dialog.
+        aria-haspopup={asSheet ? "dialog" : "menu"}
         aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation();
@@ -324,48 +482,56 @@ export function KebabMenu({
       >
         {trigger ?? <OverflowIcon size={15} />}
       </button>
-      {open &&
+      {present &&
         menuStyle &&
         createPortal(
           <div
             ref={menuRef}
-            className={themeClassName(theme, "pane-tab-overflow-menu")}
+            className={themeClassName(theme, "pane-tab-overflow-menu", menuClassName)}
             style={menuStyle}
+            data-presence={presence}
+            data-placement={
+              menuPlacement === "side"
+                ? menuStyle.left === "auto"
+                  ? "side-left"
+                  : "side"
+                : opensUpward
+                  ? "top"
+                  : "bottom"
+            }
+            inert={presence === "leaving"}
             role="menu"
+            aria-label={menuLabel ?? title}
             onKeyDown={onMenuKeyDown}
             onClick={(e) => e.stopPropagation()}
           >
-            {items.map((item) => (
-              <button
-                key={item.key}
-                className={`pane-tab-overflow-item${item.danger ? " danger" : ""}${
-                  armedKey === item.key ? " armed" : ""
-                }`}
-                role="menuitem"
-                // Issue #1106 — `aria-disabled`, not the native `disabled`
-                // attribute: a disabled button doesn't receive pointer
-                // events, which is exactly what makes a `title` on it
-                // unreliable across engines. handleItemClick's own
-                // `if (item.disabled) return` above is what actually keeps
-                // this inert; aria-disabled is presentation + a11y only.
-                aria-disabled={item.disabled || undefined}
-                title={item.title}
-                onClick={() => handleItemClick(item)}
-              >
-                {item.icon}
-                <span style={{ flex: 1 }}>
-                  {armedKey === item.key && item.armLabel ? item.armLabel : item.label}
-                </span>
-                {armedKey === item.key && (
-                  <span className="pane-tab-overflow-hint" style={{ color: "var(--o)" }}>
-                    {armSecondsLeft}s
-                  </span>
-                )}
-              </button>
-            ))}
+            {menuItems}
           </div>,
           document.body,
         )}
+      {asSheet && sheet && (
+        <BottomSheet
+          open={open}
+          onClose={close}
+          label={menuLabel ?? title}
+          closeLabel={sheet.closeLabel}
+          title={sheet.title}
+          backStack
+          sheetClassName={`pane-actions-sheet${tier === "phone" ? "" : " mobile-session-sheet--tablet"}`}
+          suppressRestoreRef={sheetSuppressRestoreRef}
+        >
+          <div
+            ref={menuRef}
+            className="pane-actions-sheet-menu"
+            role="menu"
+            aria-label={menuLabel ?? title}
+            onKeyDown={(e) => void onMenuArrowKeys(e)}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {menuItems}
+          </div>
+        </BottomSheet>
+      )}
     </>
   );
 }

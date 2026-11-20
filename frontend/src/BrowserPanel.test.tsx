@@ -1121,7 +1121,9 @@ describe("BrowserPanel", () => {
     expect(screen.getByTitle("Reload")).toBeInTheDocument();
   });
 
-  it("shows the back and forward buttons disabled when there is no history", async () => {
+  // #3371 — the Browser pane offers back and forward in Agent's browser only:
+  // a cross-origin iframe's history cannot be read.
+  it("has no back or forward buttons in external mode", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((input: RequestInfo | URL) => {
@@ -1137,10 +1139,9 @@ describe("BrowserPanel", () => {
 
     render(<BrowserPanel params={{ kind: "external" }} />);
 
-    const backBtn = screen.getByTitle("Back");
-    const forwardBtn = screen.getByTitle("Forward");
-    expect(backBtn).toBeDisabled();
-    expect(forwardBtn).toBeDisabled();
+    expect(screen.getByPlaceholderText("https://example.com")).toBeInTheDocument();
+    expect(screen.queryByTitle("Back")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Forward")).not.toBeInTheDocument();
   });
 
   it("shows favorited URLs across all projects in a dropdown in external mode", async () => {

@@ -343,6 +343,29 @@ export async function seedDemo({
   // would add a second if the browser's own first load won the race.
   await api("/api/workspaces");
 
+  // Workspace groups for the rail's workspace picker: two with workspaces, one
+  // empty (shown as a drop box), plus the ungrouped "Default" and "Scratchpad"
+  // (the "No group" section). Names and colours are fixed so renders repeat.
+  const seedGroups = [
+    { name: "Product", color: "#4f8cff", workspaces: ["Web app", "Mobile app"] },
+    { name: "Platform", color: "#3fb68b", workspaces: ["API"] },
+    { name: "Experiments", color: "#e0a030", workspaces: [] },
+  ];
+  for (const g of seedGroups) {
+    const group = await api("/api/groups", {
+      method: "POST",
+      body: JSON.stringify({ name: g.name, color: g.color }),
+    });
+    for (const name of g.workspaces) {
+      const ws = await api("/api/workspaces", { method: "POST", body: JSON.stringify({ name }) });
+      await api(`/api/workspaces/${ws.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ groupId: group.id }),
+      });
+    }
+  }
+  await api("/api/workspaces", { method: "POST", body: JSON.stringify({ name: "Scratchpad" }) });
+
   await api("/api/settings", {
     method: "PATCH",
     body: JSON.stringify({ projectRoots: [scratchRoot] }),

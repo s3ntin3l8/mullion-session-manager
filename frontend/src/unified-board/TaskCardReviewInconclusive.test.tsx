@@ -33,6 +33,8 @@ function storeState() {
     openRightSidebarIssue: vi.fn(),
     settings: { sessions: { confirmBeforeKill: false } },
     theme: "dark",
+    // The board publishes its status counts for the left rail.
+    setBoardStatuses: () => {},
     events: {},
     sessionGitStatuses: {},
     gitDiffStats: {},

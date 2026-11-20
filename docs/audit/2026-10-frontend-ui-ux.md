@@ -663,14 +663,20 @@ lands.
 
 #### 2. The `inert` drawer — confirmed unreachable
 
-At 375×812 the closed drawer carries `inert` (the property _and_ the
-attribute), 30 Tab presses land on **zero** elements inside it, and the walk
-does move — three distinct controls outside the drawer were reached, so this
-is not a pass by accident. The sharper half of the property also holds: while
-closed, the drawer **refuses** programmatic focus as well as the tab order;
-once opened, `inert` is gone and the drawer takes focus normally. The check
-asserts both halves, because "unreachable" is only meaningful if the drawer
-is reachable when it should be.
+_Written against the 375×812 drawer the redesign has since removed (#3014,
+#3041); `make verify-ui` C2 now measures the surfaces that replaced it._
+
+The audit measured that the closed drawer carried `inert`, that 30 Tab presses
+landed on zero elements inside it, and that it refused programmatic focus.
+C2 now covers two things. On the phone, the hidden `.sidebar-host-hidden`
+mount is `inert` and Tab never enters it; that element is also `display: none`,
+so this half pins the attribute and does not prove `inert` on its own. At
+1200px the docked sidebar is collapsed by default and `inert`; the check
+overrides its `visibility: hidden` fallback so `inert` is the only guard,
+walks Tab, and confirms focus is refused. It also removes `inert` in the page
+and requires focus to get in, so the check can fail. Opened from the rail's
+`[data-toggle-sidebar]` button, it must be reachable by Tab from a control
+outside it.
 
 #### 3. Rendered contrast over tinted and hovered backgrounds — two defects, both fixed
 

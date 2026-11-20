@@ -306,6 +306,37 @@ describe("seedDemo sessions", () => {
   });
 });
 
+describe("seedDemo workspace groups", () => {
+  it("seeds groups (one empty), their workspaces and an ungrouped workspace", async () => {
+    const root = mkdtempSync(path.join(dir, "seed-"));
+    const calls: { url: string; method?: string; body: Record<string, unknown> }[] = [];
+    // POSTs to a collection answer with that collection's next id, the way the
+    // backend does (workspace 1 is the seeded "Default"), so a wrong id or a
+    // workspace filed under the wrong group shows up in the assertions.
+    const nextId = { "/api/groups": 0, "/api/workspaces": 1 } as Record<string, number>;
+    const api = async (url: string, init?: { method?: string; body?: string }) => {
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : {} });
+      if (init?.method === "POST" && url in nextId) return { id: ++nextId[url] };
+      return { id: 1, taskMaster: { enabled: "on", autoClaimPaused: true } };
+    };
+    await seedDemo({ api, root });
+    const groups = calls.filter((c) => c.url === "/api/groups").map((c) => c.body.name);
+    expect(groups).toEqual(["Product", "Platform", "Experiments"]);
+    const created = calls
+      .filter((c) => c.url === "/api/workspaces" && c.method === "POST")
+      .map((c) => c.body.name);
+    expect(created).toEqual(["Web app", "Mobile app", "API", "Scratchpad"]);
+    const grouped = calls.filter(
+      (c) => /^\/api\/workspaces\/\d+$/.test(c.url) && c.method === "PATCH",
+    );
+    expect(grouped.map((c) => [c.url, c.body.groupId])).toEqual([
+      ["/api/workspaces/2", 1],
+      ["/api/workspaces/3", 1],
+      ["/api/workspaces/4", 2],
+    ]);
+  });
+});
+
 describe("seedDemo git depth and dock", () => {
   it("gives aurora-web branches, a worktree, a dev-server port and a dock control", async () => {
     const root = mkdtempSync(path.join(dir, "seed-"));

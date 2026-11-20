@@ -7,6 +7,7 @@ import { useDashboardStore } from "./store/index.js";
 import { api, LOCAL_HOST_ID } from "./api/index.js";
 import type { GitStatus, Project, Session } from "./api/index.js";
 import type * as ApiModule from "./api/index.js";
+import { pickDropdownOption } from "./test/dropdown.js";
 import { makeHost } from "./test/fixtures.js";
 
 // Uses the real zustand store (seeded via setState), same pattern as
@@ -444,8 +445,8 @@ describe("SourceControlSection (issue #433 scope B)", () => {
 
     expect(screen.getByText("branch-a")).toBeTruthy();
 
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    await user.selectOptions(select, String(PROJECT_B.id));
+    const select = screen.getByRole("combobox");
+    pickDropdownOption(select, String(PROJECT_B.id));
     expect(screen.getByText("branch-b")).toBeTruthy();
 
     act(() => {
@@ -453,7 +454,7 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     });
     expect(screen.getByText("branch-b")).toBeTruthy();
 
-    await user.selectOptions(select, "__follow__");
+    pickDropdownOption(select, "__follow__");
     expect(screen.getByText("branch-c")).toBeTruthy();
   });
 
@@ -526,8 +527,8 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     render(<SourceControlSection onOpenGit={vi.fn()} />);
     await user.click(screen.getByText("Source Control"));
 
-    const select = screen.getByRole("combobox") as HTMLSelectElement;
-    await user.selectOptions(select, String(PROJECT_B.id));
+    const select = screen.getByRole("combobox");
+    pickDropdownOption(select, String(PROJECT_B.id));
     expect(screen.getByText("branch-b")).toBeTruthy();
 
     // The pinned project disappears from the store — e.g. deleted.

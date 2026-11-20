@@ -72,7 +72,8 @@ export function TaskAgents({ task }: { task: Task }) {
   const unfolded = open && editable;
   useEffect(() => {
     if (!toggled.current) return;
-    if (unfolded) editorRef.current?.querySelector<HTMLElement>("select, input")?.focus();
+    if (unfolded)
+      editorRef.current?.querySelector<HTMLElement>(".ui-dropdown-field, input")?.focus();
     // Edit is gone when the task stopped being editable mid-edit: land on the host.
     else (editRef.current ?? rootRef.current)?.focus();
   }, [unfolded]);

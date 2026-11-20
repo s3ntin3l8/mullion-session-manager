@@ -17,6 +17,8 @@ export interface SidebarRowProps {
   expanded?: boolean;
   onClick?: () => void;
   className?: string;
+  /** Marks the title button so a list can return focus to it after a detail closes. */
+  rowKey?: string;
 }
 
 /**
@@ -35,6 +37,7 @@ export function SidebarRow({
   expanded,
   onClick,
   className,
+  rowKey,
 }: SidebarRowProps) {
   const cls = [
     "sb-row",
@@ -54,6 +57,7 @@ export function SidebarRow({
           <button
             type="button"
             className="sb-row-title sb-row-title--btn"
+            data-row-key={rowKey}
             aria-current={selected ? "true" : undefined}
             aria-expanded={expanded}
             onClick={(e) => {

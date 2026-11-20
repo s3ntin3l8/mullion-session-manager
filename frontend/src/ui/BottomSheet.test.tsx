@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BottomSheet } from "./BottomSheet.js";
@@ -354,5 +354,296 @@ describe("BottomSheet", () => {
 
     expect(screen.getByLabelText("elsewhere")).toHaveFocus();
     expect(screen.getByRole("button", { name: "Trigger" })).not.toHaveFocus();
+  });
+});
+
+// Issue #3008 — the sheet moves on the house spring. jsdom has no layout, so
+// these tests give the sheet one (a 400px travel from its top edge to the
+// bottom of the backdrop) and drive requestAnimationFrame by hand: no real
+// timers, and no assertion on how long anything takes.
+describe("BottomSheet motion", () => {
+  let frames: Map<number, FrameRequestCallback>;
+  let now: number;
+  let nextFrame: number;
+  let reduceMotion: boolean;
+
+  function frame(ms = 16) {
+    now += ms;
+    const callbacks = [...frames.values()];
+    frames.clear();
+    act(() => {
+      for (const callback of callbacks) callback(now);
+    });
+  }
+
+  function runToRest() {
+    for (let i = 0; i < 1000 && frames.size > 0; i++) frame();
+  }
+
+  beforeEach(() => {
+    frames = new Map();
+    now = 0;
+    nextFrame = 1;
+    reduceMotion = false;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => void frames.delete(id));
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: reduceMotion && query === "(prefers-reduced-motion: reduce)",
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockReturnValue(400);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function Sheet({ open, onClose = () => {} }: { open: boolean; onClose?: () => void }) {
+    return (
+      <BottomSheet open={open} onClose={onClose} label="Example" closeLabel="Close" title="Title">
+        body
+      </BottomSheet>
+    );
+  }
+
+  const sheet = () => document.querySelector(".mobile-session-sheet") as HTMLElement;
+  const backdrop = () => document.querySelector(".mobile-session-backdrop") as HTMLElement;
+  const header = () => document.querySelector(".mobile-session-sheet-header") as HTMLElement;
+  const offset = () => {
+    const match = /translateY\((-?[\d.]+)px\)/.exec(sheet().style.transform);
+    return match ? Number(match[1]) : 0;
+  };
+
+  // jsdom has no PointerEvent; a MouseEvent of the pointer type carries
+  // clientY, and the pointer fields are set on the instance. timeStamp is set
+  // too, so the release velocity never reads a real clock.
+  function pointer(
+    target: Element,
+    type: "pointerdown" | "pointermove" | "pointerup" | "pointercancel",
+    clientY: number,
+    time: number,
+  ) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientY, button: 0 });
+    Object.defineProperty(event, "pointerId", { value: 1 });
+    Object.defineProperty(event, "pointerType", { value: "touch" });
+    Object.defineProperty(event, "timeStamp", { value: time });
+    act(() => void target.dispatchEvent(event));
+  }
+
+  it("enters from the bottom edge and comes to rest in place", () => {
+    render(<Sheet open={true} />);
+    expect(offset()).toBe(400);
+    frame();
+    frame();
+    expect(offset()).toBeGreaterThan(0);
+    expect(offset()).toBeLessThan(400);
+    runToRest();
+    // At rest the inline styles are gone again.
+    expect(sheet().style.transform).toBe("");
+    expect(backdrop().style.opacity).toBe("");
+  });
+
+  it("leaves the way it came, unreachable while it goes, then unmounts", () => {
+    const { rerender } = render(<Sheet open={true} />);
+    runToRest();
+    rerender(<Sheet open={false} />);
+    // Still on screen for the exit, but no longer a dialog anyone can reach.
+    expect(sheet()).not.toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(backdrop()).toHaveAttribute("aria-hidden", "true");
+    expect(backdrop()).toHaveAttribute("inert");
+    frame();
+    frame();
+    expect(offset()).toBeGreaterThan(0);
+    runToRest();
+    expect(document.querySelector(".mobile-session-sheet")).toBeNull();
+  });
+
+  it("reverses a sheet that is leaving without starting over", () => {
+    const { rerender } = render(<Sheet open={true} />);
+    runToRest();
+    rerender(<Sheet open={false} />);
+    for (let i = 0; i < 4; i++) frame();
+    const leaving = sheet();
+    const where = offset();
+    expect(where).toBeGreaterThan(0);
+
+    rerender(<Sheet open={true} />);
+    // Same element, same place: it turns around rather than jumping to the edge.
+    expect(sheet()).toBe(leaving);
+    expect(offset()).toBe(where);
+    runToRest();
+    expect(sheet().style.transform).toBe("");
+    expect(screen.getByRole("dialog", { name: "Example" })).toBeInTheDocument();
+  });
+
+  it("follows a finger on the header and springs back from a short, slow drag", () => {
+    const onClose = vi.fn();
+    render(<Sheet open={true} onClose={onClose} />);
+    runToRest();
+    pointer(header(), "pointerdown", 100, 1000);
+    pointer(header(), "pointermove", 160, 1100);
+    pointer(header(), "pointermove", 200, 1200);
+    expect(offset()).toBe(100);
+    // Lifted after resting: no speed to hand over, and 100px is short of half.
+    pointer(header(), "pointerup", 200, 1500);
+    expect(onClose).not.toHaveBeenCalled();
+    runToRest();
+    expect(sheet().style.transform).toBe("");
+  });
+
+  it("dismisses a short drag that is thrown, decided by where it is heading", () => {
+    const onClose = vi.fn();
+    render(<Sheet open={true} onClose={onClose} />);
+    runToRest();
+    pointer(header(), "pointerdown", 100, 1000);
+    pointer(header(), "pointermove", 130, 1016);
+    pointer(header(), "pointermove", 160, 1032);
+    // Only 60px down, but moving fast when it lifted.
+    pointer(header(), "pointerup", 160, 1040);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses a slow drag that went past half the travel", () => {
+    const onClose = vi.fn();
+    render(<Sheet open={true} onClose={onClose} />);
+    runToRest();
+    pointer(header(), "pointerdown", 100, 1000);
+    pointer(header(), "pointermove", 350, 1400);
+    pointer(header(), "pointerup", 350, 2000);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries a throw on out when the caller closes it", () => {
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return <Sheet open={open} onClose={() => setOpen(false)} />;
+    }
+    render(<Harness />);
+    runToRest();
+    pointer(header(), "pointerdown", 100, 1000);
+    pointer(header(), "pointermove", 130, 1016);
+    pointer(header(), "pointermove", 160, 1032);
+    pointer(header(), "pointerup", 160, 1040);
+    frame();
+    // Still moving down from where the finger let go, not snapping back first.
+    expect(offset()).toBeGreaterThan(60);
+    runToRest();
+    expect(document.querySelector(".mobile-session-sheet")).toBeNull();
+  });
+
+  it("resists a drag upward past its resting place", () => {
+    render(<Sheet open={true} />);
+    runToRest();
+    pointer(header(), "pointerdown", 300, 1000);
+    pointer(header(), "pointermove", 200, 1100);
+    expect(offset()).toBeLessThan(0);
+    expect(offset()).toBeGreaterThan(-100);
+  });
+
+  it("can catch the sheet while it is still arriving", () => {
+    render(<Sheet open={true} />);
+    frame();
+    frame();
+    const caught = offset();
+    expect(caught).toBeGreaterThan(0);
+    pointer(header(), "pointerdown", 100, 1000);
+    // Stopped under the finger.
+    expect(frames.size).toBe(0);
+    expect(offset()).toBe(caught);
+    pointer(header(), "pointermove", 120, 1100);
+    expect(offset()).toBeCloseTo(caught + 20, 6);
+  });
+
+  it("lets a sheet tapped while arriving carry on arriving instead of closing", () => {
+    const onClose = vi.fn();
+    render(<Sheet open={true} onClose={onClose} />);
+    frame();
+    frame();
+    // Still most of its travel away: a position-only decision would dismiss.
+    expect(offset()).toBeGreaterThan(200);
+    pointer(header(), "pointerdown", 100, 1000);
+    pointer(header(), "pointermove", 100, 1010);
+    pointer(header(), "pointerup", 100, 1020);
+    expect(onClose).not.toHaveBeenCalled();
+    runToRest();
+    expect(sheet().style.transform).toBe("");
+  });
+
+  it("does not start a drag from a button in the header, or after a cancel", () => {
+    const onClose = vi.fn();
+    render(<Sheet open={true} onClose={onClose} />);
+    runToRest();
+    const close = screen.getByRole("button", { name: "Close" });
+    pointer(close, "pointerdown", 100, 1000);
+    pointer(header(), "pointermove", 400, 1100);
+    expect(sheet().style.transform).toBe("");
+
+    pointer(header(), "pointerdown", 100, 2000);
+    pointer(header(), "pointermove", 400, 2016);
+    // The browser took the pointer: no throw, it returns by position alone.
+    pointer(header(), "pointercancel", 400, 2020);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    pointer(header(), "pointermove", 500, 2100);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("fades instead of travelling under reduced motion", () => {
+    reduceMotion = true;
+    const animations: { keyframes: Keyframe[]; finish: () => void; cancel: () => void }[] = [];
+    const animate = vi.fn(function (
+      this: Element,
+      keyframes: Keyframe[],
+      _options?: KeyframeAnimationOptions,
+    ) {
+      const animation = {
+        keyframes,
+        onfinish: null as null | (() => void),
+        finish() {
+          this.onfinish?.();
+        },
+        cancel: vi.fn(),
+      };
+      animations.push(animation);
+      return animation as unknown as Animation;
+    });
+    Object.defineProperty(HTMLElement.prototype, "animate", { value: animate, configurable: true });
+    try {
+      const { rerender } = render(<Sheet open={true} />);
+      // No travel at all, and no frames: it is in place at once and fades in.
+      expect(sheet().style.transform).toBe("");
+      expect(frames.size).toBe(0);
+      expect(animations[0].keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+
+      rerender(<Sheet open={false} />);
+      expect(animations[1].keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
+      // Holds its end state, so the sheet doesn't flash back before unmounting.
+      expect(animate.mock.calls[1][1]).toMatchObject({ fill: "forwards" });
+      expect(sheet()).not.toBeNull();
+      act(() => animations[1].finish());
+      expect(document.querySelector(".mobile-session-sheet")).toBeNull();
+
+      // A drag-dismiss fades from where the finger left it, not from the top.
+      function Harness() {
+        const [open, setOpen] = useState(true);
+        return <Sheet open={open} onClose={() => setOpen(false)} />;
+      }
+      rerender(<Harness />);
+      pointer(header(), "pointerdown", 100, 1000);
+      pointer(header(), "pointermove", 400, 1400);
+      pointer(header(), "pointerup", 400, 2000);
+      expect(offset()).toBe(300);
+      expect(animations[animations.length - 1].keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
+    } finally {
+      delete (HTMLElement.prototype as { animate?: unknown }).animate;
+    }
   });
 });

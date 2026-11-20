@@ -6,6 +6,9 @@ import {
   PHONE_BREAKPOINT_QUERY,
   TABLET_BREAKPOINT_QUERY,
   DESKTOP_BREAKPOINT_QUERY,
+  RAILS_FULL_BAND_QUERY,
+  RAILS_HALVES_BAND_QUERY,
+  DESKTOP_NARROW_BAND_QUERY,
 } from "../lib/layoutTier.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import type { LayoutMode } from "../api/index.js";
@@ -41,16 +44,30 @@ class FakeMediaQueryList extends EventTarget {
 // comment). `setTier` flips all three `.matches` flags consistently;
 // callers still have to dispatch `change` on whichever boundary MQL they
 // want the hook to observe.
-function stubBreakpointMedia(initialTier: LayoutTier) {
+// #3010 — the hook also listens at the band boundaries (800 and 1100px), so
+// the stub answers those too. "halves" is the tablet tier inside the
+// two-halves band (800-1099px); plain "tablet" stands for the 1100-1279px band,
+// which keeps the grid.
+type StubWidth = LayoutTier | "halves";
+function stubBreakpointMedia(initialTier: StubWidth) {
   const phone = new FakeMediaQueryList(PHONE_BREAKPOINT_QUERY, initialTier === "phone");
-  const tablet = new FakeMediaQueryList(TABLET_BREAKPOINT_QUERY, initialTier === "tablet");
+  const tablet = new FakeMediaQueryList(
+    TABLET_BREAKPOINT_QUERY,
+    initialTier === "tablet" || initialTier === "halves",
+  );
   const desktop = new FakeMediaQueryList(DESKTOP_BREAKPOINT_QUERY, initialTier === "desktop");
+  const railsFull = new FakeMediaQueryList(RAILS_FULL_BAND_QUERY, false);
+  const railsHalves = new FakeMediaQueryList(RAILS_HALVES_BAND_QUERY, initialTier === "halves");
+  const desktopNarrow = new FakeMediaQueryList(DESKTOP_NARROW_BAND_QUERY, initialTier === "tablet");
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => {
       if (query === PHONE_BREAKPOINT_QUERY) return phone;
       if (query === TABLET_BREAKPOINT_QUERY) return tablet;
       if (query === DESKTOP_BREAKPOINT_QUERY) return desktop;
+      if (query === RAILS_FULL_BAND_QUERY) return railsFull;
+      if (query === RAILS_HALVES_BAND_QUERY) return railsHalves;
+      if (query === DESKTOP_NARROW_BAND_QUERY) return desktopNarrow;
       throw new Error(`unexpected matchMedia query in test: ${query}`);
     }),
   );
@@ -58,10 +75,14 @@ function stubBreakpointMedia(initialTier: LayoutTier) {
     phone,
     tablet,
     desktop,
-    setTier: (tier: LayoutTier) => {
+    railsHalves,
+    desktopNarrow,
+    setTier: (tier: StubWidth) => {
       phone.matches = tier === "phone";
-      tablet.matches = tier === "tablet";
+      tablet.matches = tier === "tablet" || tier === "halves";
       desktop.matches = tier === "desktop";
+      railsHalves.matches = tier === "halves";
+      desktopNarrow.matches = tier === "tablet";
     },
   };
 }
@@ -394,6 +415,57 @@ describe("useLayoutPresentation", () => {
       expect(right.api.setSize).not.toHaveBeenCalled();
     });
 
+    // #3010 — the two halves (800-1099px) are a one-pane presentation like
+    // the phone, inside the tablet tier.
+    it("presents the halves as one pane, and folds and unfolds keeping the snapshot", async () => {
+      const media = stubBreakpointMedia("tablet");
+      const { api, addGroup } = makeMockApi();
+      const left = addGroup("grid", { id: "left", width: 500, height: 600 });
+      const right = addGroup("grid", { id: "right", width: 500, height: 600 });
+      const setLayoutTier = vi.fn();
+      const onUnfold = vi.fn();
+      const preferPanel = vi.fn(() => null);
+      renderHook(() =>
+        useLayoutPresentation({
+          dockviewApi: api,
+          layoutMode: "auto",
+          setLayoutTier,
+          onUnfold,
+          preferPanel,
+        }),
+      );
+      expect(left.header.hidden).toBe(false);
+
+      // Into the halves (1100 -> 900px): one pane, headers hidden, the
+      // proportions snapshotted.
+      media.setTier("halves");
+      media.railsHalves.dispatchEvent(new Event("change"));
+      expect(left.header.hidden).toBe(true);
+      expect(preferPanel).toHaveBeenLastCalledWith("halves");
+      expect(setLayoutTier).toHaveBeenLastCalledWith("tablet");
+
+      // Fold to the phone and back: both one-pane, no restore in between.
+      media.setTier("phone");
+      media.phone.dispatchEvent(new Event("change"));
+      expect(preferPanel).toHaveBeenLastCalledWith("phone");
+      media.setTier("halves");
+      media.phone.dispatchEvent(new Event("change"));
+      expect(preferPanel).toHaveBeenLastCalledWith("halves");
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(onUnfold).not.toHaveBeenCalled();
+
+      // Back to a grid width: the snapshot from leaving the grid restores.
+      left.api.setSize({ width: 100 });
+      right.api.setSize({ width: 900 });
+      left.api.setSize.mockClear();
+      media.setTier("tablet");
+      media.railsHalves.dispatchEvent(new Event("change"));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      expect(left.header.hidden).toBe(false);
+      expect(left.api.setSize).toHaveBeenCalledWith({ width: 500 });
+      expect(onUnfold).toHaveBeenCalledTimes(1);
+    });
+
     it("does not call onUnfold when no width snapshot was taken (opened at phone width)", async () => {
       // Mounted already at phone, so no snapshot was ever taken: the proportions
       // can't be trusted, so the #1426 save suspension must stay.
@@ -527,7 +599,7 @@ describe("useLayoutPresentation", () => {
       expect(right.api.setSize).not.toHaveBeenCalled();
     });
 
-    it("removes both boundary-query change listeners on unmount", () => {
+    it("removes every boundary-query change listener on unmount", () => {
       const media = stubBreakpointMedia("phone");
       const { api } = makeMockApi();
       const setLayoutTier = vi.fn();
@@ -541,6 +613,8 @@ describe("useLayoutPresentation", () => {
       media.setTier("tablet");
       media.phone.dispatchEvent(new Event("change"));
       media.desktop.dispatchEvent(new Event("change"));
+      media.railsHalves.dispatchEvent(new Event("change"));
+      media.desktopNarrow.dispatchEvent(new Event("change"));
 
       expect(setLayoutTier).not.toHaveBeenCalled();
     });

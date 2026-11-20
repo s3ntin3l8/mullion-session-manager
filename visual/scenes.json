@@ -60,7 +60,7 @@
           "click": ".session-item:has-text(\"fake-agent.sh\")"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Git\"]"
+          "click": ".right-rail-btn[aria-label=\"Git\"], .right-rail-btn[aria-label^=\"Git, \"]"
         },
         {
           "waitFor": "text=feat/ahead"
@@ -87,7 +87,7 @@
       ],
       "settle": 500,
       "emphasis": {
-        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; }"
+        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; }"
       }
     },
     {
@@ -125,7 +125,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"GitHub\"]"
+          "click": ".right-rail-btn[aria-label=\"GitHub\"], .right-rail-btn[aria-label^=\"GitHub, \"]"
         },
         {
           "waitFor": "text=#12"
@@ -138,7 +138,7 @@
         }
       ],
       "emphasis": {
-        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; }"
+        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; }"
       }
     },
     {
@@ -260,7 +260,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -287,7 +287,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -366,13 +366,7 @@
       "viewports": ["phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
-        },
-        {
-          "wait": 800
-        },
-        {
-          "click": "role=button[name=/^Tasks/] >> nth=0"
+          "click": ".phone-mode-bar button:has-text(\"Tasks\")"
         },
         {
           "wait": 3000
@@ -381,8 +375,58 @@
       "settle": 500,
       "baseline": true,
       "emphasis": {
-        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
       }
+    },
+    {
+      "name": "phone-more",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": ".phone-mode-more"
+        },
+        {
+          "waitFor": ".phone-more-row"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      },
+      "baseline": true
+    },
+    {
+      "name": "phone-sidebar-view",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": ".phone-mode-more"
+        },
+        {
+          "waitFor": ".phone-more-row"
+        },
+        {
+          "click": ".phone-more-row:has(.phone-more-label:text-is(\"Git\"))"
+        },
+        {
+          "waitFor": ".right-sidebar-panel.phone"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      },
+      "baseline": true
     },
     {
       "name": "session-list",
@@ -391,7 +435,7 @@
       "viewports": ["mobile", "phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
+          "click": ".mobile-session-trigger"
         },
         {
           "wait": 800
@@ -399,7 +443,7 @@
       ],
       "baseline": true,
       "emphasis": {
-        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
       }
     },
     {
@@ -409,19 +453,19 @@
       "viewports": ["mobile", "phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
+          "click": ".mobile-session-trigger"
         },
         {
           "wait": 800
         },
         {
-          "click": ".session-item:has-text(\"mobile-demo.sh\")"
+          "click": ".mobile-session-row-main:has-text(\"mobile demo\")"
         }
       ],
       "settle": ".xterm-screen",
       "baseline": true,
       "emphasis": {
-        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
       }
     },
     {
@@ -430,18 +474,18 @@
       "viewports": ["mobile", "phone"],
       "steps": [
         {
-          "click": "[class*=\"toolbar\"] button >> nth=0"
+          "click": ".mobile-session-trigger"
         },
         {
           "wait": 800
         },
         {
-          "click": ".session-item:has-text(\"mobile-demo.sh\")"
+          "click": ".mobile-session-row-main:has-text(\"mobile demo\")"
         }
       ],
       "settle": ".xterm-screen",
       "emphasis": {
-        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
       },
       "tags": ["check", "audit"],
       "motion": "normal"
@@ -480,7 +524,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"History\"]"
+          "click": ".right-rail-btn[aria-label=\"History\"], .right-rail-btn[aria-label^=\"History, \"]"
         },
         {
           "wait": 800
@@ -506,7 +550,7 @@
           "click": "role=button[name=\"Collapse dock\"]"
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Files\"]"
+          "click": ".right-rail-btn[aria-label=\"Files\"], .right-rail-btn[aria-label^=\"Files, \"]"
         },
         {
           "wait": 800
@@ -519,7 +563,7 @@
     {
       "name": "tablet-workspace",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
@@ -529,16 +573,17 @@
       "settle": 500,
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
-      }
+      },
+      "baseline": true
     },
     {
-      "name": "tablet-navigator",
+      "name": "desktop-narrow-sidebar",
       "path": "/",
-      "tags": ["audit"],
-      "viewports": ["tablet", "fold"],
+      "tags": ["check", "audit"],
+      "viewports": ["desktop-narrow"],
       "steps": [
         {
-          "click": "role=button[name=\"Toggle sidebar\"]"
+          "click": "role=button[name=\"Sidebar\"]"
         },
         {
           "wait": 600
@@ -556,7 +601,7 @@
       "viewports": ["tablet", "fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -570,11 +615,11 @@
     {
       "name": "tablet-tasks-detail",
       "path": "/",
-      "tags": ["audit"],
+      "tags": ["check", "audit"],
       "viewports": ["tablet", "fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -589,7 +634,8 @@
       "settle": 500,
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
-      }
+      },
+      "baseline": true
     },
     {
       "name": "tablet-tasks-reopen",
@@ -598,7 +644,7 @@
       "viewports": ["tablet", "fold"],
       "steps": [
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "waitFor": "text=need you"
@@ -616,7 +662,7 @@
           "wait": 400
         },
         {
-          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+          "click": ".right-rail-btn[aria-label=\"Tasks\"], .right-rail-btn[aria-label^=\"Tasks, \"]"
         },
         {
           "wait": 500
@@ -626,6 +672,80 @@
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
       }
+    },
+    {
+      "name": "tablet-tasks-board",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=/^Tasks/] >> nth=0"
+        },
+        {
+          "waitFor": ".kanban-unified[data-board-layout]"
+        },
+        {
+          "wait": 1500
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      },
+      "baseline": true
+    },
+    {
+      "name": "tablet-tasks-stacked",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["tablet", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=/^Tasks/] >> nth=0"
+        },
+        {
+          "waitFor": ".task-card"
+        },
+        {
+          "click": ".task-card-title >> nth=0"
+        },
+        {
+          "waitFor": "[data-testid=\"task-detail-view\"]"
+        },
+        {
+          "waitFor": ".kanban-unified[data-board-layout=\"stacked\"]"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "workspace-picker",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["desktop", "fold"],
+      "steps": [
+        {
+          "click": "role=button[name=/switch workspace/]"
+        },
+        {
+          "waitFor": "role=dialog[name=\"Workspaces\"] >> text=\"Experiments\""
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      },
+      "baseline": true
     },
     {
       "name": "tablet-notifications",
@@ -644,9 +764,149 @@
       "emphasis": {
         "css": ".discover-block { display: none !important; }"
       }
+    },
+    {
+      "name": "fold-browser-view",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Browser\"], .right-rail-btn[aria-label^=\"Browser, \"]"
+        },
+        {
+          "waitFor": ".browser-sidebar-view"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "fold-dock-view",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Dock\"], .right-rail-btn[aria-label^=\"Dock, \"]"
+        },
+        {
+          "waitFor": ".dock-sidebar-view"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "fold-devices-view",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": ".right-rail-btn[aria-label=\"Devices\"], .right-rail-btn[aria-label^=\"Devices, \"]"
+        },
+        {
+          "waitFor": ".devices-sidebar-view"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "fold-two-halves",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": "role=button[name=\"New session\"] >> nth=0"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"fake-agent.sh\")"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": "role=button[name=\"New session\"] >> nth=-1"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"dark-mode-palette.sh\")"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "settle": ".xterm-screen"
+    },
+    {
+      "name": "fold-view-over-half",
+      "path": "/",
+      "tags": ["audit"],
+      "viewports": ["fold"],
+      "steps": [
+        {
+          "click": "role=button[name=\"New session\"] >> nth=0"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"fake-agent.sh\")"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": "role=button[name=\"New session\"] >> nth=-1"
+        },
+        {
+          "click": "role=tab[name=\"Open existing\"]"
+        },
+        {
+          "click": ".session-launcher-row:has-text(\"dark-mode-palette.sh\")"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"Git\"], .right-rail-btn[aria-label^=\"Git, \"]"
+        },
+        {
+          "wait": 800
+        }
+      ]
     }
   ],
   "viewports": {
+    "desktop-narrow": {
+      "width": 1200,
+      "height": 800,
+      "scale": 1,
+      "mobile": false
+    },
     "tablet": {
       "width": 820,
       "height": 1180,

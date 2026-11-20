@@ -4,6 +4,7 @@ import { useDashboardStore } from "../../store/index.js";
 import { ApiError } from "../../api/index.js";
 import type { DiscoveredDevice, PairAndConnectBody } from "../../api/index.js";
 import { usePolling } from "../../hooks/usePolling.js";
+import { useDismissExit } from "../../hooks/usePresence.js";
 import { CloseIcon, DeviceIcon } from "../../ui/icons.js";
 import { SecondaryButton } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
@@ -193,10 +194,20 @@ export function PairDeviceDialog({
     if (e.key === "Enter") submit();
   };
 
+  // #3015 — its own dismiss controls play the exit before `onClose`, as
+  // ui/Modal's do (this dialog builds the create-modal markup itself).
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
+
   return (
-    <div className="create-modal-backdrop" onClick={onClose}>
+    <div
+      ref={backdropRef}
+      className="create-modal-backdrop motion-scrim"
+      data-presence={presence}
+      onClick={dismiss}
+    >
       <div
-        className="create-modal"
+        className="create-modal motion-dialog"
         role="dialog"
         aria-label="Pair a phone or tablet"
         onClick={(event) => event.stopPropagation()}
@@ -211,7 +222,7 @@ export function PairDeviceDialog({
               On the phone: Developer options → Wireless debugging → Pair device with pairing code.
             </span>
           </span>
-          <button className="create-modal-close" aria-label="Close" onClick={onClose}>
+          <button className="create-modal-close" aria-label="Close" onClick={dismiss}>
             <CloseIcon size={15} />
           </button>
         </div>
@@ -342,7 +353,7 @@ export function PairDeviceDialog({
               ? "Pick a device above, or pair manually."
               : "Pairs and connects in one step."}
           </span>
-          <button className="create-modal-cancel" onClick={onClose}>
+          <button className="create-modal-cancel" onClick={dismiss}>
             Cancel
           </button>
           <button className="create-modal-submit" onClick={submit} disabled={!canSubmit}>

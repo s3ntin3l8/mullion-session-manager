@@ -1,4 +1,5 @@
 import { ProjectPreviewPicker } from "./ProjectPreviewMenu.js";
+import { ActionBanner } from "./ActionBanner.js";
 import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
@@ -6,17 +7,30 @@ import type { DockviewApi, DockviewReadyEvent } from "dockview-react";
 import "dockview-react/dist/styles/dockview.css";
 import { SidebarShell } from "./sidebar/SidebarShell.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
-import { PhoneNavigatorPanel } from "./PhoneNavigator.js";
-import { sidebarPhoneSection } from "./lib/phoneNavSection.js";
-import type { PhoneNavTab } from "./PhoneNavigator.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
-import type { TerminalPaneParams } from "./TerminalPane.js";
+import type { LauncherTarget } from "./store/types.js";
+import { useHalfActions } from "./fold/useHalfActions.js";
 import { ErrorBoundary } from "./ErrorBoundary.js";
 import { Toolbar } from "./Toolbar.js";
-import { usePhoneTasksNavigator } from "./hooks/usePhoneTasksNavigator.js";
+import { LeftRail } from "./LeftRail.js";
+import { RailWorkspaceSection } from "./rail/RailWorkspaceSection.js";
+import { RailPanes } from "./rail/RailPaneList.js";
+import { HalfHeader } from "./fold/HalfHeader.js";
+import { RightHalfPane } from "./fold/RightHalfPane.js";
+import { openTerminalPath } from "./lib/openTerminalPath.js";
+import { preferredPaneFor, useFoldHalves } from "./hooks/useFoldHalves.js";
+import { canGoRight, EMPTY_FOLD_HALVES, halfOf, splitByHalf } from "./lib/foldHalves.js";
+import type { Half } from "./lib/foldHalves.js";
+import { selectSessionTitleContexts, sessionPaneTitle } from "./lib/sessionDisplay.js";
+import type { LayoutPresentation } from "./lib/layoutTier.js";
+import type { RailPaneInput } from "./lib/railPanes.js";
 import { MobileKeyBar } from "./MobileKeyBar.js";
+import { PhoneModeBar } from "./PhoneModeBar.js";
 import { PaneHeaderActions } from "./PaneHeaderActions.js";
 import { CommandPalette } from "./CommandPalette.js";
+import { SessionLauncherHost } from "./launchers/SessionLauncher.js";
+import { ProjectSettingsHost } from "./project-settings/ProjectSettingsDialog.js";
+import { launchIntoWorkspace } from "./lib/launchIntoWorkspace.js";
 import type { SettingsSection } from "./Settings.js";
 import { SettingsLoadingFallback } from "./SettingsLoadingFallback.js";
 import { Dock } from "./Dock.js";
@@ -36,19 +50,26 @@ import { initialPaneTitle } from "./paneTitle.js";
 import { components, tabComponents, KanbanBoardOverlay } from "./panels/registry.js";
 import {
   isTiledPanel,
-  tiledColumnCount,
-  shouldWarnTabletPaneCap,
   canLaunchTerminal,
   shouldShowCodexHookTrustBanner,
   workspaceProjectIdsFromPanels,
   openTerminalSessionIds,
+  openSessionPanel,
+  focusPanelForTier,
+  panelSessionId,
 } from "./panelUtils.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { useReportTerminalPalette } from "./hooks/useReportTerminalPalette.js";
 import { RightSidebar } from "./right-sidebar/RightSidebar.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
-import { isCompactTier, resolveLayoutTier, useCoarsePointer } from "./lib/layoutTier.js";
+import {
+  isCompactTier,
+  presentationFor,
+  resolveLayoutTier,
+  useCoarsePointer,
+  useLayoutBand,
+} from "./lib/layoutTier.js";
 import type { LayoutTier, LayoutContext } from "./lib/layoutTier.js";
 import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
@@ -74,6 +95,7 @@ import { useHydrateSettings } from "./hooks/useHydrateSettings.js";
 import { useThemeWatch } from "./hooks/useThemeWatch.js";
 import { useAutoFocusOnAttention } from "./hooks/useAutoFocusOnAttention.js";
 import { useAutoOpenChildPanels } from "./hooks/useAutoOpenChildPanels.js";
+import { useApplyPendingOpens } from "./hooks/useApplyPendingOpens.js";
 import { useCloseKilledSessionPanels } from "./hooks/useCloseKilledSessionPanels.js";
 import { useCloseMissingDevicePanels } from "./hooks/useCloseMissingDevicePanels.js";
 import { useCloseStaleProjectPanels } from "./hooks/useCloseStaleProjectPanels.js";
@@ -81,10 +103,6 @@ import { useSyncSessionOpenerRefs } from "./hooks/useSyncSessionOpenerRefs.js";
 import { usePushSessionOpen } from "./hooks/usePushSessionOpen.js";
 import { usePushResync } from "./hooks/usePushResync.js";
 import { usePostWorkspaceSwitchHighlight } from "./hooks/usePostWorkspaceSwitchHighlight.js";
-import { usePaneCapNotice } from "./hooks/usePaneCapNotice.js";
-import { useSidebarOpenTierReset } from "./hooks/useSidebarOpenTierReset.js";
-import { useSidebarSwipe } from "./hooks/useSidebarSwipe.js";
-import { useRightSidebarEdgeSwipe } from "./hooks/useRightSidebarEdgeSwipe.js";
 import { useRetriableLazy } from "./lib/retriableLazy.js";
 import { ResourceAlertBanner } from "./ResourceAlertBanner.js";
 
@@ -119,9 +137,10 @@ interface PaletteState {
 
 export function App() {
   const [dockviewApi, setDockviewApi] = useState<DockviewApi | null>(null);
-  // Only meaningful below the mobile breakpoint (see styles.css) — a no-op
-  // on desktop, where .sidebar-wrapper ignores this class entirely.
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Whether the docked left sidebar shows in the desktop-narrow band
+  // (1100-1279px, #3041): collapsed by default and not persisted, so the
+  // >=1280px `sidebarCollapsed` preference is not touched from this band.
+  const [narrowSidebarShown, setNarrowSidebarShown] = useState(false);
   const [workspacesLoaded, setWorkspacesLoaded] = useState(false);
   // Issue #1638 — giving up on the initial load used to be console-only.
   // Stays false until a later round succeeds. Distinct from workspacesLoaded:
@@ -134,8 +153,8 @@ export function App() {
   // Tablet tier plan, PR 4 — replaces the old phone-only `isMobile` boolean.
   // `isMobile` below is now a derived `layoutTier === "phone"` local const
   // (not its own state) so every "stays phone-only" call site the plan
-  // enumerates (phone session switcher, empty-grid dropzone suppression,
-  // toggleSidebar's dual semantics) keeps working unchanged, while
+  // enumerates (phone session switcher, empty-grid dropzone suppression)
+  // keeps working unchanged, while
   // tier-aware call sites (session-opening's positioning, applyLayoutPresentation)
   // read `layoutTier` directly.
   // Seeded synchronously from the live width (not a "desktop" placeholder) so
@@ -147,7 +166,24 @@ export function App() {
   const [layoutTier, setLayoutTier] = useState<LayoutTier>(() =>
     resolveLayoutTier(useDashboardStore.getState().settings.layoutMode),
   );
+  // The finer five-way band, exposed as `data-band` for later slices; nothing
+  // reads it yet. Independent of `isCoarsePointer` below.
+  const layoutBand = useLayoutBand(useDashboardStore((s) => s.settings.layoutMode));
   const isMobile = layoutTier === "phone";
+  // Entering the desktop-narrow band starts with its sidebar collapsed again,
+  // whatever it was the last time the window was that wide. Adjusted during
+  // render (React's "storing information from previous renders" pattern),
+  // not in an effect, so the first frame in the band is already collapsed.
+  const [narrowSidebarBand, setNarrowSidebarBand] = useState(layoutBand);
+  if (narrowSidebarBand !== layoutBand) {
+    setNarrowSidebarBand(layoutBand);
+    setNarrowSidebarShown(false);
+  }
+  // The left sidebar by band (#3041, design 9.1/9.5): docked from 1100px
+  // (open by default from 1280px, collapsed by default below), absent from
+  // 700 to 1099px, where the rail's workspace chip, its pane list and the
+  // launcher are the navigation. The phone has none either (#3014).
+  const leftSidebarDocked = layoutBand === "desktop" || layoutBand === "desktop-narrow";
   const compact = isCompactTier(layoutTier);
   // Touch affordances (key bar, tab-strip panning) are gated on pointer
   // coarseness, not layout tier — see lib/layoutTier.ts's own doc comment on
@@ -171,11 +207,6 @@ export function App() {
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
-  // Set when a section was picked from the phone navigator's own Settings
-  // list, so Settings opens straight into it (see Settings.tsx).
-  const [settingsStartInContent, setSettingsStartInContent] = useState(false);
-  // Which tab of the phone navigator is showing; remembered across closes.
-  const [navTab, setNavTab] = useState<PhoneNavTab>("projects");
   // Bumped on the Settings ErrorBoundary's own reset — see loadSettings'
   // header comment for why a fresh lazy() payload (not just remounting)
   // is what actually lets a later reopen retry a chunk-load failure.
@@ -224,7 +255,6 @@ export function App() {
     settings,
     settingsLoaded,
     sidebarCollapsed,
-    splitRequest,
     backendReachable,
     sessionExpired,
     currentVersion,
@@ -250,7 +280,6 @@ export function App() {
       settings: s.settings,
       settingsLoaded: s.settingsLoaded,
       sidebarCollapsed: s.sidebarCollapsed,
-      splitRequest: s.splitRequest,
       backendReachable: s.backendReachable,
       sessionExpired: s.sessionExpired,
       currentVersion: s.currentVersion,
@@ -285,10 +314,6 @@ export function App() {
   // state-setters don't re-run the check reliably) and from the fetch race
   // below (workspacesLoaded flips exactly once).
   const bootstrappedRef = useRef(false);
-  // Workspace ids that have already seen the tablet pane-cap notice this
-  // page load (issue #1555). Not persisted: a reload may say it again.
-  const paneCapWarnedRef = useRef(new Set<number>());
-  const [paneCapNotice, setPaneCapNotice] = useState(false);
   // restoringRef/restoredWorkspaceIdRef used to be declared here, but now
   // come from useWorkspacePersistence's return value (see the hook call
   // further down, at the exact position the restore/autosave effects used
@@ -365,13 +390,14 @@ export function App() {
   // deep-link, and push-message effects further down, which read
   // restoringRef/restoredWorkspaceIdRef and depend on a restore having
   // already run) is unchanged — see that hook's own header comment.
-  const { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint } = useWorkspacePersistence({
-    dockviewApi,
-    activeWorkspaceId,
-    workspaces,
-    layoutTier,
-    setPanelsVersion,
-  });
+  const { restoringRef, restoredWorkspaceIdRef, liftPhoneTaint, isSaveSuspended } =
+    useWorkspacePersistence({
+      dockviewApi,
+      activeWorkspaceId,
+      workspaces,
+      layoutTier,
+      setPanelsVersion,
+    });
 
   // Repaints every other terminal after a panel is added (issue #107).
   // Extracted to useTerminalRepaintOnPanelAdd; called here, where the effect was.
@@ -394,7 +420,21 @@ export function App() {
     layoutMode: settings.layoutMode,
     setLayoutTier,
     onUnfold: liftPhoneTaint,
+    preferPanel: preferredPaneFor,
   });
+
+  // #3010 — the two halves between 800 and 1099px: one pane per half, a
+  // device-local view of the workspace (see useFoldHalves). Workspace mode
+  // only for the UI; the presentation itself also holds under the board.
+  const layoutPresentation: LayoutPresentation = presentationFor(layoutTier, layoutBand);
+  const foldHalves = layoutPresentation === "halves" && viewMode !== "kanban";
+  const halvesState = useDashboardStore((s) =>
+    s.activeWorkspaceId === null
+      ? EMPTY_FOLD_HALVES
+      : (s.foldHalves[s.activeWorkspaceId] ?? EMPTY_FOLD_HALVES),
+  );
+  const focusedHalf = useDashboardStore((s) => s.focusedHalf);
+  const rightSidebarOpen = useDashboardStore((s) => s.rightSidebarOpen);
 
   // Sidebar session drag-to-dock — dragging a session row out of the Sidebar
   // and dropping it onto the dockview grid to open/dock its panel —
@@ -405,21 +445,12 @@ export function App() {
   // load-bearing: none of the three extracted effects share state with any
   // other effect in this file, or with each other beyond the ref the hook
   // now owns internally — see that hook's own header comment.
-  const { dockviewRef } = useDockviewDrop({ dockviewApi, setSidebarOpen });
+  const { dockviewRef } = useDockviewDrop({ dockviewApi });
   useBalanceOnDrop({ dockviewApi, enabled: settings.balancePanesOnDrop });
 
   const openSettings = useCallback((section: SettingsSection = "appearance") => {
     setSettingsSection(section);
-    setSettingsStartInContent(false);
     setSettingsOpen(true);
-  }, []);
-  // Phone navigator's Settings tab: open the picked section directly and
-  // close the navigator behind it.
-  const openSettingsFromNavigator = useCallback((section: SettingsSection) => {
-    setSettingsSection(section);
-    setSettingsStartInContent(true);
-    setSettingsOpen(true);
-    setSidebarOpen(false);
   }, []);
 
   // Opens the global command palette. The single enforcement point for
@@ -449,6 +480,8 @@ export function App() {
     openSettings,
     openGlobalLauncher,
     rightSidebarEnabled: !isMobile,
+    modeSwitchEnabled: !isMobile,
+    overlayOpen: palette.open || settingsOpen,
   });
 
   // Check for updates on mount and re-check every 30 minutes.
@@ -528,6 +561,21 @@ export function App() {
     hasSeededChildSessionsRef,
   });
 
+  // #3033 — adds the sessions opened in this workspace on the fold or the
+  // phone, on a client that saves the layout. Same gates as above.
+  useApplyPendingOpens({
+    dockviewApi,
+    activeWorkspaceId,
+    presentation: layoutPresentation,
+    sessions,
+    sessionsLoaded,
+    projects,
+    terminalFontSize: settings.terminal.fontSize,
+    restoringRef,
+    restoredWorkspaceIdRef,
+    isSaveSuspended,
+  });
+
   // The backgrounded-tab document.title/favicon-badge effect used to be
   // declared here — moved into useAttentionNotifications above (called
   // higher up in this file); see that hook's own header comment for why
@@ -569,16 +617,32 @@ export function App() {
   // why the actual count is 12 rather than the roadmap's estimated 16).
   // Memoized so the onOpen* callbacks below (each lists `layout` in its own
   // useCallback dependency array — see usePanelOpener's own header comment)
-  // don't get a fresh identity every render, only when the tier or the
-  // user's configured cap actually changes.
-  const layout: LayoutContext = useMemo(
-    () => ({ tier: layoutTier, tabletPaneCap: settings.tabletPaneCap }),
-    [layoutTier, settings.tabletPaneCap],
-  );
+  // don't get a fresh identity every render, only when the tier changes.
+  const layout: LayoutContext = useMemo(() => ({ tier: layoutTier }), [layoutTier]);
+
+  // #3010 — after `layout`, which reopening a remembered pane needs.
+  useFoldHalves({
+    dockviewApi,
+    presentation: layoutPresentation,
+    activeWorkspaceId,
+    panelsVersion,
+    isRestored: () =>
+      !restoringRef.current &&
+      activeWorkspaceId !== null &&
+      restoredWorkspaceIdRef.current === activeWorkspaceId,
+    sessionsLoaded,
+    reopenSession: (sessionId) => {
+      const session = useDashboardStore.getState().sessions.find((x) => x.id === sessionId);
+      if (!dockviewApi || !session || session.status === "killed") return false;
+      openSessionPanel(dockviewApi, session, layout, useDashboardStore.getState().projects);
+      return true;
+    },
+  });
   const {
     onOpenSession,
     onOpenSessionAsFloat,
     onOpenTimeline,
+    onOpenAgentBrowser,
     onOpenGitHub,
     onOpenGit,
     onOpenAgentRules,
@@ -597,13 +661,13 @@ export function App() {
     onOpenPreviewTargets,
     onOpenPreview,
     onOpenDevice,
+    onOpenRailBrowser,
   } = usePanelOpener({
     dockviewApi,
     layout,
     projects,
     workspaces,
     activeWorkspaceId,
-    setSidebarOpen,
   });
 
   // `?session=<id>` deep-link effect (issue #95 prerequisite) — extracted to
@@ -678,13 +742,14 @@ export function App() {
     restoredWorkspaceIdRef,
   });
 
-  // #2149 — a task push notification click opens that task: the sidebar's
-  // Tasks detail on desktop, the full-screen docked panel on phone/tablet.
-  useTaskNotificationOpen(compact);
+  // #2149 — a task push notification click opens that task in the sidebar's
+  // Tasks detail (#3011), which the phone shows full screen (#3014).
+  useTaskNotificationOpen();
 
-  // Issue #2020 — resolves requestOpenTask (the Tasks detail's pop-out, and
-  // every "show me this task" on phone and tablet; the sidebar has no
-  // dockview API of its own). Same ordering contract as the hook above.
+  // Issue #2020 — resolves requestOpenTask (the desktop Tasks detail's
+  // pop-out, useCanPopOutTask; every other "show me this task" opens the
+  // sidebar's own detail, #3011, #3014; the sidebar has no dockview API of its
+  // own). Same ordering contract as the hook above.
   useOpenTaskRequest({
     dockviewApi,
     activeWorkspaceId,
@@ -728,153 +793,109 @@ export function App() {
     [dockviewApi],
   );
 
+  // #3048 — the launcher's project management closes a deleted project's
+  // panes and can send an empty discovery to Settings → Projects.
+  const launcherProjectActions = useMemo(
+    () => ({ onSessionEnded, onOpenSettingsProjects: () => openSettings("projects") }),
+    [onSessionEnded, openSettings],
+  );
+
+  // Issue #3013 — New session controls open the launcher (⌘K and the command
+  // box stay the palette). A sidebar project's "+" preselects its project.
   const openProjectLauncher = useCallback((projectId: number) => {
     if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
-    setPalette({ open: true, scope: "project", projectId });
+    useDashboardStore.getState().openLauncher({ projectId });
+  }, []);
+  const openNewSessionLauncher = useCallback(() => {
+    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
+    useDashboardStore.getState().openLauncher();
+  }, []);
+  // #3010 — the "+" under a half's sessions: the launcher, targeting that half.
+  const openNewSessionOnHalf = useCallback((half: Half) => {
+    if (!canLaunchTerminal(useDashboardStore.getState().viewMode)) return;
+    useDashboardStore.getState().openLauncher({ half });
   }, []);
 
-  // A split-right/split-down click (PaneHeaderActions.tsx) signals intent
-  // via the store's `splitRequest` (that component can't receive props from
-  // here — dockview owns its render). Rather than an effect that computes
-  // the reference panel's project and then calls setPalette (the same
-  // setState-in-effect anti-pattern already worked around elsewhere in this
-  // file — see CommandPalette/Dock/Settings in Phase 4b), derive whether the
-  // palette should be open, and for which project, directly in render. A
-  // splitRequest whose reference panel/session can no longer be resolved
-  // (e.g. the pane was closed between the click and this render) simply
-  // fails to open a palette for it — inert until overwritten by a fresh
-  // request or cleared by the palette's own close handler.
-  const splitRequestProjectId = useMemo(() => {
-    if (!splitRequest || !dockviewApi) return null;
-    const panel = dockviewApi.getPanel(splitRequest.referencePanelId);
-    const sessionId = (panel?.params as TerminalPaneParams | undefined)?.sessionId;
-    return sessions.find((s) => s.id === sessionId)?.projectId ?? null;
-  }, [splitRequest, dockviewApi, sessions]);
-  const paletteOpen = palette.open || (splitRequest !== null && splitRequestProjectId !== null);
-  const paletteScope = splitRequest ? "project" : palette.scope;
-  const paletteProjectId = splitRequest ? splitRequestProjectId : palette.projectId;
+  // #3010 — a session launched or opened from a half's "+" lands on that
+  // half: assigned before it opens, so the open path's router places it.
+  // In a workspace with no tiled pane yet, the right half's "+" lands on the
+  // left: the left half is never empty while a pane is open (moveToHalf).
+  const openSessionOnHalf = useCallback(
+    (session: Session, target: { half?: Half } | null) => {
+      if (foldHalves && target?.half && dockviewApi) {
+        useDashboardStore.getState().moveToHalf(
+          `session-${session.id}`,
+          target.half,
+          dockviewApi.panels.filter(isTiledPanel).map((p) => p.id),
+        );
+      }
+      onOpenSession(session);
+    },
+    [foldHalves, dockviewApi, onOpenSession],
+  );
 
-  // The palette's actual launch handler: if this launch was requested via a
-  // split action, add the new panel positioned next to the reference panel
-  // instead of the normal open-or-focus path (an already-open session for
-  // that id just gets focused — dockview panel ids are unique, and split's
-  // whole point is launching a *new* session, so this collision is rare).
-  // Falls back to the normal `onOpenSession` path for a non-split launch.
-  const handleLaunched = useCallback(
-    (session: Session) => {
-      if (!dockviewApi || !splitRequest) {
-        onOpenSession(session);
+  // #3054 — a pane's "Split right"/"Split down" opens the launcher with a
+  // split target; the launched (or opened existing) session lands beside the
+  // reference pane rather than through the normal open path. A session whose
+  // pane is already open is just focused (dockview panel ids are unique), and
+  // a reference pane closed in the meantime falls back to dockview's default
+  // placement.
+  const placeLaunchedSession = useCallback(
+    (session: Session, target: LauncherTarget | null, workspaceId: number | null = null) => {
+      // #3246 — started on the phone into another workspace: it joins that
+      // one (and the phone switches to it), so it is not placed in this grid.
+      if (workspaceId !== null) {
+        launchIntoWorkspace(session, workspaceId);
         return;
       }
-      const req = splitRequest;
-      useDashboardStore.getState().clearSplitRequest();
+      const split = target?.split;
+      if (!split || !dockviewApi) {
+        openSessionOnHalf(session, target);
+        return;
+      }
       const panelId = `session-${session.id}`;
       const existing = dockviewApi.getPanel(panelId);
       if (existing) {
-        existing.api.setActive();
-      } else {
-        const referencePanel = dockviewApi.getPanel(req.referencePanelId);
-        const projectName = projects.find((p) => p.id === session.projectId)?.name;
-        dockviewApi.addPanel({
-          id: panelId,
-          component: "terminal",
-          tabComponent: "terminal",
-          title: initialPaneTitle(session, projectName),
-          params: { sessionId: session.id },
-          ...(referencePanel ? { position: { referencePanel, direction: req.direction } } : {}),
-        });
-        // Explicit splits ignore tabletPositioning's cap (issue #1555).
-        // Count after addPanel — dockview updates the grid synchronously.
-        const workspaceKey = activeWorkspaceId ?? -1;
-        if (
-          shouldWarnTabletPaneCap({
-            tier: layoutTier,
-            columnCount: tiledColumnCount(dockviewApi.panels),
-            cap: settings.tabletPaneCap,
-            alreadyWarned: paneCapWarnedRef.current.has(workspaceKey),
-          })
-        ) {
-          paneCapWarnedRef.current.add(workspaceKey);
-          setPaneCapNotice(true);
-        }
+        focusPanelForTier(dockviewApi, existing, layoutTier);
+        return;
       }
-      setSidebarOpen(false);
+      const referencePanel = dockviewApi.getPanel(split.referencePanelId);
+      const projectName = projects.find((p) => p.id === session.projectId)?.name;
+      dockviewApi.addPanel({
+        id: panelId,
+        component: "terminal",
+        tabComponent: "terminal",
+        title: initialPaneTitle(session, projectName),
+        params: { sessionId: session.id },
+        ...(referencePanel ? { position: { referencePanel, direction: split.direction } } : {}),
+      });
     },
-    [
-      dockviewApi,
-      splitRequest,
-      onOpenSession,
-      projects,
-      activeWorkspaceId,
-      layoutTier,
-      settings.tabletPaneCap,
-    ],
+    [dockviewApi, openSessionOnHalf, projects, layoutTier],
   );
-
-  usePaneCapNotice({ paneCapNotice, setPaneCapNotice });
 
   const handleSelectWorkspace = useCallback((workspaceId: number) => {
     useDashboardStore.getState().showWorkspace(workspaceId);
-    setSidebarOpen(false);
-    // The notice is one boolean, the warned set is per workspace. Leaving it
-    // up across a switch showed workspace B a split that happened in A.
-    setPaneCapNotice(false);
   }, []);
 
-  // One toggle, two meanings depending on breakpoint: phone/tablet's
-  // `sidebarOpen` is a closed-by-default overlay flag (App.tsx-local, not
-  // persisted — resets to closed every navigation, which is the right
-  // default for an overlay); desktop's `sidebarCollapsed` is a persisted,
-  // open-by-default panel-visibility preference (store-owned, survives
-  // reload). Same button, same handler.
-  //
-  // Floating-sidebar redesign — was phone-only (`isMobile`) under the
-  // tablet tier plan, with tablet deliberately kept on desktop's docked
-  // collapse behavior ("it has room for the docked sidebar"). Reversed:
-  // tablet's sidebar was pushing and resizing the live dockview grid on
-  // open (`sidebar.css`'s `.sidebar-wrapper` was an in-flow `flex-shrink: 0`
-  // item there), which is both the wrong feel (Apple's own
-  // `UISplitViewController` floats the sidebar as an overlay below the
-  // regular/compact width threshold, never resizing content) and a second,
-  // independent trigger for the dockview pane-skew bug fixed separately —
-  // any grid-width change while a group is maximized replays that same
-  // clamp. `layoutTier !== "desktop"` (not `isMobile`) now drives
-  // `sidebarOpen`, so tablet gets the same floating overlay as phone.
+  // The rail's sidebar button (#3041): from 1280px it flips the persisted
+  // `sidebarCollapsed` preference; from 1100 to 1279px the band's own,
+  // collapsed-by-default flag. Both are the same docked sidebar, pushing the
+  // grid. Below 1100px there is no left sidebar, so nothing to toggle.
   const toggleSidebar = useCallback(() => {
-    if (compact) setSidebarOpen((v) => !v);
-    else useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
-  }, [compact, sidebarCollapsed]);
+    if (layoutBand === "desktop") {
+      useDashboardStore.getState().setSidebarCollapsed(!sidebarCollapsed);
+    } else if (layoutBand === "desktop-narrow") {
+      setNarrowSidebarShown((v) => !v);
+    }
+  }, [layoutBand, sidebarCollapsed]);
 
-  // Floating-sidebar redesign — edge-swipe open/dismiss (lib/sidebarSwipeGesture.ts's
-  // own header comment covers the design: discrete threshold+commit, not a
-  // live drag-follow, and no separate overlay hit-target so touches starting
-  // in the edge slice still reach a terminal rendered flush against it
-  // first). Two independent attachments, only one live at a time per state:
-  // `.app-body` with an edge-zone filter drives open (only relevant while
-  // closed), the sidebar panel itself (draggable from anywhere on it,
-  // matching Files/Notes on iPad) drives dismiss (only relevant while open).
-  // Desktop is excluded entirely — the docked sidebar has no swipe gesture.
-  const appBodyRef = useRef<HTMLDivElement>(null);
-  const sidebarWrapperRef = useRef<HTMLDivElement>(null);
-  // Drop a stale open drawer when leaving the compact tier. Extracted to
-  // useSidebarOpenTierReset; called here, where the effect was — before
-  // usePhoneBackStack / usePhoneTasksNavigator.
-  useSidebarOpenTierReset({ compact, setSidebarOpen });
-  // Phone + tablet: Android back / the back gesture closes the topmost overlay (see
-  // hooks/usePhoneBackStack.ts). Settings and the session/notification
-  // sheets register themselves; the navigator and the Tasks board live here.
-  usePhoneBackStack(compact && sidebarOpen, () => setSidebarOpen(false));
-  usePhoneTasksNavigator({ compact, viewMode, sidebarOpen, setSidebarOpen });
-  // Edge-swipe to open/dismiss the compact sidebar. Extracted to
-  // useSidebarSwipe; called here, where the effect was.
-  useSidebarSwipe({ compact, sidebarOpen, setSidebarOpen, appBodyRef, sidebarWrapperRef });
-
-  const rightSidebarOpen = useDashboardStore((s) => s.rightSidebarOpen);
-  // Tablet right-edge swipe opens the right sidebar. Extracted to
-  // useRightSidebarEdgeSwipe; called here, immediately after the
-  // rightSidebarOpen subscription, where the effect was.
-  useRightSidebarEdgeSwipe({ layoutTier, rightSidebarOpen, appBodyRef });
-
+  // Phone (#3014): after "Open session in Workspace" took a task's session to
+  // Workspace, back returns to Tasks (design 9.3). The only back that changes
+  // mode; it is registered while the switch it undoes is still in effect.
+  const crossLinkReturn = useDashboardStore((s) => s.crossLinkReturn);
+  usePhoneBackStack(isMobile && crossLinkReturn !== null && viewMode === "list", () =>
+    useDashboardStore.getState().returnFromCrossLink(),
+  );
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct
   // `writeNumber` call the way Dock/UnifiedBoard persist — `setSidebarWidth`
@@ -889,8 +910,6 @@ export function App() {
     cursor: "col-resize",
   });
 
-  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null;
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
   // Whether any active session is Codex — gates the hook-trust banner below
   // (issue #259) so it only appears when it's actually relevant, not on
   // every load of a machine that merely has Codex installed.
@@ -898,10 +917,10 @@ export function App() {
     () => sessions.some((s) => s.status === "active" && CODEX_COMMAND_RE.test(s.command.trim())),
     [sessions],
   );
-  const paneCount = useMemo(() => dockviewApi?.panels.length ?? 0, [dockviewApi, panelsVersion]);
-  // Tiled-only count, for the empty-grid dropzone: paneCount above includes
-  // floating (peek) panels, so a lone floating panel would otherwise hide the
-  // "nothing tiled here" hint even though the grid itself is empty (#121).
+  // Tiled-only count, for the empty-grid dropzone: counting every panel would
+  // include floating (peek) panels, so a lone floating panel would otherwise
+  // hide the "nothing tiled here" hint even though the grid itself is empty
+  // (#121).
   const tiledPaneCount = useMemo(
     () => dockviewApi?.panels.filter(isTiledPanel).length ?? 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
@@ -921,6 +940,54 @@ export function App() {
     () => dockviewApi?.panels.filter(isTiledPanel) ?? [],
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
     [dockviewApi, panelsVersion],
+  );
+  // Every pane open in the active workspace, floating ones included, for the
+  // left rail's pane list (#3009). Floating is safe there: focusPanelForTier
+  // maximizes only on the phone, which has no rail, and in the halves, whose
+  // router leaves a float to the ordinary path and whose moves count tiled
+  // panes only (tiledLeftCount below).
+  const railPanes = useMemo<RailPaneInput[]>(
+    () =>
+      (dockviewApi?.panels ?? []).map((panel) => ({
+        id: panel.id,
+        title: panel.title ?? "",
+        sessionId: panelSessionId(panel),
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-derives off panelsVersion, not a real dependency
+    [dockviewApi, panelsVersion],
+  );
+  const focusRailPane = useCallback(
+    (panelId: string) => {
+      const panel = dockviewApi?.getPanel(panelId);
+      if (dockviewApi && panel) focusPanelForTier(dockviewApi, panel, layoutTier);
+    },
+    [dockviewApi, layoutTier],
+  );
+  // #3010 — the halves' panes: the left rail lists the left half's, the
+  // right rail the right half's.
+  const railSplit = useMemo(() => splitByHalf(halvesState, railPanes), [halvesState, railPanes]);
+  // The left half only ever shows a tiled pane (a float cannot be maximized),
+  // so a float is not something the left half can fall back on: the guard
+  // that keeps the left half non-empty counts tiled panes only.
+  const tiledLeftCount = useMemo(() => {
+    const tiled = new Set(dockviewApi?.panels.filter(isTiledPanel).map((p) => p.id));
+    return railSplit.left.filter((p) => tiled.has(p.id)).length;
+  }, [dockviewApi, railSplit.left]);
+  const { moveToHalf, toggleRightRailPane, renderHalfActions, renameHalfPane, halfMenuItems } =
+    useHalfActions(dockviewApi, layoutTier, tiledLeftCount);
+  // #3034 — a path clicked in the right half's terminal opens the editor in
+  // the grid, which on the halves is the left half; the left half now has
+  // the user's attention. A path that opens nothing leaves focus where it is.
+  const openRightHalfPath = useCallback(
+    (sessionId: number, path: string, line?: number) => {
+      if (!dockviewApi) return;
+      if (!openTerminalPath(dockviewApi, sessionId, layout, path, line)) return;
+      // The halves router (showPaneOnItsHalf) already focuses the left half
+      // for a tiled editor; a floating one is left to the ordinary path and
+      // would keep focus on the right half without this.
+      useDashboardStore.getState().setFocusedHalf("left");
+    },
+    [dockviewApi, layout],
   );
   // Projects with a session open in the active workspace, derived from the
   // live dockview panels (panel.params.sessionId -> session.projectId) —
@@ -993,10 +1060,60 @@ export function App() {
   // panel switch — see its own render site further down) — without this,
   // the bar would keep showing and sending keys to a terminal the Kanban
   // board is currently covering, with no way to see what a tap even did.
+  //
+  // #3010 — with two halves on screen, the key bar addresses the focused
+  // half: the right half's session while it has focus (and no view covers
+  // it), the left half's otherwise.
+  // Only while its pane is open in the grid: the assignment can outlive a
+  // pane for a moment (a reload, before the remembered panes reopen).
+  const rightHalfPanelId =
+    foldHalves &&
+    halvesState.shownRight !== null &&
+    railPanes.some((p) => p.id === halvesState.shownRight)
+      ? halvesState.shownRight
+      : null;
+  // Task titles and numbers (#3285), for the halves' pane headers.
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
+  const rightHalfSession = rightHalfPanelId
+    ? sessions.find((s) => `session-${s.id}` === rightHalfPanelId)
+    : undefined;
+  const rightHalfOnScreen = !!rightHalfSession && !rightSidebarOpen;
+  const phoneViewCovering = isMobile && rightSidebarOpen;
+  // The left half's pane, for its header.
+  const leftHalfPane = (() => {
+    // Only a left-half pane: the active panel can be a right-half one for a
+    // moment (or for good, with no tiled pane left to show on the left).
+    if (!foldHalves || !activePanelId || halfOf(halvesState, activePanelId) !== "left") {
+      return null;
+    }
+    const pane = railPanes.find((p) => p.id === activePanelId);
+    if (!pane) return null;
+    const session =
+      pane.sessionId === undefined ? undefined : sessions.find((x) => x.id === pane.sessionId);
+    return {
+      id: pane.id,
+      title: session ? sessionPaneTitle(session, titleContexts.get(session.id)) : pane.title,
+      projectName: session
+        ? (projects.find((p) => p.id === session.projectId)?.name ?? null)
+        : null,
+    };
+  })();
+  const onUseLeftHalf = useCallback(() => {
+    const store = useDashboardStore.getState();
+    store.setFocusedHalf("left");
+    const id = store.activePanelId;
+    if (id) store.noteHalfUsed({ kind: "pane", panelId: id });
+  }, []);
   const activeTerminalSession =
-    activePanelId && viewMode !== "kanban"
-      ? sessions.find((s) => `session-${s.id}` === activePanelId && s.status === "active")
-      : undefined;
+    viewMode === "kanban"
+      ? undefined
+      : rightHalfOnScreen && focusedHalf === "right"
+        ? rightHalfSession?.status === "active"
+          ? rightHalfSession
+          : undefined
+        : activePanelId
+          ? sessions.find((s) => `session-${s.id}` === activePanelId && s.status === "active")
+          : undefined;
 
   // Dockview ships its own hardcoded light/dark chrome colors, unaware of
   // the selected terminal color scheme — so a scheme's background (e.g.
@@ -1020,7 +1137,6 @@ export function App() {
   const rightSidebarActions = useMemo(
     () => ({
       onOpenGit,
-      onOpenGitHub,
       onOpenFileEditor,
       onOpenFile,
       onOpenAgentRules,
@@ -1029,10 +1145,11 @@ export function App() {
       onOpenDockConfig,
       onOpenSkills,
       onOpenTasks,
+      onOpenDevice,
+      onOpenRailBrowser,
     }),
     [
       onOpenGit,
-      onOpenGitHub,
       onOpenFileEditor,
       onOpenFile,
       onOpenAgentRules,
@@ -1041,6 +1158,8 @@ export function App() {
       onOpenDockConfig,
       onOpenSkills,
       onOpenTasks,
+      onOpenDevice,
+      onOpenRailBrowser,
     ],
   );
 
@@ -1078,32 +1197,38 @@ export function App() {
   const sidebar = (
     <SidebarShell
       showSourceControl={isMobile}
-      phoneSection={compact ? sidebarPhoneSection(navTab) : undefined}
       workspaceProjectIds={scopedWorkspaceProjectIds}
       openSessionIds={isMobile ? null : openSessionIds}
       onOpenSession={onOpenSession}
       onOpenSessionAsFloat={onOpenSessionAsFloat}
       onSessionEnded={onSessionEnded}
       onOpenProjectLauncher={openProjectLauncher}
-      onOpenGlobalLauncher={openGlobalLauncher}
       onOpenSettingsProjects={() => openSettings("projects")}
-      onOpenTasks={onOpenTasks}
       onOpenGit={onOpenGit}
       onOpenProjectSetup={onOpenProjectSetup}
-      onOpenDevice={onOpenDevice}
     />
   );
 
-  // Phone/tablet session switcher — rendered into the toolbar in place of the old
-  // `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
-  const mobileSessionSwitcher = compact ? (
+  // Whether the left sidebar shows: from 1280px unless collapsed, from 1100
+  // to 1279px only once opened, never below 1100px (#3041). The rail lists
+  // the open panes when it does not (#3009).
+  const leftSidebarShown =
+    layoutBand === "desktop"
+      ? !sidebarCollapsed
+      : layoutBand === "desktop-narrow"
+        ? narrowSidebarShown
+        : false;
+
+  // Phone session switcher — rendered into the phone's top bar in place of the
+  // old `.mobile-tabs` strip. `mobilePanels` is tiled-only (see its comment).
+  // From 700px there is no top bar (#3009): the left rail lists the open
+  // panes while the left sidebar is not showing.
+  const mobileSessionSwitcher = isMobile ? (
     <MobileSessionBar
-      tier={layoutTier}
-      contextLabel={isMobile ? undefined : activeWorkspace?.name}
       panels={mobilePanels}
       activePanelId={activePanelId}
       dockviewApi={dockviewApi}
-      onNewSession={openGlobalLauncher}
+      onNewSession={openNewSessionLauncher}
       onOpenSession={onOpenSession}
       // Issue #1882 — the phone tier has no workspace switcher, so a picker
       // row that names another workspace is the way back to it.
@@ -1111,15 +1236,137 @@ export function App() {
     />
   ) : null;
 
+  // The shell banners (backend down, session expired, workspaces not
+  // loaded, resource alerts, update, Codex hook trust). On the two halves
+  // (#3213) they go above both halves, between the rails, rather than
+  // inside .grid-area, which there is only the left half; elsewhere they
+  // stay at the top of the grid area.
+  const halvesBand = layoutPresentation === "halves";
+  const shellBanners = (
+    <>
+      {/* Whole-backend-down — design States doc section 04. Docked at
+          the top of the grid area, rest of the UI dimmed (not
+          disabled) beneath it via .grid-area-body.dimmed, matching the
+          design's "frozen body" — a visual cue, not an actual input
+          lock, so nothing gets destructively stuck if this signal
+          itself turns out wrong. Reuses the existing live-refresh poll
+          (store.ts) rather than a separate health-check mechanism.
+          Gated on !sessionExpired below it: a gateway forward-auth
+          session expiry (self-hosted behind Traefik + Authentik or
+          similar) also fails every request this poll makes, but it
+          isn't "the backend is down" — the process is fine, only the
+          gateway is rejecting the request — so it gets its own banner
+          instead of this one asserting a cause that isn't true. */}
+      {!backendReachable && !sessionExpired && (
+        <div className="backend-down-banner">
+          <ServerRackIcon size={16} style={{ color: "var(--r)" }} />
+          <span className="backend-down-title">Mullion server unreachable</span>
+          <span className="backend-down-subtext">retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…</span>
+          <button
+            className="backend-down-reconnect"
+            disabled={reconnecting}
+            onClick={() => {
+              setReconnecting(true);
+              useDashboardStore
+                .getState()
+                .refreshSessions()
+                .catch(() => {
+                  // Surfaced through backendReachable/sessionExpired
+                  // themselves (both already drive their own banner) —
+                  // nothing further to do with the rejection here,
+                  // just don't let it become an unhandled rejection.
+                })
+                .finally(() => setReconnecting(false));
+            }}
+          >
+            {reconnecting ? "Reconnecting…" : "Reconnect"}
+          </button>
+        </div>
+      )}
+      {/* A gateway forward-auth session expiry that survived
+          api/client.ts's own silent top-level reload attempt (its
+          guard already fired once this session — see
+          AuthExpiredError's doc comment) — the one case where recovery
+          genuinely needs the user, so it gets an explicit action
+          rather than another silent reload. */}
+      {sessionExpired && (
+        <div className="backend-down-banner">
+          <WarningTriangleIcon size={16} style={{ color: "var(--o)" }} />
+          <span className="backend-down-title">Session expired</span>
+          <span className="backend-down-subtext">sign in again to continue</span>
+          <button className="backend-down-reconnect" onClick={() => window.location.reload()}>
+            Sign in
+          </button>
+        </div>
+      )}
+      {/* Issue #1638 — the mount load gave up. workspacesLoaded stays
+          false (an unknown list must not bootstrap a second Default),
+          so without this the grid is just empty. Not .backend-down-banner:
+          a dead backend already shows that red bar, and its Reconnect
+          does not retry this load, so this stays but reads as secondary. */}
+      {workspaceLoadFailed && (
+        <div className="workspace-load-banner" role="alert">
+          <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
+          <span className="backend-down-title">Couldn't load workspaces</span>
+          <span className="backend-down-subtext">retry, or come back online</span>
+          <button
+            className="workspace-load-retry"
+            onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      <ResourceAlertBanner onOpenStorage={() => openSettings("storage")} />
+      {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
+        <ActionBanner
+          icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
+          title={`v${currentVersion} → v${updateCheck.latestVersion} available`}
+          subtext="Click for details"
+          onOpen={() => openSettings("server")}
+          onDismiss={() => useDashboardStore.getState().dismissUpdate()}
+          dismissTitle="Dismiss until next version"
+        />
+      )}
+      {/* Codex `/hooks` trust pending (issue #259) — same dismissible,
+          click-through-to-Settings shape as the update banner above.
+          Mullion cannot grant this trust on the user's behalf (that's
+          the whole point of Codex's gate), so this only informs and
+          links to the one-time manual step. */}
+      {shouldShowCodexHookTrustBanner({
+        codexSessionActive,
+        codexHookTrust,
+        dismissedCodexHookTrustVersion,
+        currentVersion,
+      }) && (
+        <ActionBanner
+          icon={<RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />}
+          title="Codex hooks not yet trusted"
+          subtext="Run /hooks in a Codex session to enable status updates · Click for details"
+          onOpen={() => openSettings("launchers")}
+          onDismiss={() => useDashboardStore.getState().dismissCodexHookTrust()}
+          dismissTitle="Dismiss until next version"
+        />
+      )}
+    </>
+  );
+
   return (
     <div
       data-tier={layoutTier}
+      data-band={layoutBand}
+      // Workspace or Tasks (#3009); left-rail.css hides the left sidebar in
+      // Tasks mode from 700px.
+      data-mode={viewMode === "kanban" ? "tasks" : "workspace"}
       className={themeClassName(
         theme,
         "app",
-        sidebarOpen && "sb-open",
-        compact && viewMode === "kanban" && "nav-tasks",
-        sidebarCollapsed && "sidebar-collapsed",
+        isMobile && "mode-bar",
+        leftSidebarDocked && !leftSidebarShown && "sidebar-collapsed",
+        foldHalves && "fold-halves",
+        // The two halves' widths hold in Tasks mode too: the board on the
+        // left half, the task sidebar docked on the right (frame 2b).
+        layoutPresentation === "halves" && "halves-band",
         sidebarResizing && "sidebar-resizing",
         settings.sidebarDensity === "compact" && "density-compact",
         isCoarsePointer && activeTerminalSession && "key-bar",
@@ -1134,259 +1381,106 @@ export function App() {
           every surface's failure has somewhere to land — including ones
           rendered inside a modal or a panel further down. */}
       <ToastHost />
-      <Toolbar
-        onToggleSidebar={toggleSidebar}
-        onOpenSession={onOpenSession}
-        onOpenTimeline={onOpenTimeline}
-        onOpenBrowser={onOpenBrowser}
-        onOpenLauncher={openGlobalLauncher}
-        onOpenSettings={openSettings}
-        activeWorkspaceName={activeWorkspace?.name ?? null}
-        paneCount={paneCount}
-        currentVersion={currentVersion}
-        mobileSessionSlot={mobileSessionSwitcher}
-        phone={isMobile}
-        notificationSheet={compact && isCoarsePointer}
-      />
-      <div className="app-body" ref={appBodyRef}>
-        <div className="cmux-scrim" onClick={() => setSidebarOpen(false)} />
-        <div
-          className="sidebar-wrapper cmux-scroll"
-          ref={sidebarWrapperRef}
-          /* The compact tier's drawer is closed by sliding it off-screen
-             (styles/sidebar.css's `transform: translateX(-101%)`), which
-             leaves every control inside it — session rows, the filter
-             input, the per-row kebab menus — focusable and in the
-             accessibility tree while they sit off-screen. A keyboard user
-             tabbing through the app would land on controls they cannot
-             see, and a screen reader would read the whole hidden tree.
-
-             `inert` removes the subtree from both the tab order and the
-             accessibility tree in one attribute. It is applied only on the
-             compact tier: the desktop sidebar is always visible, so making
-             it inert when `sidebarOpen` is false (the desktop default)
-             would hide a permanently-visible panel.
-
-             styles/sidebar.css pairs this with `visibility: hidden` for
-             the closed state, which is the fallback for browsers without
-             `inert` support — an element with `visibility: hidden` is not
-             focusable either. */
-          inert={compact && !sidebarOpen}
-        >
-          {/* Desktop-only (review finding, floating-sidebar redesign): the
-              overlay's own `width: min(310px, 84vw) !important`
-              (sidebar.css's phone/tablet `data-tier` block) outranks
-              `--sidebar-width`, the custom property this drag actually
-              writes to, so below desktop width the handle used to render,
-              respond to mousedown, and update state/localStorage while
-              visibly doing nothing — a resize-by-mouse gesture doesn't fit
-              a touch-first floating overlay anyway. */}
-          {layoutTier === "desktop" && !sidebarCollapsed && (
-            <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
-          )}
-          {/* Phone: workspaces don't exist as a concept — the session picker
-              lists every session — and the drawer is a full-screen navigator
-              with tabs instead of one long scroll. */}
-          {compact ? (
-            <>
-              <PhoneNavigatorPanel
-                tablet={!isMobile}
-                workspaces={
-                  isMobile ? undefined : (
-                    <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-                  )
+      {/* The top bar is the phone's only (#3009). From 700px its controls
+          live on the left rail below: the board toggle is the mode switch,
+          the command box, bell and settings are the rail's bottom cluster,
+          the sidebar toggle sits under the mode switch, New session is each
+          sidebar project's "+" (the launcher, #3013) and the command box (the
+          ⌘K palette), and the theme is in Settings → Appearance.
+          The top bar's version label is in Settings → Server. */}
+      {isMobile && (
+        <Toolbar
+          onOpenLauncher={openGlobalLauncher}
+          mobileSessionSlot={mobileSessionSwitcher}
+          inert={phoneViewCovering}
+        />
+      )}
+      <div className={`app-body${halvesBand ? " app-body--halves" : ""}`}>
+        {!isMobile && (
+          <LeftRail
+            onToggleSidebar={leftSidebarDocked ? toggleSidebar : undefined}
+            sidebarShown={leftSidebarShown}
+            middle={
+              <RailWorkspaceSection
+                onSelectWorkspace={handleSelectWorkspace}
+                sheet={isCoarsePointer}
+                showPanes={!leftSidebarShown}
+                panes={foldHalves ? railSplit.left : railPanes}
+                activePanelId={activePanelId}
+                onFocusPane={focusRailPane}
+                onNewSession={
+                  foldHalves ? () => openNewSessionOnHalf("left") : openNewSessionLauncher
                 }
-                navTab={navTab}
-                setNavTab={setNavTab}
-                onOpenTasks={onOpenTasks}
-                onClose={() => setSidebarOpen(false)}
-                onSelectSetting={openSettingsFromNavigator}
-                sidebar={sidebar}
-                onOpenSession={onOpenSession}
-                onSessionEnded={onSessionEnded}
+                menuItems={foldHalves ? halfMenuItems("left") : undefined}
               />
-            </>
-          ) : (
-            <>
-              <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
-              {sidebar}
-            </>
-          )}
-        </div>
-        <div className="grid-area">
-          {/* Whole-backend-down — design States doc section 04. Docked at
-              the top of the grid area, rest of the UI dimmed (not
-              disabled) beneath it via .grid-area-body.dimmed, matching the
-              design's "frozen body" — a visual cue, not an actual input
-              lock, so nothing gets destructively stuck if this signal
-              itself turns out wrong. Reuses the existing live-refresh poll
-              (store.ts) rather than a separate health-check mechanism.
-              Gated on !sessionExpired below it: a gateway forward-auth
-              session expiry (self-hosted behind Traefik + Authentik or
-              similar) also fails every request this poll makes, but it
-              isn't "the backend is down" — the process is fine, only the
-              gateway is rejecting the request — so it gets its own banner
-              instead of this one asserting a cause that isn't true. */}
-          {!backendReachable && !sessionExpired && (
-            <div className="backend-down-banner">
-              <ServerRackIcon size={16} style={{ color: "var(--r)" }} />
-              <span className="backend-down-title">Mullion server unreachable</span>
-              <span className="backend-down-subtext">
-                retry in {LIVE_REFRESH_INTERVAL_MS / 1000}s…
-              </span>
-              <button
-                className="backend-down-reconnect"
-                disabled={reconnecting}
-                onClick={() => {
-                  setReconnecting(true);
-                  useDashboardStore
-                    .getState()
-                    .refreshSessions()
-                    .catch(() => {
-                      // Surfaced through backendReachable/sessionExpired
-                      // themselves (both already drive their own banner) —
-                      // nothing further to do with the rejection here,
-                      // just don't let it become an unhandled rejection.
-                    })
-                    .finally(() => setReconnecting(false));
-                }}
-              >
-                {reconnecting ? "Reconnecting…" : "Reconnect"}
-              </button>
-            </div>
-          )}
-          {/* A gateway forward-auth session expiry that survived
-              api/client.ts's own silent top-level reload attempt (its
-              guard already fired once this session — see
-              AuthExpiredError's doc comment) — the one case where recovery
-              genuinely needs the user, so it gets an explicit action
-              rather than another silent reload. */}
-          {sessionExpired && (
-            <div className="backend-down-banner">
-              <WarningTriangleIcon size={16} style={{ color: "var(--o)" }} />
-              <span className="backend-down-title">Session expired</span>
-              <span className="backend-down-subtext">sign in again to continue</span>
-              <button className="backend-down-reconnect" onClick={() => window.location.reload()}>
-                Sign in
-              </button>
-            </div>
-          )}
-          {/* Issue #1638 — the mount load gave up. workspacesLoaded stays
-              false (an unknown list must not bootstrap a second Default),
-              so without this the grid is just empty. Not .backend-down-banner:
-              a dead backend already shows that red bar, and its Reconnect
-              does not retry this load, so this stays but reads as secondary. */}
-          {workspaceLoadFailed && (
-            <div className="workspace-load-banner" role="alert">
-              <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="backend-down-title">Couldn't load workspaces</span>
-              <span className="backend-down-subtext">retry, or come back online</span>
-              <button
-                className="workspace-load-retry"
-                onClick={() => setWorkspaceLoadNonce((n) => n + 1)}
-              >
-                Retry
-              </button>
-            </div>
-          )}
-          {paneCapNotice && (
-            <div className="pane-cap-notice">
-              <WarningTriangleIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="pane-cap-notice-title" role="status">
-                This split is past the tablet pane cap, so panes may get small.
-              </span>
-              <button
-                type="button"
-                className="pane-cap-notice-dismiss"
-                aria-label="Dismiss"
-                onClick={() => setPaneCapNotice(false)}
-              >
-                ×
-              </button>
-            </div>
-          )}
-          <ResourceAlertBanner onOpenStorage={() => openSettings("storage")} />
-          {updateCheck?.updateAvailable && updateCheck.latestVersion !== dismissedUpdateVersion && (
-            <div
-              className="update-banner"
-              onClick={() => openSettings("server")}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") openSettings("server");
-              }}
-            >
-              <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="update-banner-title">
-                v{currentVersion} → v{updateCheck.latestVersion} available
-              </span>
-              <span className="update-banner-subtext">Click for details</span>
-              <span
-                className="update-banner-dismiss"
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useDashboardStore.getState().dismissUpdate();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.stopPropagation();
-                    useDashboardStore.getState().dismissUpdate();
-                  }
-                }}
-                title="Dismiss until next version"
-              >
-                ×
-              </span>
-            </div>
-          )}
-          {/* Codex `/hooks` trust pending (issue #259) — same dismissible,
-              click-through-to-Settings shape as the update banner above.
-              Mullion cannot grant this trust on the user's behalf (that's
-              the whole point of Codex's gate), so this only informs and
-              links to the one-time manual step. */}
-          {shouldShowCodexHookTrustBanner({
-            codexSessionActive,
-            codexHookTrust,
-            dismissedCodexHookTrustVersion,
-            currentVersion,
-          }) && (
-            <div
-              className="update-banner"
-              onClick={() => openSettings("launchers")}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") openSettings("launchers");
-              }}
-            >
-              <RefreshIcon size={16} style={{ color: "var(--o)", flexShrink: 0 }} />
-              <span className="update-banner-title">Codex hooks not yet trusted</span>
-              <span className="update-banner-subtext">
-                Run /hooks in a Codex session to enable status updates · Click for details
-              </span>
-              <span
-                className="update-banner-dismiss"
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  useDashboardStore.getState().dismissCodexHookTrust();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.stopPropagation();
-                    useDashboardStore.getState().dismissCodexHookTrust();
-                  }
-                }}
-                title="Dismiss until next version"
-              >
-                ×
-              </span>
-            </div>
-          )}
+            }
+            onOpenLauncher={openGlobalLauncher}
+            onOpenSettings={openSettings}
+            onOpenSession={onOpenSession}
+            onOpenTimeline={onOpenTimeline}
+            onOpenBrowser={onOpenBrowser}
+            notificationSheet={compact && isCoarsePointer}
+          />
+        )}
+        {/* No left sidebar on the phone (#3014) or from 700 to 1099px
+            (#3041): there the top bar's session picker / the rail's
+            workspace chip, pane list and the launcher are the navigation.
+            The sidebar still mounts, hidden: its mount loads projects,
+            sessions, hosts and tasks, and it owns each project's live GitHub
+            subscription, which the picker, the launcher and the rail rely
+            on. */}
+        {!leftSidebarDocked && (
+          <div className="sidebar-host-hidden" hidden inert>
+            {sidebar}
+          </div>
+        )}
+        {/* From 1100px: docked, pushing the grid (design 9.1). Collapsing
+            it is styles/sidebar.css's `.sidebar-collapsed` rule, which takes
+            it to zero width; `inert` takes its controls out of the tab order
+            and the accessibility tree too, or a keyboard user would tab
+            through session rows they cannot see (collapsed is the default
+            from 1100 to 1279px). */}
+        {leftSidebarDocked && (
+          <div className="sidebar-wrapper cmux-scroll" inert={!leftSidebarShown}>
+            {leftSidebarShown && (
+              <div className="sidebar-resize-handle" onMouseDown={onSidebarResizeMouseDown} />
+            )}
+            <WorkspaceSwitcher onSelectWorkspace={handleSelectWorkspace} />
+            {sidebar}
+          </div>
+        )}
+        {halvesBand && <div className="shell-banners">{shellBanners}</div>}
+        <div
+          // #3216 — a phone sidebar view covers the grid (and the top bar,
+          // above) but is not modal, so the mode bar under it stays reachable:
+          // what it covers leaves the tab order and the accessibility tree.
+          inert={phoneViewCovering}
+          className={`grid-area${foldHalves ? " fold-half fold-half-left" : ""}${
+            foldHalves && rightHalfOnScreen && focusedHalf === "left" ? " focused" : ""
+          }`}
+          // #3010 — a press or focus in the left half gives it the key bar
+          // and makes its pane the one used last (for the phone after
+          // folding).
+          onPointerDownCapture={foldHalves ? onUseLeftHalf : undefined}
+          onFocusCapture={foldHalves ? onUseLeftHalf : undefined}
+        >
+          {!halvesBand && shellBanners}
           <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
+            {foldHalves && leftHalfPane && (
+              <HalfHeader
+                side="left"
+                title={leftHalfPane.title}
+                projectName={leftHalfPane.projectName}
+                onMove={
+                  canGoRight(leftHalfPane.id) && tiledLeftCount > 1
+                    ? () => moveToHalf(leftHalfPane.id, "right")
+                    : null
+                }
+                focused={rightHalfOnScreen && focusedHalf === "left"}
+                renderActions={renderHalfActions(leftHalfPane.id)}
+                onRenameCommit={(value) => renameHalfPane(leftHalfPane.id, value)}
+              />
+            )}
             <div
               ref={dockviewContainerRef}
               className="dockview-container"
@@ -1432,15 +1526,40 @@ export function App() {
                   <DockviewReact/> would drop dockviewApi and break future
                   addPanel/restore calls). Desktop-only — mobile shows its own
                   switcher instead of the tiled grid entirely. Gated on
-                  tiledPaneCount (not paneCount) so a floating peek panel
+                  tiledPaneCount (tiled panels only) so a floating peek panel
                   doesn't hide this hint while the grid itself is empty (#121). */}
               {!isMobile && tiledPaneCount === 0 && (
                 <div className="empty-grid-dropzone" style={{ position: "absolute", inset: 0 }}>
                   <GridIcon size={26} style={{ color: "var(--dim)" }} />
                   <span className="empty-grid-title">Nothing tiled here yet</span>
-                  <span className="empty-grid-hint">
-                    ⌘K to launch · pick a session from the sidebar
-                  </span>
+                  {/* #2978 — a touch screen has no ⌘K: it gets the launcher and
+                      the sidebar as buttons instead of the keyboard hint. */}
+                  {isCoarsePointer ? (
+                    <div className="ui-empty-state-actions empty-grid-actions">
+                      <button
+                        type="button"
+                        className="ui-empty-state-btn-primary"
+                        onClick={openNewSessionLauncher}
+                      >
+                        Launch a session
+                      </button>
+                      {leftSidebarDocked && !leftSidebarShown && (
+                        <button
+                          type="button"
+                          className="ui-empty-state-btn-secondary"
+                          onClick={toggleSidebar}
+                        >
+                          Show the sidebar
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="empty-grid-hint">
+                      {leftSidebarDocked
+                        ? "⌘K to launch · pick a session from the sidebar"
+                        : "⌘K to launch or find a session"}
+                    </span>
+                  )}
                 </div>
               )}
               {/* The unified task/session board (formerly issue #211's
@@ -1449,26 +1568,33 @@ export function App() {
                   not a conditionally-mounted replacement" reasoning as the
                   empty grid dropzone above: dockview's own API instance (and
                   every open panel) stays alive underneath while viewMode is
-                  "kanban", so leaving Tasks via Toolbar.tsx's own "Back to
-                  workspace" button restores exactly what was there before.
-                  Tasks is a top-level destination, not a workspace view mode
-                  — entering it now only happens from Sidebar.tsx's own
-                  entry or the command palette, not a toggle that implied it
-                  was a peer of the tiled workspace grid. Desktop/tablet only:
-                  on phone the board renders inside the navigator's Tasks tab
-                  instead (PhoneNavigatorPanel). */}
-              {viewMode === "kanban" && !compact && (
-                <KanbanBoardOverlay onOpenSession={onOpenSession} onSessionEnded={onSessionEnded} />
+                  "kanban", so switching back to Workspace restores exactly
+                  what was there before. This is Tasks mode (#3009), entered
+                  from the left rail's mode switch, its shortcut, Sidebar.tsx's
+                  own entry or the command palette, and on the phone from the
+                  mode bar (#3014), where it shows one lane at a time. */}
+              {viewMode === "kanban" && (
+                <KanbanBoardOverlay
+                  onOpenSession={onOpenSession}
+                  onSessionEnded={onSessionEnded}
+                  phone={isMobile}
+                />
               )}
             </div>
-            <Dock
-              workspaceProjectIds={scopedWorkspaceProjectIds}
-              onOpenGitHub={onOpenGitHub}
-              onOpenBrowser={onOpenBrowser}
-              onOpenBlankBrowser={onOpenBlankBrowser}
-              onManagePreviews={(id) => onOpenDockConfig(id, "previews")}
-              onOpenSession={onOpenSession}
-            />
+            {/* Not in Tasks mode from 700px (#3009): the board takes the
+                grid area full height. Unmounted rather than hidden so its
+                monitors are not fitted to an empty box; its rows and
+                heights are persisted, so it comes back as it was. */}
+            {viewMode !== "kanban" && (
+              <Dock
+                workspaceProjectIds={scopedWorkspaceProjectIds}
+                onOpenGitHub={onOpenGitHub}
+                onOpenBrowser={onOpenBrowser}
+                onOpenBlankBrowser={onOpenBlankBrowser}
+                onManagePreviews={(id) => onOpenDockConfig(id, "previews")}
+                onOpenSession={onOpenSession}
+              />
+            )}
             {/* Mobile UI/UX overhaul, item C.2 — last child of
                 .grid-area-body (a flex column), so it sits at the bottom of
                 the already-`bottom: var(--kb-inset)`-shrunk .app shell —
@@ -1478,7 +1604,7 @@ export function App() {
                 `isMobile`) so a tablet's touch-primary input gets the key
                 bar too; a touchscreen laptop at desktop width gets it as
                 well, for the same reason. */}
-            {isCoarsePointer && activeTerminalSession && (
+            {isCoarsePointer && activeTerminalSession && !foldHalves && (
               <MobileKeyBar sessionId={activeTerminalSession.id} />
             )}
           </div>
@@ -1487,23 +1613,91 @@ export function App() {
           tier={layoutTier}
           actions={rightSidebarActions}
           workspaceProjectIds={scopedWorkspaceProjectIds}
+          halves={layoutPresentation === "halves"}
+          band={layoutBand}
+          rightHalf={
+            rightHalfSession && rightHalfPanelId ? (
+              <RightHalfPane
+                // #3015 — keyed by the session, so a session arriving on the
+                // right half mounts fresh and plays its arrival (motion.css).
+                key={rightHalfSession.id}
+                sessionId={rightHalfSession.id}
+                title={sessionPaneTitle(rightHalfSession, titleContexts.get(rightHalfSession.id))}
+                projectName={
+                  projects.find((p) => p.id === rightHalfSession.projectId)?.name ?? null
+                }
+                focused={focusedHalf === "right"}
+                onMoveLeft={() => moveToHalf(rightHalfPanelId, "left")}
+                onClose={() => {
+                  useDashboardStore.getState().showRightPane(null);
+                  useDashboardStore.getState().setFocusedHalf("left");
+                }}
+                onUse={() => {
+                  const store = useDashboardStore.getState();
+                  store.setFocusedHalf("right");
+                  store.noteHalfUsed({ kind: "pane", panelId: rightHalfPanelId });
+                }}
+                onOpenFile={(path, line) => openRightHalfPath(rightHalfSession.id, path, line)}
+                renderActions={renderHalfActions(rightHalfPanelId)}
+                onRenameCommit={(value) => renameHalfPane(rightHalfPanelId, value)}
+              />
+            ) : null
+          }
+          railSessions={
+            foldHalves ? (
+              <>
+                <span className="left-rail-sep" aria-hidden="true" />
+                <RailPanes
+                  panes={railSplit.right}
+                  activePanelId={rightHalfOnScreen ? rightHalfPanelId : null}
+                  onFocus={toggleRightRailPane}
+                  onAdd={() => openNewSessionOnHalf("right")}
+                  label="Right half"
+                  menuItems={halfMenuItems("right")}
+                />
+              </>
+            ) : null
+          }
         />
       </div>
+      {/* #3053 — on the two halves, one key bar under both, so both terminals
+          keep the same height and it is plain that one bar serves the two.
+          It types into the half used last (activeTerminalSession), which its
+          header marks. Outside both halves, so a tap on it is not a use of
+          the left half (onUseLeftHalf). */}
+      {foldHalves && isCoarsePointer && activeTerminalSession && (
+        <MobileKeyBar sessionId={activeTerminalSession.id} />
+      )}
+      {/* Phone (#3014): the mode bar, last in .app's column so it sits under
+          the key bar, at the bottom edge. */}
+      {isMobile && (
+        <PhoneModeBar
+          onOpenSettings={() => openSettings()}
+          onNewSession={openNewSessionLauncher}
+          onOpenSession={onOpenSession}
+          onOpenTimeline={onOpenTimeline}
+          onOpenBrowser={onOpenBrowser}
+        />
+      )}
       <ProjectPreviewPicker
         onOpenDefault={onOpenBrowser}
         onBlank={onOpenBlankBrowser}
         onManage={(projectId) => onOpenDockConfig(projectId, "previews")}
       />
-      {paletteOpen && (
+      {/* Issue #3013 — "New session" opens this launcher; ⌘K stays the palette. */}
+      <SessionLauncherHost
+        phone={isMobile}
+        panels={mobilePanels}
+        onLaunched={placeLaunchedSession}
+        onOpenSession={placeLaunchedSession}
+        projectActions={launcherProjectActions}
+      />
+      {palette.open && (
         <CommandPalette
-          scope={paletteScope}
+          scope={palette.scope}
           layoutTier={layoutTier}
-          projectId={paletteProjectId}
-          onClose={() => {
-            setPalette((p) => ({ ...p, open: false }));
-            useDashboardStore.getState().clearSplitRequest();
-          }}
-          onLaunched={handleLaunched}
+          projectId={palette.projectId}
+          onClose={() => setPalette((p) => ({ ...p, open: false }))}
           onOpenSession={onOpenSession}
           onOpenGitHub={onOpenGitHub}
           onOpenAgentRules={onOpenAgentRules}
@@ -1519,6 +1713,7 @@ export function App() {
           onOpenHosts={() => openSettings("hosts")}
           onOpenSettings={() => openSettings()}
           onOpenTimeline={onOpenTimeline}
+          onOpenAgentBrowser={onOpenAgentBrowser}
           onOpenBlankBrowser={onOpenBlankBrowser}
           onToggleRightSidebar={
             isMobile ? undefined : () => useDashboardStore.getState().toggleRightSidebar()
@@ -1528,6 +1723,7 @@ export function App() {
           onOpenTasks={onOpenTasks}
         />
       )}
+      <ProjectSettingsHost phone={isMobile} backStack={compact} />
       {settingsOpen && (
         // ErrorBoundary's fallback (.crashed-pane, styles.css) has no
         // positioning of its own — it depends entirely on its parent. .app
@@ -1550,7 +1746,7 @@ export function App() {
         // makes this div its own stacking context, so without an explicit
         // z-index it paints at the implicit "auto" level among .app's other
         // children — losing to any sibling with its own explicit z-index
-        // above 0 (e.g. the mobile sidebar drawer at 45, `.overlay-backdrop`
+        // above 0 (e.g. `.overlay-backdrop`
         // at 50), regardless of DOM order. `.settings-backdrop`'s own
         // z-index: 60 (styles.css) is what correctly out-ranks those today;
         // matching it here keeps that ordering unchanged now that this
@@ -1573,7 +1769,6 @@ export function App() {
               <LazySettings
                 onClose={() => setSettingsOpen(false)}
                 initialSection={settingsSection}
-                startInContent={settingsStartInContent}
                 phone={isMobile}
                 backStack={compact}
               />
