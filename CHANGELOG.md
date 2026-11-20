@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.66](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.65...v0.3.66) (2026-11-20)
+
+
+### Features
+
+* **uiux:** Tasks as a primary mode, with new phone, fold and tablet layouts ([#3021](https://github.com/s3ntin3l8/mullion-session-manager/issues/3021)) ([a5a3e6e](https://github.com/s3ntin3l8/mullion-session-manager/commit/a5a3e6eb509617ab65affb2b36fcb09786041a92))
+
+
+### Bug Fixes
+
+* **sessions:** clear two CodeQL alerts in the session services ([#3412](https://github.com/s3ntin3l8/mullion-session-manager/issues/3412)) ([fae3ee6](https://github.com/s3ntin3l8/mullion-session-manager/commit/fae3ee66afbe71cae1b53ab3a2d66367ac552288))
+
 ## [0.3.65](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.64...v0.3.65) (2026-11-19)
 
 
