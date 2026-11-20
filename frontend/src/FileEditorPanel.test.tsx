@@ -240,7 +240,8 @@ describe("FileEditorPanel", () => {
       render(<FileEditorPanel params={{ projectId: 1 }} />);
       await screen.findByText(".env");
       expect(openDropdown(screen.getByRole("combobox"))).toHaveTextContent("Worktree: feat-x");
-      expect(screen.queryByRole("option", { name: /dead|proj$/ })).toBeNull();
+      expect(screen.queryByRole("option", { name: /dead/ })).toBeNull();
+      expect(screen.queryByRole("option", { name: /proj$/ })).toBeNull();
 
       pickDropdownOption(screen.getByRole("combobox"), "7");
       await waitFor(() =>
