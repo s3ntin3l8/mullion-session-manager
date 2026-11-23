@@ -62,9 +62,18 @@ export function attachParamsFromRow(
   project: ProjectRow,
   { cols, rows }: { cols: number; rows: number },
 ): AttachSessionParams {
+  const cwd = sessionCwdOnHost(app, row, project);
+  if (cwd === null) {
+    // No path for the session's host: fall back to the project's own, which a
+    // remote agent will reject — say so rather than fail opaquely there.
+    app.log.warn(
+      { sessionId: row.id, projectId: project.id },
+      "session's project has no path on the session's host; attaching with the project's own path",
+    );
+  }
   return {
     id: String(row.id),
-    cwd: sessionCwdOnHost(app, row, project) ?? project.cwd,
+    cwd: cwd ?? project.cwd,
     command: row.command,
     cols,
     rows,

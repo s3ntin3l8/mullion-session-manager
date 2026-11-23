@@ -54,14 +54,23 @@ export function resolveSessionHostId(
  * it has one, else the project's checkout on THAT host — what spawn used as
  * its placement cwd (`projectCwdOnHost`, placement.ts; not imported here to
  * keep this module free of placement's dependency tree). `null` = the project
- * has no path on the session's host. */
+ * has no path on the session's host.
+ *
+ * Pass `resolvedHostId` when the caller already ran `resolveSessionHostId`, to
+ * skip a second project SELECT for a session whose own host is NULL.
+ *
+ * Mirrors `projectCwdOnHost` (placement.ts) and `resolveExecutionContext`
+ * (execution-context.ts); keep the three in step. The last one refuses a host
+ * with no project root BEFORE it looks at `session.cwd`, whereas an explicit
+ * row cwd wins here, as it does at spawn. */
 export function sessionCwdOnHost(
   app: FastifyInstance,
   row: { projectId: number; hostId: string | null; cwd: string | null },
   project: { hostId: string; cwd: string; hostCwds: string | null },
+  resolvedHostId?: string,
 ): string | null {
   if (row.cwd) return row.cwd;
-  const hostId = resolveSessionHostId(app, row);
+  const hostId = resolvedHostId ?? resolveSessionHostId(app, row);
   if (hostId === project.hostId) return project.cwd;
   return parseHostCwds(project.hostCwds)[hostId] ?? null;
 }
