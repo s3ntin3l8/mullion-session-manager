@@ -204,10 +204,6 @@ export function settingsDefaultModel(settings: AppSettings, cli: ModelCli | null
           : null;
 }
 
-// Issue #1424 — the per-session model override for whichever launcher is
-// currently selected. It is keyed to the CLI it was picked for, and reads back
-// as "no override" the moment the selection's CLI no longer matches — moving
-// from Claude to Codex must never carry a Claude model over to a Codex launch.
 // Whether a launcher's command gets a per-session Model choice: it runs a
 // model-capable agent CLI and does not already pass its own model flag.
 export function commandOffersModel(command: string): boolean {
@@ -215,6 +211,10 @@ export function commandOffersModel(command: string): boolean {
   return cli !== null && !commandHasModelFlag(command, cli);
 }
 
+// Issue #1424 — the per-session model override for whichever launcher is
+// currently selected. It is keyed to the CLI it was picked for, and reads back
+// as "no override" the moment the selection's CLI no longer matches — moving
+// from Claude to Codex must never carry a Claude model over to a Codex launch.
 export function useLaunchModel(activeCommand: string | null) {
   const settings = useDashboardStore((s) => s.settings);
   const [override, setOverride] = useState<{ cli: ModelCli; value: string | null } | null>(null);

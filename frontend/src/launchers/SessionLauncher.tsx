@@ -440,9 +440,11 @@ function LauncherNewSession({
     launch(row, commandOffersModel(row.command) ? { model: model.forLaunch(row.command) } : {});
   // A row that offers a model is selected first, so the choice is made before
   // it launches; any other row launches straight away.
+  // Activating the row that is already selected (a second click, or Enter or
+  // Space on it from the keyboard) launches it.
   const clickRow = (row: Launcher) => {
-    if (commandOffersModel(row.command)) setPickedRowId(row.id);
-    else launchRow(row);
+    if (commandOffersModel(row.command) && row.id !== pickedRow?.id) setPickedRowId(row.id);
+    else if (!launching) launchRow(row);
   };
   // What Enter launches from the filter: a shell or script picked in the
   // palette, else the selected agent, else the first shell or script.
@@ -905,7 +907,7 @@ function RowOptions({
       <span className="visually-hidden" role="status" aria-live="polite">
         {title} selected.
       </span>
-      <ModelRow model={model} />
+      {model.show && <ModelRow model={model} />}
     </div>
   );
 }

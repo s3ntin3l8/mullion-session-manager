@@ -111,4 +111,27 @@ describe("SessionLauncher — Model choice for a custom launcher (#3058)", () =>
     expect(body).not.toHaveProperty("model");
     expect(screen.queryByRole("combobox", { name: "Model for this session" })).toBeNull();
   });
+
+  it("Enter on a focused model row selects it, and Enter again launches it with the picked model", async () => {
+    const onCreateSession = setup([CLAUDE, custom("my-claude", "claude --foo")]);
+    const user = userEvent.setup();
+
+    const row = await screen.findByRole("button", { name: /^my-claude/ });
+    row.focus();
+    await user.keyboard("{Enter}");
+    expect(onCreateSession).not.toHaveBeenCalled();
+    expect(row).toHaveAttribute("aria-current", "true");
+
+    pickDropdownOption(
+      await screen.findByRole("combobox", { name: "Model for this session" }),
+      "opusplan",
+    );
+    row.focus();
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ command: "claude --foo", model: "opusplan" }),
+    );
+  });
 });
