@@ -465,7 +465,10 @@ the whole API without SSO (which still has its own bearer auth when in-process
 auth is configured, or no auth at all when `MULLION_TRUST_GATEWAY=true`).
 `MULLION_ENROLLMENT_SECRET` is admin-grade for the whole fleet (see
 [Current limitations](#current-limitations)), so it must be a strong random
-value and is the entire trust boundary on the agent hostname.
+value — it is the trust boundary for enrolling a new host (alongside any
+per-host tokens minted in Settings), while `/api/internal/pair`,
+`/api/internal/deregister`, and `/ws/agent-channel` carry their own
+credentials.
 
 **Shared rate-limit bucket and proxy peer address for
 `MULLION_ENROLLMENT_ALLOWED_CIDRS`.** As noted under
@@ -473,8 +476,9 @@ value and is the entire trust boundary on the agent hostname.
 [`docs/auth.md`](auth.md#current-limitations), `trustProxy` is off app-wide and
 `MULLION_ENROLLMENT_ALLOWED_CIDRS` evaluates the raw TCP peer
 (`request.raw.socket.remoteAddress`, IPv4-only, failing closed). Behind Traefik,
-both IP-keyed rate limiters (including `/api/internal/pair`'s failure bucket)
-and `MULLION_ENROLLMENT_ALLOWED_CIDRS` therefore see the proxy's address rather
+every IP-keyed rate limiter (the app-wide bucket, register and deregister at
+20/min, and `/api/internal/pair`'s failure bucket) and
+`MULLION_ENROLLMENT_ALLOWED_CIDRS` therefore see the proxy's address rather
 than the connecting agent's; there is no separate auto-approve CIDR setting.
 
 **Do not put the user-facing hostname's SSO bypass on `/api/internal/*`.** Keep

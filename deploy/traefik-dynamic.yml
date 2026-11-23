@@ -188,8 +188,11 @@ http:
     #
     # Uses exact Path() matchers on its own dedicated hostname (not a broad
     # Host()-only or PathPrefix rule) so only the agent enrollment, pairing,
-    # and channel endpoints are reachable without forwardAuth. Illustrative —
-    # not run against a live Traefik instance.
+    # and channel endpoints are reachable without forwardAuth.
+    # CHANGEME_AGENT_HOSTNAME must be distinct from CHANGEME_HOSTNAME — reusing
+    # the dashboard hostname makes this longer rule win Traefik's tiebreak and
+    # disables forwardAuth on those four paths. Illustrative — not run against
+    # a live Traefik instance.
     #
     # mullion-agent:
     #   rule: "Host(`CHANGEME_AGENT_HOSTNAME`) && (Path(`/api/internal/register`) || Path(`/api/internal/pair`) || Path(`/api/internal/deregister`) || Path(`/ws/agent-channel`))"
