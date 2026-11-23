@@ -3067,6 +3067,10 @@ button.github-panel-row.gh-issue-row {
 /* The canvas is focusable (tabIndex={0} — BrowserPanel.tsx, DevicePane.tsx),
    so suppressing its outline left a keyboard user with no indication of
    where they were. */
+.browser-pane-canvas:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 /* #3030 — the touch keyboard's input: focusable (so it can raise the soft
    keyboard) but invisible. Not display:none or visibility:hidden, which
    cannot take focus; 16px so iOS does not zoom the page on focus. */
@@ -3086,10 +3090,6 @@ button.github-panel-row.gh-issue-row {
 }
 .browser-pane-keyboard-toggle[aria-pressed="true"] {
   color: var(--accent-solid);
-}
-.browser-pane-canvas:focus-visible {
-  outline: 2px solid var(--accent-solid);
-  outline-offset: 1px;
 }
 .device-pane-canvas {
   touch-action: none;

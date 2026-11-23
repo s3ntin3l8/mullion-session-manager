@@ -94,6 +94,24 @@ const TOUCH_KEYBOARD_KEYS = new Set([
   "ArrowDown",
 ]);
 
+// #3030 — `beforeinput` types a soft keyboard raises without a usable
+// keydown (its keydown a 229 placeholder), and the key presses that do the
+// same in the remote page (Linux Chromium's bindings).
+const BEFOREINPUT_KEYS: Record<string, string[]> = {
+  deleteContentBackward: ["Backspace"],
+  deleteContentForward: ["Delete"],
+  deleteWordBackward: ["Control+Backspace"],
+  deleteWordForward: ["Control+Delete"],
+  deleteSoftLineBackward: ["Shift+Home", "Backspace"],
+  deleteHardLineBackward: ["Shift+Home", "Backspace"],
+  deleteSoftLineForward: ["Shift+End", "Delete"],
+  deleteHardLineForward: ["Shift+End", "Delete"],
+  insertLineBreak: ["Enter"],
+  insertParagraph: ["Enter"],
+  historyUndo: ["Control+z"],
+  historyRedo: ["Control+Shift+z"],
+};
+
 function mouseButtonName(button: number): "left" | "right" | "middle" {
   if (button === 2) return "right";
   if (button === 1) return "middle";
@@ -144,6 +162,8 @@ export function BrowserPane(props: {
   const coarsePointer = useCoarsePointer();
   const typingInputRef = useRef<HTMLTextAreaElement>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  // The typing effect's commitComposition, for the canvas tap handler.
+  const commitTypingRef = useRef<() => void>(() => {});
   const onTitleChangeRef = useRef(props.onTitleChange);
   const onUrlChangeRef = useRef(props.onUrlChange);
   useEffect(() => {
@@ -326,8 +346,12 @@ export function BrowserPane(props: {
       // keyboard the user is about to type with. preventDefault keeps focus
       // where it is; the click itself still goes to the page.
       const typingInput = typingInputRef.current;
-      if (typingInput && document.activeElement === typingInput) event.preventDefault();
-      else canvas!.focus();
+      // A word still being composed is sent first, so it lands in the field
+      // it was typed for, not the one this tap moves to.
+      if (typingInput && document.activeElement === typingInput) {
+        event.preventDefault();
+        commitTypingRef.current();
+      } else canvas!.focus();
       const { x, y } = canvasPoint(event);
       sendControl({ type: "mouse", action: "down", x, y, button: mouseButtonName(event.button) });
     };
@@ -517,20 +541,24 @@ export function BrowserPane(props: {
   // The hard part is that each typed character must reach the page exactly
   // once, whatever mix of events the soft keyboard raises, so each kind of
   // input has one owner:
-  // - `keydown` owns only TOUCH_KEYBOARD_KEYS (sent as a `press`), and only
+  // - `keydown` owns only TOUCH_KEYBOARD_KEYS and Ctrl/Cmd chords (a tablet's
+  //   hardware keyboard), sent as a `press` with their modifiers, and only
   //   when the key is real: a 229/`Unidentified`/composing keydown is the
   //   soft keyboard's placeholder for something `beforeinput` reports next.
   // - `beforeinput` owns text (`insertText`, `insertReplacementText`, a
   //   paste), sent as one `clipboard` message, which the server types with
-  //   insertText; plus the soft keyboard's own deletes and line breaks, as
-  //   the matching key. It is cancelled, so the textarea stays empty.
+  //   insertText; plus the soft keyboard's own deletes, line breaks and
+  //   undo, as the matching key. It is cancelled, so the textarea stays empty.
   // - `compositionend` owns IME and autocomplete text (Android keyboards
   //   compose every word): nothing is sent while a composition is open, then
   //   its final text once. The composition's own `beforeinput`s are skipped.
+  //   A tap on the page or closing the keyboard mid-word sends the word so
+  //   far first (commitComposition), so it lands in the field it was typed
+  //   for; compositionend then sends only what came after.
   // - `input` never sends; it only empties the textarea of anything a
   //   non-cancellable event left behind.
-  // Keeping the textarea empty between words is what makes "once" hold: the
-  // keyboard never sees (so can never autocorrect) text already sent.
+  // Keeping the textarea empty outside a composition is what makes "once"
+  // hold: the keyboard never sees (so can never rewrite) text already sent.
   useEffect(() => {
     const input = typingInputRef.current;
     if (!coarsePointer || !input) return;
@@ -538,38 +566,79 @@ export function BrowserPane(props: {
     const press = (key: string) => send({ type: "key", action: "press", key });
     const isOpen = () => document.activeElement === input;
     let composing = false;
+    // The open composition's text already sent by commitComposition.
+    let composedSent = "";
+
+    // The textarea is empty when a composition starts, so its value is the
+    // composition (plus what an early commit already sent, still in it).
+    const commitComposition = () => {
+      if (!composing) return;
+      const text = input.value;
+      if (text.startsWith(composedSent) && text.length > composedSent.length) {
+        send({ type: "clipboard", text: text.slice(composedSent.length) });
+        composedSent = text;
+      }
+    };
+    commitTypingRef.current = commitComposition;
+
+    const withModifiers = (event: KeyboardEvent, key: string) =>
+      [
+        event.ctrlKey || event.metaKey ? "Control" : null,
+        event.altKey ? "Alt" : null,
+        event.shiftKey ? "Shift" : null,
+        key,
+      ]
+        .filter(Boolean)
+        .join("+");
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isOpen() || composing || event.isComposing || event.keyCode === 229) return;
+      // A hardware keyboard's Ctrl/Cmd chord (Cmd maps to Ctrl, as on the
+      // canvas): the empty textarea would swallow it. Same clipboard split
+      // as the canvas: Ctrl+V is left to the textarea's own paste (which
+      // beforeinput sends), Ctrl+C/X ask the server for the page's selection.
+      const chord =
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.getModifierState("AltGraph") &&
+        event.key.length === 1;
+      if (chord) {
+        const key = event.key.toLowerCase();
+        if (!event.shiftKey && key === "v") return;
+        event.preventDefault();
+        if (!event.shiftKey && (key === "c" || key === "x")) {
+          send({ type: key === "c" ? "copy" : "cut" });
+          return;
+        }
+        press(`Control+${event.shiftKey ? "Shift+" : ""}${key}`);
+        return;
+      }
       if (!TOUCH_KEYBOARD_KEYS.has(event.key)) return;
       event.preventDefault();
-      press(event.key);
+      press(withModifiers(event, event.key));
     };
     const onBeforeInput = (event: InputEvent) => {
       if (!isOpen() || composing || event.isComposing) return;
+      const keys = BEFOREINPUT_KEYS[event.inputType];
+      if (keys) {
+        event.preventDefault();
+        keys.forEach(press);
+        return;
+      }
       switch (event.inputType) {
         case "insertText":
         case "insertReplacementText":
         case "insertFromPaste":
         case "insertFromDrop": {
-          event.preventDefault();
           const text = event.data ?? event.dataTransfer?.getData("text/plain") ?? "";
-          if (text) send({ type: "clipboard", text });
+          // Not cancelled when there is nothing to send, so a browser that
+          // carries the text some other way still inserts it into the
+          // textarea (the `input` handler then empties it).
+          if (!text) return;
+          event.preventDefault();
+          send({ type: "clipboard", text });
           return;
         }
-        case "deleteContentBackward":
-          event.preventDefault();
-          press("Backspace");
-          return;
-        case "deleteContentForward":
-          event.preventDefault();
-          press("Delete");
-          return;
-        case "insertLineBreak":
-        case "insertParagraph":
-          event.preventDefault();
-          press("Enter");
-          return;
         default:
           // Composition steps (insertCompositionText, insertFromComposition,
           // deleteCompositionText) belong to compositionend.
@@ -578,18 +647,29 @@ export function BrowserPane(props: {
     };
     const onCompositionStart = () => {
       composing = true;
+      composedSent = "";
     };
     const onCompositionEnd = (event: CompositionEvent) => {
+      const data = event.data ?? "";
+      // After an early commit only the rest is new. A composition the user
+      // edited back past what was sent sends nothing more: that part is
+      // already in an earlier field.
+      const rest = data.startsWith(composedSent) ? data.slice(composedSent.length) : "";
+      if (isOpen() && rest) send({ type: "clipboard", text: rest });
       composing = false;
-      if (isOpen() && event.data) send({ type: "clipboard", text: event.data });
+      composedSent = "";
       input.value = "";
     };
     const onInput = () => {
       if (!composing) input.value = "";
     };
     const onBlur = () => {
-      // A composition the blur cut short is dropped, not half-sent.
+      // Closing the keyboard mid-word sends the word: on Android every word
+      // is a composition until a space, so dropping it would lose it. A
+      // compositionend after this one is not sent (the input is not open).
+      commitComposition();
       composing = false;
+      composedSent = "";
       input.value = "";
     };
     input.addEventListener("keydown", onKeyDown);
@@ -599,6 +679,7 @@ export function BrowserPane(props: {
     input.addEventListener("input", onInput);
     input.addEventListener("blur", onBlur);
     return () => {
+      commitTypingRef.current = () => {};
       input.removeEventListener("keydown", onKeyDown);
       input.removeEventListener("beforeinput", onBeforeInput);
       input.removeEventListener("compositionstart", onCompositionStart);

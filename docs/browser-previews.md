@@ -182,13 +182,23 @@ What is typed reaches the page once, as follows:
 - **IME and composed text** (Chinese, Japanese, and Android keyboards, which
   compose each word) is sent once, when the composition ends. On such a
   keyboard a word reaches the page when you commit it (a space, a suggestion,
-  Enter), not letter by letter.
+  Enter), not letter by letter. A tap on the page or closing the keyboard in
+  the middle of a word sends the word so far first, so it lands in the field
+  it was typed for.
 - **Enter, Backspace, Delete, Tab, Escape and the arrow keys** are sent as a
-  `{type:"key",action:"press",key}` message.
+  `{type:"key",action:"press",key}` message, with any modifier held on a
+  hardware keyboard (`Shift+Tab`). A soft keyboard's word and line deletes and
+  its undo are sent as the matching key (`Control+Backspace`, ...).
+- **A hardware keyboard's Ctrl/Cmd chords** go to the page as on the canvas:
+  Ctrl/Cmd+C and +X copy or cut the page's selection, Ctrl/Cmd+V pastes the
+  host clipboard, any other chord is pressed in the page.
 
-The hidden text box is emptied after each word, so the keyboard never sees
-(and can never rewrite) text it has already sent. Autocorrect and suggestions
-still work within the word you are typing; capitalisation is off, since each
+The hidden text box is kept empty outside a composition, so the keyboard
+never sees (and can never rewrite) text it has already sent. The cost is
+context: an Android keyboard still suggests and autocorrects the word you are
+composing, but a keyboard that does not compose (iOS, most hardware
+keyboards) sees an empty box after every letter, so it offers next-word
+predictions at most, not corrections. Capitalisation is off, since every
 word would otherwise look like the start of a sentence.
 
 ## Why the proxy exists (and when you need it)
