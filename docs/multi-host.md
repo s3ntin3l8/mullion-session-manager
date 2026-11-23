@@ -77,15 +77,20 @@ MULLION_ENROLLMENT_ALLOWED_CIDRS=10.0.0.0/8              # optional — restrict
 ```
 
 `MULLION_ENROLLMENT_ALLOWED_CIDRS` checks the raw TCP peer address
-(`request.ip`) — `trustProxy` is off app-wide (see `docs/auth.md`), so if
-your primary sits behind a reverse proxy (Traefik, per `deploy/README.md`),
-every enroll attempt arrives from the proxy's own address, not the agent's.
-List the proxy's address in the range (or leave the setting unset and rely
-on `MULLION_ENROLLMENT_SECRET` alone) rather than debugging unexpected 403s.
+(`request.raw.socket.remoteAddress` via `getRawRemoteAddress`, deliberately
+ignoring `X-Forwarded-For` even if `trustProxy` were enabled) — and
+`trustProxy` is off app-wide (see `docs/auth.md`), so if your primary sits
+behind a reverse proxy (Traefik, per `deploy/README.md`), every enroll
+attempt arrives from the proxy's own address, not the agent's. It is also
+IPv4-only and fails closed on anything it cannot parse, so if Traefik reaches
+the app over IPv6, every enrollment returns `403`. List the proxy's IPv4
+address in the range (or leave the setting unset and rely on
+`MULLION_ENROLLMENT_SECRET` alone) rather than debugging unexpected 403s.
 The same `trustProxy`-off consequence also flattens every IP-keyed rate
-limiter (including the login limiter) into one shared bucket behind a
-proxy — see `docs/auth.md`'s "Current limitations" for why that's an
-accepted trade-off rather than a bug (B5, audit remediation plan).
+limiter (including the login limiter and `/api/internal/pair`'s failure
+bucket) into one shared bucket behind a proxy — see `docs/auth.md`'s
+"Current limitations" for why that's an accepted trade-off rather than a bug
+(B5, audit remediation plan).
 
 On boot the agent presents `MULLION_ENROLLMENT_TOKEN` to the primary's
 register endpoint; the primary either **claims** an existing host row whose
@@ -432,13 +437,17 @@ without the `forwardAuth` middleware. Restrict its rule to these exact four
 paths and nothing else:
 
 - `/api/internal/register` (`src/routes/enrollment.ts`)
-- `/api/internal/pair` (`src/routes/host-pairing.ts`)
+- `/api/internal/pair` (`src/routes/host-pairing.ts` — the desktop Helper's
+  pairing-code redeem endpoint; an enrolled agent itself only calls register,
+  deregister, and `/ws/agent-channel`)
 - `/api/internal/deregister` (`src/routes/enrollment.ts`)
 - `/ws/agent-channel` (`src/routes/agent-channel.ts`)
 
-Then set `MULLION_PRIMARY_URL=https://<that-hostname>` on the agent. The
-example below follows [`deploy/README.md`](../deploy/README.md)'s Traefik
-conventions and is **illustrative** (not run against a live Traefik instance):
+Then set `MULLION_PRIMARY_URL=https://<that-hostname>` on the agent.
+[`deploy/traefik-dynamic.yml`](../deploy/traefik-dynamic.yml) ships a
+commented-out `mullion-agent` router template matching the example below, which
+follows [`deploy/README.md`](../deploy/README.md)'s Traefik conventions and is
+**illustrative** (not run against a live Traefik instance):
 
 ```yaml
 mullion-agent:
@@ -454,18 +463,19 @@ mullion-agent:
 matchers rather than a broad `Host()`-only or prefix rule: a wrong rule exposes
 the whole API without SSO (which still has its own bearer auth when in-process
 auth is configured, or no auth at all when `MULLION_TRUST_GATEWAY=true`).
+`MULLION_ENROLLMENT_SECRET` is admin-grade for the whole fleet (see
+[Current limitations](#current-limitations)), so it must be a strong random
+value and is the entire trust boundary on the agent hostname.
 
-**Shared failure rate-limit bucket behind a proxy.** Because `trustProxy` is off
-app-wide (see [`docs/auth.md`](auth.md#current-limitations)), every request's
-`request.ip` is the proxy's address rather than the agent's. IP-keyed rate
-limiters — including `/api/internal/pair`'s failure bucket and the app-wide
-rate limiter — therefore share one bucket across all agents behind Traefik.
-
-**`MULLION_ENROLLMENT_ALLOWED_CIDRS` and auto-approve CIDRs see the proxy's address.**
-For the same `trustProxy`-off reason, CIDR checks evaluate the raw TCP peer
-(`request.ip`), which is Traefik's address rather than the connecting agent's.
-Do not rely on `MULLION_ENROLLMENT_ALLOWED_CIDRS` or auto-approve CIDRs to
-distinguish individual remote agents behind the proxy.
+**Shared rate-limit bucket and proxy peer address for
+`MULLION_ENROLLMENT_ALLOWED_CIDRS`.** As noted under
+[Self-registration](#self-registration-zero-manual-steps) and
+[`docs/auth.md`](auth.md#current-limitations), `trustProxy` is off app-wide and
+`MULLION_ENROLLMENT_ALLOWED_CIDRS` evaluates the raw TCP peer
+(`request.raw.socket.remoteAddress`, IPv4-only, failing closed). Behind Traefik,
+both IP-keyed rate limiters (including `/api/internal/pair`'s failure bucket)
+and `MULLION_ENROLLMENT_ALLOWED_CIDRS` therefore see the proxy's address rather
+than the connecting agent's; there is no separate auto-approve CIDR setting.
 
 **Do not put the user-facing hostname's SSO bypass on `/api/internal/*`.** Keep
 the unauthenticated agent endpoints isolated on their own dedicated hostname
