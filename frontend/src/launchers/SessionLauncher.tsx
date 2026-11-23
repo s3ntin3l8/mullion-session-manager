@@ -444,7 +444,7 @@ function LauncherNewSession({
   // Space on it from the keyboard) launches it.
   const clickRow = (row: Launcher) => {
     if (commandOffersModel(row.command) && row.id !== pickedRow?.id) setPickedRowId(row.id);
-    else if (!launching) launchRow(row);
+    else launchRow(row);
   };
   // What Enter launches from the filter: a shell or script picked in the
   // palette, else the selected agent, else the first shell or script.
@@ -810,7 +810,6 @@ function LauncherNewSession({
                     className={`session-launcher-row${row.id === pickedRow?.id ? " on" : ""}`}
                     aria-current={row.id === pickedRow?.id || undefined}
                     onClick={() => clickRow(row)}
-                    onDoubleClick={() => launchRow(row)}
                     onKeyDown={(e) => onRowKeyDown(e, index)}
                   >
                     <span className="session-launcher-row-icon" aria-hidden="true">
