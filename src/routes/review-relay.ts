@@ -8,6 +8,7 @@ import {
 } from "../services/task-store.js";
 import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
+import { projectRootOnHost, resolveSessionHostId } from "../services/session-host.js";
 import { getGitStatus } from "../services/git-status.js";
 import { isWithinAnyWorktree, listWorktrees, resolveRepoRoot } from "../services/git-refs.js";
 import { resolveRepoRefResult } from "../services/host-git.js";
@@ -254,18 +255,33 @@ async function trustedLiveCwd(projectCwd: string, liveCwd: string): Promise<stri
  * normalizes a detached HEAD the same way the local path does, so the two
  * hosts behave the same.
  *
+ * "Owns it" means the SESSION's host (`sessions.hostId`, else the project's),
+ * and the directory is the session's own cwd or else the project's checkout ON
+ * THAT host (`hostCwds`) — not the project's host and path: a session placed
+ * on another host has no row cwd, and the project's own path does not exist
+ * there. A project with no path on the session's host has no branch to find.
+ *
  * A host that is unreachable degrades to "no branch" (null), which the caller
  * turns into the same 404 an undeterminable local branch produces.
  */
 async function resolveSessionBranch(
   app: FastifyInstance,
-  project: { id: number; cwd: string; hostId: string },
-  session: { id: number; cwd: string | null },
+  project: { id: number; cwd: string; hostId: string; hostCwds: string | null },
+  session: { id: number; projectId: number; cwd: string | null; hostId: string | null },
 ): Promise<string | null> {
-  const cwd = session.cwd ?? project.cwd;
-  if (project.hostId !== LOCAL_HOST_ID) {
+  const hostId = resolveSessionHostId(app, session);
+  const root = projectRootOnHost(project, hostId);
+  const cwd = session.cwd ?? root;
+  if (cwd === null) {
+    app.log.warn(
+      { hostId, projectId: project.id },
+      "review-request: the project has no path on the session's host",
+    );
+    return null;
+  }
+  if (hostId !== LOCAL_HOST_ID) {
     try {
-      const client = getRemoteHostClient(app, project.hostId);
+      const client = getRemoteHostClient(app, hostId);
       const result = await client.resolveGitStatus(cwd);
       // Not a repo (or a repo whose status could not be read) — no branch.
       if (!result.isRepo) return null;
@@ -276,7 +292,7 @@ async function resolveSessionBranch(
       // worktree cwd outside the agent's own PROJECTS_ROOTS surfaces here as
       // a 4xx HostRequestError — same "no branch" outcome.
       app.log.warn(
-        { hostId: project.hostId, projectId: project.id, err },
+        { hostId, projectId: project.id, err },
         "review-request: could not resolve the session branch on its host",
       );
       return null;
@@ -288,7 +304,7 @@ async function resolveSessionBranch(
   // status read that finds nothing falls through to the older sources.
   // forceFresh: this decides which PR gets reviewed, so a 5s-old cached
   // answer for a directory the agent just switched branches in won't do.
-  const trusted = live?.liveCwd ? await trustedLiveCwd(project.cwd, live.liveCwd) : null;
+  const trusted = live?.liveCwd && root ? await trustedLiveCwd(root, live.liveCwd) : null;
   const liveCwdBranch = trusted
     ? (await getGitStatus(trusted, { forceFresh: true }))?.branch
     : null;
