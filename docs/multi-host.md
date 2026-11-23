@@ -1850,7 +1850,9 @@ A session records the host it was spawned on — `sessions.hostId`, written
 [#1722](https://github.com/s3ntin3l8/mullion-session-manager/issues/1722)
 / roadmap 8.8). Every **session-scoped** operation follows that row: its
 terminal attach, its live status, its scrollback, its process list, its file
-uploads, its scope's liveness, the review gate, promote or attention
+uploads (written under the project's checkout **on that host**, via
+`hostCwds`; a host the project has no path on is refused with a 409), its
+scope's liveness, the review gate, promote or attention
 acknowledgement waiting on it, the worktree it owns, and the events it
 reports.
 

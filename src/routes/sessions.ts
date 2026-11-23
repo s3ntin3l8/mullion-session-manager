@@ -72,6 +72,7 @@ import {
   resolveSessionHostIds,
   withLiveStatus,
 } from "../services/session-live-info.js";
+import { sessionCwdOnHost } from "../services/session-host.js";
 import { noteHostReachable, warnHostThrottled } from "../services/host-warn-throttle.js";
 
 // Throttled per (host, message) — see services/host-warn-throttle.ts.
@@ -1659,8 +1660,14 @@ export async function sessionsRoute(app: FastifyInstance) {
         // Issue #1722 / roadmap 8.8 — the SESSION's host: the upload writes
         // into the SESSION's cwd, and that path is on the host the session
         // runs on.
-        const backend = resolveBackend(app, resolveSessionHostId(app, row));
-        const cwd = row.cwd ?? project.cwd;
+        const hostId = resolveSessionHostId(app, row);
+        const backend = resolveBackend(app, hostId);
+        // The session's directory ON ITS host: a session placed on another
+        // host has no row cwd, and the project's own path doesn't exist there.
+        const cwd = sessionCwdOnHost(app, row, project, hostId);
+        if (cwd === null) {
+          return reply.conflict(`The project has no path on host ${hostId}`);
+        }
         return isGenericFile
           ? await backend.uploadFile(cwd, request.body, fileName)
           : await backend.uploadImage(cwd, request.body, mime);

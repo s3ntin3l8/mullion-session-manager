@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AddressInfo } from "node:net";
 import http from "node:http";
 import { eq } from "drizzle-orm";
-import { sessions } from "../../src/db/schema.js";
+import { projects, sessions } from "../../src/db/schema.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
@@ -281,6 +281,12 @@ describe("sessions route: which host owns a session operation", () => {
       const sessionBackendModule = await import("../../src/services/session-backend.js");
       const remoteHostId = await createRemoteHost(app, "placed-upload");
       const projectId = await createProject(app);
+      // A placed session's directory is the project's checkout ON that host.
+      app.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify({ [remoteHostId]: "/srv/remote/checkout" }) })
+        .where(eq(projects.id, projectId))
+        .run();
 
       const [placed] = app.db
         .insert(sessions)
