@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, gt, inArray, isNotNull, isNull, lt, notInArray, or, sql } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
-import { resolveGitHubToken } from "./github-integration.js";
+import { resolveGitHubToken, resolveOwnBotLogin } from "./github-integration.js";
 import { pickRepoOwners, repoKey, resolveRepoKeys, type ResolvedRepo } from "./repo-key.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
@@ -26,6 +26,7 @@ import {
 } from "./task-state.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { isTrustedAuthor, resolveTrustedLogins } from "./task-trust.js";
+import { proposalContentSha, type ProposalState } from "./task-proposal.js";
 import { stripFencedCode } from "./issue-body-directives.js";
 import {
   dependencyGate,
@@ -188,14 +189,32 @@ function isEpicIssue(issue: TaskIssue): boolean {
  * reasoning behind each piece (backlog-vs-ready default, the
  * onConflictDoUpdate target/set split, the `IS NOT` no-op guard).
  */
-export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: TaskIssue): void {
+export function upsertIssueTask(
+  app: FastifyInstance,
+  projectId: number,
+  issue: TaskIssue,
+  // The App bot's own login, lowercased (resolveOwnBotLogin). An untrusted
+  // author that IS this install's bot is ingested as a "proposal" instead of
+  // being dropped: backlog until a human approves. Null/absent = no App.
+  ownBotLogin?: string | null,
+): void {
   // Trust gate — an issue opened by someone with no standing in the repo
   // (or with the label added by a template/Action rather than a maintainer)
   // must not become an autonomous worker's spec. Runs before the upsert, so
   // no insert and no title/body update of an already-known row (author and
   // association are fixed per issue, so this also stops post-label body
   // edits by an outsider); the only write is the ready→backlog demotion below.
-  if (!isTrustedAuthor(issue.authorAssociation, issue.authorLogin, resolveTrustedLogins(app))) {
+  const trustedAuthor = isTrustedAuthor(
+    issue.authorAssociation,
+    issue.authorLogin,
+    resolveTrustedLogins(app),
+  );
+  const isProposal =
+    !trustedAuthor &&
+    ownBotLogin != null &&
+    issue.authorLogin != null &&
+    issue.authorLogin.toLowerCase() === ownBotLogin;
+  if (!trustedAuthor && !isProposal) {
     // Warn once per issue, not once per 60s sweep — bounded so a flood of
     // untrusted labeled issues can't grow the set without limit.
     const key = `${projectId}#${issue.number}`;
@@ -294,13 +313,18 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       // The pre-update body — the manual-directive-removal promotion below
       // compares it against this sighting's body.
       body: tasks.body,
+      title: tasks.title,
+      sessionId: tasks.sessionId,
+      proposalState: tasks.proposalState,
+      approvedBodySha: tasks.approvedBodySha,
     })
     .from(tasks)
     .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
     .get();
   const existed = existingRow !== undefined;
 
-  const initialStatus = isManualOnly(issue.body) || isEpicIssue(issue) ? "backlog" : "ready";
+  const initialStatus =
+    isProposal || isManualOnly(issue.body) || isEpicIssue(issue) ? "backlog" : "ready";
 
   // #667 — dependencyCount is only present on a listLabeledIssues-sourced
   // TaskIssue (the poll sweep); a webhook-built one (routes/webhooks.ts) has
@@ -330,6 +354,7 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       body: issue.body,
       htmlUrl: issue.htmlUrl,
       status: initialStatus,
+      proposalState: isProposal ? ("proposed" satisfies ProposalState) : null,
       dependencyCount: issue.dependencyCount ?? null,
       parentIssueNumber: newParentNumber,
       parentIssueRepo: newParentRepo,
@@ -404,6 +429,64 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
   if (!existed && row) {
     broadcastTaskEvent({ taskId: row.id, projectId, kind: "ingested", ts: Date.now() });
     return;
+  }
+
+  // A proposal (the install's own bot's issue) must never be runnable without
+  // a human Approve. A row that is not yet a proposal (ingested before the
+  // bot lost trust, say) becomes one; an approved one stays approved only
+  // while title+body are exactly what the human approved. Both demote an
+  // unstarted `ready` task, like the untrusted-author branch above.
+  if (isProposal && existingRow !== undefined) {
+    const stillApproved =
+      existingRow.proposalState === "approved" &&
+      existingRow.approvedBodySha === proposalContentSha(issue.title, issue.body);
+    const unstarted = existingRow.sessionId === null;
+    if (!stillApproved && existingRow.proposalState !== "proposed" && unstarted) {
+      app.db
+        .update(tasks)
+        .set({ proposalState: "proposed" satisfies ProposalState, approvedBodySha: null })
+        .where(
+          and(
+            eq(tasks.id, existingRow.id),
+            isNull(tasks.sessionId),
+            inArray(tasks.status, ["backlog", "ready"] satisfies TaskStatus[]),
+          ),
+        )
+        .run();
+      const demotedProposal = app.db
+        .update(tasks)
+        .set({ status: "backlog" satisfies TaskStatus })
+        .where(
+          and(
+            eq(tasks.id, existingRow.id),
+            eq(tasks.status, "ready" satisfies TaskStatus),
+            isNull(tasks.sessionId),
+          ),
+        )
+        .run();
+      if (demotedProposal.changes > 0) {
+        recordTaskTransition(app, {
+          taskId: existingRow.id,
+          projectId,
+          from: "ready",
+          to: "backlog",
+          via: "github-sync-proposal-body-changed",
+          context: { issueNumber: issue.number },
+        });
+      }
+    } else if (!stillApproved && existingRow.proposalState === "approved" && !unstarted) {
+      const flightKey = `${projectId}#${issue.number}#proposal-edited-${existingRow.id}`;
+      if (
+        !warnedUntrustedIssues.has(flightKey) &&
+        warnedUntrustedIssues.size < MAX_WARNED_UNTRUSTED
+      ) {
+        warnedUntrustedIssues.add(flightKey);
+        app.log.warn(
+          { projectId, issueNumber: issue.number, taskId: existingRow.id },
+          "[task-watcher] an approved proposal's issue was edited after approval — left running; review its output before approving",
+        );
+      }
+    }
   }
 
   // #1016 — the upsert above never touches `status` on a re-sighting (same
@@ -498,7 +581,8 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
     existingRow !== undefined &&
     isManualOnly(existingRow.body) &&
     !isManualOnly(issue.body) &&
-    !isEpicIssue(issue)
+    !isEpicIssue(issue) &&
+    !isProposal
   ) {
     const promoted = app.db
       .update(tasks)
@@ -560,7 +644,7 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
     existingRow.worktreePath === null
   ) {
     const resurrectableStatus =
-      isManualOnly(issue.body) || isEpicIssue(issue) ? "backlog" : "ready";
+      isProposal || isManualOnly(issue.body) || isEpicIssue(issue) ? "backlog" : "ready";
     const resurrected = app.db
       .update(tasks)
       .set({
@@ -568,6 +652,9 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
         failureReason: null,
         failureDiagnostics: null,
         completedAt: null,
+        ...(isProposal
+          ? { proposalState: "proposed" satisfies ProposalState, approvedBodySha: null }
+          : {}),
       })
       .where(
         and(
@@ -761,8 +848,9 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         // "ready" (auto-claim eligible) unless its body opts out via
         // `Manual: true`, in which case "backlog" — see upsertIssueTask's own
         // doc comment. A repeat sighting never touches status.
+        const ownBotLogin = await resolveOwnBotLogin(app);
         for (const issue of issues) {
-          upsertIssueTask(app, projectId, issue);
+          upsertIssueTask(app, projectId, issue, ownBotLogin);
         }
         openIssueNumbers = new Set(issues.map((i) => i.number));
         ownerIssueSets.set(key, openIssueNumbers);

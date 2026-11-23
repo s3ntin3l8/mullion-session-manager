@@ -93,11 +93,15 @@ export function TaskCard({
   // waiting for a host any more) has to say so on the card; the promise is
   // not dropped silently.
   const [startFreshError, setStartFreshError] = useState<string | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const isProposal = task.proposalState === "proposed";
   const epicColour = epicColourVar(task);
   const hosts = useDashboardStore((s) => s.hosts);
   const sessionsLoaded = useDashboardStore((s) => s.sessionsLoaded);
   // #3194 — "Start fresh" on a card whose retry waits for its original host.
   const startFreshTask = useDashboardStore((s) => s.startFreshTask);
+  const approveProposal = useDashboardStore((s) => s.approveProposal);
+  const dismissProposal = useDashboardStore((s) => s.dismissProposal);
   const hostChip = describeTaskHost(
     task,
     workerSession,
@@ -291,7 +295,7 @@ export function TaskCard({
       // Lets the board find a card again after its layout changes (the
       // stacked switch keeps the selected card in view and moves it, #3011).
       data-task-id={task.id}
-      draggable
+      draggable={!isProposal}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragLeave={() => setDropTarget(false)}
@@ -724,6 +728,43 @@ export function TaskCard({
           CONFIRMED stranded on that host — not on origin — is never failed
           for waiting; every other wait keeps the dispatch give-up. The reason
           is on the card above (the dispatch notice). */}
+      {isProposal && (
+        <div className="task-card-proposal" role="group" aria-label="Filed by Mullion">
+          <span className="task-card-proposal-tag">Filed by Mullion · needs approval</span>
+          <button
+            type="button"
+            className="task-card-proposal-approve"
+            onClick={(e) => {
+              e.stopPropagation();
+              setProposalError(null);
+              void approveProposal(task.id).catch((err: unknown) =>
+                setProposalError(err instanceof Error ? err.message : "Could not approve"),
+              );
+            }}
+          >
+            Approve
+          </button>
+          <button
+            type="button"
+            className="task-card-proposal-dismiss"
+            title="Close the issue on GitHub"
+            onClick={(e) => {
+              e.stopPropagation();
+              setProposalError(null);
+              void dismissProposal(task.id).catch((err: unknown) =>
+                setProposalError(err instanceof Error ? err.message : "Could not dismiss"),
+              );
+            }}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {proposalError !== null && (
+        <div className="task-card-hint task-card-start-fresh-error" role="status">
+          {proposalError}
+        </div>
+      )}
       {task.status === "claimed" && Boolean(task.retryHostId) && (
         <button
           type="button"

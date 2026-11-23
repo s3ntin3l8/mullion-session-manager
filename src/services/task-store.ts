@@ -34,6 +34,8 @@ const TASK_ROW_COLUMNS = {
   body: tasks.body,
   htmlUrl: tasks.htmlUrl,
   status: tasks.status,
+  // A task from this install's own bot waits for a human Approve (task-proposal.ts).
+  proposalState: tasks.proposalState,
   boardOrder: tasks.boardOrder,
   sessionId: tasks.sessionId,
   seedDelivered: tasks.seedDelivered,

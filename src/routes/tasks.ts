@@ -506,6 +506,18 @@ export async function tasksRoute(app: FastifyInstance) {
       // 6.2's full transition table, not this route.
       if (
         status !== undefined &&
+        status !== existing.status &&
+        existing.proposalState === "proposed"
+      ) {
+        return reply.code(409).send({
+          statusCode: 409,
+          error: "Conflict",
+          code: "proposal-needs-approval",
+          message: "This task was filed by Mullion and needs a human Approve before it can run",
+        });
+      }
+      if (
+        status !== undefined &&
         !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus)
       ) {
         return reply.conflict(

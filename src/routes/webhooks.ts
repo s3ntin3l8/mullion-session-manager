@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
-import { resolveGitHubToken } from "../services/github-integration.js";
+import { resolveGitHubToken, resolveOwnBotLogin } from "../services/github-integration.js";
 import {
   findReviewingTaskByPr,
   findTaskBlockerStateByIssue,
@@ -436,14 +436,19 @@ export async function webhookRoutes(app: FastifyInstance) {
                   // #2233 — projects sharing a repo all get the broadcast
                   // above, but only the oldest imports the issue.
                   if (projectId !== repoOwners.get(repoKeyOf({ owner, repo }))) break;
-                  upsertIssueTask(app, projectId, {
-                    number: issue.number,
-                    title: issue.title,
-                    body: issue.body ?? null,
-                    htmlUrl: issue.html_url,
-                    authorLogin: issue.user?.login ?? null,
-                    authorAssociation: issue.author_association,
-                  });
+                  upsertIssueTask(
+                    app,
+                    projectId,
+                    {
+                      number: issue.number,
+                      title: issue.title,
+                      body: issue.body ?? null,
+                      htmlUrl: issue.html_url,
+                      authorLogin: issue.user?.login ?? null,
+                      authorAssociation: issue.author_association,
+                    },
+                    await resolveOwnBotLogin(app),
+                  );
                 } else if (action === "closed" || action === "unlabeled") {
                   // "unlabeled" only proceeds when the label GitHub reports
                   // removed is the task label — an issue can have other

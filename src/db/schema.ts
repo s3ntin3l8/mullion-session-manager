@@ -1753,6 +1753,13 @@ export const tasks = sqliteTable(
     // auto-claim pacing (a held task is waiting for a HOST, not a slot), the
     // give-up's worktree clear, and dropping a stale hold.
     dispatchHeld: integer("dispatch_held", { mode: "boolean" }).notNull().default(false),
+    // An issue filed by this install's own GitHub App bot is not trusted to run
+    // unattended (an agent may have copied an outsider's text into it), so it is
+    // ingested as `backlog` + "proposed" and only a human Approve makes it
+    // claimable. null = an ordinary task. "approved" pins the body the human
+    // saw in `approvedBodySha`; a later body edit puts it back to "proposed".
+    proposalState: text("proposal_state"),
+    approvedBodySha: text("approved_body_sha"),
     // Issue #3194 — the host a QUEUED RETRY is waiting for: the host its
     // worker ran on, whose preserved branch the retry resumes. Set while the
     // retry waits for that host (the original is offline and the branch is not
@@ -1909,6 +1916,12 @@ export const integrations = sqliteTable("integrations", {
   // read it. Pre-migration/never-configured rows are null; render nothing,
   // not "unknown."
   githubAppKeyRotatedAt: integer("github_app_key_rotated_at", { mode: "timestamp" }),
+  // The App's slug (`GET /app`), saved when the credential is verified so the
+  // task watcher can tell which issue author is this install's own bot
+  // (`<slug>[bot]`) without a network call per sweep. Null for rows configured
+  // before this column existed (resolved lazily, see own-bot-login.ts) and
+  // nulled by clearGitHubApp.
+  githubAppSlug: text("github_app_slug"),
 });
 
 // #490b — per-project webhook registration record. Distinct from

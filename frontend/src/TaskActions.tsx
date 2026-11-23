@@ -80,6 +80,8 @@ export function TaskActions({
     reReviewTask,
     updateTask,
     refreshTasks,
+    approveProposal,
+    dismissProposal,
     tasks,
   } = useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
@@ -148,6 +150,19 @@ export function TaskActions({
   // already-successful writes unreflected in the store until the next
   // regular poll. refreshTasks() in the catch closes that gap the same way
   // applyDrop's own per-update .catch does.
+  // Approve / Dismiss on a task Mullion's own bot filed (see task-proposal.ts).
+  const runProposal = async (action: (id: number) => Promise<Task>) => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await action(task.id);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not update the proposal");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const moveStatus = async (status: "backlog" | "ready") => {
     setSubmitting(true);
     setError(null);
@@ -170,6 +185,29 @@ export function TaskActions({
       setSubmitting(false);
     }
   };
+
+  if (task.status === "backlog" && task.proposalState === "proposed") {
+    return (
+      <div className="task-detail-actions">
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          onClick={() => void runProposal(approveProposal)}
+        >
+          Approve
+        </button>
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          title="Close the issue on GitHub"
+          onClick={() => void runProposal(dismissProposal)}
+        >
+          Dismiss
+        </button>
+        {error && <span className="task-detail-error">{error}</span>}
+      </div>
+    );
+  }
 
   if (task.status === "backlog") {
     return (

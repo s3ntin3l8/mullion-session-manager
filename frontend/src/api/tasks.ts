@@ -162,6 +162,12 @@ export const tasksApi = {
   // anywhere else). The branch stays on that host, with its commits; the
   // task is re-queued as a new claim. Same response shape as claimTask.
   startFreshTask: (id: number) => request<Task>(`/api/tasks/${id}/start-fresh`, { method: "POST" }),
+  // A task from an issue Mullion's own bot filed: Approve makes it claimable,
+  // Dismiss closes the issue on GitHub.
+  approveProposal: (id: number) =>
+    request<Task>(`/api/tasks/${id}/approve-proposal`, { method: "POST" }),
+  dismissProposal: (id: number) =>
+    request<Task>(`/api/tasks/${id}/dismiss-proposal`, { method: "POST" }),
 
   // #483 — reviewing -> failed: the other resolver of a reviewing task,
   // alongside approve/reject, for when the answer is "give up entirely"
