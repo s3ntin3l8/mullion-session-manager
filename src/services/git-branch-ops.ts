@@ -303,10 +303,10 @@ export async function branchCheckoutPath(
 }
 
 /** runGitPull's answer, in this file's result shape. */
-function fromPullResult(res: GitPullResult): GitBranchOpResult {
+function fromPullResult(res: GitPullResult, upstream: string | null): GitBranchOpResult {
   if (res.pulled) {
     return res.reason === "already-up-to-date"
-      ? { ok: true, reason: "already-up-to-date" }
+      ? { ok: true, reason: "already-up-to-date", ...(upstream ? { detail: upstream } : {}) }
       : { ok: true };
   }
   switch (res.reason) {
@@ -395,7 +395,7 @@ async function pullInWorktree(worktree: string, branch: string): Promise<GitBran
     };
   }
   if (!state.clean) return { ...DIRTY, detail: `${worktree} has uncommitted changes` };
-  return fromPullResult(await runGitPull(worktree));
+  return fromPullResult(await runGitPull(worktree), state.upstream);
 }
 
 const UPSTREAM_FORMAT = "%(upstream)%00%(upstream:short)";

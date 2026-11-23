@@ -28,7 +28,13 @@ import {
 import { isTaskBranch, type MullionLinks } from "../hooks/useMullionLinks.js";
 import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
-import { rebaseNotice, rebaseRefusalMessage, runBranchOp, runBranchPull } from "./branchOps.js";
+import {
+  fastForwardWouldDo,
+  rebaseNotice,
+  rebaseRefusalMessage,
+  runBranchOp,
+  runBranchPull,
+} from "./branchOps.js";
 import { deleteBranchTitle, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
 import { NewBranchForm } from "./NewBranchForm.js";
 import { openSessionOn } from "./sessionLaunch.js";
@@ -252,8 +258,9 @@ export function BranchesSection({
             const isDefault = isDefaultBranchName(b.name, defaultBranch);
             const merge = b.mergeState && !isDefault ? mergeChip(b.mergeState, b.pr) : null;
             const error = rowErrors[errorKey(projectId, b.name)];
-            // #3068 — offered only when there is something to pull.
-            const canPull = !!b.upstream && !b.upstreamGone && (b.behind ?? 0) > 0;
+            // #3068 — offered only when a fast-forward can bring something in:
+            // behind a live upstream, with no local commits of its own.
+            const canPull = !!b.upstream && !b.upstreamGone && fastForwardWouldDo(b);
             const blocked = b.isCurrent
               ? "Cannot delete the current branch"
               : isDefault

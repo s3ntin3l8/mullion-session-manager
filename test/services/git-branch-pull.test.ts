@@ -207,6 +207,7 @@ describe("pullBranch — checked out in a worktree", () => {
     expect(await pullBranch(repo, "feature", wt)).toEqual({
       ok: true,
       reason: "already-up-to-date",
+      detail: "origin/feature",
     });
   });
 

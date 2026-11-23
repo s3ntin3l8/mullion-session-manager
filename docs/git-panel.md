@@ -88,7 +88,7 @@ damaged clone shows the repair plan and a confirmed **Repair**, #1896), an
   on the current branch, a two-step **Rebase** (its own icon: it replays local
   commits, it is not a Pull), and two-step delete with `Force`. A row shows
   `↑ahead ↓behind` against its upstream, and a row that is behind a live
-  upstream adds **Pull** (#3068): fast-forward only, for any branch, including
+  upstream with no local commits of its own adds **Pull** (#3068): fast-forward only, for any branch, including
   one a linked worktree holds and so cannot be checked out. The current
   branch's Pull is the header's Pull. A refused checkout, rebase or pull shows
   its reason on the row; a rebase that sessions block while a fast-forward
@@ -204,7 +204,10 @@ does is skip the _warning_, not the _action_.
     fast-forward refusals above;
   - checked out in the **main checkout**: an active session working there
     (`sessions-active`; sessions in the linked worktrees below it do not
-    count), plus the header Pull's guards. The current branch's row uses the
+    count), plus the header Pull's guards. Only _active_ sessions count here,
+    the same rule as checkout and rebase in that checkout; the linked-worktree
+    guard above also counts ended-but-alive and unconfirmable ones, as
+    worktree removal does. The current branch's row uses the
     header's Pull instead, which a session in the checkout does not block (a
     dirty tree does);
   - the branch moved to another checkout between the session check and the

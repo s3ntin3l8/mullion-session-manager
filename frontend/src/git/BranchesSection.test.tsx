@@ -90,20 +90,21 @@ beforeEach(() => {
 });
 
 describe("BranchesSection — Pull (issue #3068)", () => {
-  it("offers Pull only on rows behind a live upstream", () => {
+  it("offers Pull only on rows a fast-forward can bring up to date", () => {
     renderSection([
       branch("main", { isCurrent: true, upstream: "origin/main" }),
       branch("idle", { upstream: "origin/idle", behind: 2 }),
       branch("ahead-only", { upstream: "origin/ahead-only", ahead: 3 }),
       branch("gone", { upstream: "origin/gone", behind: 1, upstreamGone: true }),
       branch("local", { behind: 1 }),
+      branch("diverged", { upstream: "origin/diverged", behind: 2, ahead: 1 }),
     ]);
     expect(
       within(rowOf("idle")).getByRole("button", {
         name: "Pull — fast-forward 2 commits from origin/idle",
       }),
     ).toBeEnabled();
-    for (const name of ["main", "ahead-only", "gone", "local"]) {
+    for (const name of ["main", "ahead-only", "gone", "local", "diverged"]) {
       expect(within(rowOf(name)).queryByRole("button", { name: /^Pull/ })).toBeNull();
     }
   });
@@ -130,7 +131,8 @@ describe("BranchesSection — Pull (issue #3068)", () => {
 
   it("shows a refusal inline on the row, with no Force", async () => {
     m.pullProjectGitBranch.mockResolvedValue({ ok: false, reason: "not-fast-forward" });
-    renderSection([branch("idle", { upstream: "origin/idle", behind: 2, ahead: 1 })]);
+    // The row's counts are from the last fetch; the server's fetch can find more.
+    renderSection([branch("idle", { upstream: "origin/idle", behind: 2 })]);
     await userEvent.click(within(rowOf("idle")).getByRole("button", { name: /^Pull/ }));
     expect(
       await within(rowOf("idle")).findByText(
