@@ -1919,7 +1919,8 @@ export const integrations = sqliteTable("integrations", {
   // The App's slug (`GET /app`), saved when the credential is verified so the
   // task watcher can tell which issue author is this install's own bot
   // (`<slug>[bot]`) without a network call per sweep. Null for rows configured
-  // before this column existed (resolved lazily, see own-bot-login.ts) and
+  // before this column existed (resolved lazily by resolveOwnBotLogin in
+  // services/github-integration.ts) and
   // nulled by clearGitHubApp.
   githubAppSlug: text("github_app_slug"),
 });

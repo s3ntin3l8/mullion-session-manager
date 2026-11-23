@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
-import { peekOwnBotLogin, resolveGitHubToken } from "../services/github-integration.js";
+import { resolveGitHubToken } from "../services/github-integration.js";
 import {
   findReviewingTaskByPr,
   findTaskBlockerStateByIssue,
@@ -436,19 +436,18 @@ export async function webhookRoutes(app: FastifyInstance) {
                   // #2233 — projects sharing a repo all get the broadcast
                   // above, but only the oldest imports the issue.
                   if (projectId !== repoOwners.get(repoKeyOf({ owner, repo }))) break;
-                  upsertIssueTask(
-                    app,
-                    projectId,
-                    {
-                      number: issue.number,
-                      title: issue.title,
-                      body: issue.body ?? null,
-                      htmlUrl: issue.html_url,
-                      authorLogin: issue.user?.login ?? null,
-                      authorAssociation: issue.author_association,
-                    },
-                    peekOwnBotLogin(app),
-                  );
+                  // No own-bot login here on purpose: whether an issue is one of
+                  // Mullion's own proposals is decided only by the poll, which
+                  // reads the author from GitHub's API. A webhook payload's
+                  // author must never be what lets an issue in as a proposal.
+                  upsertIssueTask(app, projectId, {
+                    number: issue.number,
+                    title: issue.title,
+                    body: issue.body ?? null,
+                    htmlUrl: issue.html_url,
+                    authorLogin: issue.user?.login ?? null,
+                    authorAssociation: issue.author_association,
+                  });
                 } else if (action === "closed" || action === "unlabeled") {
                   // "unlabeled" only proceeds when the label GitHub reports
                   // removed is the task label — an issue can have other

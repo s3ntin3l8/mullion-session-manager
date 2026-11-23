@@ -179,3 +179,56 @@ describe("TaskActions' Start fresh on a waiting retry", () => {
     expect(await screen.findByText("Failed to start the task fresh")).toBeInTheDocument();
   });
 });
+
+// A task from an issue Mullion's own bot filed: Approve and Dismiss replace
+// "Move to Ready", and Approve sends the text the screen showed.
+describe("TaskActions on a proposal", () => {
+  const approveProposal = vi.fn();
+  const dismissProposal = vi.fn();
+  const proposal = makeTask({
+    id: 4,
+    status: "backlog",
+    proposalState: "proposed",
+    title: "fix(x): later",
+    body: "do it",
+  });
+
+  beforeEach(() => {
+    approveProposal.mockReset();
+    dismissProposal.mockReset();
+    useDashboardStore.setState({ approveProposal, dismissProposal });
+  });
+
+  it("offers Approve and Dismiss instead of Move to Ready", () => {
+    render(<TaskActions task={proposal} />);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Move to Ready" })).toBeNull();
+  });
+
+  it("approves with the title and body on screen", async () => {
+    const user = userEvent.setup();
+    approveProposal.mockResolvedValue(undefined);
+    render(<TaskActions task={proposal} />);
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(approveProposal).toHaveBeenCalledWith(4, { title: "fix(x): later", body: "do it" });
+  });
+
+  it("dismisses", async () => {
+    const user = userEvent.setup();
+    dismissProposal.mockResolvedValue(undefined);
+    render(<TaskActions task={proposal} />);
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(dismissProposal).toHaveBeenCalledWith(4);
+  });
+
+  it("shows the server's reason when the issue changed", async () => {
+    const user = userEvent.setup();
+    approveProposal.mockRejectedValueOnce(
+      new ApiError("The issue changed since you opened it", 409),
+    );
+    render(<TaskActions task={proposal} />);
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(/issue changed/)).toBeInTheDocument();
+  });
+});

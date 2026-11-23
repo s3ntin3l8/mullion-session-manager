@@ -40,6 +40,8 @@ vi.mock("../../src/services/github-integration.js", () => ({
   // mock's return value is used directly with `await`, which works fine on
   // a plain (non-Promise) value.
   resolveGitHubToken: mockResolveGitHubToken,
+  // The poll asks for the install's own bot login before upserting; none here.
+  resolveOwnBotLogin: async () => null,
 }));
 
 // #484 — the ingest sweep resolves each project's repo via
@@ -612,6 +614,8 @@ describe("startTaskWatcher", () => {
         body: "details",
         htmlUrl: "https://x/42",
         status: "ready",
+        // An ordinary task: only the install's own bot's issues are proposals.
+        proposalState: null,
         // #667 — absent from listLabeledIssues' mocked return above, so
         // TaskIssue.dependencyCount is undefined; upsertIssueTask's insert
         // still writes the column explicitly as null (not omitted), see

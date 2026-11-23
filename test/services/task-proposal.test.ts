@@ -31,7 +31,9 @@ const { upsertIssueTask } = await import("../../src/services/task-watcher.js");
 const { enqueueTask } = await import("../../src/services/task-claim.js");
 const { enqueueRetry } = await import("../../src/services/task-retry.js");
 const { dispatchQueuedTasks } = await import("../../src/services/task-dispatch.js");
-const { proposalContentSha } = await import("../../src/services/task-proposal.js");
+const { proposalContentSha, proposalBlocksRun } =
+  await import("../../src/services/task-proposal.js");
+const { FAILURE_REASON_LABEL_LOST } = await import("../../src/services/task-github-sync.js");
 const { eq, and } = await import("drizzle-orm");
 
 const tmpDb = path.join(os.tmpdir(), `task-proposal-test-${process.pid}.db`);
@@ -274,6 +276,64 @@ describe("proposed tasks (own-bot issues)", () => {
       await post(row(i.number)!.id, "approve-proposal");
       upsertIssueTask(app, projectId, { ...i }, null);
       expect(row(i.number)).toMatchObject({ status: "ready", proposalState: "approved" });
+    });
+  });
+
+  describe("proposalBlocksRun", () => {
+    const base = { approvedBodySha: null, title: "t", body: "b" };
+    it("lets an ordinary task through", () => {
+      expect(proposalBlocksRun({ ...base, proposalState: null })).toBe(false);
+    });
+    it("blocks a proposal and any state it does not recognise", () => {
+      expect(proposalBlocksRun({ ...base, proposalState: "proposed" })).toBe(true);
+      expect(proposalBlocksRun({ ...base, proposalState: "something-else" })).toBe(true);
+    });
+    it("lets an approved task through only while its pin matches", () => {
+      const sha = proposalContentSha("t", "b");
+      expect(proposalBlocksRun({ ...base, proposalState: "approved", approvedBodySha: sha })).toBe(
+        false,
+      );
+      expect(proposalBlocksRun({ ...base, proposalState: "approved", approvedBodySha: "x" })).toBe(
+        true,
+      );
+    });
+  });
+
+  describe("an existing task that turns out to be the bot's", () => {
+    it("becomes a proposal and is demoted from ready", () => {
+      const i = issue({ authorLogin: "me", authorAssociation: "OWNER" });
+      upsertIssueTask(app, projectId, i, BOT);
+      expect(row(i.number)).toMatchObject({ status: "ready", proposalState: null });
+      // Same issue, now seen with the bot as its (untrusted) author.
+      upsertIssueTask(
+        app,
+        projectId,
+        { ...i, authorLogin: BOT, authorAssociation: "CONTRIBUTOR" },
+        BOT,
+      );
+      expect(row(i.number)).toMatchObject({ status: "backlog", proposalState: "proposed" });
+    });
+
+    it("a proposal that failed for losing its label returns to proposed, not ready", () => {
+      const i = issue();
+      upsertIssueTask(app, projectId, i, BOT);
+      const id = row(i.number)!.id;
+      app.db
+        .update(tasks)
+        .set({
+          status: "failed",
+          failureReason: FAILURE_REASON_LABEL_LOST,
+          proposalState: "approved",
+          approvedBodySha: proposalContentSha(i.title, i.body),
+        })
+        .where(eq(tasks.id, id))
+        .run();
+      upsertIssueTask(app, projectId, i, BOT);
+      expect(row(i.number)).toMatchObject({
+        status: "backlog",
+        proposalState: "proposed",
+        approvedBodySha: null,
+      });
     });
   });
 });

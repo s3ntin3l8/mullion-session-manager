@@ -14,11 +14,13 @@ export function proposalBlocksRun(t: {
   title: string;
   body: string | null;
 }): boolean {
-  if (t.proposalState === "proposed") return true;
+  // Fail closed: the column is free text, so anything but null (an ordinary
+  // task) or an "approved" whose pin still matches must not run.
+  if (t.proposalState === null) return false;
   if (t.proposalState === "approved") {
     return t.approvedBodySha !== proposalContentSha(t.title, t.body);
   }
-  return false;
+  return true;
 }
 
 /** The pin: title and body are both what a worker is prompted with. */
