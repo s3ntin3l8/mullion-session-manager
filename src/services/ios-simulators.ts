@@ -7,6 +7,11 @@ export interface IosSimulator {
   name: string;
   runtime: string;
   state: IosSimulatorState;
+  /** The simctl device type identifier, when it reports one. */
+  deviceTypeId?: string;
+  /** When the simulator last booted (ISO 8601), absent until it has. The only
+   * signal that tells a simulator someone uses from one Xcode provisioned. */
+  lastBootedAt?: string;
 }
 
 /** Raised when `xcrun simctl list` cannot be run, exits non-zero, or returns
@@ -73,6 +78,12 @@ export function parseSimctlDevices(jsonText: string): IosSimulator[] {
         name: record.name,
         runtime,
         state: record.state,
+        ...(typeof record.deviceTypeIdentifier === "string" && record.deviceTypeIdentifier
+          ? { deviceTypeId: record.deviceTypeIdentifier }
+          : {}),
+        ...(typeof record.lastBootedAt === "string" && record.lastBootedAt
+          ? { lastBootedAt: record.lastBootedAt }
+          : {}),
       });
     }
   }

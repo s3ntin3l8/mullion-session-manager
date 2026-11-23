@@ -116,4 +116,7 @@ export interface IosSimulator {
   name: string;
   runtime: string;
   state: IosSimulatorState;
+  deviceTypeId?: string;
+  /** ISO 8601; absent until the simulator has booted. */
+  lastBootedAt?: string;
 }

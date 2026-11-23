@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { IosSimulator, SimulatorCatalog } from "../../api/index.js";
 import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
 import { useAsyncData } from "../../hooks/useAsyncData.js";
 import { Dropdown, Row, SecondaryButton, TextInput } from "../../ui/primitives.js";
+import { CustomSelect } from "../../ui/CustomSelect.js";
+import { sortDeviceTypes, sortRuntimes } from "./simulatorList.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 
 // Mirrors the server's SIMULATOR_NAME_PATTERN (src/services/ios-simulators.ts):
@@ -42,7 +44,6 @@ export function NewSimulatorForm({
   const [runtimeId, setRuntimeId] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const nameError = describeSimulatorNameError(name);
 
   useAsyncData(
     () => api.listSimulatorCatalog(hostId),
@@ -67,13 +68,22 @@ export function NewSimulatorForm({
     },
   );
 
-  const selectedType = catalog?.deviceTypes.some((t) => t.id === deviceTypeId)
+  // Newest first, and the newest preselected (the newest iPhone, the newest iOS).
+  const deviceTypes = useMemo(() => sortDeviceTypes(catalog?.deviceTypes ?? []), [catalog]);
+  const runtimes = useMemo(() => sortRuntimes(catalog?.runtimes ?? []), [catalog]);
+  const selectedType = deviceTypes.some((t) => t.id === deviceTypeId)
     ? deviceTypeId
-    : (catalog?.deviceTypes[0]?.id ?? "");
-  const selectedRuntime = catalog?.runtimes.some((r) => r.id === runtimeId)
+    : (deviceTypes[0]?.id ?? "");
+  const selectedRuntime = runtimes.some((r) => r.id === runtimeId)
     ? runtimeId
-    : (catalog?.runtimes[catalog.runtimes.length - 1]?.id ?? "");
-  const trimmed = name.trim();
+    : (runtimes[0]?.id ?? "");
+  // An empty name falls back to "<device type> (<runtime>)", as Xcode names one.
+  const typeName = deviceTypes.find((t) => t.id === selectedType)?.name;
+  const runtimeName = runtimes.find((r) => r.id === selectedRuntime)?.name;
+  const defaultName = typeName && runtimeName ? `${typeName} (${runtimeName})` : "";
+  const trimmed = name.trim() || defaultName;
+  // The name that will be sent, so a too-long or odd default is caught too.
+  const nameError = describeSimulatorNameError(trimmed);
   const canCreate =
     !creating && trimmed.length > 0 && nameError === null && selectedType && selectedRuntime;
 
@@ -108,11 +118,14 @@ export function NewSimulatorForm({
       </div>
       {open && (
         <div style={{ marginTop: 10 }}>
-          <Row label="New simulator name" desc="Letters, digits, spaces and . _ ( ) ' - only.">
+          <Row
+            label="New simulator name"
+            desc="Optional. Defaults to the device type and runtime. Letters, digits, spaces and . _ ( ) ' - only."
+          >
             <TextInput
               style={{ width: 220 }}
               aria-label="New simulator name"
-              placeholder="iPhone 16 QA"
+              placeholder={defaultName || "iPhone 18 Pro (iOS 27.0)"}
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
@@ -128,10 +141,13 @@ export function NewSimulatorForm({
             </div>
           )}
           {catalogError && <ErrorText style={{ marginTop: 8 }}>{catalogError}</ErrorText>}
-          {catalog && catalog.deviceTypes.length > 0 && (
-            <Row label="Device type" desc="The iPhone or iPad model to simulate.">
-              <Dropdown
-                options={catalog.deviceTypes.map((t) => ({ value: t.id, label: t.name }))}
+          {deviceTypes.length > 0 && (
+            <Row label="Device type" desc="The iPhone or iPad model to simulate, newest first.">
+              <CustomSelect
+                label="Device type"
+                searchable
+                emptyMessage="No matching device types"
+                options={deviceTypes.map((t) => ({ value: t.id, label: t.name }))}
                 value={selectedType}
                 onChange={setDeviceTypeId}
               />
@@ -143,10 +159,10 @@ export function NewSimulatorForm({
               installation.
             </div>
           )}
-          {catalog && catalog.runtimes.length > 0 && (
-            <Row label="Runtime" desc="An installed iOS version.">
+          {runtimes.length > 0 && (
+            <Row label="Runtime" desc="An installed iOS version, newest first.">
               <Dropdown
-                options={catalog.runtimes.map((r) => ({ value: r.id, label: r.name }))}
+                options={runtimes.map((r) => ({ value: r.id, label: r.name }))}
                 value={selectedRuntime}
                 onChange={setRuntimeId}
               />

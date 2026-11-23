@@ -49,6 +49,8 @@ describe("Settings -> Devices iOS Simulator", () => {
   let simulatorCreateBodies: Array<Record<string, unknown>>;
   let simulatorCreateError: { status: number; message: string } | null;
   let emptyDeviceTypes: boolean;
+  let longDeviceTypeName: boolean;
+  let devicesFail: boolean;
 
   beforeEach(() => {
     devicesDb = [];
@@ -61,13 +63,16 @@ describe("Settings -> Devices iOS Simulator", () => {
     simulatorCreateBodies = [];
     simulatorCreateError = null;
     emptyDeviceTypes = false;
+    longDeviceTypeName = false;
+    devicesFail = false;
 
     const { fetchMock, unexpectedCalls: unexpected } = mockFetch({
       "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
       "GET /api/hosts": () => jsonResponse(200, []),
       "GET /api/projects": () => jsonResponse(200, []),
       "GET /api/sessions": () => jsonResponse(200, []),
-      "GET /api/devices": () => jsonResponse(200, devicesDb),
+      "GET /api/devices": () =>
+        devicesFail ? jsonResponse(500, { message: "boom" }) : jsonResponse(200, devicesDb),
       "GET /api/devices/hosts": () => jsonResponse(200, deviceHostsDb),
       "GET /api/devices/discovered": () => jsonResponse(200, []),
       "GET /api/avds": () => jsonResponse(200, { avds: ["pixel_7"] }),
@@ -83,7 +88,12 @@ describe("Settings -> Devices iOS Simulator", () => {
           deviceTypes: emptyDeviceTypes
             ? []
             : [
-                { id: "type-16", name: "iPhone 16" },
+                {
+                  id: "type-16",
+                  name: longDeviceTypeName
+                    ? `iPhone ${"Very Long Model Name ".repeat(4)}`
+                    : "iPhone 16",
+                },
                 { id: "type-ipad", name: "iPad Air" },
               ],
           runtimes: [
@@ -149,7 +159,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the form unchanged when no host reports ios", async () => {
+  it("shows no iOS section when no host reports ios", async () => {
     deviceHostsDb = [
       {
         hostId: "local",
@@ -161,9 +171,10 @@ describe("Settings -> Devices iOS Simulator", () => {
     ];
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await dd.findDropdownByLabel("pixel_7");
-    expect(screen.queryByRole("radio", { name: "iOS Simulator" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "iOS Simulator" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Add a simulator")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ New AVD" })).toBeInTheDocument();
   });
 
@@ -221,9 +232,7 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
-
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
+    await user.click(await screen.findByText("Add a simulator"));
 
     expect(screen.queryByRole("button", { name: "+ New AVD" })).not.toBeInTheDocument();
     expect(dd.queryDropdownByLabel("pixel_7")).not.toBeInTheDocument();
@@ -231,19 +240,21 @@ describe("Settings -> Devices iOS Simulator", () => {
     const hostPicker = screen.getByRole("combobox", { name: "Host" });
     expect(dd.dropdownOptions(hostPicker).map((o) => o.label)).toEqual(["Primary", "Mac mini"]);
 
-    const simPicker = await screen.findByRole("combobox", { name: "Simulator" });
-    expect(dd.dropdownOptions(simPicker).map((o) => [o.label, o.disabled])).toEqual([
-      ["iPhone 16 Pro (iOS 18.2 · Shutdown) — already added", true],
-      ["iPhone 15 (iOS 17.5 · Booted)", false],
-    ]);
-    expect(dd.dropdownValue(simPicker)).toBe("SIM-UDID-2");
+    const simPicker = await screen.findByRole("radiogroup", { name: "Simulator" });
+    // Grouped by runtime, newest first; the one already added is not selectable.
+    expect(
+      within(simPicker)
+        .getAllByRole("group")
+        .map((g) => g.getAttribute("aria-label")),
+    ).toEqual(["iOS 18.2", "iOS 17.5"]);
+    expect(within(simPicker).getByRole("radio", { name: /iPhone 16 Pro/ })).toBeDisabled();
+    expect(within(simPicker).getByRole("radio", { name: /iPhone 15/ })).toBeChecked();
 
     dd.pickDropdownOption(hostPicker, "h-mac");
     await waitFor(() => {
-      const macSimPicker = screen.getByRole("combobox", { name: "Simulator" });
-      expect(dd.dropdownOptions(macSimPicker).map((o) => o.label)).toEqual([
-        "iPad Air (iOS 18.2 · Shutdown)",
-      ]);
+      const macSimPicker = screen.getByRole("radiogroup", { name: "Simulator" });
+      expect(within(macSimPicker).getAllByRole("radio")).toHaveLength(1);
+      expect(within(macSimPicker).getByRole("radio", { name: /iPad Air/ })).toBeInTheDocument();
     });
   });
 
@@ -272,22 +283,20 @@ describe("Settings -> Devices iOS Simulator", () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
-    await user.click(await screen.findByText("Create a device"));
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
-    await screen.findByRole("combobox", { name: "Simulator" });
+    await user.click(await screen.findByText("Add a simulator"));
+    await screen.findByRole("radiogroup", { name: "Simulator" });
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => expect(createBodies).toHaveLength(1));
-    expect(createBodies[0]).toEqual({ platform: "ios", udid: "SIM-UDID-1" });
+    // The booted simulator is preselected, not the first one simctl lists.
+    expect(createBodies[0]).toEqual({ platform: "ios", udid: "SIM-UDID-2" });
     expect(createBodies[0]).not.toHaveProperty("hostId");
 
-    await user.click(await screen.findByText("Create a device"));
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
+    await user.click(await screen.findByText("Add a simulator"));
     dd.pickDropdownOption(screen.getByRole("combobox", { name: "Host" }), "h-mac");
     await waitFor(() => {
-      expect(
-        dd.dropdownOptions(screen.getByRole("combobox", { name: "Simulator" })).map((o) => o.label),
-      ).toEqual(["iPad Air (iOS 18.2 · Shutdown)"]);
+      const macSimPicker = screen.getByRole("radiogroup", { name: "Simulator" });
+      expect(within(macSimPicker).getByRole("radio", { name: /iPad Air/ })).toBeInTheDocument();
     });
     await user.click(screen.getByRole("button", { name: "Create" }));
 
@@ -317,9 +326,8 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
-    await screen.findByRole("combobox", { name: "Simulator" });
+    await user.click(await screen.findByText("Add a simulator"));
+    await screen.findByRole("radiogroup", { name: "Simulator" });
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     expect(
@@ -343,8 +351,7 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
+    await user.click(await screen.findByText("Add a simulator"));
 
     expect(screen.getByText("Mac mini")).toBeVisible();
     expect(
@@ -390,15 +397,19 @@ describe("Settings -> Devices iOS Simulator", () => {
     simulatorsByHostDb = { local: IOS_SIMS_LOCAL };
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
-    await screen.findByRole("combobox", { name: "Simulator" });
+    await user.click(await screen.findByText("Add a simulator"));
+    await screen.findByRole("radiogroup", { name: "Simulator" });
 
     await user.click(screen.getByRole("button", { name: "+ New simulator" }));
     const create = await screen.findByRole("button", { name: "Create simulator" });
-    expect(create).toBeDisabled();
-    await screen.findByRole("combobox", { name: "Device type" });
+    await screen.findByRole("button", { name: "Device type" });
+    // Newest runtime preselected; the name defaults to "<device type> (<runtime>)".
     expect(dd.dropdownValue(screen.getByRole("combobox", { name: "Runtime" }))).toBe("rt-18");
+    expect(screen.getByRole("textbox", { name: "New simulator name" })).toHaveAttribute(
+      "placeholder",
+      "iPhone 16 (iOS 18.2)",
+    );
+    expect(create).toBeEnabled();
 
     const nameInput = screen.getByRole("textbox", { name: "New simulator name" });
     await user.type(nameInput, "-bad");
@@ -407,7 +418,8 @@ describe("Settings -> Devices iOS Simulator", () => {
     await user.clear(nameInput);
     await user.type(nameInput, "QA phone");
 
-    dd.pickDropdownOption(screen.getByRole("combobox", { name: "Device type" }), "type-ipad");
+    await user.click(screen.getByRole("button", { name: "Device type" }));
+    await user.click(await screen.findByRole("option", { name: "iPad Air" }));
     await user.click(create);
 
     await waitFor(() => {
@@ -416,11 +428,9 @@ describe("Settings -> Devices iOS Simulator", () => {
       ]);
     });
     await waitFor(() => {
-      const picker = screen.getByRole("combobox", { name: "Simulator" });
-      expect(dd.dropdownValue(picker)).toBe("NEW-UDID");
-      expect(dd.dropdownOptions(picker).map((o) => o.label)).toContain(
-        "QA phone (iOS 18.2 · Shutdown)",
-      );
+      const picker = screen.getByRole("radiogroup", { name: "Simulator" });
+      // Never booted, so only the selection keeps it in the "used" view.
+      expect(within(picker).getByRole("radio", { name: /QA phone/ })).toBeChecked();
     });
     expect(screen.queryByRole("button", { name: "Create simulator" })).not.toBeInTheDocument();
 
@@ -444,12 +454,11 @@ describe("Settings -> Devices iOS Simulator", () => {
     simulatorCreateError = { status: 502, message: "Invalid runtime" };
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
-    await screen.findByRole("combobox", { name: "Simulator" });
+    await user.click(await screen.findByText("Add a simulator"));
+    await screen.findByRole("radiogroup", { name: "Simulator" });
 
     await user.click(screen.getByRole("button", { name: "+ New simulator" }));
-    await screen.findByRole("combobox", { name: "Device type" });
+    await screen.findByRole("button", { name: "Device type" });
     await user.type(screen.getByRole("textbox", { name: "New simulator name" }), "QA phone");
     await user.click(screen.getByRole("button", { name: "Create simulator" }));
 
@@ -471,11 +480,155 @@ describe("Settings -> Devices iOS Simulator", () => {
     emptyDeviceTypes = true;
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
-    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
-    await screen.findByRole("combobox", { name: "Simulator" });
+    await user.click(await screen.findByText("Add a simulator"));
+    await screen.findByRole("radiogroup", { name: "Simulator" });
     await user.click(screen.getByRole("button", { name: "+ New simulator" }));
     expect(await screen.findByText(/No iPhone or iPad device types/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create simulator" })).toBeDisabled();
+  });
+
+  describe("platform sections", () => {
+    const dev = (over: Partial<Device> & { id: number }): Device => ({
+      hostId: "local",
+      projectId: null,
+      name: null,
+      platform: "android",
+      kind: "emulator",
+      avdName: null,
+      serial: null,
+      udid: null,
+      status: "active",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      live: null,
+      ...over,
+    });
+
+    it("shows the device-load error once, even with both sections on screen", async () => {
+      deviceHostsDb = [
+        {
+          hostId: "local",
+          name: "Primary",
+          status: "ok",
+          deviceKinds: ["emulator"],
+          platforms: ["android", "ios"],
+        },
+      ];
+      devicesFail = true;
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      await screen.findByRole("region", { name: "iOS Simulator" });
+      expect(await screen.findAllByText("Couldn't load devices.")).toHaveLength(1);
+    });
+
+    it("offers no way to add a simulator when no host can run one, but keeps the rows", async () => {
+      deviceHostsDb = [
+        {
+          hostId: "local",
+          name: "Primary",
+          status: "ok",
+          deviceKinds: ["emulator"],
+          platforms: ["android"],
+        },
+      ];
+      devicesDb = [dev({ id: 2, platform: "ios", udid: "SIM-UDID-2" })];
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      const ios = await screen.findByRole("region", { name: "iOS Simulator" });
+      expect(within(ios).getByTestId("device-row-2")).toBeInTheDocument();
+      expect(within(ios).queryByText("Add a simulator")).toBeNull();
+      expect(within(ios).getByText(/No host can run simulators right now/)).toBeInTheDocument();
+    });
+
+    it("keeps Create disabled, with the reason, when the default simulator name is not valid", async () => {
+      deviceHostsDb = [
+        {
+          hostId: "local",
+          name: "Primary",
+          status: "ok",
+          deviceKinds: ["emulator"],
+          platforms: ["android", "ios"],
+        },
+      ];
+      simulatorsByHostDb = { local: IOS_SIMS_LOCAL };
+      longDeviceTypeName = true;
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      await user.click(await screen.findByText("Add a simulator"));
+      await screen.findByRole("radiogroup", { name: "Simulator" });
+      await user.click(screen.getByRole("button", { name: "+ New simulator" }));
+      await screen.findByRole("button", { name: "Device type" });
+      expect(await screen.findByText(/At most 64 characters/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Create simulator" })).toBeDisabled();
+      // Typing a short name of one's own clears it.
+      await user.type(screen.getByRole("textbox", { name: "New simulator name" }), "QA");
+      expect(screen.getByRole("button", { name: "Create simulator" })).toBeEnabled();
+    });
+
+    it("keeps each platform's devices, controls and SDK images in its own section", async () => {
+      deviceHostsDb = [
+        {
+          hostId: "local",
+          name: "Primary",
+          status: "ok",
+          deviceKinds: ["emulator", "physical"],
+          platforms: ["android", "ios"],
+        },
+      ];
+      simulatorsByHostDb = { local: IOS_SIMS_LOCAL };
+      devicesDb = [
+        dev({ id: 1, avdName: "pixel_7" }),
+        dev({ id: 2, platform: "ios", udid: "SIM-UDID-2" }),
+      ];
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      const android = await screen.findByRole("region", { name: "Android" });
+      const ios = await screen.findByRole("region", { name: "iOS Simulator" });
+
+      expect(within(android).getByTestId("device-row-1")).toBeInTheDocument();
+      expect(within(android).queryByTestId("device-row-2")).toBeNull();
+      expect(within(ios).getByTestId("device-row-2")).toBeInTheDocument();
+      expect(within(ios).queryByTestId("device-row-1")).toBeNull();
+
+      expect(within(android).getByText("Create an emulator")).toBeInTheDocument();
+      expect(within(android).getByText("Pair a phone or tablet")).toBeInTheDocument();
+      expect(within(android).getByText("SDK system images")).toBeInTheDocument();
+      expect(within(ios).getByText("Add a simulator")).toBeInTheDocument();
+      expect(within(ios).queryByText("SDK system images")).toBeNull();
+      expect(within(ios).queryByText("Create an emulator")).toBeNull();
+    });
+
+    it("shows no Android section or SDK images on a host that only runs simulators", async () => {
+      deviceHostsDb = [
+        {
+          hostId: "local",
+          name: "Primary",
+          status: "ok",
+          deviceKinds: [],
+          platforms: ["ios"],
+        },
+      ];
+      simulatorsByHostDb = { local: IOS_SIMS_LOCAL };
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      expect(await screen.findByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
+      expect(screen.queryByRole("region", { name: "Android" })).toBeNull();
+      expect(screen.queryByText("SDK system images")).toBeNull();
+    });
+
+    it("says so when no simulator has been added yet", async () => {
+      deviceHostsDb = [
+        {
+          hostId: "local",
+          name: "Primary",
+          status: "ok",
+          deviceKinds: ["emulator"],
+          platforms: ["android", "ios"],
+        },
+      ];
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      const ios = await screen.findByRole("region", { name: "iOS Simulator" });
+      expect(await within(ios).findByText(/No simulators added yet/)).toBeInTheDocument();
+      expect(
+        within(await screen.findByRole("region", { name: "Android" })).getByText(
+          /No Android devices yet/,
+        ),
+      ).toBeInTheDocument();
+    });
   });
 });

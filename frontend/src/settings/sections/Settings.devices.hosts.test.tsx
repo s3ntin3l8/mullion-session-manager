@@ -106,7 +106,7 @@ describe("Settings -> Devices host picker", () => {
   const openForm = async () => {
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
-    await user.click(await screen.findByText("Create a device"));
+    await user.click(await screen.findByText("Create an emulator"));
     await findDropdownByLabel("pixel_7"); // wait for the AVD picker to load
     return user;
   };

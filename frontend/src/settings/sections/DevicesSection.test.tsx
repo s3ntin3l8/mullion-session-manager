@@ -99,9 +99,9 @@ function installBackend(overrides: Partial<Record<RouteName, Handler>> = {}) {
   return { calls, unexpectedCalls };
 }
 
-/** Opens the "Create a device" form — the AVD picker's owner. */
+/** Opens the "Create an emulator" form — the AVD picker's owner. */
 async function openCreateForm(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByText("Create a device"));
+  await user.click(await screen.findByText("Create an emulator"));
 }
 
 describe("DevicesSection — the useAsyncData loads (issue #2411)", () => {
@@ -184,9 +184,9 @@ describe("DevicesSection — the useAsyncData loads (issue #2411)", () => {
 
       await openCreateForm(user);
       // Close the form again — that supersedes the first request.
-      await user.click(screen.getByText("Create a device"));
+      await user.click(screen.getByText("Create an emulator"));
       // Re-open it: a second request goes out.
-      await user.click(screen.getByText("Create a device"));
+      await user.click(screen.getByText("Create an emulator"));
 
       await act(async () => {
         fresh.resolve(jsonResponse(200, { avds: ["fresh_avd"] }));
