@@ -198,19 +198,37 @@ export function previewQueryError(query: Record<string, string | undefined>): st
 export type LoopbackHost = "127.0.0.1" | "[::1]";
 
 const LOOPBACK_PROBE_TIMEOUT_MS = 300;
+const LOOPBACK_DRAIN_TIMEOUT_MS = 1_000;
 const LOOPBACK_CACHE_TTL_MS = 2_000;
 const loopbackHosts = new Map<number, { at: number; host: LoopbackHost }>();
 
 function canConnect(host: string, port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = net.connect({ host, port, timeout: LOOPBACK_PROBE_TIMEOUT_MS });
-    const done = (ok: boolean) => {
-      socket.destroy();
+    let settled = false;
+    const settle = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
       resolve(ok);
     };
-    socket.once("connect", () => done(true));
-    socket.once("timeout", () => done(false));
-    socket.once("error", () => done(false));
+    // Close politely: a FIN, then drain whatever the server answers with. Tearing
+    // the socket down at once resets the connection, which a server that writes
+    // on connect (and a test's raw stub) reports as an uncaught ECONNRESET.
+    socket.once("connect", () => {
+      settle(true);
+      socket.end();
+      socket.resume();
+      // A server that keeps the connection open is let go of soon after.
+      socket.setTimeout(LOOPBACK_DRAIN_TIMEOUT_MS, () => socket.destroy());
+    });
+    socket.once("timeout", () => {
+      settle(false);
+      socket.destroy();
+    });
+    socket.on("error", () => {
+      settle(false);
+      socket.destroy();
+    });
   });
 }
 
