@@ -91,6 +91,7 @@ describe("review-request: the session's branch is read on the session's host (#3
     projectHostId: string,
     hostCwds: Record<string, string> | null,
     sessionHostId: string,
+    sessionCwd: string | null = null,
   ) {
     const [proj] = app.db
       .insert(projects)
@@ -104,7 +105,7 @@ describe("review-request: the session's branch is read on the session's host (#3
       .all();
     const [sess] = app.db
       .insert(sessions)
-      .values({ projectId: proj.id, command: "bash", hostId: sessionHostId })
+      .values({ projectId: proj.id, command: "bash", hostId: sessionHostId, cwd: sessionCwd })
       .returning()
       .all();
     return sess.id;
@@ -135,6 +136,31 @@ describe("review-request: the session's branch is read on the session's host (#3
       "acme",
       "widgets",
       "acme:feat/placed",
+    );
+  });
+
+  it("prefers the session's own cwd over the project's mapped path on the remote host", async () => {
+    const resolveGitStatus = vi.fn(async () => ({
+      isRepo: true,
+      status: { branch: "feat/worktree" },
+    }));
+    mocks.getRemoteHostClient.mockReturnValue({ resolveGitStatus });
+    const id = placed(
+      "local",
+      { "mac-agent": "/Users/me/Projects/app" },
+      "mac-agent",
+      "/Users/me/Projects/app/.mullion-worktrees/session-7",
+    );
+    const res = await post(id);
+    expect(res.statusCode).toBe(404);
+    expect(resolveGitStatus).toHaveBeenCalledWith(
+      "/Users/me/Projects/app/.mullion-worktrees/session-7",
+    );
+    expect(mocks.findPullRequestByHead).toHaveBeenCalledWith(
+      "ghs_token",
+      "acme",
+      "widgets",
+      "acme:feat/worktree",
     );
   });
 
