@@ -103,6 +103,17 @@ export const DEVICE_PAIR_SCHEMA = {
   },
 } as const;
 
+export const SIMULATOR_CREATE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "deviceTypeId", "runtimeId"],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 64 },
+    deviceTypeId: { type: "string", minLength: 1, maxLength: 256 },
+    runtimeId: { type: "string", minLength: 1, maxLength: 256 },
+  },
+} as const;
+
 export interface AvdCreateBody {
   name: string;
   systemImage: string;

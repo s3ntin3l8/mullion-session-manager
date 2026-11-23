@@ -4,11 +4,13 @@
 import { request } from "./client.js";
 import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import type {
+  CreateSimulatorBody,
   Device,
   DeviceHostEntry,
   DiscoveredDevice,
   IosSimulator,
   PairAndConnectBody,
+  SimulatorCatalog,
 } from "./types.js";
 
 export type CreateDeviceBody =
@@ -29,6 +31,16 @@ export const devicesApi = {
         ? `/api/simulators?hostId=${encodeURIComponent(hostId)}`
         : "/api/simulators",
     ),
+
+  listSimulatorCatalog: (hostId?: string) =>
+    request<SimulatorCatalog>(
+      hostId && hostId !== LOCAL_HOST_ID
+        ? `/api/simulators/catalog?hostId=${encodeURIComponent(hostId)}`
+        : "/api/simulators/catalog",
+    ),
+
+  createSimulator: (body: CreateSimulatorBody) =>
+    request<IosSimulator>("/api/simulators", { method: "POST", body: JSON.stringify(body) }),
 
   createDevice: (body: CreateDeviceBody) =>
     request<Device>("/api/devices", { method: "POST", body: JSON.stringify(body) }),

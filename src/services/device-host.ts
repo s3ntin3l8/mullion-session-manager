@@ -17,7 +17,14 @@ import { getRemoteHostClient } from "./remote-host-client.js";
 import { HostRequestError } from "./remote-host-errors.js";
 import type { DeviceSpawnSpec, LiveDevicesResponse } from "./device-wire.js";
 import type { DiscoveredDevice } from "./device-discovery.js";
-import { listIosSimulators, type IosSimulator } from "./ios-simulators.js";
+import {
+  createIosSimulator,
+  listIosSimulators,
+  listSimulatorCatalog,
+  type CreateSimulatorInput,
+  type IosSimulator,
+  type SimulatorCatalog,
+} from "./ios-simulators.js";
 
 // The primary's view of "the machine a device runs on" (issue #3200). A device's
 // `devices` row names its host (`hostId`); every operation on the live device
@@ -65,6 +72,10 @@ export interface DeviceHost {
   action(id: number, action: DeviceAction): Promise<DeviceActionResult>;
   /** Available iOS simulators on this host, or null when a remote agent predates `/internal/simulators`. */
   simulators(): Promise<IosSimulator[] | null>;
+  /** Device types and iOS runtimes a simulator can be created from, or null when a remote agent predates the route. */
+  simulatorCatalog(): Promise<SimulatorCatalog | null>;
+  /** Creates an iOS simulator on this host, or null when a remote agent predates the route. */
+  createSimulator(input: CreateSimulatorInput): Promise<IosSimulator | null>;
   /** Pair a physical Android device with this host's adb server. */
   pair(pairingAddress: string, pairingCode: string): Promise<void>;
   /** mDNS-discovered Android phones on this host's LAN. */
@@ -127,6 +138,14 @@ class LocalDeviceHost implements DeviceHost {
 
   simulators(): Promise<IosSimulator[]> {
     return listIosSimulators();
+  }
+
+  simulatorCatalog(): Promise<SimulatorCatalog> {
+    return listSimulatorCatalog();
+  }
+
+  createSimulator(input: CreateSimulatorInput): Promise<IosSimulator> {
+    return createIosSimulator(input);
   }
 
   pair(pairingAddress: string, pairingCode: string): Promise<void> {
@@ -255,6 +274,14 @@ class RemoteDeviceHost implements DeviceHost {
 
   simulators(): Promise<IosSimulator[] | null> {
     return this.client.devices.simulators();
+  }
+
+  simulatorCatalog(): Promise<SimulatorCatalog | null> {
+    return this.client.devices.simulatorCatalog();
+  }
+
+  createSimulator(input: CreateSimulatorInput): Promise<IosSimulator | null> {
+    return this.client.devices.createSimulator(input);
   }
 
   async pair(pairingAddress: string, pairingCode: string): Promise<void> {

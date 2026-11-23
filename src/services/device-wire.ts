@@ -1,6 +1,6 @@
 import type { DeviceInfo, DeviceKind, DevicePlatform } from "./device-drivers/types.js";
 import type { DiscoveredDevice } from "./device-discovery.js";
-import type { IosSimulator } from "./ios-simulators.js";
+import type { CreateSimulatorInput, IosSimulator, SimulatorCatalog } from "./ios-simulators.js";
 
 // The request/response shapes of the agent's `/internal/devices*` routes
 // (routes/internal-devices.ts), shared by the agent that serves them and the
@@ -48,6 +48,14 @@ export interface LiveDevicesResponse {
 
 export interface SimulatorsResponse {
   simulators: IosSimulator[];
+}
+
+export type SimulatorCatalogResponse = SimulatorCatalog;
+
+export type CreateSimulatorRequest = CreateSimulatorInput;
+
+export interface CreateSimulatorResponse {
+  simulator: IosSimulator;
 }
 
 export interface DevicePairRequest {

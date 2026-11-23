@@ -88,6 +88,29 @@ export interface DeviceHostEntry {
 
 export type IosSimulatorState = "Booted" | "Shutdown";
 
+export interface SimulatorDeviceType {
+  id: string;
+  name: string;
+}
+
+export interface SimulatorRuntime {
+  id: string;
+  name: string;
+}
+
+/** What `GET /api/simulators/catalog` offers a new simulator. */
+export interface SimulatorCatalog {
+  deviceTypes: SimulatorDeviceType[];
+  runtimes: SimulatorRuntime[];
+}
+
+export interface CreateSimulatorBody {
+  name: string;
+  deviceTypeId: string;
+  runtimeId: string;
+  hostId?: string;
+}
+
 export interface IosSimulator {
   udid: string;
   name: string;

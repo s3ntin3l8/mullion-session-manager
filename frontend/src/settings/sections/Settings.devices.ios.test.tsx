@@ -46,6 +46,8 @@ describe("Settings -> Devices iOS Simulator", () => {
   let createError: { status: number; message: string } | null;
   let createCounter: number;
   let unexpectedCalls: string[];
+  let simulatorCreateBodies: Array<Record<string, unknown>>;
+  let simulatorCreateError: { status: number; message: string } | null;
 
   beforeEach(() => {
     devicesDb = [];
@@ -55,6 +57,8 @@ describe("Settings -> Devices iOS Simulator", () => {
     createBodies = [];
     createError = null;
     createCounter = 0;
+    simulatorCreateBodies = [];
+    simulatorCreateError = null;
 
     const { fetchMock, unexpectedCalls: unexpected } = mockFetch({
       "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
@@ -71,6 +75,32 @@ describe("Settings -> Devices iOS Simulator", () => {
         const err = simulatorsErrorByHost[hostId];
         if (err) return jsonResponse(err.status, { message: err.message });
         return jsonResponse(200, simulatorsByHostDb[hostId] ?? []);
+      },
+      "GET /api/simulators/catalog": () =>
+        jsonResponse(200, {
+          deviceTypes: [
+            { id: "type-16", name: "iPhone 16" },
+            { id: "type-ipad", name: "iPad Air" },
+          ],
+          runtimes: [
+            { id: "rt-17", name: "iOS 17.5" },
+            { id: "rt-18", name: "iOS 18.2" },
+          ],
+        }),
+      "POST /api/simulators": ({ init }) => {
+        if (simulatorCreateError) {
+          return jsonResponse(simulatorCreateError.status, {
+            message: simulatorCreateError.message,
+          });
+        }
+        const body = JSON.parse(init?.body as string) as Record<string, unknown>;
+        simulatorCreateBodies.push(body);
+        return jsonResponse(201, {
+          udid: "NEW-UDID",
+          name: body.name,
+          runtime: "iOS 18.2",
+          state: "Shutdown",
+        });
       },
       "POST /api/devices": ({ init }) => {
         if (createError) {
@@ -342,5 +372,84 @@ describe("Settings -> Devices iOS Simulator", () => {
     const row = await screen.findByTestId("device-row-11");
     await within(row).findByText("iPhone 16 Pro · iOS 18.2");
     expect(within(row).getByText("iPhone 16 Pro")).toBeVisible();
+  });
+  it("creates a new simulator from the catalog, preselects it and registers it", async () => {
+    deviceHostsDb = [
+      {
+        hostId: "local",
+        name: "Primary",
+        status: "ok",
+        deviceKinds: ["emulator"],
+        platforms: ["android", "ios"],
+      },
+    ];
+    simulatorsByHostDb = { local: IOS_SIMS_LOCAL };
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByText("Create a device"));
+    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
+    await screen.findByRole("combobox", { name: "Simulator" });
+
+    await user.click(screen.getByRole("button", { name: "+ New simulator" }));
+    const create = await screen.findByRole("button", { name: "Create simulator" });
+    expect(create).toBeDisabled();
+    await screen.findByRole("combobox", { name: "Device type" });
+    expect(dd.dropdownValue(screen.getByRole("combobox", { name: "Runtime" }))).toBe("rt-18");
+
+    const nameInput = screen.getByRole("textbox", { name: "New simulator name" });
+    await user.type(nameInput, "-bad");
+    expect(await screen.findByText(/starting with a letter or digit/)).toBeInTheDocument();
+    expect(create).toBeDisabled();
+    await user.clear(nameInput);
+    await user.type(nameInput, "QA phone");
+
+    dd.pickDropdownOption(screen.getByRole("combobox", { name: "Device type" }), "type-ipad");
+    await user.click(create);
+
+    await waitFor(() => {
+      expect(simulatorCreateBodies).toEqual([
+        { name: "QA phone", deviceTypeId: "type-ipad", runtimeId: "rt-18" },
+      ]);
+    });
+    await waitFor(() => {
+      const picker = screen.getByRole("combobox", { name: "Simulator" });
+      expect(dd.dropdownValue(picker)).toBe("NEW-UDID");
+      expect(dd.dropdownOptions(picker).map((o) => o.label)).toContain(
+        "QA phone (iOS 18.2 · Shutdown)",
+      );
+    });
+    expect(screen.queryByRole("button", { name: "Create simulator" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      expect(createBodies).toEqual([{ platform: "ios", udid: "NEW-UDID" }]);
+    });
+  });
+
+  it("shows the server's message when creating a simulator fails", async () => {
+    deviceHostsDb = [
+      {
+        hostId: "h-mac",
+        name: "Mac mini",
+        status: "ok",
+        deviceKinds: ["emulator"],
+        platforms: ["ios"],
+      },
+    ];
+    simulatorsByHostDb = { "h-mac": IOS_SIMS_MAC };
+    simulatorCreateError = { status: 502, message: "Invalid runtime" };
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByText("Create a device"));
+    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
+    await screen.findByRole("combobox", { name: "Simulator" });
+
+    await user.click(screen.getByRole("button", { name: "+ New simulator" }));
+    await screen.findByRole("combobox", { name: "Device type" });
+    await user.type(screen.getByRole("textbox", { name: "New simulator name" }), "QA phone");
+    await user.click(screen.getByRole("button", { name: "Create simulator" }));
+
+    expect(await screen.findByText("Invalid runtime")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create simulator" })).toBeEnabled();
   });
 });

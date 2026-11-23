@@ -135,6 +135,53 @@ describe("remote-host-devices", () => {
     );
   });
 
+  it("reads the simulator catalog and creates a simulator, answering null from an old agent", async () => {
+    const catalog = { deviceTypes: [{ id: "t", name: "iPhone 16" }], runtimes: [] };
+    const sim = { udid: "U", name: "QA", runtime: "iOS 18.2", state: "Shutdown" };
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(catalog)
+      .mockResolvedValueOnce({ simulator: sim });
+    const client = createDevicesClient({
+      request,
+      openInbound: unusedOpenInbound,
+      openChannel: unusedOpenChannel,
+    });
+    await expect(client.simulatorCatalog()).resolves.toEqual(catalog);
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "/internal/simulators/catalog",
+      undefined,
+      DEVICE_REQUEST_TIMEOUT_MS,
+    );
+    const input = { name: "QA", deviceTypeId: "t", runtimeId: "r" };
+    await expect(client.createSimulator(input)).resolves.toEqual(sim);
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "/internal/simulators",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(input) }),
+      DEVICE_REQUEST_TIMEOUT_MS,
+    );
+
+    const old = vi.fn().mockRejectedValue(new HostRequestError("h", 404, "nope"));
+    const oldClient = createDevicesClient({
+      request: old,
+      openInbound: unusedOpenInbound,
+      openChannel: unusedOpenChannel,
+    });
+    await expect(oldClient.simulatorCatalog()).resolves.toBeNull();
+    await expect(oldClient.createSimulator(input)).resolves.toBeNull();
+
+    const broken = vi.fn().mockRejectedValue(new HostRequestError("h", 500, "boom"));
+    const brokenClient = createDevicesClient({
+      request: broken,
+      openInbound: unusedOpenInbound,
+      openChannel: unusedOpenChannel,
+    });
+    await expect(brokenClient.simulatorCatalog()).rejects.toThrow(HostRequestError);
+    await expect(brokenClient.createSimulator(input)).rejects.toThrow(HostRequestError);
+  });
+
   it("reads an agent answer with no platforms as Android-only", async () => {
     const some = vi.fn().mockResolvedValue({ deviceKinds: ["physical", "emulator"] });
     await expect(
