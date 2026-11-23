@@ -8,6 +8,8 @@ import type {
   DevicePlatform,
 } from "./device-drivers/types.js";
 import type {
+  CreateSimulatorRequest,
+  CreateSimulatorResponse,
   DeviceKindsResponse,
   DevicePairResponse,
   DeviceSpawnSpec,
@@ -18,7 +20,7 @@ import type {
   SpawnDeviceResponse,
 } from "./device-wire.js";
 import type { DiscoveredDevice } from "./device-discovery.js";
-import type { IosSimulator } from "./ios-simulators.js";
+import type { IosSimulator, SimulatorCatalog } from "./ios-simulators.js";
 
 // RemoteHostClient facet convention (issue #3289 / #3301):
 // - Each domain lives in `src/services/remote-host-<domain>.ts` and exports a
@@ -145,6 +147,37 @@ export function createDevicesClient({ request, openInbound, openChannel }: Devic
             DEVICE_REQUEST_TIMEOUT_MS,
           )
         ).simulators;
+      } catch (err) {
+        if (err instanceof HostRequestError && err.statusCode === 404) return null;
+        throw err;
+      }
+    },
+
+    /** Device types and iOS runtimes a simulator can be created from, or null when
+     * the agent predates `GET /internal/simulators/catalog` (a 404). */
+    async simulatorCatalog(): Promise<SimulatorCatalog | null> {
+      try {
+        return await request<SimulatorCatalog>(
+          "/internal/simulators/catalog",
+          undefined,
+          DEVICE_REQUEST_TIMEOUT_MS,
+        );
+      } catch (err) {
+        if (err instanceof HostRequestError && err.statusCode === 404) return null;
+        throw err;
+      }
+    },
+
+    /** Creates a simulator on the agent; null when the agent predates the route. */
+    async createSimulator(input: CreateSimulatorRequest): Promise<IosSimulator | null> {
+      try {
+        return (
+          await request<CreateSimulatorResponse>(
+            "/internal/simulators",
+            jsonPost(input),
+            DEVICE_REQUEST_TIMEOUT_MS,
+          )
+        ).simulator;
       } catch (err) {
         if (err instanceof HostRequestError && err.statusCode === 404) return null;
         throw err;

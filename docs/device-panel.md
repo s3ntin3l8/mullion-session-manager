@@ -118,6 +118,21 @@ Live H.264 video and HID input come from `idb_companion` over gRPC
 (`@grpc/grpc-js`, one companion process per device), which is restarted after
 every simulator boot because its HID connection goes stale across a reboot.
 
+**Creating a simulator.** Settings → Devices → Create a device → iOS Simulator
+has a **+ New simulator** button, the counterpart of **+ New AVD**. It lists the
+target host's own device types (iPhone and iPad) and available iOS runtimes
+(`GET /api/simulators/catalog?hostId=`, answered by `GET
+/internal/simulators/catalog` on an agent), and `POST /api/simulators`
+(`{hostId?, name, deviceTypeId, runtimeId}`, forwarded to `POST
+/internal/simulators` on an agent) runs `xcrun simctl create`. The ids are
+checked against that catalog and the name against a conservative pattern
+(1-64 characters, a letter or digit first, then letters, digits, spaces and
+`. _ ( ) ' -`; accented and non-Latin letters are fine) before anything runs, and everything reaches `simctl` as separate
+argv elements. The new simulator comes back `Shutdown` and is preselected in the
+form; adding it as a device is still the form's own **Create** step. Mullion only
+ever creates: it never deletes or erases a simulator. An agent that predates the
+routes answers "update its agent".
+
 **Video behaviour.** `idb_companion`'s `video_stream` opens with
 `format: "H264"`, `fps: 30`, and `key_frame_rate: 0` (idb's default GOP
 interval — keyframes arrive roughly every 4 s). `IosSimulatorDriver` buffers
@@ -416,6 +431,9 @@ needs:
   `POST /internal/devices/:id/action`, `POST /internal/devices/pair` and
   `GET /internal/devices/discovered` are the live-list, stop/delete,
   one-shot-action, pairing and mDNS discovery counterparts.
+  `GET /internal/simulators`, `GET /internal/simulators/catalog` and
+  `POST /internal/simulators` serve an iOS host's simulator list, create catalog
+  and simulator creation (see [Creating a simulator](#ios-simulator)).
   `GET /internal/devices/live` also carries each emulator's port in an optional
   `ports` map (absent from an agent that predates it); while listing, the
   primary backfills a null `devices.port` from it and logs instead of
@@ -713,7 +731,8 @@ expose them.
 ## 3. REST API
 
 `src/routes/devices.ts` — `GET/POST /api/devices`, `GET /api/devices/hosts`,
-`GET /api/simulators` (`?hostId=`), `POST /api/devices/pair`,
+`GET /api/simulators` (`?hostId=`), `GET /api/simulators/catalog` (`?hostId=`),
+`POST /api/simulators` (create one), `POST /api/devices/pair`,
 `POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
 `GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/start`,
 `POST /api/devices/:id/stop`, `POST /api/devices/:id/action` (body:

@@ -21,7 +21,7 @@ import {
   type DeviceHost,
 } from "../services/device-host.js";
 import { getAvdHost } from "../services/avd-host.js";
-import { SimctlError } from "../services/ios-simulators.js";
+import { SimctlError, SimulatorRequestError } from "../services/ios-simulators.js";
 import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
   iosSimulatorAvailable,
@@ -777,38 +777,129 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.get<{ Querystring: { hostId?: string } }>("/api/simulators", async (request, reply) => {
-    const requestedHostId = request.query?.hostId;
+  /**
+   * Resolves the host a simulator route targets and checks it reports iOS
+   * support. Replies 400 itself and returns null when the host is unknown, an
+   * old agent, or has no iOS Simulator.
+   */
+  async function resolveIosHost(
+    requestedHostId: string | undefined,
+    reply: FastifyReply,
+  ): Promise<DeviceHost | null> {
     const hostId = requestedHostId && requestedHostId.length > 0 ? requestedHostId : LOCAL_HOST_ID;
     if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
-      return reply.badRequest(`Unknown host ${hostId}`);
+      reply.badRequest(`Unknown host ${hostId}`);
+      return null;
     }
     const host = getDeviceHost(app, hostId);
+    const support = await host.kinds();
+    if (support === null) {
+      reply.badRequest(`Host ${host.hostId} does not report device support — update its agent.`);
+      return null;
+    }
+    if (!support.platforms.includes("ios")) {
+      reply.badRequest(
+        `Host ${host.hostId} does not support iOS simulators (supported platforms: ${support.platforms.join(", ") || "none"}).`,
+      );
+      return null;
+    }
+    return host;
+  }
+
+  const simulatorsStaleAgent = (host: DeviceHost) =>
+    `Host ${host.hostId} does not report simulator support — update its agent.`;
+
+  function replySimulatorError(
+    reply: FastifyReply,
+    hostId: string,
+    err: unknown,
+    doing: string,
+  ): FastifyReply {
+    if (err instanceof SimulatorRequestError) return reply.badRequest(err.message);
+    if (err instanceof SimctlError) return reply.badGateway(err.message);
+    if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+    return replyHostUnreachable(reply, hostId, err, doing);
+  }
+
+  app.get<{ Querystring: { hostId?: string } }>("/api/simulators", async (request, reply) => {
+    const requested = request.query?.hostId;
+    let host: DeviceHost | null = null;
     try {
-      const support = await host.kinds();
-      if (support === null) {
-        return reply.badRequest(
-          `Host ${host.hostId} does not report device support — update its agent.`,
-        );
-      }
-      if (!support.platforms.includes("ios")) {
-        return reply.badRequest(
-          `Host ${host.hostId} does not support iOS simulators (supported platforms: ${support.platforms.join(", ") || "none"}).`,
-        );
-      }
+      host = await resolveIosHost(requested, reply);
+      if (!host) return reply;
       const simulators = await host.simulators();
-      if (simulators === null) {
-        return reply.badRequest(
-          `Host ${host.hostId} does not report simulator support — update its agent.`,
-        );
-      }
+      if (simulators === null) return reply.badRequest(simulatorsStaleAgent(host));
       return simulators;
     } catch (err) {
-      if (err instanceof SimctlError) return reply.badGateway(err.message);
-      if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
-      return replyHostUnreachable(reply, host.hostId, err, "listing iOS simulators");
+      return replySimulatorError(
+        reply,
+        host?.hostId ?? requested ?? LOCAL_HOST_ID,
+        err,
+        "listing iOS simulators",
+      );
     }
   });
+
+  app.get<{ Querystring: { hostId?: string } }>(
+    "/api/simulators/catalog",
+    async (request, reply) => {
+      const requested = request.query?.hostId;
+      let host: DeviceHost | null = null;
+      try {
+        host = await resolveIosHost(requested, reply);
+        if (!host) return reply;
+        const catalog = await host.simulatorCatalog();
+        if (catalog === null) return reply.badRequest(simulatorsStaleAgent(host));
+        return catalog;
+      } catch (err) {
+        return replySimulatorError(
+          reply,
+          host?.hostId ?? requested ?? LOCAL_HOST_ID,
+          err,
+          "listing the iOS simulator catalog",
+        );
+      }
+    },
+  );
+
+  app.post<{
+    Body: { hostId?: string; name: string; deviceTypeId: string; runtimeId: string };
+  }>(
+    "/api/simulators",
+    {
+      schema: {
+        body: {
+          type: "object",
+          additionalProperties: false,
+          required: ["name", "deviceTypeId", "runtimeId"],
+          properties: {
+            hostId: { type: "string", maxLength: 128 },
+            name: { type: "string", minLength: 1, maxLength: 64 },
+            deviceTypeId: { type: "string", minLength: 1, maxLength: 256 },
+            runtimeId: { type: "string", minLength: 1, maxLength: 256 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { hostId: requested, ...input } = request.body;
+      let host: DeviceHost | null = null;
+      try {
+        host = await resolveIosHost(requested, reply);
+        if (!host) return reply;
+        const simulator = await host.createSimulator(input);
+        if (simulator === null) return reply.badRequest(simulatorsStaleAgent(host));
+        return reply.code(201).send(simulator);
+      } catch (err) {
+        return replySimulatorError(
+          reply,
+          host?.hostId ?? requested ?? LOCAL_HOST_ID,
+          err,
+          "creating an iOS simulator",
+        );
+      }
+    },
+  );
 
   app.get<{ Params: { id: string } }>("/api/devices/:id", async (request, reply) => {
     const id = Number(request.params.id);

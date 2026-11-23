@@ -6,6 +6,7 @@ import {
   DEVICE_ID_PARAMS_SCHEMA,
   DEVICE_PAIR_SCHEMA,
   DEVICE_SPAWN_SCHEMA,
+  SIMULATOR_CREATE_SCHEMA,
   DEVICE_TERMINATE_SCHEMA,
 } from "./internal-schemas.js";
 import { isValidDeviceAddress, isValidPairingCode } from "../services/device-address.js";
@@ -14,7 +15,13 @@ import {
   localDeviceKinds,
   localDevicePlatforms,
 } from "../services/device-kinds.js";
-import { listIosSimulators, SimctlError } from "../services/ios-simulators.js";
+import {
+  createIosSimulator,
+  listIosSimulators,
+  listSimulatorCatalog,
+  SimctlError,
+  SimulatorRequestError,
+} from "../services/ios-simulators.js";
 import { isDeviceAction, performDeviceAction } from "../services/device-drivers/actions.js";
 import { DeviceActionError } from "../services/device-drivers/types.js";
 import type { DeviceKind, DevicePlatform } from "../services/device-drivers/types.js";
@@ -26,6 +33,9 @@ import type {
   DeviceWsQuery,
   DiscoveredDevicesResponse,
   LiveDevicesResponse,
+  CreateSimulatorRequest,
+  CreateSimulatorResponse,
+  SimulatorCatalogResponse,
   SimulatorsResponse,
   SpawnDeviceResponse,
 } from "../services/device-wire.js";
@@ -71,6 +81,41 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
       try {
         return { simulators: await listIosSimulators() };
       } catch (err) {
+        if (err instanceof SimctlError) return reply.badGateway(err.message);
+        throw err;
+      }
+    },
+  );
+
+  app.get<{ Reply: SimulatorCatalogResponse }>(
+    "/internal/simulators/catalog",
+    rateLimit,
+    async (_request, reply) => {
+      if (!app.devicePanelEnabled) return reply.badRequest(app.devicePanelUnavailableMessage);
+      if (!(await iosSimulatorAvailable(app))) {
+        return reply.badRequest("iOS Simulator is not available on this host");
+      }
+      try {
+        return await listSimulatorCatalog();
+      } catch (err) {
+        if (err instanceof SimctlError) return reply.badGateway(err.message);
+        throw err;
+      }
+    },
+  );
+
+  app.post<{ Body: CreateSimulatorRequest; Reply: CreateSimulatorResponse }>(
+    "/internal/simulators",
+    { ...rateLimit, schema: { body: SIMULATOR_CREATE_SCHEMA } },
+    async (request, reply) => {
+      if (!app.devicePanelEnabled) return reply.badRequest(app.devicePanelUnavailableMessage);
+      if (!(await iosSimulatorAvailable(app))) {
+        return reply.badRequest("iOS Simulator is not available on this host");
+      }
+      try {
+        return { simulator: await createIosSimulator(request.body) };
+      } catch (err) {
+        if (err instanceof SimulatorRequestError) return reply.badRequest(err.message);
         if (err instanceof SimctlError) return reply.badGateway(err.message);
         throw err;
       }

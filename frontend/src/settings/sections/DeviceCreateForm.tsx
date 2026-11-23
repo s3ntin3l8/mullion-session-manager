@@ -13,6 +13,7 @@ import { normalizeAvdHardware } from "../../../../src/shared/avd-hardware.js";
 import { useAsyncData } from "../../hooks/useAsyncData.js";
 import { Dropdown, Row, SecondaryButton, Segmented, TextInput } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
+import { NewSimulatorForm } from "./NewSimulatorForm.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
@@ -452,6 +453,17 @@ export function DeviceCreateForm({
             </div>
           )}
           {simulatorsError && <ErrorText style={{ marginTop: 8 }}>{simulatorsError}</ErrorText>}
+          <NewSimulatorForm
+            hostId={effectiveHostId}
+            onCreated={(created) => {
+              const next = [...simulators.filter((s) => s.udid !== created.udid), created];
+              setSimulators(next);
+              setSimulatorsLoaded(true);
+              setSimulatorsError(null);
+              setSimulatorUdid(created.udid);
+              onSimulatorsLoaded(effectiveHostId, Object.fromEntries(next.map((s) => [s.udid, s])));
+            }}
+          />
         </>
       ) : (
         <>
