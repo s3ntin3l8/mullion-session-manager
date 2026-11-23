@@ -841,7 +841,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"fake-agent.sh\")"
+          "click": ".session-launcher-row:has-text(\"Add login rate limiting\")"
         },
         {
           "wait": 800
@@ -853,7 +853,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"dark-mode-palette.sh\")"
+          "click": ".session-launcher-row:has-text(\"feat/dark-palette\")"
         },
         {
           "wait": 800
@@ -874,7 +874,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"fake-agent.sh\")"
+          "click": ".session-launcher-row:has-text(\"Add login rate limiting\")"
         },
         {
           "wait": 800
@@ -886,7 +886,7 @@
           "click": "role=tab[name=\"Open existing\"]"
         },
         {
-          "click": ".session-launcher-row:has-text(\"dark-mode-palette.sh\")"
+          "click": ".session-launcher-row:has-text(\"feat/dark-palette\")"
         },
         {
           "wait": 800
