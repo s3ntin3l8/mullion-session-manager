@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
+import { KeyboardIcon, RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { isMacPlatform, macChordPress } from "./browserKeyMap.js";
 import { TextInput } from "./ui/primitives.js";
 import { browserApi } from "./api/browser.js";
+import { useCoarsePointer } from "./lib/layoutTier.js";
 
 export interface BrowserPaneParams {
   sessionId: number;
@@ -76,6 +77,23 @@ function isBlankAddress(url: string): boolean {
   return trimmed === "" || trimmed.toLowerCase() === "about:blank";
 }
 
+// #3030 — keys the touch keyboard's hidden textarea forwards from `keydown`
+// as one `press` each. Text never goes this way: a soft keyboard reports most
+// printable keys as `Unidentified`/229 (or reports them here AND again as
+// `beforeinput`), so text has exactly one owner, `beforeinput` and
+// `compositionend`, and these keys have exactly one owner, this list.
+const TOUCH_KEYBOARD_KEYS = new Set([
+  "Enter",
+  "Backspace",
+  "Delete",
+  "Tab",
+  "Escape",
+  "ArrowLeft",
+  "ArrowRight",
+  "ArrowUp",
+  "ArrowDown",
+]);
+
 function mouseButtonName(button: number): "left" | "right" | "middle" {
   if (button === 2) return "right";
   if (button === 1) return "middle";
@@ -119,6 +137,13 @@ export function BrowserPane(props: {
   // retryRef/refitRef.
   const sendControlRef = useRef<(message: Record<string, unknown>) => void>(() => {});
   const retryRef = useRef<() => void>(() => {});
+  // #3030 — on a coarse pointer the canvas cannot raise the on-screen
+  // keyboard, so a hidden textarea does: the toolbar's keyboard button
+  // focuses it, and what is typed into it goes to the page (see the typing
+  // effect below). "Open" means that textarea has focus.
+  const coarsePointer = useCoarsePointer();
+  const typingInputRef = useRef<HTMLTextAreaElement>(null);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const onTitleChangeRef = useRef(props.onTitleChange);
   const onUrlChangeRef = useRef(props.onUrlChange);
   useEffect(() => {
@@ -296,7 +321,13 @@ export function BrowserPane(props: {
       sendControl({ type: "mouse", action: "move", x, y });
     };
     const onMouseDown = (event: MouseEvent) => {
-      canvas!.focus();
+      // With the touch keyboard open, a tap on the page (say, on the next
+      // form field) must not move focus to the canvas: that would close the
+      // keyboard the user is about to type with. preventDefault keeps focus
+      // where it is; the click itself still goes to the page.
+      const typingInput = typingInputRef.current;
+      if (typingInput && document.activeElement === typingInput) event.preventDefault();
+      else canvas!.focus();
       const { x, y } = canvasPoint(event);
       sendControl({ type: "mouse", action: "down", x, y, button: mouseButtonName(event.button) });
     };
@@ -482,6 +513,110 @@ export function BrowserPane(props: {
     // TerminalPane.tsx's own mount-effect dependency.
   }, [props.params.sessionId]);
 
+  // #3030 — typing into the page from the touch keyboard's hidden textarea.
+  // The hard part is that each typed character must reach the page exactly
+  // once, whatever mix of events the soft keyboard raises, so each kind of
+  // input has one owner:
+  // - `keydown` owns only TOUCH_KEYBOARD_KEYS (sent as a `press`), and only
+  //   when the key is real: a 229/`Unidentified`/composing keydown is the
+  //   soft keyboard's placeholder for something `beforeinput` reports next.
+  // - `beforeinput` owns text (`insertText`, `insertReplacementText`, a
+  //   paste), sent as one `clipboard` message, which the server types with
+  //   insertText; plus the soft keyboard's own deletes and line breaks, as
+  //   the matching key. It is cancelled, so the textarea stays empty.
+  // - `compositionend` owns IME and autocomplete text (Android keyboards
+  //   compose every word): nothing is sent while a composition is open, then
+  //   its final text once. The composition's own `beforeinput`s are skipped.
+  // - `input` never sends; it only empties the textarea of anything a
+  //   non-cancellable event left behind.
+  // Keeping the textarea empty between words is what makes "once" hold: the
+  // keyboard never sees (so can never autocorrect) text already sent.
+  useEffect(() => {
+    const input = typingInputRef.current;
+    if (!coarsePointer || !input) return;
+    const send = (message: Record<string, unknown>) => sendControlRef.current(message);
+    const press = (key: string) => send({ type: "key", action: "press", key });
+    const isOpen = () => document.activeElement === input;
+    let composing = false;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isOpen() || composing || event.isComposing || event.keyCode === 229) return;
+      if (!TOUCH_KEYBOARD_KEYS.has(event.key)) return;
+      event.preventDefault();
+      press(event.key);
+    };
+    const onBeforeInput = (event: InputEvent) => {
+      if (!isOpen() || composing || event.isComposing) return;
+      switch (event.inputType) {
+        case "insertText":
+        case "insertReplacementText":
+        case "insertFromPaste":
+        case "insertFromDrop": {
+          event.preventDefault();
+          const text = event.data ?? event.dataTransfer?.getData("text/plain") ?? "";
+          if (text) send({ type: "clipboard", text });
+          return;
+        }
+        case "deleteContentBackward":
+          event.preventDefault();
+          press("Backspace");
+          return;
+        case "deleteContentForward":
+          event.preventDefault();
+          press("Delete");
+          return;
+        case "insertLineBreak":
+        case "insertParagraph":
+          event.preventDefault();
+          press("Enter");
+          return;
+        default:
+          // Composition steps (insertCompositionText, insertFromComposition,
+          // deleteCompositionText) belong to compositionend.
+          return;
+      }
+    };
+    const onCompositionStart = () => {
+      composing = true;
+    };
+    const onCompositionEnd = (event: CompositionEvent) => {
+      composing = false;
+      if (isOpen() && event.data) send({ type: "clipboard", text: event.data });
+      input.value = "";
+    };
+    const onInput = () => {
+      if (!composing) input.value = "";
+    };
+    const onBlur = () => {
+      // A composition the blur cut short is dropped, not half-sent.
+      composing = false;
+      input.value = "";
+    };
+    input.addEventListener("keydown", onKeyDown);
+    input.addEventListener("beforeinput", onBeforeInput);
+    input.addEventListener("compositionstart", onCompositionStart);
+    input.addEventListener("compositionend", onCompositionEnd);
+    input.addEventListener("input", onInput);
+    input.addEventListener("blur", onBlur);
+    return () => {
+      input.removeEventListener("keydown", onKeyDown);
+      input.removeEventListener("beforeinput", onBeforeInput);
+      input.removeEventListener("compositionstart", onCompositionStart);
+      input.removeEventListener("compositionend", onCompositionEnd);
+      input.removeEventListener("input", onInput);
+      input.removeEventListener("blur", onBlur);
+    };
+  }, [coarsePointer]);
+
+  // Focus is moved inside the tap's own click handler: iOS raises the
+  // keyboard only for a focus() made synchronously in a user gesture.
+  const toggleKeyboard = () => {
+    const input = typingInputRef.current;
+    if (!input) return;
+    if (document.activeElement === input) input.blur();
+    else input.focus({ preventScroll: true });
+  };
+
   const navigateRev = props.navigateTo?.rev;
   const navigateUrl = props.navigateTo?.url;
   useEffect(() => {
@@ -535,10 +670,39 @@ export function BrowserPane(props: {
         >
           <RefreshIcon size={13} />
         </button>
+        {coarsePointer && (
+          <button
+            className="browser-panel-reload browser-pane-keyboard-toggle"
+            title={keyboardOpen ? "Hide keyboard" : "Type into the page"}
+            aria-label={keyboardOpen ? "Hide keyboard" : "Type into the page"}
+            aria-pressed={keyboardOpen}
+            // Keeps focus on the open textarea, so a tap to close it is not
+            // first a blur (closing it) and then a click (opening it again).
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={toggleKeyboard}
+          >
+            <KeyboardIcon size={13} />
+          </button>
+        )}
         {props.toolbarEnd}
       </div>
       <div className="browser-pane-canvas-wrap">
         <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
+        {coarsePointer && (
+          <textarea
+            ref={typingInputRef}
+            className="browser-pane-typing-input"
+            aria-label="Text to type into the page"
+            rows={1}
+            // Empty between words, so the keyboard would otherwise treat
+            // every word as a sentence start and capitalize it.
+            autoCapitalize="off"
+            autoComplete="off"
+            spellCheck={false}
+            onFocus={() => setKeyboardOpen(true)}
+            onBlur={() => setKeyboardOpen(false)}
+          />
+        )}
         {lastError && <div className="browser-pane-error-toast">{lastError}</div>}
         {bindingError && (
           <div className="terminal-status-overlay failed" role="alert">

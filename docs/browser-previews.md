@@ -156,6 +156,41 @@ view is the agent browser (#3370).
 On a touch screen a one-finger drag on the page scrolls it (in the view and
 in the grid pane); a tap clicks.
 
+### Typing on a touch screen
+
+The page is a picture on a `<canvas>`, which never raises the on-screen
+keyboard, so on a coarse pointer (`(pointer: coarse)`: a phone, tablet or
+foldable) the browser's toolbar has a **keyboard** button, in the view and in
+the grid pane (#3030). Tap the page's field first (the tap clicks it, as
+always), then tap the button: it focuses a hidden text box, which raises the
+keyboard, and what you type goes to the page. Tap the button again, or
+anywhere outside the browser, to put the keyboard away. With the keyboard
+open, tapping the page still clicks it but keeps the keyboard up, so you can
+move from one field to the next.
+
+A tap on the page does not raise the keyboard by itself. Whether the tap
+landed on an editable field is only known to the remote page, after a round
+trip to the server, and a phone raises its keyboard only for a focus made
+inside the tap itself, so an explicit button is the one way that works.
+
+What is typed reaches the page once, as follows:
+
+- **Text** (letters, autocomplete and autocorrect picks, a paste from the
+  keyboard) is sent as a `{type:"clipboard",text}` message, which the server
+  types with Playwright's `insertText`. The page sees the text arrive in its
+  field and its `input` event, not a keydown per letter.
+- **IME and composed text** (Chinese, Japanese, and Android keyboards, which
+  compose each word) is sent once, when the composition ends. On such a
+  keyboard a word reaches the page when you commit it (a space, a suggestion,
+  Enter), not letter by letter.
+- **Enter, Backspace, Delete, Tab, Escape and the arrow keys** are sent as a
+  `{type:"key",action:"press",key}` message.
+
+The hidden text box is emptied after each word, so the keyboard never sees
+(and can never rewrite) text it has already sent. Autocorrect and suggestions
+still work within the word you are typing; capitalisation is off, since each
+word would otherwise look like the start of a sentence.
+
 ## Why the proxy exists (and when you need it)
 
 A plain iframe pointing at `http://localhost:5173` works fine as long as
