@@ -75,9 +75,12 @@ export function canDragToColumn(status: TaskStatus): boolean {
 // by it, with `id` as a stable tiebreaker for equal/default boardOrder
 // values (e.g. two tasks both left at the 0 default).
 export function orderTasksForColumn(tasks: Task[], status: TaskStatus): Task[] {
+  // Proposals (issues Mullion's own bot filed) lead the backlog: they wait on a
+  // human, and the column shows them under their own heading.
+  const proposed = (t: Task) => (status === "backlog" && t.proposalState === "proposed" ? 0 : 1);
   return tasks
     .filter((t) => t.status === status)
-    .sort((a, b) => a.boardOrder - b.boardOrder || a.id - b.id);
+    .sort((a, b) => proposed(a) - proposed(b) || a.boardOrder - b.boardOrder || a.id - b.id);
 }
 
 // What one board column lists: the tasks of its status, plus Claimed ones in In

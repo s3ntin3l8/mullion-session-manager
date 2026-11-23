@@ -236,6 +236,42 @@
   font-size: 0.85em;
 }
 
+/* A task from an issue Mullion's own bot filed: the tag says why it waits, the
+   buttons are the only way to let it run (or to close the issue). */
+.task-card-proposal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.task-card-proposal-tag {
+  flex: 1 1 100%;
+  color: var(--status-warn-fg);
+  font-size: 0.85em;
+}
+.task-card-proposal-approve,
+.task-card-proposal-dismiss {
+  padding: 0 9px;
+  border: 1px solid var(--status-warn-border);
+  border-radius: 999px;
+  background: var(--status-warn-bg);
+  color: var(--status-warn-fg);
+  font: inherit;
+  cursor: pointer;
+}
+.task-card-proposal-dismiss {
+  background: transparent;
+}
+/* Backlog's two groups: proposals first, then everything else. */
+.kanban-column-subhead {
+  margin: 4px 2px 0;
+  color: var(--text-muted, inherit);
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* ───────── Density ───────── */
 .task-density-compact .task-card {
   padding: 6px 8px;

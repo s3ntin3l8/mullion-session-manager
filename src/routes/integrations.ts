@@ -250,7 +250,13 @@ export async function integrationsRoute(app: FastifyInstance) {
     // App configured while the route 500s and the UI shows a failure for
     // what was actually a successful configure.
     const keyFingerprint = computeKeyFingerprint(privateKey);
-    setGitHubApp(app, appId, privateKey, provider);
+    setGitHubApp(
+      app,
+      appId,
+      privateKey,
+      provider,
+      verification.status === "verified" ? verification.appSlug : null,
+    );
     // Only after the credential was actually saved (every rejection above
     // returns before here), and only for the App that pushes: a re-saved
     // primary App may fix a permanent push 403 (#2104).

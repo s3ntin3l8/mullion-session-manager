@@ -2032,6 +2032,9 @@ export interface Task {
   body: string | null;
   htmlUrl: string | null;
   status: TaskStatus;
+  // "proposed" = filed by this install's own GitHub App bot, waiting for a human
+  // Approve; "approved" once approved; null for an ordinary task.
+  proposalState: "proposed" | "approved" | null;
   // Render/ordering tier within a status column — local-only, never pushed
   // to GitHub. See tasksBoard.ts.
   boardOrder: number;

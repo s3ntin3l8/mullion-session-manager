@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import type { DragEvent } from "react";
 import type { Project, Session, Task, TaskStatus } from "../api/index.js";
 import type { Theme } from "../store/index.js";
@@ -74,6 +74,14 @@ export function TaskColumn({
   // stack is a view of the list, not state anyone else reads.
   const [openStacks, setOpenStacks] = useState<ReadonlySet<string>>(new Set());
   const items = useMemo(() => columnItems(tasks), [tasks]);
+  const proposedCount = tasks.filter((t) => t.proposalState === "proposed").length;
+  // Only a mix needs a heading to tell the groups apart.
+  const showGroups = proposedCount > 0;
+  const groupOf = (item: ColumnItem): "proposed" | "rest" | null => {
+    if (!showGroups) return null;
+    const t = item.kind === "card" ? item.task : item.members[0].task;
+    return t.proposalState === "proposed" ? "proposed" : "rest";
+  };
 
   const acceptsDrag = (e: DragEvent<HTMLDivElement>) =>
     acceptsDrop && e.dataTransfer.types.includes(TASK_DRAG_MIME);
@@ -244,9 +252,22 @@ export function TaskColumn({
         ) : tasks.length === 0 ? (
           <div className="kanban-column-empty">No tasks</div>
         ) : (
-          items.map((item) =>
-            item.kind === "card" ? renderCard(item.task, item.index) : renderStack(item),
-          )
+          items.map((item, i) => {
+            const node =
+              item.kind === "card" ? renderCard(item.task, item.index) : renderStack(item);
+            // Backlog lists proposals first (tasksBoard.ts); head each group.
+            const group = status === "backlog" ? groupOf(item) : null;
+            const prev = i > 0 && status === "backlog" ? groupOf(items[i - 1]) : null;
+            if (group === null || group === prev) return node;
+            return (
+              <Fragment key={`group:${group}:${i}`}>
+                <div className="kanban-column-subhead" data-group={group}>
+                  {group === "proposed" ? `Proposed by Mullion (${proposedCount})` : "Backlog"}
+                </div>
+                {node}
+              </Fragment>
+            );
+          })
         )}
       </div>
     </div>

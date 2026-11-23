@@ -371,3 +371,34 @@ describe("store.createTask / updateTask / deleteTask (local-board CRUD, 6.9/#233
     );
   });
 });
+
+describe("store proposal actions", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("approveProposal posts what the human saw, then refreshes the task list", async () => {
+    const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+      url.endsWith("/approve-proposal")
+        ? jsonResponse(200, makeTask({ id: 3, proposalState: "approved" }))
+        : jsonResponse(200, []),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const refreshTasks = vi.fn(async () => {});
+    useDashboardStore.setState({ refreshTasks });
+    await useDashboardStore.getState().approveProposal(3, { title: "t", body: "b" });
+    const call = fetchMock.mock.calls.find((c) =>
+      String(c[0]).endsWith("/api/tasks/3/approve-proposal"),
+    )!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ title: "t", body: "b" });
+    expect(refreshTasks).toHaveBeenCalled();
+  });
+
+  it("dismissProposal posts, then refreshes the task list", async () => {
+    const fetchMock = vi.fn(async (_url: string) => jsonResponse(200, makeTask({ id: 3 })));
+    vi.stubGlobal("fetch", fetchMock);
+    const refreshTasks = vi.fn(async () => {});
+    useDashboardStore.setState({ refreshTasks });
+    await useDashboardStore.getState().dismissProposal(3);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/tasks/3/dismiss-proposal");
+    expect(refreshTasks).toHaveBeenCalled();
+  });
+});

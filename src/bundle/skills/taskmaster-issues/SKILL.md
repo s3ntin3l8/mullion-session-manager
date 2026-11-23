@@ -102,6 +102,13 @@ Trusted GitHub logins list in Settings → Task Master — e.g. a bot account yo
 file from). Comments from anyone else are left out of the worker's prompt. If a
 correctly labeled issue never appears, check who opened it.
 
+**Issues you file from a Mullion session** are authored by Mullion's own GitHub
+App bot, which is not on that trusted list. They are not dropped: they land in
+the board's backlog under **Proposed by Mullion** and run only after a human
+clicks Approve (the body is pinned at that point; editing it later sends it back
+for approval). So write them for a reader who decides whether to run them, and do
+not expect one to start by itself.
+
 ## Writing a body a worker can implement
 
 This is the part that decides whether autonomous pickup produces a usable

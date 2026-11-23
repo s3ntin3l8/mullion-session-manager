@@ -9,6 +9,7 @@
 // session-row/Header.test.tsx's own header comment).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { UnifiedBoard } from "../UnifiedBoard.js";
 import type {
   GitBranchesResult,
@@ -44,6 +45,8 @@ const deleteSession = vi.fn(async () => {});
 const refreshTasks = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 const createTask = vi.fn(async () => makeTask({}));
+const approveProposal = vi.fn(async () => makeTask({}));
+const dismissProposal = vi.fn(async () => makeTask({}));
 
 function storeState() {
   return {
@@ -61,6 +64,8 @@ function storeState() {
     refreshTasks,
     updateTask,
     createTask,
+    approveProposal,
+    dismissProposal,
     settings: { sessions: { confirmBeforeKill: false } },
     theme: "dark",
     events,
@@ -103,6 +108,8 @@ beforeEach(() => {
   refreshTasks.mockClear();
   updateTask.mockClear();
   createTask.mockClear();
+  approveProposal.mockClear();
+  dismissProposal.mockClear();
   localStorage.clear();
 });
 
@@ -226,5 +233,39 @@ describe("UnifiedBoard task columns", () => {
       .getByText("Ready", { selector: ".kanban-column-title" })
       .closest(".kanban-column")!;
     expect(readyColumn.querySelector(".kanban-column-blocked-count")).toBeNull();
+  });
+
+  describe("proposals (issues Mullion's own bot filed)", () => {
+    it("lists them first under their own heading, with Approve and Dismiss", async () => {
+      tasks = [
+        makeTask({ id: 1, status: "backlog", title: "plain one" }),
+        makeTask({ id: 2, status: "backlog", title: "proposed one", proposalState: "proposed" }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+      expect(screen.getByText("Proposed by Mullion (1)")).toBeInTheDocument();
+      const titles = [...document.querySelectorAll(".task-card-title")].map((n) => n.textContent);
+      expect(titles.indexOf("proposed one")).toBeLessThan(titles.indexOf("plain one"));
+
+      await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(approveProposal).toHaveBeenCalledWith(2, { title: "proposed one", body: null });
+      await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+      expect(dismissProposal).toHaveBeenCalledWith(2);
+    });
+
+    it("shows the server's reason when Approve is refused", async () => {
+      approveProposal.mockRejectedValueOnce(new Error("Task is not a proposal awaiting approval"));
+      tasks = [makeTask({ id: 2, status: "backlog", proposalState: "proposed" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+      expect(await screen.findByText("Task is not a proposal awaiting approval")).toBeVisible();
+    });
+
+    it("adds no heading or buttons when nothing is proposed", () => {
+      tasks = [makeTask({ id: 1, status: "backlog" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByText(/Proposed by Mullion/)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    });
   });
 });

@@ -141,6 +141,7 @@ export const TASK_DERIVED_DEFAULTS = {
   lastNudgedAt: null,
   ciHoldNote: null,
   mergeOverridable: false,
+  proposalState: null,
 } as const;
 
 export function makeTask(overrides: Partial<Task> = {}): Task {

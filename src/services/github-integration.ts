@@ -134,6 +134,47 @@ function getGitHubAppCredentials(
   };
 }
 
+// The primary App's own bot login (`<slug>[bot]`, lowercased), for the task
+// watcher's "is this issue from our own agents?" check. Slug is persisted at
+// configure time; rows configured before that are resolved once via `GET /app`
+// and saved. A failed lookup is remembered briefly so a GitHub outage does not
+// cost one request per sweep.
+const OWN_BOT_NEGATIVE_TTL_MS = 5 * 60 * 1000;
+let ownBotMiss: { appId: string; at: number } | null = null;
+
+export async function resolveOwnBotLogin(app: FastifyInstance): Promise<string | null> {
+  const row = getRow(app, GITHUB_PROVIDER);
+  if (!row?.githubAppId || !row.githubAppPrivateKeyEnc) return null;
+  if (row.githubAppSlug) return `${row.githubAppSlug}[bot]`.toLowerCase();
+  if (
+    ownBotMiss &&
+    ownBotMiss.appId === row.githubAppId &&
+    Date.now() - ownBotMiss.at < OWN_BOT_NEGATIVE_TTL_MS
+  ) {
+    return null;
+  }
+  try {
+    const creds = getGitHubAppCredentials(app, GITHUB_PROVIDER);
+    if (!creds) return null;
+    const authenticated = await getAuthenticatedApp(signAppJwt(creds.appId, creds.privateKeyPem));
+    if (String(authenticated.id) !== creds.appId || !authenticated.slug) {
+      ownBotMiss = { appId: creds.appId, at: Date.now() };
+      return null;
+    }
+    app.db
+      .update(integrations)
+      .set({ githubAppSlug: authenticated.slug })
+      .where(eq(integrations.provider, GITHUB_PROVIDER))
+      .run();
+    ownBotMiss = null;
+    return `${authenticated.slug}[bot]`.toLowerCase();
+  } catch (err) {
+    app.log.warn({ err }, "[github-integration] could not resolve the App's own bot login");
+    ownBotMiss = { appId: row.githubAppId, at: Date.now() };
+    return null;
+  }
+}
+
 export type AppVerificationResult =
   | { status: "verified"; appSlug: string }
   | { status: "rejected"; message: string }
@@ -217,6 +258,7 @@ export function setGitHubApp(
   appId: string,
   privateKeyPem: string,
   provider: string = GITHUB_PROVIDER,
+  appSlug: string | null = null,
 ): void {
   // #514 — read the OUTGOING appId before the upsert, same pattern
   // clearGitHubApp already uses below. Without this, changing the
@@ -246,10 +288,16 @@ export function setGitHubApp(
       githubAppId: appId,
       githubAppPrivateKeyEnc,
       githubAppKeyRotatedAt,
+      githubAppSlug: appSlug,
     })
     .onConflictDoUpdate({
       target: integrations.provider,
-      set: { githubAppId: appId, githubAppPrivateKeyEnc, githubAppKeyRotatedAt },
+      set: {
+        githubAppId: appId,
+        githubAppPrivateKeyEnc,
+        githubAppKeyRotatedAt,
+        githubAppSlug: appSlug,
+      },
     })
     .run();
   // Hermes review, PR #504: re-PUTting the SAME appId (e.g. after an
@@ -286,7 +334,12 @@ export function clearGitHubApp(app: FastifyInstance, provider: string = GITHUB_P
 
   app.db
     .update(integrations)
-    .set({ githubAppId: null, githubAppPrivateKeyEnc: null, githubAppKeyRotatedAt: null })
+    .set({
+      githubAppId: null,
+      githubAppPrivateKeyEnc: null,
+      githubAppKeyRotatedAt: null,
+      githubAppSlug: null,
+    })
     .where(eq(integrations.provider, provider))
     .run();
 }

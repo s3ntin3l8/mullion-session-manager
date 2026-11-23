@@ -382,6 +382,50 @@ and any sibling tasks that are themselves known (labeled) Task Master tasks
 but isn't individually listed, since nothing on this side of the API knows
 it exists.
 
+## Proposed tasks (issues Mullion's own bot filed)
+
+Only an issue whose author is a repo OWNER/MEMBER/COLLABORATOR, or on the
+Trusted logins list, becomes a task on its own (`task-trust.ts`). The GitHub App
+bot that Mullion files deferred follow-ups as shows up as `CONTRIBUTOR`, so it
+used to be dropped silently. Trusting it outright would let any text an agent
+had read (an outsider's issue, a web page) reach an unattended worker through a
+bot-filed issue, so it is ingested as a **proposal** instead:
+
+- `upsertIssueTask` takes the install's own bot login (`resolveOwnBotLogin`,
+  from `integrations.githubAppSlug`, filled in when the App credential is
+  verified or lazily from `GET /app`). An untrusted author that equals it is
+  inserted as `backlog` with `proposalState = "proposed"`, never `ready`.
+  Every other untrusted author is still ignored; the bot's comments are still
+  left out of worker prompts.
+- A proposal runs only after **Approve** (`POST /api/tasks/:id/approve-proposal`,
+  the board card or the task sidebar): it becomes `ready` (stays `backlog` for
+  `Manual: true` or an epic with open sub-issues) and `approvedBodySha` pins the
+  hash of the title and body the human saw (`task-proposal.ts`). **Dismiss**
+  closes the issue on GitHub and fails and archives the task.
+- If the issue is edited after approval, the next sweep sees a different hash and
+  puts it back to `proposed` (an unstarted `ready` task is demoted; a running one
+  is left alone with a warning).
+- Nothing else can make a proposal runnable: `PATCH /api/tasks/:id` refuses a
+  status change with `proposal-needs-approval`, the board will not drag it, the
+  `Manual: true`-removal promotion and relabel resurrection keep it in backlog.
+  The routes are not exposed as agent tools: an agent must not approve its own
+  proposal.
+
+Only the poll decides a proposal, from the author GitHub's API returns: the
+webhook path passes no bot login, so a webhook payload's author can never be what
+lets an issue in as one (the poll picks it up on its next sweep, 60 seconds by default).
+
+The gate assumes no generic route lets an agent reach these two endpoints: the
+Approve check (title and body must match what the caller saw) proves the caller
+read the text, not that a human decided, and an agent that filed the issue knows
+both. Keep them out of the control-socket and MCP op sets;
+`test/services/task-proposal-agent-surface.test.ts` fails if either path appears there.
+
+Approving a `Manual: true` proposal (or an epic with open sub-issues) leaves it in
+backlog as approved: from there it is claimed by hand like any other manual task.
+
+The backlog column lists proposals first, under "Proposed by Mullion".
+
 ## The no-commits gate and turn-finished check
 
 [`tasks.md`](tasks.md#lifecycle)'s `in_progress → reviewing` bullet

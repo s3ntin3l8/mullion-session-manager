@@ -436,6 +436,10 @@ export async function webhookRoutes(app: FastifyInstance) {
                   // #2233 — projects sharing a repo all get the broadcast
                   // above, but only the oldest imports the issue.
                   if (projectId !== repoOwners.get(repoKeyOf({ owner, repo }))) break;
+                  // No own-bot login here on purpose: whether an issue is one of
+                  // Mullion's own proposals is decided only by the poll, which
+                  // reads the author from GitHub's API. A webhook payload's
+                  // author must never be what lets an issue in as a proposal.
                   upsertIssueTask(app, projectId, {
                     number: issue.number,
                     title: issue.title,
