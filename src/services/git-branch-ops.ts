@@ -2,8 +2,9 @@ import { spawn as spawnChild } from "node:child_process";
 import path from "node:path";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { isPlainBranchName, listWorktrees, resolveDefaultBaseRefNoFetch } from "./git-refs.js";
+import { isLockError, runGitPull } from "./git-pull.js";
 import { isGitRepo } from "./git-status.js";
-import type { GitBranchOpReason, GitBranchOpResult } from "../shared/types.js";
+import type { GitBranchOpReason, GitBranchOpResult, GitPullResult } from "../shared/types.js";
 
 export type { GitBranchOpReason, GitBranchOpResult };
 
@@ -288,3 +289,175 @@ export async function rebaseBranch(cwd: string, onto?: string): Promise<GitBranc
   }
   return failed(res, "git rebase failed");
 }
+
+/** Where `branch` is checked out, by `git worktree list` — the main checkout
+ * included. `null` when the list could not be read (fail closed: a caller
+ * must not take that for "checked out nowhere"). */
+export async function branchCheckoutPath(
+  cwd: string,
+  branch: string,
+): Promise<{ path: string | null } | null> {
+  const worktrees = await listWorktrees(cwd);
+  if (worktrees === null) return null;
+  return { path: worktrees.find((w) => w.branch === branch)?.path ?? null };
+}
+
+/** runGitPull's answer, in this file's result shape. */
+function fromPullResult(res: GitPullResult): GitBranchOpResult {
+  if (res.pulled) {
+    return res.reason === "already-up-to-date"
+      ? { ok: true, reason: "already-up-to-date" }
+      : { ok: true };
+  }
+  switch (res.reason) {
+    case "not-a-repo":
+    case "unborn-head":
+    case "detached-head":
+    case "dirty-tree":
+    case "no-upstream":
+    case "not-fast-forward":
+    case "busy":
+      return { ok: false, reason: res.reason, detail: res.detail };
+    case "stale-lock":
+      return {
+        ok: false,
+        reason: "failed",
+        detail: `A leftover git lock file blocks the update: ${res.detail ?? "unknown"}`,
+      };
+    default:
+      return { ok: false, reason: "failed", detail: res.detail };
+  }
+}
+
+/**
+ * Issue #3068 — fast-forwards one local branch to its upstream, wherever it
+ * is (the project checkout at `cwd`, a linked worktree, or nowhere). Never
+ * merges, rebases or forces: a diverged branch is `not-fast-forward`.
+ *
+ * - Checked out in a worktree (the main checkout included): `git merge
+ *   --ff-only @{u}` there after a fetch (runGitPull), refused on a dirty tree
+ *   or a stopped merge/rebase — that checkout's HEAD must still be `branch`.
+ * - Checked out nowhere: only the ref moves, never a working tree. The
+ *   remote is fetched, the upstream must contain the branch tip, and the ref
+ *   is advanced with a local `git fetch . <upstream>:refs/heads/<branch>`.
+ *   That fetch has no `+`, `--force` or `--update-head-ok`, so git itself
+ *   refuses a non-fast-forward and a branch checked out in any worktree
+ *   (including one that is mid-rebase, which `worktree list` shows as
+ *   detached); `--no-prune` keeps a `fetch.prune` setting from deleting the
+ *   local branch.
+ *
+ * `expectedWorktree` is what the caller saw when it chose its session guard
+ * (`null`: checked out nowhere). If git now says otherwise, nothing runs —
+ * the caller guarded a different checkout from the one that would change.
+ * It is compared only, never used as a directory to run git in.
+ */
+export async function pullBranch(
+  cwd: string,
+  branch: string,
+  expectedWorktree?: string | null,
+): Promise<GitBranchOpResult> {
+  if (!isGitRepo(cwd)) return { ok: false, reason: "not-a-repo" };
+  if (!isRefName(branch)) return { ok: false, reason: "invalid-name" };
+  if (!(await refExists(cwd, `refs/heads/${branch}`)))
+    return { ok: false, reason: "no-such-branch" };
+
+  const holder = await branchCheckoutPath(cwd, branch);
+  if (holder === null) return { ok: false, reason: "failed", detail: "Could not list worktrees" };
+  if (expectedWorktree !== undefined) {
+    const expected = expectedWorktree === null ? null : path.resolve(expectedWorktree);
+    const actual = holder.path === null ? null : path.resolve(holder.path);
+    if (expected !== actual) {
+      return {
+        ok: false,
+        reason: "failed",
+        detail: "The branch's checkout changed while the update was starting — try again",
+      };
+    }
+  }
+
+  if (holder.path !== null) return pullInWorktree(holder.path, branch);
+  return fastForwardRef(cwd, branch);
+}
+
+async function pullInWorktree(worktree: string, branch: string): Promise<GitBranchOpResult> {
+  if (!isGitRepo(worktree)) return { ok: false, reason: "not-a-repo", detail: worktree };
+  const state = await readState(worktree);
+  if (isResult(state)) return state;
+  if (await operationInProgress(worktree)) {
+    return { ok: false, reason: "operation-in-progress", detail: worktree };
+  }
+  // runGitPull pulls whatever is checked out there: it must still be `branch`.
+  if (state.branch !== branch) {
+    return {
+      ok: false,
+      reason: "failed",
+      detail: "The branch's checkout changed while the update was starting — try again",
+    };
+  }
+  if (!state.clean) return { ...DIRTY, detail: `${worktree} has uncommitted changes` };
+  return fromPullResult(await runGitPull(worktree));
+}
+
+const UPSTREAM_FORMAT = "%(upstream)%00%(upstream:short)";
+
+async function fastForwardRef(cwd: string, branch: string): Promise<GitBranchOpResult> {
+  const local = `refs/heads/${branch}`;
+  const upstreamRes = await runGit(cwd, ["for-each-ref", `--format=${UPSTREAM_FORMAT}`, local]);
+  if (upstreamRes.code !== 0) return failed(upstreamRes, "Failed to read the branch's upstream");
+  const [upstreamRef = "", upstreamShort = ""] = upstreamRes.stdout.trim().split("\0");
+  if (!upstreamRef) {
+    return { ok: false, reason: "no-upstream", detail: "No upstream tracking branch configured" };
+  }
+
+  // The remote the branch tracks, never an assumed `origin`. A local
+  // upstream (`branch.<name>.remote = .`) needs no fetch.
+  const remoteRes = await runGit(cwd, ["config", "--get", `branch.${branch}.remote`]);
+  const remote = remoteRes.code === 0 ? remoteRes.stdout.trim() : "";
+  if (remote && remote !== "." && !remote.startsWith("-")) {
+    const fetched = await runGit(cwd, ["fetch", "--quiet", "--prune", remote], FETCH_TIMEOUT_MS);
+    if (fetched.code !== 0) {
+      if (isLockError(fetched.stderr)) return BUSY;
+      return failed(fetched, "git fetch failed");
+    }
+  }
+
+  if (!(await refExists(cwd, upstreamRef))) {
+    return {
+      ok: false,
+      reason: "no-upstream",
+      detail: `The upstream ${upstreamShort || upstreamRef} no longer exists`,
+    };
+  }
+  const upToDate = await runGit(cwd, ["merge-base", "--is-ancestor", upstreamRef, local]);
+  if (upToDate.code === 0) {
+    return { ok: true, reason: "already-up-to-date", detail: upstreamShort || upstreamRef };
+  }
+  const canFastForward = await runGit(cwd, ["merge-base", "--is-ancestor", local, upstreamRef]);
+  if (canFastForward.code !== 0) {
+    return { ok: false, reason: "not-fast-forward", detail: "Branch has diverged from upstream" };
+  }
+
+  const res = await runGit(cwd, [
+    "fetch",
+    "--quiet",
+    "--no-prune",
+    "--no-tags",
+    ".",
+    `${upstreamRef}:${local}`,
+  ]);
+  if (res.code === 0) return { ok: true, detail: upstreamShort || upstreamRef };
+  const stderr = res.stderr;
+  const holder = /refusing to fetch into branch '[^']*' checked out at '([^']*)'/.exec(stderr);
+  if (holder) return { ok: false, reason: "checked-out", detail: holder[1] };
+  if (/non-fast-forward|\[rejected\]/i.test(stderr)) {
+    return { ok: false, reason: "not-fast-forward", detail: "Branch has diverged from upstream" };
+  }
+  if (isLockError(stderr)) return BUSY;
+  return failed(res, "git fetch failed");
+}
+
+const BUSY: GitBranchOpResult = {
+  ok: false,
+  reason: "busy",
+  detail: "Another git process is using this repository",
+};

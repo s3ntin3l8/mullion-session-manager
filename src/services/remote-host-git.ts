@@ -211,6 +211,20 @@ export function resolveGitRebase(
   );
 }
 
+export function resolveGitBranchPull(
+  request: GitRequest,
+  cwd: string,
+  branch: string,
+  expectedWorktree: string | null,
+): Promise<GitBranchOpResult> {
+  return request(
+    "/internal/git-branch-pull",
+    { method: "POST", body: JSON.stringify({ cwd, branch, expectedWorktree }) },
+    // A fetch and a fast-forward merge: the rebase's budget, not a checkout's.
+    GIT_REBASE_REQUEST_TIMEOUT_MS,
+  );
+}
+
 export function resolveGitClone(
   request: GitRequest,
   url: string,

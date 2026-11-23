@@ -408,6 +408,7 @@ export function inertBackendMembers() {
     checkoutBranch: vi.fn().mockResolvedValue({ ok: false, reason: "not-a-repo" }),
     createBranch: vi.fn().mockResolvedValue({ ok: false, reason: "not-a-repo" }),
     rebaseBranch: vi.fn().mockResolvedValue({ ok: false, reason: "not-a-repo" }),
+    pullBranch: vi.fn().mockResolvedValue({ ok: false, reason: "not-a-repo" }),
     removeListedWorktree: vi.fn().mockResolvedValue({ removed: false, reason: "not-a-repo" }),
     pruneWorktreeMetadata: vi.fn().mockResolvedValue({ pruned: false }),
     readTaskReviewFindings: vi.fn().mockResolvedValue(null),

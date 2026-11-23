@@ -953,6 +953,16 @@ export class RemoteHostClient {
     return git.resolveGitRebase(this.boundRequest, cwd, onto);
   }
 
+  /** Issue #3068 — mirrors /internal/git-branch-pull (git-branch-ops.ts's
+   * pullBranch). An agent that predates it answers 404. */
+  resolveGitBranchPull(
+    cwd: string,
+    branch: string,
+    expectedWorktree: string | null,
+  ): Promise<GitBranchOpResult> {
+    return git.resolveGitBranchPull(this.boundRequest, cwd, branch, expectedWorktree);
+  }
+
   /** Resolves this agent's default base ref (and its pinned commit SHA) on
    * its own filesystem (#484) — mirrors /internal/git-base-ref's
    * `{ baseRef, sha }` shape. `resolveDefaultBaseRef` runs `git fetch

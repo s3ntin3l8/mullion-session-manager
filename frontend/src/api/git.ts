@@ -181,6 +181,15 @@ export const gitApi = {
       body: JSON.stringify(onto ? { onto } : {}),
     }),
 
+  // Issue #3068 — fast-forward one branch from its upstream, wherever it is
+  // checked out (or only its ref, when nowhere). A refusal is a 200
+  // `{ ok: false, reason }`, like the other guarded branch operations.
+  pullProjectGitBranch: (projectId: number, branch: string) =>
+    request<GitBranchOpResult>(`/api/projects/${projectId}/git-branch-pull`, {
+      method: "POST",
+      body: JSON.stringify({ branch }),
+    }),
+
   // Issue #442 — Source Control manual branch deletion. `deleted: false` with a
   // `reason` is a normal 200 response (a git-level refusal), not a thrown
   // ApiError — only a genuine HTTP error (4xx/5xx) throws.

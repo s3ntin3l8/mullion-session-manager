@@ -668,6 +668,41 @@ describe("internal routes: git worktree and branch operations", () => {
       });
     });
 
+    // Issue #3068 — the per-branch Pull, on the agent's own filesystem.
+    it("pulls one branch, comparing the checkout the primary guarded", async () => {
+      await withRepo(async (cwd, run) => {
+        run(["branch", "--track", "follower", "main"]);
+        const app = await buildApp();
+        try {
+          expect(
+            (
+              await post(app, "/internal/git-branch-pull", {
+                cwd,
+                branch: "follower",
+                expectedWorktree: null,
+              })
+            ).json(),
+          ).toEqual({ ok: true, reason: "already-up-to-date", detail: "main" });
+          // The primary thought it was checked out nowhere; it is the checkout.
+          expect(
+            (
+              await post(app, "/internal/git-branch-pull", {
+                cwd,
+                branch: "main",
+                expectedWorktree: null,
+              })
+            ).json(),
+          ).toMatchObject({ ok: false, reason: "failed" });
+          expect(
+            (await post(app, "/internal/git-branch-pull", { cwd: "/etc", branch: "main" }))
+              .statusCode,
+          ).toBe(400);
+        } finally {
+          await app.close();
+        }
+      });
+    });
+
     it("refuses while the clone is claimed by another git operation", async () => {
       await withRepo(async (cwd) => {
         const { markCloneBusy, releaseClone } =

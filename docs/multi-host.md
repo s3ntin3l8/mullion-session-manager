@@ -1754,7 +1754,8 @@ The Source Control routes under `/api/projects/:id/` accept an optional
 `?sessionId=<id>` query parameter: `git-status`, `git-branches`, `git-branch`,
 `git-log`, `git-commit/:sha`, `git-commit/:sha/file`, `git-health`, and the
 mutating `git-repair`, `git-fetch`, `git-pull`, `git-branch-delete`,
-`git-branch-prune`, `git-checkout`, `git-branch-create` and `git-rebase`. With it
+`git-branch-prune`, `git-checkout`, `git-branch-create`, `git-rebase` and
+`git-branch-pull`. With it
 the route resolves host and directory through `resolveExecutionContext` and
 operates on **that session's checkout** (its host, and its cwd: the main
 checkout or a sibling worktree). Without it the explicit project default

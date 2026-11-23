@@ -13,6 +13,7 @@ import {
   PlayTriangleIcon,
   PlusIcon,
   PullIcon,
+  RebaseIcon,
   SearchIcon,
   TrashIcon,
 } from "../ui/icons.js";
@@ -27,7 +28,7 @@ import {
 import { isTaskBranch, type MullionLinks } from "../hooks/useMullionLinks.js";
 import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
-import { rebaseNotice, runBranchOp } from "./branchOps.js";
+import { rebaseNotice, rebaseRefusalMessage, runBranchOp, runBranchPull } from "./branchOps.js";
 import { deleteBranchTitle, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
 import { NewBranchForm } from "./NewBranchForm.js";
 import { openSessionOn } from "./sessionLaunch.js";
@@ -132,22 +133,29 @@ export function BranchesSection({
     }
   };
 
-  // Issue #1672 — guarded checkout / rebase. A refusal lands on the row,
-  // inline: none of these offer a Force.
-  const moveHead = async (name: string, kind: "checkout" | "rebase") => {
+  // Issue #1672 — guarded checkout / rebase, and (#3068) the per-branch
+  // fast-forward Pull. A refusal lands on the row, inline: none of these
+  // offer a Force. One at a time: they all claim the same clone.
+  const moveHead = async (b: GitBranchInfo, kind: "checkout" | "rebase" | "pull") => {
     if (moving) return;
+    const name = b.name;
     setMoving(true);
-    const outcome = await runBranchOp(
-      projectId,
-      () =>
-        kind === "checkout"
-          ? api.checkoutProjectGitBranch(projectId, name)
-          : api.rebaseProjectGitBranch(projectId),
-      kind === "checkout" ? () => `Checked out ${name}.` : rebaseNotice,
-    );
+    const outcome =
+      kind === "pull"
+        ? await runBranchPull(projectId, b)
+        : await runBranchOp(
+            projectId,
+            () =>
+              kind === "checkout"
+                ? api.checkoutProjectGitBranch(projectId, name)
+                : api.rebaseProjectGitBranch(projectId),
+            kind === "checkout" ? () => `Checked out ${name}.` : rebaseNotice,
+          );
     setMoving(false);
     if (!outcome.ok) {
-      setError(name, { message: outcome.message });
+      setError(name, {
+        message: kind === "rebase" ? rebaseRefusalMessage(outcome, b) : outcome.message,
+      });
       return;
     }
     setError(name, null);
@@ -244,6 +252,8 @@ export function BranchesSection({
             const isDefault = isDefaultBranchName(b.name, defaultBranch);
             const merge = b.mergeState && !isDefault ? mergeChip(b.mergeState, b.pr) : null;
             const error = rowErrors[errorKey(projectId, b.name)];
+            // #3068 — offered only when there is something to pull.
+            const canPull = !!b.upstream && !b.upstreamGone && (b.behind ?? 0) > 0;
             const blocked = b.isCurrent
               ? "Cannot delete the current branch"
               : isDefault
@@ -323,15 +333,26 @@ export function BranchesSection({
                 }
                 actions={
                   <>
+                    {canPull && (
+                      <IconButton
+                        label={`Pull — fast-forward ${b.behind} commit${
+                          b.behind === 1 ? "" : "s"
+                        } from ${b.upstream}`}
+                        onClick={() => void moveHead(b, "pull")}
+                        disabled={moving}
+                      >
+                        <PullIcon size={13} />
+                      </IconButton>
+                    )}
                     {b.isCurrent ? (
                       <ConfirmButton
                         variant="neutral"
                         compact
-                        title="Rebase onto its upstream (or the default branch)"
+                        title="Rebase — replay local commits onto its upstream (or the default branch)"
                         disabled={moving}
-                        onConfirm={() => void moveHead(b.name, "rebase")}
+                        onConfirm={() => void moveHead(b, "rebase")}
                       >
-                        <PullIcon size={13} />
+                        <RebaseIcon size={13} />
                       </ConfirmButton>
                     ) : (
                       <IconButton
@@ -340,7 +361,7 @@ export function BranchesSection({
                             ? `Can't check out — in use by ${worktree.path.split("/").pop()}`
                             : "Check out"
                         }
-                        onClick={() => void moveHead(b.name, "checkout")}
+                        onClick={() => void moveHead(b, "checkout")}
                         disabled={moving || worktree !== undefined}
                       >
                         <GitBranchIcon size={13} />

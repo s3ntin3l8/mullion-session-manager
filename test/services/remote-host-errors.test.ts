@@ -43,6 +43,7 @@ const MUTATING_INTERNAL_POSTS = [
   "/internal/git-checkout",
   "/internal/git-branch-create",
   "/internal/git-rebase",
+  "/internal/git-branch-pull",
   "/internal/git-push",
   "/internal/git-clone",
   "/internal/write-files",

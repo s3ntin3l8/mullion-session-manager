@@ -10,6 +10,7 @@ import { deriveTaskBranchName } from "../../src/services/git-worktree.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
 import { eq } from "drizzle-orm";
 import { nullTaskFileReads } from "../helpers/null-task-file-reads.js";
+import { inertBranchOps } from "../helpers/inert-branch-ops.js";
 
 // `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
 // remote backend has to satisfy all of it — a fake missing members would
@@ -45,9 +46,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     pruneWorktrees: vi.fn().mockResolvedValue({ removed: [], skipped: [] }),
     clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
     deleteBranch: vi.fn().mockResolvedValue({ deleted: false, reason: "no-such-branch" }),
-    checkoutBranch: vi.fn().mockResolvedValue({ ok: false, reason: "not-a-repo" }),
-    createBranch: vi.fn().mockResolvedValue({ ok: false, reason: "not-a-repo" }),
-    rebaseBranch: vi.fn().mockResolvedValue({ ok: false, reason: "not-a-repo" }),
+    ...inertBranchOps(),
     removeListedWorktree: vi.fn().mockResolvedValue({ removed: false, reason: "not-listed" }),
     pruneWorktreeMetadata: vi.fn().mockResolvedValue({ pruned: false }),
     readTaskReviewFindings: vi.fn().mockResolvedValue(null),

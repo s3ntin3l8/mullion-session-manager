@@ -13,7 +13,7 @@ import {
   GlobeIcon,
   HistoryIcon,
   PlayTriangleIcon,
-  PullIcon,
+  RebaseIcon,
   TrashIcon,
 } from "../ui/icons.js";
 import {
@@ -25,7 +25,7 @@ import {
   TaskChip,
 } from "../ui/sidebar/index.js";
 import { mergeChip } from "./branchGroups.js";
-import { rebaseNotice, runBranchOp } from "./branchOps.js";
+import { rebaseNotice, rebaseRefusalMessage, runBranchOp } from "./branchOps.js";
 import { prTriad } from "./prTriad.js";
 import { deleteBranchTitle, reasonMessage } from "./gitReasons.js";
 import { openSessionOn } from "./sessionLaunch.js";
@@ -135,7 +135,15 @@ export function BranchDetail({
     );
     setMoving(false);
     if (!outcome.ok) {
-      setActionError({ message: outcome.message });
+      setActionError({
+        message:
+          kind === "rebase"
+            ? rebaseRefusalMessage(outcome, {
+                ahead: detail?.upstreamAhead,
+                behind: detail?.upstreamBehind,
+              })
+            : outcome.message,
+      });
       return;
     }
     setActionError(null);
@@ -380,12 +388,12 @@ export function BranchDetail({
         {detail?.isCurrent ? (
           <ConfirmButton
             variant="neutral"
-            title="Rebase onto its upstream (or the default branch)"
+            title="Rebase — replay local commits onto its upstream (or the default branch)"
             armedLabel="Confirm rebase"
             disabled={moving}
             onConfirm={() => void moveHead("rebase")}
           >
-            <PullIcon size={12} /> Rebase…
+            <RebaseIcon size={12} /> Rebase…
           </ConfirmButton>
         ) : (
           detail && (
