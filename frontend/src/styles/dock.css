@@ -628,3 +628,28 @@ button.dock-group-empty:hover {
   min-height: 0;
   box-sizing: border-box;
 }
+
+/* #3425 — "Run on <host>" for a project that reaches more than one host. */
+.dock-host-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.dock-host-picker-label {
+  font-size: 0.6875rem;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.dock-sidebar-view > .dock-host-picker {
+  padding: 4px 12px;
+}
+
+.dock-host-picker-hint {
+  font-size: 0.6875rem;
+  color: var(--dim);
+  flex-basis: 100%;
+}

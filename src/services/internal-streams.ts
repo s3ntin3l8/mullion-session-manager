@@ -12,6 +12,7 @@
 // whole subject.
 
 import type { FastifyInstance } from "fastify";
+import net from "node:net";
 import { expandHome } from "./project-config.js";
 import { WebSocket as NodeWebSocket } from "ws";
 import { createMuxConnection } from "./ssh-agent-mux.js";
@@ -194,6 +195,63 @@ export function previewQueryError(query: Record<string, string | undefined>): st
   return null;
 }
 
+export type LoopbackHost = "127.0.0.1" | "[::1]";
+
+const LOOPBACK_PROBE_TIMEOUT_MS = 300;
+const LOOPBACK_CACHE_TTL_MS = 2_000;
+const loopbackHosts = new Map<number, { at: number; host: LoopbackHost }>();
+
+function canConnect(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port, timeout: LOOPBACK_PROBE_TIMEOUT_MS });
+    const done = (ok: boolean) => {
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  });
+}
+
+/**
+ * Which loopback address a dev server on `port` listens on (#3425). Node
+ * servers (Vite among them) often bind `localhost` to `::1` alone on macOS, so
+ * a proxy that only dials 127.0.0.1 answers 502 for a server that is running.
+ * IPv4 first; `::1` only when IPv4 refuses and IPv6 accepts; otherwise IPv4, so
+ * a server that is simply down fails exactly as it did before. Held for a
+ * moment: a preview makes a request per asset. Probes only the two literal
+ * loopback addresses, never a caller-supplied host.
+ */
+export async function pickLoopbackHost(port: number): Promise<LoopbackHost> {
+  const hit = loopbackHosts.get(port);
+  if (hit && Date.now() - hit.at < LOOPBACK_CACHE_TTL_MS) return hit.host;
+  // Only an answer is held. A server that is down (or still starting) is not
+  // remembered, so one that comes up on ::1 is found on the very next request.
+  if (await canConnect("127.0.0.1", port)) {
+    loopbackHosts.set(port, { at: Date.now(), host: "127.0.0.1" });
+    return "127.0.0.1";
+  }
+  if (await canConnect("::1", port)) {
+    loopbackHosts.set(port, { at: Date.now(), host: "[::1]" });
+    return "[::1]";
+  }
+  return "127.0.0.1";
+}
+
+/** Drops the cached loopback choices (tests). */
+export function clearLoopbackHostCache(): void {
+  loopbackHosts.clear();
+}
+
+/** `url` (built by `resolveLoopbackPreviewUrl`) pointed at `host` instead. */
+export function withLoopbackHost(url: URL, host: LoopbackHost): URL {
+  if (host === "127.0.0.1") return url;
+  const next = new URL(url);
+  next.hostname = host;
+  return next;
+}
+
 /** The WS analog of `/internal/preview/:port/*`, for a remote-hosted project's
  * HMR connection (issue #28 phase 6): the dev server on this agent's own
  * loopback. */
@@ -205,11 +263,25 @@ export function acceptPreviewStream(
   // Re-derived, not trusted from the validation run: cheap, pure, and already
   // proven to succeed by it passing at all.
   const port = parsePort(query.port as string) as number;
-  const upstreamUrl = resolveLoopbackPreviewUrl(query.path as string, port) as URL;
-  const upstream = new NodeWebSocket(toWsUrl(upstreamUrl), {
-    headers: { host: upstreamUrl.host },
-  });
-  pipeWsFrames(app, socket as unknown as NodeWebSocket, upstream, { port });
+  const base = resolveLoopbackPreviewUrl(query.path as string, port) as URL;
+  // Frames the near side sends before the upstream opens are dropped anyway
+  // (ws-pipe.ts), so choosing the address first costs nothing.
+  void pickLoopbackHost(port)
+    .then((host) => {
+      // The browser side may have gone while the address was being chosen; its
+      // close event is already past, so nothing would ever close an upstream
+      // opened now.
+      if (socket.readyState !== NodeWebSocket.OPEN) return;
+      const upstreamUrl = withLoopbackHost(base, host);
+      const upstream = new NodeWebSocket(toWsUrl(upstreamUrl), {
+        headers: { host: upstreamUrl.host },
+      });
+      pipeWsFrames(app, socket as unknown as NodeWebSocket, upstream, { port });
+    })
+    .catch((err: unknown) => {
+      app.log.warn({ err, port }, "internal preview ws: could not open the upstream");
+      socket.close();
+    });
 }
 
 export function configuredPreviewQueryError(query: { url?: string }): string | null {

@@ -28,8 +28,17 @@ vi.mock("node:child_process", async (importOriginal) =>
 vi.mock("../../src/services/bundle-sync.js", () => bundleSyncHarness.mockModule());
 const { buildApp } = await import("../../src/app.js");
 const { clearAgentsCacheForTests } = await import("../../src/services/agent-detect.js");
+const { clearLoopbackHostCache, pickLoopbackHost, withLoopbackHost } =
+  await import("../../src/services/internal-streams.js");
 const { SIGNATURE_HEADER, TIMESTAMP_HEADER, NONCE_HEADER, buildCanonicalString, hashBody, sign } =
   await import("../../src/services/request-signature.js");
+
+// A sandbox without an IPv6 loopback cannot host the ::1-only cases below.
+const ipv6Loopback = await new Promise<boolean>((resolve) => {
+  const probe = net.createServer();
+  probe.once("error", () => resolve(false));
+  probe.listen(0, "::1", () => probe.close(() => resolve(true)));
+});
 
 const TOKEN = INTERNAL_TEST_TOKEN;
 const { fakePtyChildren } = ptyHarness;
@@ -683,6 +692,87 @@ describe("internal routes: ws events, ssh-agent bridge, and preview proxy", () =
       expect(await sendUntilEcho(ws, "ping")).toBe("echo:ping");
 
       ws.close();
+      await app.close();
+    });
+  });
+
+  // #3425 — Vite and other Node servers often bind `localhost` to ::1 alone on
+  // macOS, which a proxy that only dials 127.0.0.1 reports as unreachable.
+  describe.skipIf(!ipv6Loopback)("a dev server bound to ::1 only (#3425)", () => {
+    let server: http.Server;
+    let wss: WebSocketServer;
+    let v6Port: number;
+
+    beforeAll(async () => {
+      server = http.createServer((req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ host: req.headers.host, path: req.url }));
+      });
+      wss = new WebSocketServer({ server });
+      wss.on("connection", (socket) => {
+        socket.on("message", (data) => socket.send(`echo:${data.toString()}`));
+      });
+      await new Promise<void>((resolve) => server.listen(0, "::1", resolve));
+      v6Port = (server.address() as AddressInfo).port;
+    });
+    afterAll(async () => {
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    beforeEach(() => clearLoopbackHostCache());
+
+    it("picks ::1 only when IPv4 refuses and IPv6 accepts", async () => {
+      expect(await pickLoopbackHost(v6Port)).toBe("[::1]");
+      // A port nothing listens on stays on IPv4, so it fails exactly as before.
+      const unused = await new Promise<number>((resolve) => {
+        const s = net.createServer();
+        s.listen(0, "127.0.0.1", () => {
+          const { port } = s.address() as AddressInfo;
+          s.close(() => resolve(port));
+        });
+      });
+      expect(await pickLoopbackHost(unused)).toBe("127.0.0.1");
+      expect(withLoopbackHost(new URL("http://127.0.0.1:1/a?b=1"), "127.0.0.1").href).toBe(
+        "http://127.0.0.1:1/a?b=1",
+      );
+      expect(withLoopbackHost(new URL("http://127.0.0.1:1/a?b=1"), "[::1]").href).toBe(
+        "http://[::1]:1/a?b=1",
+      );
+    });
+
+    it("proxies an HTTP preview request to it", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/preview/${v6Port}/asset.js?v=2`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ host: `[::1]:${v6Port}`, path: "/asset.js?v=2" });
+      await app.close();
+    });
+
+    it("proxies a WS preview upgrade to it", async () => {
+      const { app, port } = await listenApp();
+      const ws = new NodeWebSocket(
+        `ws://127.0.0.1:${port}/internal/ws/preview?port=${v6Port}&path=%2Fhmr`,
+        { headers: { authorization: `Bearer ${TOKEN}` } },
+      );
+      expect(await waitForNodeWsOutcome(ws)).toBe("open");
+      expect(await sendUntilEcho(ws, "ping")).toBe("echo:ping");
+      ws.close();
+      await app.close();
+    });
+
+    it("reports it online from /internal/dev-server-status", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/dev-server-status?port=${v6Port}&scheme=http`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ online: true });
       await app.close();
     });
   });

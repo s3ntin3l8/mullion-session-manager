@@ -17,7 +17,9 @@ import path from "node:path";
 import { and, desc, eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
+import { parseHostCwds } from "./host-cwds.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { projectCwdOnHost } from "./placement.js";
 import { resolveProjectDock } from "./project-config.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { getProjectRow } from "./session-host.js";
@@ -43,25 +45,55 @@ export type DockControlResult<T> =
 const fail = (status: number, message: string, body?: Record<string, unknown>) =>
   ({ ok: false, status, message, ...(body ? { body } : {}) }) as const;
 
-/** The project's configured (`.crs/dock.json` + global) controls. Docker-
- * discovered controls are not agent-controllable (see listing note). */
-async function configuredControls(
+/** The checkout a control is resolved and launched against: the project's own,
+ * or its checkout on the host a start names (`StartTarget.hostId`). */
+interface LaunchBase {
+  hostId: string;
+  cwd: string;
+}
+
+/** The project's checkout on `hostId` (its own host when none is named). A host
+ * the project is not on is refused rather than guessed at: `dock.json` is read
+ * from the checkout there, and the session runs in it. */
+function resolveLaunchBase(
+  project: { hostId: string; cwd: string; hostCwds: string | null },
+  hostId: string | undefined,
+): DockControlResult<LaunchBase> {
+  if (hostId === undefined || hostId === project.hostId) {
+    return { ok: true, value: { hostId: project.hostId, cwd: project.cwd } };
+  }
+  const cwd = projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds));
+  if (cwd === null) {
+    return fail(409, `The project has no checkout on host ${hostId}`, {
+      code: "no_checkout_on_host",
+    });
+  }
+  return { ok: true, value: { hostId, cwd } };
+}
+
+/** The project's configured (`.crs/dock.json` + global) controls, read from its
+ * checkout on `hostId` (default: the project's own host). Docker-discovered
+ * controls are not agent-controllable (see listing note). */
+export async function configuredControls(
   app: FastifyInstance,
   projectId: number,
+  hostId?: string,
 ): Promise<DockControlResult<DockControl[]>> {
   const project = getProjectRow(app, projectId);
   if (!project) return fail(404, "Project not found");
-  if (project.hostId === LOCAL_HOST_ID) {
-    return { ok: true, value: resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR) };
+  const base = resolveLaunchBase(project, hostId);
+  if (!base.ok) return base;
+  if (base.value.hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: resolveProjectDock(base.value.cwd, app.config.CRS_CONFIG_DIR) };
   }
   try {
     return {
       ok: true,
-      value: await getRemoteHostClient(app, project.hostId).resolveDock(project.cwd),
+      value: await getRemoteHostClient(app, base.value.hostId).resolveDock(base.value.cwd),
     };
   } catch (err) {
-    app.log.warn({ hostId: project.hostId, err }, "host unreachable, dock unavailable");
-    return fail(503, `Host ${project.hostId} is unreachable`);
+    app.log.warn({ hostId: base.value.hostId, err }, "host unreachable, dock unavailable");
+    return fail(503, `Host ${base.value.hostId} is unreachable`);
   }
 }
 
@@ -120,8 +152,9 @@ async function resolveControl(
   app: FastifyInstance,
   projectId: number,
   controlId: string,
+  hostId?: string,
 ): Promise<DockControlResult<DockControl>> {
-  const controls = await configuredControls(app, projectId);
+  const controls = await configuredControls(app, projectId, hostId);
   if (!controls.ok) return controls;
   const control = controls.value.find((c) => c.id === controlId && c.source !== "docker");
   return control ? { ok: true, value: control } : fail(404, "Dock control not found");
@@ -132,6 +165,9 @@ async function resolveControl(
 export interface StartTarget {
   branch?: string;
   worktreePath?: string;
+  /** Run on this host (the project must have a checkout there). Omitted: the
+   * project's own placement, as before. Never stored: it is per launch. */
+  hostId?: string;
 }
 
 /** Launches a session exactly as the dashboard does (`POST /api/sessions`).
@@ -198,20 +234,28 @@ async function validateTarget(
   if (target.branch !== undefined && target.worktreePath !== undefined) {
     return { ok: false, error: fail(400, "pass either branch or worktreePath, not both") };
   }
-  if (target.worktreePath === undefined) return { ok: true, cwd: undefined };
+  if (target.worktreePath === undefined) {
+    // No path to check, but a named host still has to hold the checkout.
+    const project = getProjectRow(app, projectId)!;
+    const base = resolveLaunchBase(project, target.hostId);
+    return base.ok ? { ok: true, cwd: undefined } : { ok: false, error: base };
+  }
   // The dock session's cwd must be the project checkout, a directory inside it
   // (a monorepo package), or one of its git worktrees; nothing else (a session
   // has no parent here, so createSessionRecord's child-cwd containment does
   // not apply). On the local host symlinks are resolved first.
   const project = getProjectRow(app, projectId)!;
-  const local = project.hostId === LOCAL_HOST_ID;
+  const base = resolveLaunchBase(project, target.hostId);
+  if (!base.ok) return { ok: false, error: base };
+  const { hostId, cwd: baseCwd } = base.value;
+  const local = hostId === LOCAL_HOST_ID;
   const fix = (p: string) => (local ? realpathLoose(p) : p);
-  const root = fix(path.resolve(project.cwd));
-  const resolved = fix(resolveTargetPath(path.resolve(project.cwd), target.worktreePath));
+  const root = fix(path.resolve(baseCwd));
+  const resolved = fix(resolveTargetPath(path.resolve(baseCwd), target.worktreePath));
   const ok =
     resolved === root ||
     resolved.startsWith(root + path.sep) ||
-    (await isSiblingWorktreeCwd({ cwd: project.cwd, hostId: project.hostId }, resolved));
+    (await isSiblingWorktreeCwd({ cwd: baseCwd, hostId }, resolved));
   return ok
     ? { ok: true, cwd: resolved }
     : {
@@ -230,7 +274,7 @@ export async function startDockControl(
   target: StartTarget,
   launch: LaunchSession,
 ): Promise<DockControlResult<{ sessionId: number }>> {
-  const control = await resolveControl(app, projectId, controlId);
+  const control = await resolveControl(app, projectId, controlId, target.hostId);
   if (!control.ok) return control;
   const running = findRunningDockSession(app, projectId, controlId);
   if (running) {
@@ -260,6 +304,7 @@ export async function startDockControl(
     kind: "dock",
     dockControlId: c.id,
     name: c.title,
+    ...(target.hostId !== undefined ? { targetHostId: target.hostId } : {}),
     ...(target.branch !== undefined
       ? { worktree: { branch: target.branch }, worktreeRefresh }
       : target.worktreePath !== undefined
@@ -286,9 +331,14 @@ export async function stopDockControl(
   projectId: number,
   controlId: string,
 ): Promise<DockControlResult<{ sessionId: number | null }>> {
-  const control = await resolveControl(app, projectId, controlId);
-  if (!control.ok) return control;
+  // A control started on another host is defined by THAT host's dock.json, so
+  // it is checked there (#3425), not against the project host's.
   const running = findRunningDockSession(app, projectId, controlId);
+  const project = getProjectRow(app, projectId);
+  const runningHostId =
+    running?.hostId && project && running.hostId !== project.hostId ? running.hostId : undefined;
+  const control = await resolveControl(app, projectId, controlId, runningHostId);
+  if (!control.ok) return control;
   if (!running) return { ok: true, value: { sessionId: null } };
   await killSession(app, running.id, "detach");
   return { ok: true, value: { sessionId: running.id } };
@@ -306,7 +356,7 @@ export async function switchDockControl(
   if (target.branch === undefined && target.worktreePath === undefined) {
     return fail(400, "pass branch or worktreePath");
   }
-  const control = await resolveControl(app, projectId, controlId);
+  const control = await resolveControl(app, projectId, controlId, target.hostId);
   if (!control.ok) return control;
   // Validate before stopping: a bad target must not kill a healthy server.
   const checked = await validateTarget(app, projectId, target);

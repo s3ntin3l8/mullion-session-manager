@@ -17,7 +17,9 @@ import {
   configuredPreviewQueryError,
   parsePort,
   previewQueryError,
+  pickLoopbackHost,
   resolveLoopbackPreviewUrl,
+  withLoopbackHost,
 } from "../services/internal-streams.js";
 import { AGENT_CHANNEL_AUTH_HEADER } from "../services/agent-channel-tunnel.js";
 import { acceptControlRelayConnection } from "../plugins/control-relay.js";
@@ -558,8 +560,10 @@ export async function internalRoutes(app: FastifyInstance) {
         const rawUrl = request.raw.url ?? "/";
         const rest = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) : "/";
 
-        const upstreamUrl = resolveLoopbackPreviewUrl(rest || "/", port);
-        if (!upstreamUrl) return reply.badRequest("invalid preview path");
+        const loopbackUrl = resolveLoopbackPreviewUrl(rest || "/", port);
+        if (!loopbackUrl) return reply.badRequest("invalid preview path");
+        // A dev server bound to ::1 alone (Vite on macOS) refuses 127.0.0.1.
+        const upstreamUrl = withLoopbackHost(loopbackUrl, await pickLoopbackHost(port));
 
         // Strips the caller's own "authorization" header — the bearer token
         // this same request just authenticated with — before it reaches
@@ -648,7 +652,7 @@ export async function internalRoutes(app: FastifyInstance) {
         return reply.badRequest("scheme must be 'http' or 'https'");
       }
 
-      const online = await pingDevServer(`${scheme}://127.0.0.1:${port}`);
+      const online = await pingDevServer(`${scheme}://${await pickLoopbackHost(port)}:${port}`);
       return { online };
     },
   );

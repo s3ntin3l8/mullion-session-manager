@@ -94,6 +94,33 @@ An agent can also edit the dock config itself (`dock config get|set`, MCP
 the session's host; not a separate worktree's copy) under the same validation
 as the Settings editor.
 
+### Running a control on another host
+
+A dock control is a session, so it runs where the project is placed. To run one
+on another host the project has a checkout on (its `hostCwds`) — a Mac agent for
+an iOS Simulator, say — pick the host in the Dock's **Run on** dropdown (it
+appears when the project reaches more than one host), or pass `--host <hostId>`
+to `mullion dock start`/`switch` or `host` to the MCP `start_dock_session` /
+`switch_dock_branch`. The choice is per launch and is not stored: a fresh Dock
+starts on the project's own placement again.
+
+- The control is read from `.crs/dock.json` **in the checkout on that host**, so
+  its command and `cwd` are that checkout's. A host the project has no checkout
+  on is refused with `409 no_checkout_on_host`, before anything stops.
+- The project's preview and its dev-server status follow the host its preview
+  control runs on, so the Browser pane shows the Mac's dev server. This needs
+  previews enabled (`PREVIEW_BASE_HOST`); with them off the Dock says so, because
+  the pane would otherwise open the URL on this machine.
+- The agent reaches the dev server on its own loopback: `127.0.0.1` first, then
+  `::1`, since Node servers (Vite among them) often bind `localhost` to IPv6
+  alone on macOS. A server on a LAN address only is not reached.
+- A simulator or emulator on that host reaches the dev server at the host's own
+  localhost (`http://127.0.0.1:<port>` in the simulator's Safari); nothing links
+  the two yet.
+- Not yet on a remote host: the port-conflict probe below, dev-server port
+  detection and Docker discovery (set `devServerUrl` to a bare port by hand), and
+  branch previews (`409 remote_unsupported`).
+
 ### Port conflicts
 
 Mullion never picks a dev-server port, so two sessions for one control (two

@@ -375,7 +375,7 @@ export class MullionClient {
   /** Mirrors `mullion dock start`'s own two-step logic (src/cli/core.mjs):
    * resolve the project's dock controls, find the requested one by id, then
    * create a `kind:"dock"` session from its command/cwd. */
-  async startDockSession(projectId, dockControlId, branch) {
+  async startDockSession(projectId, dockControlId, branch, host) {
     // #2494 — the narrow `docks.start` op works at session scope for the
     // caller's own project. It 404s a docker-sourced control (not agent-
     // controllable), so only then fall back to the legacy full-scope path.
@@ -384,9 +384,17 @@ export class MullionClient {
         ...(projectId !== undefined ? { projectId } : {}),
         dockControlId,
         ...(branch !== undefined ? { branch } : {}),
+        ...(host !== undefined ? { hostId: host } : {}),
       });
     } catch (err) {
-      if (err?.status !== 404 || branch !== undefined || projectId === undefined) throw err;
+      if (
+        err?.status !== 404 ||
+        branch !== undefined ||
+        host !== undefined ||
+        projectId === undefined
+      ) {
+        throw err;
+      }
     }
     const controls = await this.controlRequest("projects.dock", { projectId });
     const control = Array.isArray(controls)
@@ -453,12 +461,13 @@ export class MullionClient {
   }
 
   /** Restart a dock control on another branch or worktree (#3049). */
-  switchDockControl(projectId, dockControlId, { branch, worktreePath } = {}) {
+  switchDockControl(projectId, dockControlId, { branch, worktreePath, host } = {}) {
     return this.controlRequest("docks.switch", {
       ...(projectId !== undefined ? { projectId } : {}),
       dockControlId,
       ...(branch !== undefined ? { branch } : {}),
       ...(worktreePath !== undefined ? { worktreePath } : {}),
+      ...(host !== undefined ? { hostId: host } : {}),
     });
   }
 

@@ -88,6 +88,34 @@ describe("MullionClient dock methods", () => {
     ]);
   });
 
+  it("startDockSession and switchDockControl send the host as hostId (#3425)", async () => {
+    const ops: unknown[] = [];
+    const socketPath = await startControlServer((msg, socket) => {
+      ops.push([msg.op, msg.body]);
+      socket.write(
+        `${JSON.stringify({ id: msg.id, ok: true, status: 201, result: { sessionId: 1 } })}\n`,
+      );
+    });
+    const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+    await client.startDockSession("3", "vite", undefined, "mac");
+    await client.switchDockControl("3", "vite", { branch: "b", host: "mac" });
+    expect(ops).toEqual([
+      ["docks.start", { projectId: "3", dockControlId: "vite", hostId: "mac" }],
+      ["docks.switch", { projectId: "3", dockControlId: "vite", branch: "b", hostId: "mac" }],
+    ]);
+  });
+
+  it("startDockSession with a host does not fall back to the legacy path on a 404", async () => {
+    const ops: string[] = [];
+    const socketPath = await startControlServer((msg, socket) => {
+      ops.push(msg.op);
+      socket.write(`${JSON.stringify({ id: msg.id, ok: false, status: 404, error: "nope" })}\n`);
+    });
+    const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+    await expect(client.startDockSession("3", "vite", undefined, "mac")).rejects.toThrow();
+    expect(ops).toEqual(["docks.start"]);
+  });
+
   it("stopDockSession by control uses docks.stop; listDockControls uses docks.list", async () => {
     const ops: unknown[] = [];
     const socketPath = await startControlServer((msg, socket) => {

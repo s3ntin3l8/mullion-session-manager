@@ -4,6 +4,7 @@ import { TerminalPane } from "../TerminalPane.js";
 import { useDashboardStore } from "../store/index.js";
 import { isStartable } from "../dockerServiceStatus.js";
 import { dockRowKey, imagePillLabel } from "../dock/dockHelpers.js";
+import { DockHostPicker } from "../dock/DockHostPicker.js";
 import { useDockProject } from "../dock/useDockProject.js";
 import type { DockControlView, DockStackActions } from "../dock/useDockProject.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "../dock/useArmedKill.js";
@@ -344,6 +345,7 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
     onOpenSession: (session) => useDashboardStore.getState().requestOpenSession(session.id),
   });
   const {
+    hostPicker,
     configuredControls,
     ungroupedDockerControls,
     standaloneOrphanControls,
@@ -422,6 +424,7 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
   return (
     <div className="dock-sidebar-view rs-fill">
       <SidebarHeader label={VIEW_TITLES.dock} />
+      {hostPicker && <DockHostPicker picker={hostPicker} />}
       <div className="dock-view-list">
         {empty && (
           <EmptyStateNote>

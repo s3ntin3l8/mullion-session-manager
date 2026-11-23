@@ -102,6 +102,70 @@ describe("mullion dock", () => {
     });
   });
 
+  it("dock start and switch carry --host as hostId (#3425)", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    await runCommand(["dock", "start", "web", "--host", "mac"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("docks.start", {
+      dockControlId: "web",
+      hostId: "mac",
+    });
+    await runCommand(["dock", "start", "1", "web", "--branch", "feat/x", "--host", "mac"], {
+      client,
+      io,
+    });
+    expect(client.request).toHaveBeenCalledWith("docks.start", {
+      projectId: "1",
+      dockControlId: "web",
+      branch: "feat/x",
+      hostId: "mac",
+    });
+    await runCommand(["dock", "switch", "web", "feat/z", "--host", "mac"], { client, io });
+    expect(client.request).toHaveBeenCalledWith("docks.switch", {
+      dockControlId: "web",
+      branch: "feat/z",
+      hostId: "mac",
+    });
+    await runCommand(["dock", "switch", "web", "--worktree", "../wt", "--host", "mac"], {
+      client,
+      io,
+    });
+    expect(client.request).toHaveBeenCalledWith("docks.switch", {
+      dockControlId: "web",
+      worktreePath: "../wt",
+      hostId: "mac",
+    });
+  });
+
+  it("dock start/switch reject a repeated or dangling --host", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    expect(
+      await runCommand(["dock", "start", "web", "--host", "a", "--host", "b"], { client, io }),
+    ).toBe(2);
+    expect(await runCommand(["dock", "start", "web", "--host"], { client, io })).toBe(2);
+    expect(
+      await runCommand(["dock", "start", "web", "--host", "--branch", "x"], { client, io }),
+    ).toBe(2);
+    expect(await runCommand(["dock", "switch", "web", "b", "--host"], { client, io })).toBe(2);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("dock start --host does not fall back to the legacy create path on a 404", async () => {
+    const client = fakeClient({
+      request: vi.fn(async () => {
+        throw Object.assign(new Error("not found"), { status: 404 });
+      }),
+    });
+    await runCommand(["dock", "start", "1", "web", "--host", "mac"], { client, io: fakeIo() });
+    expect(client.request).toHaveBeenCalledTimes(1);
+    expect(client.request).toHaveBeenCalledWith("docks.start", {
+      projectId: "1",
+      dockControlId: "web",
+      hostId: "mac",
+    });
+  });
+
   it("dock start rejects a repeated or dangling --branch", async () => {
     const client = fakeClient();
     const io = fakeIo();

@@ -171,10 +171,10 @@ function resolveDockSessionId(
     : { ok: false, reply: bad(404, "Dock control is not running") };
 }
 
-/** The `branch` / `worktreePath` a dock start or switch may carry. */
+/** The `branch` / `worktreePath` / `hostId` a dock start or switch may carry. */
 function dockTargetFields(body: Record<string, unknown> | undefined): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const key of ["branch", "worktreePath"]) {
+  for (const key of ["branch", "worktreePath", "hostId"]) {
     const value = body?.[key];
     if (typeof value === "string") out[key] = value;
   }

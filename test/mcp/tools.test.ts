@@ -264,8 +264,24 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       { projectId: "3", dockControlId: "vite" },
       { startDockSession },
     );
-    expect(startDockSession).toHaveBeenCalledWith("3", "vite", undefined);
+    expect(startDockSession).toHaveBeenCalledWith("3", "vite", undefined, undefined);
     expect(JSON.parse(text)).toEqual({ id: 42 });
+  });
+
+  it("start_dock_session and switch_dock_branch pass the host through", async () => {
+    const start = TOOLS.find((t) => t.name === "start_dock_session")!;
+    const startDockSession = vi.fn().mockResolvedValue({ id: 42 });
+    await start.handler({ dockControlId: "vite", host: "mac" }, { startDockSession });
+    expect(startDockSession).toHaveBeenCalledWith(undefined, "vite", undefined, "mac");
+
+    const sw = TOOLS.find((t) => t.name === "switch_dock_branch")!;
+    const switchDockControl = vi.fn().mockResolvedValue({ sessionId: 7 });
+    await sw.handler({ dockControlId: "vite", branch: "b", host: "mac" }, { switchDockControl });
+    expect(switchDockControl).toHaveBeenCalledWith(undefined, "vite", {
+      branch: "b",
+      worktreePath: undefined,
+      host: "mac",
+    });
   });
 
   // Phase 5 (Track B, issue #193 5.3b).

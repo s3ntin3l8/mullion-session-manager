@@ -7,7 +7,8 @@ export function createDockTools({ normalizeWaitArgs }) {
     description:
       "Start one of a project's dock controls (e.g. the dev server) — see list_dock_controls for " +
       "ids. From an agent session this works for your OWN project only (omit projectId); pass " +
-      "branch to run it on that branch in a preview worktree. Docker-discovered controls need " +
+      "branch to run it on that branch in a preview worktree, or host to run it on another host the " +
+      "project has a checkout on (e.g. a Mac agent). Docker-discovered controls need " +
       "full scope (MULLION_AUTH_TOKEN).",
     inputSchema: {
       type: "object",
@@ -22,6 +23,11 @@ export function createDockTools({ normalizeWaitArgs }) {
           description: "The dock control's id (list_dock_controls).",
         },
         branch: { type: "string", description: "Optional branch to run the control on." },
+        host: {
+          type: "string",
+          description:
+            "Optional host id to run the control on. The project needs a checkout there; omitted, it runs where the project is placed.",
+        },
       },
     },
     async handler(args, client) {
@@ -29,6 +35,7 @@ export function createDockTools({ normalizeWaitArgs }) {
         args?.projectId,
         args?.dockControlId,
         args?.branch,
+        args?.host,
       );
       return JSON.stringify(result);
     },
@@ -127,12 +134,18 @@ export function createDockTools({ normalizeWaitArgs }) {
         dockControlId: { type: "string" },
         branch: { type: "string" },
         worktreePath: { type: "string" },
+        host: {
+          type: "string",
+          description:
+            "Optional host id to restart the control on (the project needs a checkout there).",
+        },
       },
     },
     async handler(args, client) {
       const result = await client.switchDockControl(args?.projectId, args?.dockControlId, {
         branch: args?.branch,
         worktreePath: args?.worktreePath,
+        host: args?.host,
       });
       return JSON.stringify(result);
     },
