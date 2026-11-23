@@ -607,6 +607,19 @@ export function useDockProject(
       controlCwd: control.cwd,
     });
 
+    // Where this row launches. Start (nothing running) uses the group's choice.
+    // Restart keeps the control on the host its OWN session runs on unless the
+    // user picked a host: with `dev` on the Mac and `logs` at home, Restart on
+    // `logs` must not move it to the Mac. (#3425)
+    const rowHostId =
+      running &&
+      project &&
+      running.resolvedHostId !== project.hostId &&
+      hostOptions.some((o) => o.value === running.resolvedHostId)
+        ? running.resolvedHostId
+        : undefined;
+    const launchHostId = hostChoice !== null ? targetHostId : running ? rowHostId : targetHostId;
+
     const dockIdentity = dockerSessionIdentity(control);
     const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
     const launchForValue = (value: string) => {
@@ -618,7 +631,7 @@ export function useDockProject(
           dockControlId: control.id,
           worktree: { branch: branchName },
           worktreeRefresh: effectiveWorktreeRefresh,
-          ...(targetHostId !== undefined ? { targetHostId } : {}),
+          ...(launchHostId !== undefined ? { targetHostId: launchHostId } : {}),
           ...identityOpts,
           ...(control.env ? { env: control.env } : {}),
         });
@@ -627,7 +640,7 @@ export function useDockProject(
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         kind: "dock",
         dockControlId: control.id,
-        ...(targetHostId !== undefined ? { targetHostId } : {}),
+        ...(launchHostId !== undefined ? { targetHostId: launchHostId } : {}),
         ...identityOpts,
         ...(control.env ? { env: control.env } : {}),
       });

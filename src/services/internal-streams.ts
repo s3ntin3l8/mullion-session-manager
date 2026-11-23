@@ -216,6 +216,8 @@ function canConnect(host: string, port: number): Promise<boolean> {
     // on connect (and a test's raw stub) reports as an uncaught ECONNRESET.
     socket.once("connect", () => {
       settle(true);
+      // The connect-phase timeout no longer applies; the drain cap below does.
+      socket.removeAllListeners("timeout");
       socket.end();
       socket.resume();
       // A server that keeps the connection open is let go of soon after.

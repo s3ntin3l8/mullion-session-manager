@@ -237,6 +237,54 @@ describe("DockSidebarView (#3012)", () => {
       expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
     });
 
+    it("restarts each control on the host its own session runs on", async () => {
+      const LOGS = { id: "logs", title: "logs", command: "tail -f log" };
+      controls = [DEV, LOGS];
+      const onMac = {
+        ...dockSession(7, null, "npm run dev"),
+        hostId: "mac",
+        resolvedHostId: "mac",
+      } as Session;
+      const atHome = {
+        ...dockSession(9, null, "tail -f log"),
+        hostId: "local",
+        resolvedHostId: "local",
+      } as Session;
+      resetStore({ projects: [spanning], sessions: [onMac, atHome], hosts: [MAC] });
+      useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+      renderView();
+
+      // The group's default is where the newest other-host control runs.
+      await userEvent.click(await screen.findByRole("button", { name: /^logs, running/ }));
+      expect(
+        dd.dropdownValue(screen.getByRole("combobox", { name: "Run dock controls on host" })),
+      ).toBe("mac");
+      // ...but Restart on `logs` leaves it at home.
+      await userEvent.click(
+        within(screen.getByRole("group", { name: "logs actions" })).getByRole("button", {
+          name: "Restart",
+        }),
+      );
+      await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+      expect(createSession.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ dockControlId: "logs" }),
+      );
+      expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+
+      // And Restart on `dev` keeps it on the Mac.
+      createSession.mockClear();
+      await userEvent.click(screen.getByRole("button", { name: /^dev, running/ }));
+      await userEvent.click(
+        within(screen.getByRole("group", { name: "dev actions" })).getByRole("button", {
+          name: "Restart",
+        }),
+      );
+      await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+      expect(createSession.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ dockControlId: "dev", targetHostId: "mac" }),
+      );
+    });
+
     it("starts on the project's own placement until a host is picked, then on that host", async () => {
       resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
       useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });

@@ -107,8 +107,10 @@ starts on the project's own placement again.
 - A control runs in one place at a time: starting one that is already running
   (on any host) answers `409`. To move it, pick the host and **Restart** (or
   `mullion dock switch <control> <branch> --host <id>`). Until you pick, the
-  dropdown follows where the project's dock already runs, so Restart brings a
-  control back on the host it was on.
+  dropdown follows where the project's dock already runs (the newest control on
+  another host), and starting a stopped control goes there. Restart keeps a
+  running control on the host its own session is on, so a control at home is not
+  moved by a dev server running on the Mac; pick a host to move it.
 - The control is read from `.crs/dock.json` **in the checkout on that host**, so
   its command and `cwd` are that checkout's. A host the project has no checkout
   on is refused with `409 no_checkout_on_host`, before anything stops.
