@@ -413,12 +413,13 @@ bot-filed issue, so it is ingested as a **proposal** instead:
 
 Only the poll decides a proposal, from the author GitHub's API returns: the
 webhook path passes no bot login, so a webhook payload's author can never be what
-lets an issue in as one (the poll picks it up within a minute).
+lets an issue in as one (the poll picks it up on its next sweep, 60 seconds by default).
 
 The gate assumes no generic route lets an agent reach these two endpoints: the
 Approve check (title and body must match what the caller saw) proves the caller
 read the text, not that a human decided, and an agent that filed the issue knows
-both. Keep them out of the control-socket and MCP op sets.
+both. Keep them out of the control-socket and MCP op sets;
+`test/services/task-proposal-agent-surface.test.ts` fails if either path appears there.
 
 Approving a `Manual: true` proposal (or an epic with open sub-issues) leaves it in
 backlog as approved: from there it is claimed by hand like any other manual task.
