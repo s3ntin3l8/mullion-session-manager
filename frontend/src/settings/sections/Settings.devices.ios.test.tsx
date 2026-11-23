@@ -48,6 +48,7 @@ describe("Settings -> Devices iOS Simulator", () => {
   let unexpectedCalls: string[];
   let simulatorCreateBodies: Array<Record<string, unknown>>;
   let simulatorCreateError: { status: number; message: string } | null;
+  let emptyDeviceTypes: boolean;
 
   beforeEach(() => {
     devicesDb = [];
@@ -59,6 +60,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     createCounter = 0;
     simulatorCreateBodies = [];
     simulatorCreateError = null;
+    emptyDeviceTypes = false;
 
     const { fetchMock, unexpectedCalls: unexpected } = mockFetch({
       "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
@@ -78,10 +80,12 @@ describe("Settings -> Devices iOS Simulator", () => {
       },
       "GET /api/simulators/catalog": () =>
         jsonResponse(200, {
-          deviceTypes: [
-            { id: "type-16", name: "iPhone 16" },
-            { id: "type-ipad", name: "iPad Air" },
-          ],
+          deviceTypes: emptyDeviceTypes
+            ? []
+            : [
+                { id: "type-16", name: "iPhone 16" },
+                { id: "type-ipad", name: "iPad Air" },
+              ],
           runtimes: [
             { id: "rt-17", name: "iOS 17.5" },
             { id: "rt-18", name: "iOS 18.2" },
@@ -451,5 +455,27 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     expect(await screen.findByText("Invalid runtime")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create simulator" })).toBeEnabled();
+  });
+
+  it("explains a host that offers no device types", async () => {
+    deviceHostsDb = [
+      {
+        hostId: "local",
+        name: "Primary",
+        status: "ok",
+        deviceKinds: ["emulator"],
+        platforms: ["android", "ios"],
+      },
+    ];
+    simulatorsByHostDb = { local: IOS_SIMS_LOCAL };
+    emptyDeviceTypes = true;
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByText("Create a device"));
+    await user.click(await screen.findByRole("radio", { name: "iOS Simulator" }));
+    await screen.findByRole("combobox", { name: "Simulator" });
+    await user.click(screen.getByRole("button", { name: "+ New simulator" }));
+    expect(await screen.findByText(/No iPhone or iPad device types/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create simulator" })).toBeDisabled();
   });
 });

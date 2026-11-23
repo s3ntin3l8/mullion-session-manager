@@ -126,7 +126,22 @@ describe("createIosSimulator", () => {
     });
   });
 
-  it.each(["", "   ", "x".repeat(65), "-flag", "a;rm -rf", "name\nnewline", "$(id)"])(
+  it.each(["Björn's iPhone", "QA 日本語 (2)"])("accepts the name %j", async (name) => {
+    const simctl = runner();
+    const sim = await createIosSimulator({ name, deviceTypeId: IPHONE, runtimeId: IOS }, simctl);
+    expect(sim.name).toBe(name);
+    expect(simctl).toHaveBeenLastCalledWith(["create", name, IPHONE, IOS]);
+  });
+
+  it("takes the last non-empty line of simctl create's output as the UDID", async () => {
+    const sim = await createIosSimulator(
+      { name: "A", deviceTypeId: IPHONE, runtimeId: IOS },
+      runner(`warning: something\r\n${UDID}\r\n\r\n`),
+    );
+    expect(sim.udid).toBe(UDID);
+  });
+
+  it.each(["", "   ", "x".repeat(65), "-flag", "a;rm -rf", "name\nnewline", "$(id)", "a\u0000b"])(
     "rejects the name %j before running simctl",
     async (name) => {
       const simctl = runner();

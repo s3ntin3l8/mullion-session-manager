@@ -118,10 +118,11 @@ export class SimulatorRequestError extends Error {
 }
 
 const MAX_SIMULATOR_NAME_LENGTH = 64;
-// Letters, digits and the punctuation a device name reasonably carries. The
-// name rides as one argv element (never a shell), but a leading "-" would still
-// read as a simctl flag, so the first character must be alphanumeric.
-const SIMULATOR_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ._()-]*$/;
+// Unicode letters and digits plus the punctuation a device name reasonably
+// carries ("Björn's iPhone"). The name rides as one argv element (never a
+// shell), but a leading "-" would still read as a simctl flag, so the first
+// character must be a letter or digit. Control characters never match.
+const SIMULATOR_NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N} ._()'-]*$/u;
 const SIMULATOR_UDID_PATTERN = /^[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}$/;
 
 function parseJsonObject(jsonText: string): Record<string, unknown> {
@@ -232,7 +233,7 @@ export async function createIosSimulator(
   }
   if (!SIMULATOR_NAME_PATTERN.test(name)) {
     throw new SimulatorRequestError(
-      "Simulator name may only contain letters, digits, spaces and . _ ( ) -, and must start with a letter or digit",
+      "Simulator name may only contain letters, digits, spaces and . _ ( ) ' -, and must start with a letter or digit",
     );
   }
   const catalog = await listSimulatorCatalog(simctl);
@@ -243,7 +244,14 @@ export async function createIosSimulator(
   if (!runtime) throw new SimulatorRequestError(`Unknown iOS runtime ${input.runtimeId}`);
 
   const out = await runSimctl(simctl, ["create", name, input.deviceTypeId, input.runtimeId]);
-  const udid = out.toString("utf8").trim();
+  // A bare UDID on its own line; take the last non-empty line so a stray
+  // warning or blank trailer cannot fail a create that already happened.
+  const lines = out
+    .toString("utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const udid = lines[lines.length - 1] ?? "";
   if (!SIMULATOR_UDID_PATTERN.test(udid)) {
     throw new SimctlError(`simctl create returned an unexpected result: ${udid.slice(0, 80)}`);
   }

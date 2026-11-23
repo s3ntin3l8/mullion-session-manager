@@ -8,7 +8,7 @@ import { ErrorText } from "../../ui/ErrorText.js";
 
 // Mirrors the server's SIMULATOR_NAME_PATTERN (src/services/ios-simulators.ts):
 // checked here so a bad name fails fast; the server's check stays authoritative.
-const SIMULATOR_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ._()-]*$/;
+const SIMULATOR_NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N} ._()'-]*$/u;
 const MAX_NAME_LENGTH = 64;
 
 function describeSimulatorNameError(name: string): string | null {
@@ -16,7 +16,7 @@ function describeSimulatorNameError(name: string): string | null {
   if (trimmed.length === 0) return null;
   if (trimmed.length > MAX_NAME_LENGTH) return `At most ${MAX_NAME_LENGTH} characters.`;
   if (!SIMULATOR_NAME_PATTERN.test(trimmed)) {
-    return "Letters, digits, spaces and . _ ( ) - only, starting with a letter or digit.";
+    return "Letters, digits, spaces and . _ ( ) ' - only, starting with a letter or digit.";
   }
   return null;
 }
@@ -108,7 +108,7 @@ export function NewSimulatorForm({
       </div>
       {open && (
         <div style={{ marginTop: 10 }}>
-          <Row label="New simulator name" desc="Letters, digits, spaces and . _ ( ) - only.">
+          <Row label="New simulator name" desc="Letters, digits, spaces and . _ ( ) ' - only.">
             <TextInput
               style={{ width: 220 }}
               aria-label="New simulator name"
@@ -136,6 +136,12 @@ export function NewSimulatorForm({
                 onChange={setDeviceTypeId}
               />
             </Row>
+          )}
+          {catalog && catalog.deviceTypes.length === 0 && (
+            <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 4 }}>
+              No iPhone or iPad device types are available on this machine. Check the Xcode
+              installation.
+            </div>
           )}
           {catalog && catalog.runtimes.length > 0 && (
             <Row label="Runtime" desc="An installed iOS version.">
