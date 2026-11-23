@@ -208,6 +208,13 @@ export function settingsDefaultModel(settings: AppSettings, cli: ModelCli | null
 // currently selected. It is keyed to the CLI it was picked for, and reads back
 // as "no override" the moment the selection's CLI no longer matches — moving
 // from Claude to Codex must never carry a Claude model over to a Codex launch.
+// Whether a launcher's command gets a per-session Model choice: it runs a
+// model-capable agent CLI and does not already pass its own model flag.
+export function commandOffersModel(command: string): boolean {
+  const cli = commandModelCli(command);
+  return cli !== null && !commandHasModelFlag(command, cli);
+}
+
 export function useLaunchModel(activeCommand: string | null) {
   const settings = useDashboardStore((s) => s.settings);
   const [override, setOverride] = useState<{ cli: ModelCli; value: string | null } | null>(null);
@@ -215,8 +222,7 @@ export function useLaunchModel(activeCommand: string | null) {
   // A command that already has its own --model (or codex's -m) flag keeps it —
   // offering a picker the backend would then silently ignore (buildModelFlag's
   // own skip-if-present rule, hook-adapters/shared.ts) would be misleading.
-  const show =
-    activeCli !== null && activeCommand !== null && !commandHasModelFlag(activeCommand, activeCli);
+  const show = activeCommand !== null && commandOffersModel(activeCommand);
   // Called unconditionally (rules of hooks). "claude-code" is a safe,
   // no-fetch fallback; the result is not rendered when `show` is false.
   const catalog = useModelOptions(activeCli ?? "claude-code");

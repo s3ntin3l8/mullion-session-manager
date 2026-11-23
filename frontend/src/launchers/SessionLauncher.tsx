@@ -29,6 +29,7 @@ import { resolveSkipPermissions } from "./skipPermissions.js";
 import { buildSkipPermissionsAgentIds, isHiddenAgent } from "./launcherList.js";
 import {
   resolveInitialLaunchProjectId,
+  commandOffersModel,
   useLaunchModel,
   useLaunchSession,
   useLaunchTarget,
@@ -407,7 +408,11 @@ function LauncherNewSession({
     () => buildSkipPermissionsAgentIds(settings.launchers.skipPermissionsAgents, launchers),
     [settings.launchers.skipPermissionsAgents, launchers],
   );
-  const model = useLaunchModel(selected?.command ?? null);
+  // A shell or script picked here or in the palette (#3054). Defined before
+  // the model hook: a picked row whose command runs an agent (#3058) takes the
+  // Model choice over from the selected agent.
+  const pickedRow = rows.find((r) => r.id === pickedRowId) ?? null;
+  const model = useLaunchModel((pickedRow ?? selected)?.command ?? null);
   const skipSetting = selected
     ? (resolveSkipPermissions(selected, settings, null) ?? false)
     : false;
@@ -429,11 +434,18 @@ function LauncherNewSession({
       model: model.forLaunch(agent.command),
       skipPermissionsOverride: skipOverride?.agentId === agent.id ? skipOverride.value : null,
     });
-  // Shells and scripts have no options.
-  const launchRow = (row: Launcher) => launch(row);
+  // A shell or script has only the Model option, and only when its command
+  // runs an agent that takes one (#3058).
+  const launchRow = (row: Launcher) =>
+    launch(row, commandOffersModel(row.command) ? { model: model.forLaunch(row.command) } : {});
+  // A row that offers a model is selected first, so the choice is made before
+  // it launches; any other row launches straight away.
+  const clickRow = (row: Launcher) => {
+    if (commandOffersModel(row.command)) setPickedRowId(row.id);
+    else launchRow(row);
+  };
   // What Enter launches from the filter: a shell or script picked in the
   // palette, else the selected agent, else the first shell or script.
-  const pickedRow = rows.find((r) => r.id === pickedRowId) ?? null;
   const primary = pickedRow ?? selected ?? rows[0] ?? null;
   const launchPrimary = () => {
     if (!primary) return;
@@ -751,21 +763,31 @@ function LauncherNewSession({
             )}
           </section>
 
-          {selected && (
+          {pickedRow && commandOffersModel(pickedRow.command) ? (
             <section className="session-launcher-section" aria-labelledby={`${ids}-options`}>
               <h3 id={`${ids}-options`} className="session-launcher-heading">
                 Options
               </h3>
-              <AgentOptions
-                agentTitle={selected.title}
-                idPrefix={ids}
-                model={model}
-                skipValue={skipValue}
-                skipSetting={skipSetting}
-                overridden={skipOverrideValue !== null}
-                onSkipChange={(value) => setSkipOverride({ agentId: selected.id, value })}
-              />
+              <RowOptions title={pickedRow.title} idPrefix={ids} model={model} />
             </section>
+          ) : (
+            selected &&
+            !pickedRow && (
+              <section className="session-launcher-section" aria-labelledby={`${ids}-options`}>
+                <h3 id={`${ids}-options`} className="session-launcher-heading">
+                  Options
+                </h3>
+                <AgentOptions
+                  agentTitle={selected.title}
+                  idPrefix={ids}
+                  model={model}
+                  skipValue={skipValue}
+                  skipSetting={skipSetting}
+                  overridden={skipOverrideValue !== null}
+                  onSkipChange={(value) => setSkipOverride({ agentId: selected.id, value })}
+                />
+              </section>
+            )
           )}
 
           <section className="session-launcher-section" aria-labelledby={`${ids}-rows`}>
@@ -785,7 +807,8 @@ function LauncherNewSession({
                     data-launcher-row
                     className={`session-launcher-row${row.id === pickedRow?.id ? " on" : ""}`}
                     aria-current={row.id === pickedRow?.id || undefined}
-                    onClick={() => launchRow(row)}
+                    onClick={() => clickRow(row)}
+                    onDoubleClick={() => launchRow(row)}
                     onKeyDown={(e) => onRowKeyDown(e, index)}
                   >
                     <span className="session-launcher-row-icon" aria-hidden="true">
@@ -838,6 +861,55 @@ function LauncherNewSession({
   );
 }
 
+function ModelRow({ model }: { model: ReturnType<typeof useLaunchModel> }) {
+  return (
+    <div className="launcher-form-row">
+      <span className="launcher-form-label" aria-hidden="true">
+        Model
+      </span>
+      <div className="launcher-form-control">
+        <ModelSelect
+          ariaLabel="Model for this session"
+          value={model.value}
+          options={model.catalog.options}
+          defaultLabel={model.defaultLabel}
+          allowCustom={model.catalog.allowCustom}
+          onChange={model.setValue}
+          stretch
+        />
+      </div>
+    </div>
+  );
+}
+
+// A picked shell or script whose command runs an agent: the Model choice only
+// (skip-permissions never applies to a non-agent launcher).
+function RowOptions({
+  title,
+  idPrefix,
+  model,
+}: {
+  title: string;
+  idPrefix: string;
+  model: ReturnType<typeof useLaunchModel>;
+}) {
+  return (
+    <div
+      className="launcher-form session-launcher-options"
+      role="group"
+      aria-labelledby={`${idPrefix}-options-for`}
+    >
+      <span id={`${idPrefix}-options-for`} className="visually-hidden">
+        Options for {title}
+      </span>
+      <span className="visually-hidden" role="status" aria-live="polite">
+        {title} selected.
+      </span>
+      <ModelRow model={model} />
+    </div>
+  );
+}
+
 // The selected agent's options, in place under the tiles: its model and the
 // per-launch skip-permissions override. No hover anywhere: everything is
 // shown for the selection, on every pointer.
@@ -875,24 +947,7 @@ function AgentOptions({
       <span className="visually-hidden" role="status" aria-live="polite">
         {agentTitle} selected. Skip permission prompts {skipValue ? "on" : "off"}.
       </span>
-      {model.show && (
-        <div className="launcher-form-row">
-          <span className="launcher-form-label" aria-hidden="true">
-            Model
-          </span>
-          <div className="launcher-form-control">
-            <ModelSelect
-              ariaLabel="Model for this session"
-              value={model.value}
-              options={model.catalog.options}
-              defaultLabel={model.defaultLabel}
-              allowCustom={model.catalog.allowCustom}
-              onChange={model.setValue}
-              stretch
-            />
-          </div>
-        </div>
-      )}
+      {model.show && <ModelRow model={model} />}
       {/* A form row like Worktree: the switch at the start of the control
           column, its short text and the hint after it, wrapping inside the
           column. The switch keeps its full accessible name. */}
