@@ -493,7 +493,6 @@ export type {
   Host,
   HostChannelStatus,
   HostCapacity,
-  HostIdentityEvent,
   HostRecentIdentityReplacement,
   PlacementPreview,
 } from "./host-types.js";

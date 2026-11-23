@@ -7,7 +7,6 @@ import type {
   DetectCheckoutsResult,
   Host,
   HostConfig,
-  HostIdentityEvent,
   HostUpdateStatus,
   UpdateStatus,
 } from "./types.js";
@@ -39,10 +38,7 @@ export const hostsApi = {
   unbindHost: (id: string) =>
     request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/unbind`, { method: "POST" }),
 
-  // Issue #3435 — audit trail and acknowledgement of replaced machine identities.
-  getHostIdentityEvents: (id: string) =>
-    request<HostIdentityEvent[]>(`/api/hosts/${encodeURIComponent(id)}/identity-events`),
-
+  // Issue #3435 — acknowledgement of replaced machine identities.
   acknowledgeHostIdentityReplacement: (id: string) =>
     request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/identity-events/acknowledge`, {
       method: "POST",

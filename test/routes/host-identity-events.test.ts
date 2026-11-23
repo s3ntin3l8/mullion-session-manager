@@ -299,6 +299,13 @@ describe("host identity events (issue #3435)", () => {
     expect(events).toHaveLength(100);
     expect(events[0].id).toBeGreaterThan(events[99].id);
 
+    const beforeDelete = app.db
+      .select()
+      .from(hostIdentityEvents)
+      .where(eq(hostIdentityEvents.hostId, hostId))
+      .all();
+    expect(beforeDelete).toHaveLength(100);
+
     const delRes = await app.inject({ method: "DELETE", url: `/api/hosts/${hostId}` });
     expect(delRes.statusCode).toBe(204);
 

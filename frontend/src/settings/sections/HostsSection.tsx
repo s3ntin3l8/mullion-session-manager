@@ -627,6 +627,7 @@ export function HostsSection() {
               <ListRow
                 key={host.id}
                 testId={`host-row-${host.id}`}
+                stacked={Boolean(host.recentIdentityReplacement)}
                 icon={<HostsIcon size={15} />}
                 dot={display.dot}
                 title={host.name}
@@ -728,9 +729,9 @@ export function HostsSection() {
                           Identity replaced{" "}
                           {formatIdentityReplacementAge(host.recentIdentityReplacement.at, now)}
                         </span>
-                        <div
+                        <span
                           data-testid={`host-identity-replaced-detail-${host.id}`}
-                          style={{ marginTop: 2 }}
+                          style={{ display: "block", marginTop: 2 }}
                         >
                           Identity replaced from peer{" "}
                           <code>{host.recentIdentityReplacement.peer ?? "unknown"}</code>
@@ -741,7 +742,7 @@ export function HostsSection() {
                           >
                             Acknowledge
                           </SecondaryButton>
-                        </div>
+                        </span>
                       </>
                     )}
                   </>

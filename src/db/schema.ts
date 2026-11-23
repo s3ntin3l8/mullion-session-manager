@@ -167,7 +167,10 @@ export const hostIdentityEvents = sqliteTable(
     peer: text("peer"),
     acknowledgedAt: integer("acknowledged_at", { mode: "timestamp" }),
   },
-  (table) => [index("host_identity_events_host_at_idx").on(table.hostId, table.at)],
+  (table) => [
+    index("host_identity_events_host_at_idx").on(table.hostId, table.at),
+    index("host_identity_events_ack_kind_at_idx").on(table.acknowledgedAt, table.kind, table.at),
+  ],
 );
 
 // Issue #820 — a laptop/PC "helper" that dials OUT to the primary over

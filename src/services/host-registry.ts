@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { eq, and, desc, gte, isNotNull, isNull, ne, or } from "drizzle-orm";
+import { eq, and, desc, gte, isNotNull, isNull, ne, notInArray, or } from "drizzle-orm";
 import { hostIdentityEvents, hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
@@ -1082,6 +1082,19 @@ export function recordHostIdentityEvent(
       at: new Date(),
       peer: peer || null,
     })
+    .run();
+  // Keep at most IDENTITY_EVENTS_MAX rows per host so the table stays bounded.
+  const keepSubquery = app.db
+    .select({ id: hostIdentityEvents.id })
+    .from(hostIdentityEvents)
+    .where(eq(hostIdentityEvents.hostId, hostId))
+    .orderBy(desc(hostIdentityEvents.at), desc(hostIdentityEvents.id))
+    .limit(IDENTITY_EVENTS_MAX);
+  app.db
+    .delete(hostIdentityEvents)
+    .where(
+      and(eq(hostIdentityEvents.hostId, hostId), notInArray(hostIdentityEvents.id, keepSubquery)),
+    )
     .run();
 }
 

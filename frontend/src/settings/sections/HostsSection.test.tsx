@@ -426,6 +426,8 @@ describe("HostsSection token rotation", () => {
 
     render(<HostsSection />);
 
+    expect(screen.getByTestId("host-row-h1")).toHaveClass("stacked");
+    expect(screen.getByTestId("host-row-h2")).not.toHaveClass("stacked");
     expect(screen.getByTestId("host-identity-replaced-h1")).toHaveTextContent(
       /Identity replaced 5 min ago/,
     );
@@ -440,5 +442,6 @@ describe("HostsSection token rotation", () => {
     await vi.waitFor(() =>
       expect(screen.queryByTestId("host-identity-replaced-h1")).not.toBeInTheDocument(),
     );
+    expect(screen.getByTestId("host-row-h1")).not.toHaveClass("stacked");
   });
 });

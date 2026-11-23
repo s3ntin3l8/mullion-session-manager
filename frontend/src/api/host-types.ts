@@ -1,6 +1,5 @@
 import type {
   PlacementCapability,
-  HostIdentityEventKind,
   HostRole,
   PlacementMode,
 } from "../../../src/shared/constants.js";
@@ -16,15 +15,6 @@ export interface HostRecentIdentityReplacement {
   id: number;
   at: string;
   peer: string | null;
-}
-
-export interface HostIdentityEvent {
-  id: number;
-  hostId: string;
-  kind: HostIdentityEventKind;
-  at: string;
-  peer: string | null;
-  acknowledgedAt: string | null;
 }
 
 export interface HostChannelStatus {
