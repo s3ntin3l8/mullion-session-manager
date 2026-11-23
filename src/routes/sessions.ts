@@ -72,6 +72,7 @@ import {
   resolveSessionHostIds,
   withLiveStatus,
 } from "../services/session-live-info.js";
+import { sessionCwdOnHost } from "../services/session-host.js";
 import { noteHostReachable, warnHostThrottled } from "../services/host-warn-throttle.js";
 
 // Throttled per (host, message) — see services/host-warn-throttle.ts.
@@ -1660,7 +1661,12 @@ export async function sessionsRoute(app: FastifyInstance) {
         // into the SESSION's cwd, and that path is on the host the session
         // runs on.
         const backend = resolveBackend(app, resolveSessionHostId(app, row));
-        const cwd = row.cwd ?? project.cwd;
+        // The session's directory ON ITS host: a session placed on another
+        // host has no row cwd, and the project's own path doesn't exist there.
+        const cwd = sessionCwdOnHost(app, row, project);
+        if (cwd === null) {
+          return reply.conflict("The project has no path on this session's host");
+        }
         return isGenericFile
           ? await backend.uploadFile(cwd, request.body, fileName)
           : await backend.uploadImage(cwd, request.body, mime);

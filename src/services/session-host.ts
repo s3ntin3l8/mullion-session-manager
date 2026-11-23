@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq, isNotNull } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { parseHostCwds } from "./host-cwds.js";
 
 /** hostId of the project a session row belongs to — "local" for any row
  * whose project is missing (shouldn't happen; projectId is a required FK)
@@ -47,6 +48,22 @@ export function resolveSessionHostId(
 ): string {
   if (row.hostId !== null) return row.hostId;
   return resolveProjectHostId(app, row.projectId);
+}
+
+/** The directory a session runs in, on the host it runs on: its own cwd when
+ * it has one, else the project's checkout on THAT host — what spawn used as
+ * its placement cwd (`projectCwdOnHost`, placement.ts; not imported here to
+ * keep this module free of placement's dependency tree). `null` = the project
+ * has no path on the session's host. */
+export function sessionCwdOnHost(
+  app: FastifyInstance,
+  row: { projectId: number; hostId: string | null; cwd: string | null },
+  project: { hostId: string; cwd: string; hostCwds: string | null },
+): string | null {
+  if (row.cwd) return row.cwd;
+  const hostId = resolveSessionHostId(app, row);
+  if (hostId === project.hostId) return project.cwd;
+  return parseHostCwds(project.hostCwds)[hostId] ?? null;
 }
 
 /** The full project row, or undefined when there is no such project. */

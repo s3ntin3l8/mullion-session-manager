@@ -3,6 +3,7 @@ import { eq, inArray } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveSessionHostId } from "./session-live-info.js";
+import { sessionCwdOnHost } from "./session-host.js";
 import { replayDroppedCodexStop } from "./codex-stop-replay.js";
 import type { SessionInfo } from "./pty-manager.js";
 
@@ -63,7 +64,7 @@ export function attachParamsFromRow(
 ): AttachSessionParams {
   return {
     id: String(row.id),
-    cwd: row.cwd ?? project.cwd,
+    cwd: sessionCwdOnHost(app, row, project) ?? project.cwd,
     command: row.command,
     cols,
     rows,
