@@ -156,6 +156,54 @@ view is the agent browser (#3370).
 On a touch screen a one-finger drag on the page scrolls it (in the view and
 in the grid pane); a tap clicks.
 
+### Typing on a touch screen
+
+The page is a picture on a `<canvas>`, which never raises the on-screen
+keyboard, so on a coarse pointer (`(pointer: coarse)`: a phone, tablet or
+foldable) the browser's toolbar has a **keyboard** button, in the view and in
+the grid pane (#3030). Tap the page's field first (the tap clicks it, as
+always), then tap the button: it focuses a hidden text box, which raises the
+keyboard, and what you type goes to the page. Tap the button again, or
+anywhere outside the browser, to put the keyboard away. With the keyboard
+open, tapping the page still clicks it but keeps the keyboard up, so you can
+move from one field to the next. (That rests on cancelling the tap's
+`mousedown`, which keeps focus on the hidden box in Chromium; it has not yet
+been checked on a real phone, and iOS may not honour it. #3431 tracks the
+device checks.)
+
+A tap on the page does not raise the keyboard by itself. Whether the tap
+landed on an editable field is only known to the remote page, after a round
+trip to the server, and a phone raises its keyboard only for a focus made
+inside the tap itself, so an explicit button is the one way that works.
+
+What is typed reaches the page once, as follows:
+
+- **Text** (letters, autocomplete and autocorrect picks, a paste from the
+  keyboard) is sent as a `{type:"clipboard",text}` message, which the server
+  types with Playwright's `insertText`. The page sees the text arrive in its
+  field and its `input` event, not a keydown per letter.
+- **IME and composed text** (Chinese, Japanese, and Android keyboards, which
+  compose each word) is sent once, when the composition ends. On such a
+  keyboard a word reaches the page when you commit it (a space, a suggestion,
+  Enter), not letter by letter. A tap on the page or closing the keyboard in
+  the middle of a word sends the word so far first, so it lands in the field
+  it was typed for.
+- **Enter, Backspace, Delete, Tab, Escape and the arrow keys** are sent as a
+  `{type:"key",action:"press",key}` message, with any modifier held on a
+  hardware keyboard (`Shift+Tab`). A soft keyboard's word and line deletes and
+  its undo are sent as the matching key (`Control+Backspace`, ...).
+- **A hardware keyboard's Ctrl/Cmd chords** go to the page as on the canvas:
+  Ctrl/Cmd+C and +X copy or cut the page's selection, Ctrl/Cmd+V pastes the
+  host clipboard, any other chord is pressed in the page.
+
+The hidden text box is kept empty outside a composition, so the keyboard
+never sees (and can never rewrite) text it has already sent. The cost is
+context: an Android keyboard still suggests and autocorrects the word you are
+composing, but a keyboard that does not compose (iOS, most hardware
+keyboards) sees an empty box after every letter, so it offers next-word
+predictions at most, not corrections. Capitalisation is off, since every
+word would otherwise look like the start of a sentence.
+
 ## Why the proxy exists (and when you need it)
 
 A plain iframe pointing at `http://localhost:5173` works fine as long as

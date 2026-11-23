@@ -597,6 +597,332 @@ describe("BrowserPane", () => {
     });
   });
 
+  // #3030 — typing into the page from a touch screen's soft keyboard.
+  // Each test asserts the whole sent list (toEqual, not toContainEqual), so
+  // a character that arrives twice fails.
+  describe("touch keyboard (#3030)", () => {
+    function stubCoarsePointer(coarse: boolean) {
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: coarse && query === "(pointer: coarse)",
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+    }
+    function sent() {
+      return fakeSocket.send.mock.calls.map((c) => JSON.parse(c[0] as string));
+    }
+    function renderTouchPane() {
+      stubCoarsePointer(true);
+      const view = render(<BrowserPane params={{ sessionId: 1 }} />);
+      openSocket();
+      const toggle = view.getByRole("button", { name: "Type into the page" });
+      const input = view.container.querySelector<HTMLTextAreaElement>(
+        ".browser-pane-typing-input",
+      )!;
+      return { ...view, toggle, input };
+    }
+    function openKeyboard(toggle: HTMLElement) {
+      fireEvent.click(toggle);
+    }
+    function beforeInput(target: HTMLElement, init: InputEventInit) {
+      const event = new InputEvent("beforeinput", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        target.dispatchEvent(event);
+      });
+      return event;
+    }
+    function composition(target: HTMLElement, type: string, data: string) {
+      act(() => {
+        target.dispatchEvent(new CompositionEvent(type, { bubbles: true, data }));
+      });
+    }
+
+    it("offers no keyboard button or input on a fine pointer", () => {
+      stubCoarsePointer(false);
+      const { container, queryByRole } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      expect(queryByRole("button", { name: "Type into the page" })).toBeNull();
+      expect(container.querySelector(".browser-pane-typing-input")).toBeNull();
+    });
+
+    it("the keyboard button opens and closes the keyboard by focusing the input", () => {
+      const { toggle, input, getByRole } = renderTouchPane();
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+
+      openKeyboard(toggle);
+      expect(document.activeElement).toBe(input);
+      const hide = getByRole("button", { name: "Hide keyboard" });
+      expect(hide.getAttribute("aria-pressed")).toBe("true");
+      // Pressing the button must not blur the input before the click.
+      expect(fireEvent.mouseDown(hide)).toBe(false);
+
+      fireEvent.click(hide);
+      expect(document.activeElement).not.toBe(input);
+      expect(getByRole("button", { name: "Type into the page" })).toBeTruthy();
+    });
+
+    it("sends typed text once, as a clipboard insert, and keeps the input empty", () => {
+      const { toggle, input } = renderTouchPane();
+      openKeyboard(toggle);
+
+      // A hardware or iOS keyboard reports a printable key as a keydown AND
+      // a beforeinput: only the beforeinput sends.
+      fireEvent.keyDown(input, { key: "h" });
+      const event = beforeInput(input, { inputType: "insertText", data: "h" });
+      fireEvent.input(input);
+      // A soft keyboard's placeholder keydown sends nothing either.
+      fireEvent.keyDown(input, { key: "Unidentified", keyCode: 229 });
+      beforeInput(input, { inputType: "insertText", data: "i!" });
+      beforeInput(input, { inputType: "insertReplacementText", data: "there" });
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(input.value).toBe("");
+      expect(sent()).toEqual([
+        { type: "clipboard", text: "h" },
+        { type: "clipboard", text: "i!" },
+        { type: "clipboard", text: "there" },
+      ]);
+    });
+
+    it("sends an IME or autocomplete composition once, when it ends", () => {
+      const { toggle, input } = renderTouchPane();
+      openKeyboard(toggle);
+
+      composition(input, "compositionstart", "");
+      beforeInput(input, { inputType: "insertCompositionText", data: "n", isComposing: true });
+      input.value = "n";
+      fireEvent.input(input);
+      // A keydown or a plain insert raised mid-composition is ignored too.
+      fireEvent.keyDown(input, { key: "Backspace", isComposing: true });
+      beforeInput(input, { inputType: "insertText", data: "ni" });
+      input.value = "你好";
+      composition(input, "compositionend", "你好");
+      // Safari's trailing commit step and input event add nothing.
+      beforeInput(input, { inputType: "insertFromComposition", data: "你好" });
+      fireEvent.input(input);
+
+      expect(input.value).toBe("");
+      expect(sent()).toEqual([{ type: "clipboard", text: "你好" }]);
+    });
+
+    it("sends Enter, Backspace and the arrow keys as key presses", () => {
+      const { toggle, input } = renderTouchPane();
+      openKeyboard(toggle);
+
+      for (const key of ["Backspace", "Enter", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]) {
+        expect(fireEvent.keyDown(input, { key })).toBe(false);
+      }
+      // A soft keyboard that reports its delete or return only as a
+      // beforeinput (its keydown a 229 placeholder) still reaches the page.
+      fireEvent.keyDown(input, { key: "Unidentified", keyCode: 229 });
+      beforeInput(input, { inputType: "deleteContentBackward" });
+      fireEvent.keyDown(input, { key: "Unidentified", keyCode: 229 });
+      beforeInput(input, { inputType: "insertLineBreak" });
+      beforeInput(input, { inputType: "deleteContentForward" });
+
+      const press = (key: string) => ({ type: "key", action: "press", key });
+      expect(sent()).toEqual([
+        press("Backspace"),
+        press("Enter"),
+        press("ArrowLeft"),
+        press("ArrowRight"),
+        press("ArrowUp"),
+        press("ArrowDown"),
+        press("Backspace"),
+        press("Enter"),
+        press("Delete"),
+      ]);
+    });
+
+    it("sends nothing while the keyboard is closed", () => {
+      const { toggle, input } = renderTouchPane();
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      beforeInput(input, { inputType: "insertText", data: "a" });
+      composition(input, "compositionstart", "");
+      composition(input, "compositionend", "b");
+
+      // Opened and closed again: still nothing.
+      openKeyboard(toggle);
+      fireEvent.click(toggle);
+      fireEvent.keyDown(input, { key: "Backspace" });
+      beforeInput(input, { inputType: "insertText", data: "c" });
+
+      expect(sent()).toEqual([]);
+    });
+
+    it("keeps the keyboard open when the page is tapped while typing", () => {
+      const { toggle, input, container } = renderTouchPane();
+      const canvas = container.querySelector("canvas")!;
+
+      openKeyboard(toggle);
+      // The tap's click still reaches the page, but focus stays put.
+      expect(fireEvent.mouseDown(canvas, { clientX: 0, clientY: 0, button: 0 })).toBe(false);
+      expect(document.activeElement).toBe(input);
+      expect(sent()).toContainEqual({ type: "mouse", action: "down", x: 0, y: 0, button: "left" });
+
+      // With the keyboard closed, a tap focuses the canvas as before.
+      fireEvent.click(getToggle(container));
+      expect(fireEvent.mouseDown(canvas, { clientX: 0, clientY: 0, button: 0 })).toBe(true);
+      expect(document.activeElement).toBe(canvas);
+    });
+
+    it("sends a half-composed word before a tap moves to another field", () => {
+      const { toggle, input, container } = renderTouchPane();
+      const canvas = container.querySelector("canvas")!;
+      openKeyboard(toggle);
+
+      composition(input, "compositionstart", "");
+      input.value = "alice";
+      fireEvent.mouseDown(canvas, { clientX: 0, clientY: 0, button: 0 });
+      // The keyboard goes on composing in the same textarea.
+      input.value = "alicepw";
+      composition(input, "compositionend", "alicepw");
+      // A new composition edited back past an early commit sends no more.
+      composition(input, "compositionstart", "");
+      input.value = "bob";
+      fireEvent.mouseDown(canvas, { clientX: 0, clientY: 0, button: 0 });
+      composition(input, "compositionend", "bo");
+
+      expect(sent()).toEqual([
+        { type: "clipboard", text: "alice" },
+        { type: "mouse", action: "down", x: 0, y: 0, button: "left" },
+        { type: "clipboard", text: "pw" },
+        { type: "clipboard", text: "bob" },
+        { type: "mouse", action: "down", x: 0, y: 0, button: "left" },
+      ]);
+    });
+
+    it("sends a half-composed word once when the keyboard is closed", () => {
+      const { toggle, input } = renderTouchPane();
+      openKeyboard(toggle);
+
+      composition(input, "compositionstart", "");
+      input.value = "query";
+      fireEvent.click(toggle);
+      // The browser's own late compositionend, after the blur, adds nothing.
+      composition(input, "compositionend", "query");
+
+      expect(sent()).toEqual([{ type: "clipboard", text: "query" }]);
+    });
+
+    it("ignores composing and placeholder keydowns, even with no composition event", () => {
+      const { toggle, input } = renderTouchPane();
+      openKeyboard(toggle);
+
+      // A keyboard whose Enter commits a word: compositionend, then a 229
+      // Enter keydown, then the line break itself. One Enter, after the word.
+      composition(input, "compositionstart", "");
+      composition(input, "compositionend", "word");
+      expect(fireEvent.keyDown(input, { key: "Enter", keyCode: 229 })).toBe(true);
+      beforeInput(input, { inputType: "insertLineBreak" });
+      // isComposing alone (no compositionstart seen) is honoured too.
+      fireEvent.keyDown(input, { key: "Backspace", isComposing: true });
+      beforeInput(input, { inputType: "insertText", data: "x", isComposing: true });
+
+      expect(sent()).toEqual([
+        { type: "clipboard", text: "word" },
+        { type: "key", action: "press", key: "Enter" },
+      ]);
+    });
+
+    it("maps a soft keyboard's word, line and undo edits to the page's keys", () => {
+      const { toggle, input } = renderTouchPane();
+      openKeyboard(toggle);
+
+      beforeInput(input, { inputType: "deleteWordBackward" });
+      beforeInput(input, { inputType: "deleteSoftLineBackward" });
+      beforeInput(input, { inputType: "insertParagraph" });
+      beforeInput(input, { inputType: "historyUndo" });
+      beforeInput(input, { inputType: "insertFromPaste", data: "pasted" });
+      // No text to send: left to the textarea, which `input` then empties.
+      const empty = beforeInput(input, { inputType: "insertText", data: null });
+
+      expect(empty.defaultPrevented).toBe(false);
+      const press = (key: string) => ({ type: "key", action: "press", key });
+      expect(sent()).toEqual([
+        press("Control+Backspace"),
+        press("Shift+Home"),
+        press("Backspace"),
+        press("Enter"),
+        press("Control+z"),
+        { type: "clipboard", text: "pasted" },
+      ]);
+    });
+
+    it("forwards a hardware keyboard's modifiers and chords", () => {
+      const { toggle, input } = renderTouchPane();
+      openKeyboard(toggle);
+
+      fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
+      fireEvent.keyDown(input, { key: "Escape" });
+      fireEvent.keyDown(input, { key: "Delete" });
+      fireEvent.keyDown(input, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
+      fireEvent.keyDown(input, { key: "a", ctrlKey: true });
+      fireEvent.keyDown(input, { key: "Z", metaKey: true, shiftKey: true });
+      fireEvent.keyDown(input, { key: "c", ctrlKey: true });
+      fireEvent.keyDown(input, { key: "x", metaKey: true });
+      // Ctrl+V is the textarea's own paste, which beforeinput then sends.
+      expect(fireEvent.keyDown(input, { key: "v", ctrlKey: true })).toBe(true);
+      // A plain printable key is left to beforeinput.
+      expect(fireEvent.keyDown(input, { key: "q" })).toBe(true);
+
+      const press = (key: string) => ({ type: "key", action: "press", key });
+      expect(sent()).toEqual([
+        press("Shift+Tab"),
+        press("Escape"),
+        press("Delete"),
+        press("Control+Shift+ArrowLeft"),
+        press("Control+a"),
+        press("Control+Shift+z"),
+        { type: "copy" },
+        { type: "cut" },
+      ]);
+    });
+
+    it("keeps the hidden input out of the tab order", () => {
+      const { input } = renderTouchPane();
+      expect(input.tabIndex).toBe(-1);
+    });
+
+    it("forgets the open keyboard when the pointer turns fine", () => {
+      let coarse = true;
+      const listeners: Array<() => void> = [];
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          get matches() {
+            return coarse && query === "(pointer: coarse)";
+          },
+          media: query,
+          addEventListener: vi.fn((_type: string, listener: () => void) =>
+            listeners.push(listener),
+          ),
+          removeEventListener: vi.fn(),
+        })),
+      );
+      const { getByRole, queryByRole } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      fireEvent.click(getByRole("button", { name: "Type into the page" }));
+      expect(getByRole("button", { name: "Hide keyboard" })).toBeTruthy();
+
+      coarse = false;
+      act(() => listeners.forEach((l) => l()));
+      expect(queryByRole("button", { name: "Hide keyboard" })).toBeNull();
+      coarse = true;
+      act(() => listeners.forEach((l) => l()));
+      expect(getByRole("button", { name: "Type into the page" }).getAttribute("aria-pressed")).toBe(
+        "false",
+      );
+    });
+
+    function getToggle(container: HTMLElement) {
+      return container.querySelector<HTMLButtonElement>(".browser-pane-keyboard-toggle")!;
+    }
+  });
+
   it("closes the socket on unmount", () => {
     const { unmount } = render(<BrowserPane params={{ sessionId: 1 }} />);
     openSocket();
