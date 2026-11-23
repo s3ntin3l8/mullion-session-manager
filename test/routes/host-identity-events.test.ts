@@ -351,4 +351,28 @@ describe("host identity events (issue #3435)", () => {
     const item = (listRes.json() as Array<Record<string, unknown>>).find((h) => h.id === hostId);
     expect(item?.recentIdentityReplacement).toBeNull();
   });
+
+  it("preserves an unacknowledged `replaced` event when >100 later events are recorded", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "protected-replaced-box", baseUrl: "http://10.9.0.1:4000" },
+    });
+    const { id: hostId } = created.json() as { id: string };
+
+    recordHostIdentityEvent(app, hostId, "replaced", "10.9.0.2");
+    for (let i = 0; i < 105; i++) {
+      recordHostIdentityEvent(app, hostId, "token_rotated", null);
+    }
+
+    const listRes = await app.inject({ method: "GET", url: "/api/hosts" });
+    expect(listRes.statusCode).toBe(200);
+    const hosts = listRes.json() as Array<{
+      id: string;
+      recentIdentityReplacement: { peer: string | null } | null;
+    }>;
+    expect(hosts.find((h) => h.id === hostId)?.recentIdentityReplacement).toMatchObject({
+      peer: "10.9.0.2",
+    });
+  });
 });

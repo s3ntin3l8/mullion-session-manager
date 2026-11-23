@@ -1083,7 +1083,9 @@ export function recordHostIdentityEvent(
       peer: peer || null,
     })
     .run();
-  // Keep at most IDENTITY_EVENTS_MAX rows per host so the table stays bounded.
+  // Keep at most IDENTITY_EVENTS_MAX rows per host so the table stays bounded,
+  // while preserving unacknowledged `replaced` events so the replacement alert
+  // cannot be silently evicted by subsequent activity.
   const keepSubquery = app.db
     .select({ id: hostIdentityEvents.id })
     .from(hostIdentityEvents)
@@ -1093,7 +1095,11 @@ export function recordHostIdentityEvent(
   app.db
     .delete(hostIdentityEvents)
     .where(
-      and(eq(hostIdentityEvents.hostId, hostId), notInArray(hostIdentityEvents.id, keepSubquery)),
+      and(
+        eq(hostIdentityEvents.hostId, hostId),
+        notInArray(hostIdentityEvents.id, keepSubquery),
+        or(ne(hostIdentityEvents.kind, "replaced"), isNotNull(hostIdentityEvents.acknowledgedAt)),
+      ),
     )
     .run();
 }

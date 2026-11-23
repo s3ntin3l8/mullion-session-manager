@@ -255,11 +255,15 @@ credential, token, or code):
 - `revoked` — an operator revoked the host's machine identity (`POST /api/hosts/:id/revoke`).
 - `token_rotated` — an operator rotated the host's per-host token (`POST /api/hosts/:id/rotate-token`).
 
-Normal machine-credential renewals write no event. `GET /api/hosts/:id/identity-events`
-returns the newest 100 events for a host. When a host has an unacknowledged `replaced`
-event within the last 30 days, `GET /api/hosts` includes `recentIdentityReplacement` and
-Settings → Hosts shows an **Identity replaced \<relative time\>** badge with the peer
-address and an **Acknowledge** action (`POST /api/hosts/:id/identity-events/acknowledge`).
+Normal machine-credential renewals write no event. `host_identity_events` retains at
+most the newest 100 rows per host (older rows are deleted as new events arrive, except
+unacknowledged `replaced` events which are preserved until acknowledged), and
+`GET /api/hosts/:id/identity-events` caps its response at the newest 100 events. When a
+host has an unacknowledged `replaced` event within the last 30 days (queried via the
+`(acknowledged_at, kind, at)` index), `GET /api/hosts` includes
+`recentIdentityReplacement` and Settings → Hosts shows an **Identity replaced
+\<relative time\>** badge with the peer address and an **Acknowledge** action
+(`POST /api/hosts/:id/identity-events/acknowledge`).
 
 ### Pairing a desktop Helper (one-time code)
 
