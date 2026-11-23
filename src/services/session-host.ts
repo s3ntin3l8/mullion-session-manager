@@ -70,7 +70,15 @@ export function sessionCwdOnHost(
   resolvedHostId?: string,
 ): string | null {
   if (row.cwd) return row.cwd;
-  const hostId = resolvedHostId ?? resolveSessionHostId(app, row);
+  return projectRootOnHost(project, resolvedHostId ?? resolveSessionHostId(app, row));
+}
+
+/** The project's checkout on `hostId`: its own path on its own host, else the
+ * operator's `hostCwds` entry; `null` when the project has no path there. */
+export function projectRootOnHost(
+  project: { hostId: string; cwd: string; hostCwds: string | null },
+  hostId: string,
+): string | null {
   if (hostId === project.hostId) return project.cwd;
   return parseHostCwds(project.hostCwds)[hostId] ?? null;
 }
