@@ -238,10 +238,12 @@ export async function enrollmentRoute(app: FastifyInstance) {
         return respond(renewed);
       }
 
+      const peer = getRawRemoteAddress(request) || null;
+
       // Fresh registration — try claiming an existing (admin-provisioned)
       // row first; it doesn't depend on MULLION_ENROLLMENT_SECRET being
       // configured at all.
-      const claimed = claimHost(app, token, input);
+      const claimed = claimHost(app, token, input, peer);
       if (claimed) {
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [claimed.hostId] });
         refreshHostProtocolSoon(app, claimed.hostId);
@@ -263,7 +265,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
         if (allowedCidrs && !isIpAllowed(getRawRemoteAddress(request), allowedCidrs)) {
           return reply.forbidden("peer address not in MULLION_ENROLLMENT_ALLOWED_CIDRS");
         }
-        const enrolled = enrollHost(app, input);
+        const enrolled = enrollHost(app, input, peer);
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
         refreshHostProtocolSoon(app, enrolled.hostId);
         app.reconfigureSshAgentFanout();

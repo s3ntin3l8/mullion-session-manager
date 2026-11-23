@@ -493,6 +493,7 @@ export type {
   Host,
   HostChannelStatus,
   HostCapacity,
+  HostRecentIdentityReplacement,
   PlacementPreview,
 } from "./host-types.js";
 import type { CleanupSource } from "./storage-types.js";

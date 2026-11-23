@@ -158,6 +158,7 @@ export function redeemHostPairingCode(
   app: FastifyInstance,
   presentedCode: string,
   input: RedeemHostPairingInput,
+  peer: string | null = null,
 ): HostRegistration | null {
   const now = new Date();
   const matched = findLivePairing(app, presentedCode, now);
@@ -169,12 +170,12 @@ export function redeemHostPairingCode(
     if (matched.redeemedAt.getTime() <= now.getTime() - HOST_PAIRING_RETRY_WINDOW_MS) return null;
     const prior = matched.redeemRequestHash;
     if (!prior || !matched.redeemedHostId || !timingSafeTokenMatch(requestHash, prior)) return null;
-    return app.db.transaction(() => reissuePairedIdentity(app, matched.redeemedHostId!));
+    return app.db.transaction(() => reissuePairedIdentity(app, matched.redeemedHostId!, peer));
   }
   // A code past its expiry that was somehow still selected (clock edge) is dead.
   if (matched.expiresAt.getTime() <= now.getTime()) return null;
 
-  return consumeHostPairing(app, matched, requestHash, input);
+  return consumeHostPairing(app, matched, requestHash, input, peer);
 }
 
 /**
@@ -233,6 +234,7 @@ export function consumeHostPairing(
   pairing: PairingRow,
   requestHash: string,
   input: RedeemHostPairingInput,
+  peer: string | null = null,
 ): HostRegistration | null {
   return app.db.transaction((tx) => {
     const claimed = tx
@@ -248,13 +250,17 @@ export function consumeHostPairing(
       .returning()
       .all();
     if (claimed.length === 0) return null;
-    const registration = createPairedHost(app, {
-      hostname: input.hostname,
-      name: input.name ?? pairing.label ?? undefined,
-      baseUrl: input.baseUrl,
-      platform: input.platform,
-      capabilities: input.capabilities,
-    });
+    const registration = createPairedHost(
+      app,
+      {
+        hostname: input.hostname,
+        name: input.name ?? pairing.label ?? undefined,
+        baseUrl: input.baseUrl,
+        platform: input.platform,
+        capabilities: input.capabilities,
+      },
+      peer,
+    );
     tx.update(hostPairings)
       .set({ redeemedHostId: registration.hostId })
       .where(eq(hostPairings.id, pairing.id))

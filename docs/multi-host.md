@@ -242,6 +242,29 @@ via self-registration, immediately — this is what makes token rotation a
 real response to a suspected leak rather than a no-op once a host has
 switched to session-based auth.
 
+#### Identity events
+
+Every host identity lifecycle transition records an entry in `host_identity_events`
+(with timestamp and raw TCP peer address when request-driven, never storing any
+credential, token, or code):
+
+- `enrolled` — a host enrolled via `MULLION_ENROLLMENT_SECRET`.
+- `claimed` — an existing manual host row was claimed with its per-host token.
+- `paired` — a host was paired (or had its pairing response reissued on retry) via a one-time pairing code.
+- `replaced` — a registration replaced an already-live machine identity (moving the prior credential to the grace slot).
+- `revoked` — an operator revoked the host's machine identity (`POST /api/hosts/:id/revoke`).
+- `token_rotated` — an operator rotated the host's per-host token (`POST /api/hosts/:id/rotate-token`).
+
+Normal machine-credential renewals write no event. `host_identity_events` retains at
+most the newest 100 rows per host (older rows are deleted as new events arrive, except
+unacknowledged `replaced` events which are preserved until acknowledged), and
+`GET /api/hosts/:id/identity-events` caps its response at the newest 100 events. When a
+host has an unacknowledged `replaced` event within the last 30 days (queried via the
+`(acknowledged_at, kind, at)` index), `GET /api/hosts` includes
+`recentIdentityReplacement` and Settings → Hosts shows an **Identity replaced
+\<relative time\>** badge with the peer address and an **Acknowledge** action
+(`POST /api/hosts/:id/identity-events/acknowledge`).
+
 ### Pairing a desktop Helper (one-time code)
 
 For a Mac or Windows machine running the Mullion Helper, the dashboard

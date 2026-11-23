@@ -38,6 +38,12 @@ export const hostsApi = {
   unbindHost: (id: string) =>
     request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/unbind`, { method: "POST" }),
 
+  // Issue #3435 — acknowledgement of replaced machine identities.
+  acknowledgeHostIdentityReplacement: (id: string) =>
+    request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/identity-events/acknowledge`, {
+      method: "POST",
+    }),
+
   // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no new
   // work) or un-parks it. A flag, not an action: nothing is terminated.
   updateHost: (

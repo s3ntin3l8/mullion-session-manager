@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { eq, and, isNotNull, isNull, ne, or } from "drizzle-orm";
-import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
+import { eq, and, desc, gte, isNotNull, isNull, ne, notInArray, or } from "drizzle-orm";
+import { hostIdentityEvents, hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 import { parseHostCwds, serializeHostCwds } from "./host-cwds.js";
@@ -16,7 +16,7 @@ import { HOST_PAIRING_RETRY_WINDOW_MS } from "./host-pairing-policy.js";
 // frontend/src/api.ts's own re-export). Re-exported below so every existing
 // backend importer of this module keeps working unchanged. Runtime VALUE,
 // not type-only, so this is a plain import.
-import { LOCAL_HOST_ID, type HostRole } from "../shared/constants.js";
+import { LOCAL_HOST_ID, type HostIdentityEventKind, type HostRole } from "../shared/constants.js";
 
 export { LOCAL_HOST_ID };
 
@@ -406,6 +406,7 @@ export function deleteHost(app: FastifyInstance, id: string, opts: { cascade?: b
     throw new HostHasProjectsError(id, projectCount);
   }
   app.db.transaction((tx) => {
+    tx.delete(hostIdentityEvents).where(eq(hostIdentityEvents.hostId, id)).run();
     const deleted = tx.delete(hosts).where(eq(hosts.id, id)).returning().all();
     if (deleted.length === 0) throw new UnknownHostError(id);
 
@@ -584,6 +585,7 @@ export function claimHost(
   app: FastifyInstance,
   presentedToken: string,
   input: RegisterAgentInput,
+  peer: string | null = null,
 ): HostRegistration | null {
   const candidates = app.db
     .select()
@@ -639,7 +641,8 @@ export function claimHost(
     })
     .where(eq(hosts.id, matchedRow.id))
     .run();
-  return withMachineCredential(app, issueSession(app, matchedRow.id), input);
+  recordHostIdentityEvent(app, matchedRow.id, "claimed", peer);
+  return withMachineCredential(app, issueSession(app, matchedRow.id), input, peer);
 }
 
 /**
@@ -663,13 +666,17 @@ export function claimHost(
  * duplicated. Never matches a manually-created row (checks origin too), so
  * this can't be used to hijack a pre-provisioned host's identity.
  */
-export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): HostRegistration {
+export function enrollHost(
+  app: FastifyInstance,
+  input: RegisterAgentInput,
+  peer: string | null = null,
+): HostRegistration {
   // Issue #2568 — an agent that persists an identity is matched by host id on
   // every later registration, so baseUrl is not an identity for it: two
   // agents sharing an advertised URL each get their own row (and credential)
   // instead of re-stealing one. Only the legacy path below still dedupes.
   if (input.wantsMachineCredential || input.baseUrl === undefined) {
-    return insertEnrolledHost(app, input);
+    return insertEnrolledHost(app, input, peer);
   }
   const baseUrl = input.baseUrl;
   const metadata = JSON.stringify({
@@ -726,14 +733,19 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
       .where(eq(hosts.id, existing.id))
       .run();
     noteLegacyAgent(app, existing.id);
+    recordHostIdentityEvent(app, existing.id, "enrolled", peer);
     return issueSession(app, existing.id);
   }
-  const inserted = insertEnrolledHost(app, input);
+  const inserted = insertEnrolledHost(app, input, peer);
   noteLegacyAgent(app, inserted.hostId);
   return inserted;
 }
 
-function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): HostRegistration {
+function insertEnrolledHost(
+  app: FastifyInstance,
+  input: RegisterAgentInput,
+  peer: string | null = null,
+): HostRegistration {
   const metadata = JSON.stringify({
     hostname: input.hostname,
     capabilities: input.capabilities ?? null,
@@ -751,7 +763,8 @@ function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): Ho
       platform: input.platform ?? null,
     })
     .run();
-  return withMachineCredential(app, issueSession(app, id), input);
+  recordHostIdentityEvent(app, id, "enrolled", peer);
+  return withMachineCredential(app, issueSession(app, id), input, peer);
 }
 
 /**
@@ -765,6 +778,7 @@ function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): Ho
 export function createPairedHost(
   app: FastifyInstance,
   input: Omit<RegisterAgentInput, "baseUrl" | "wantsMachineCredential"> & { baseUrl?: string },
+  peer: string | null = null,
 ): HostRegistration {
   const id = crypto.randomUUID();
   app.db
@@ -782,7 +796,8 @@ export function createPairedHost(
       platform: input.platform ?? null,
     })
     .run();
-  return { ...issueSession(app, id), machineCredential: issueMachineCredential(app, id) };
+  recordHostIdentityEvent(app, id, "paired", peer);
+  return { ...issueSession(app, id), machineCredential: issueMachineCredential(app, id, peer) };
 }
 
 /**
@@ -794,6 +809,7 @@ export function createPairedHost(
 export function reissuePairedIdentity(
   app: FastifyInstance,
   hostId: string,
+  peer: string | null = null,
 ): HostRegistration | null {
   const row = getHostRow(app, hostId);
   if (!row || row.id === LOCAL_HOST_ID || row.machineCredentialRevokedAt) return null;
@@ -809,6 +825,7 @@ export function reissuePairedIdentity(
     })
     .where(eq(hosts.id, hostId))
     .run();
+  recordHostIdentityEvent(app, hostId, "paired", peer);
   return { ...issueSession(app, hostId), machineCredential: credential };
 }
 
@@ -818,7 +835,11 @@ export function reissuePairedIdentity(
  * cleared the agent's state file. Returned in plaintext exactly once; stored
  * encrypted. A live previous credential moves to the grace slot (see below).
  */
-function issueMachineCredential(app: FastifyInstance, hostId: string): string {
+function issueMachineCredential(
+  app: FastifyInstance,
+  hostId: string,
+  peer: string | null = null,
+): string {
   const credential = crypto.randomBytes(32).toString("hex");
   // A claim cannot tell a deliberate re-enroll from a second agent sharing the
   // same per-host token. Keep a still-live credential in the grace slot so a
@@ -848,6 +869,9 @@ function issueMachineCredential(app: FastifyInstance, hostId: string): string {
     })
     .where(eq(hosts.id, hostId))
     .run();
+  if (replacesLive) {
+    recordHostIdentityEvent(app, hostId, "replaced", peer);
+  }
   return credential;
 }
 
@@ -855,13 +879,17 @@ function withMachineCredential(
   app: FastifyInstance,
   registration: HostRegistration,
   input: RegisterAgentInput,
+  peer: string | null = null,
 ): HostRegistration {
   if (!input.wantsMachineCredential) {
     noteLegacyAgent(app, registration.hostId);
     return registration;
   }
   legacyAgentNoticed.delete(registration.hostId);
-  return { ...registration, machineCredential: issueMachineCredential(app, registration.hostId) };
+  return {
+    ...registration,
+    machineCredential: issueMachineCredential(app, registration.hostId, peer),
+  };
 }
 
 function safeMatch(app: FastifyInstance, presented: string, enc: string | null): boolean {
@@ -991,7 +1019,11 @@ export function checkMachineCredential(
  * renewal and, by design, does not fall back to the bootstrap token.
  * Returns false for an unknown host.
  */
-export function revokeMachineIdentity(app: FastifyInstance, hostId: string): boolean {
+export function revokeMachineIdentity(
+  app: FastifyInstance,
+  hostId: string,
+  peer: string | null = null,
+): boolean {
   const updated = app.db
     .update(hosts)
     .set({
@@ -1007,7 +1039,142 @@ export function revokeMachineIdentity(app: FastifyInstance, hostId: string): boo
     .where(and(eq(hosts.id, hostId), ne(hosts.id, LOCAL_HOST_ID)))
     .returning()
     .all();
-  return updated.length > 0;
+  if (updated.length > 0) {
+    recordHostIdentityEvent(app, hostId, "revoked", peer);
+    return true;
+  }
+  return false;
+}
+
+const IDENTITY_REPLACEMENT_WINDOW_MS = 30 * 86_400_000;
+const IDENTITY_EVENTS_MAX = 100;
+
+export interface HostIdentityEventSummary {
+  id: number;
+  hostId: string;
+  kind: HostIdentityEventKind;
+  at: string;
+  peer: string | null;
+  acknowledgedAt: string | null;
+}
+
+export interface HostRecentIdentityReplacement {
+  id: number;
+  at: string;
+  peer: string | null;
+}
+
+/**
+ * Issue #3435 — appends one host identity lifecycle event. Never stores any
+ * credential, token, or code.
+ */
+export function recordHostIdentityEvent(
+  app: FastifyInstance,
+  hostId: string,
+  kind: HostIdentityEventKind,
+  peer: string | null = null,
+): void {
+  app.db
+    .insert(hostIdentityEvents)
+    .values({
+      hostId,
+      kind,
+      at: new Date(),
+      peer: peer || null,
+    })
+    .run();
+  // Keep at most IDENTITY_EVENTS_MAX rows per host so the table stays bounded,
+  // while preserving unacknowledged `replaced` events so the replacement alert
+  // cannot be silently evicted by subsequent activity.
+  const keepSubquery = app.db
+    .select({ id: hostIdentityEvents.id })
+    .from(hostIdentityEvents)
+    .where(eq(hostIdentityEvents.hostId, hostId))
+    .orderBy(desc(hostIdentityEvents.at), desc(hostIdentityEvents.id))
+    .limit(IDENTITY_EVENTS_MAX);
+  app.db
+    .delete(hostIdentityEvents)
+    .where(
+      and(
+        eq(hostIdentityEvents.hostId, hostId),
+        notInArray(hostIdentityEvents.id, keepSubquery),
+        or(ne(hostIdentityEvents.kind, "replaced"), isNotNull(hostIdentityEvents.acknowledgedAt)),
+      ),
+    )
+    .run();
+}
+
+/**
+ * Issue #3435 — returns the host's identity events, newest first, capped at 100.
+ */
+export function listHostIdentityEvents(
+  app: FastifyInstance,
+  hostId: string,
+): HostIdentityEventSummary[] {
+  const rows = app.db
+    .select()
+    .from(hostIdentityEvents)
+    .where(eq(hostIdentityEvents.hostId, hostId))
+    .orderBy(desc(hostIdentityEvents.at), desc(hostIdentityEvents.id))
+    .limit(IDENTITY_EVENTS_MAX)
+    .all();
+  return rows.map((row) => ({
+    id: row.id,
+    hostId: row.hostId,
+    kind: row.kind,
+    at: row.at.toISOString(),
+    peer: row.peer ?? null,
+    acknowledgedAt: row.acknowledgedAt ? row.acknowledgedAt.toISOString() : null,
+  }));
+}
+
+/**
+ * Issue #3435 — newest unacknowledged `replaced` event within 30 days per host.
+ */
+export function listRecentIdentityReplacements(
+  app: FastifyInstance,
+): Map<string, HostRecentIdentityReplacement> {
+  const cutoff = new Date(Date.now() - IDENTITY_REPLACEMENT_WINDOW_MS);
+  const rows = app.db
+    .select()
+    .from(hostIdentityEvents)
+    .where(
+      and(
+        eq(hostIdentityEvents.kind, "replaced"),
+        isNull(hostIdentityEvents.acknowledgedAt),
+        gte(hostIdentityEvents.at, cutoff),
+      ),
+    )
+    .orderBy(desc(hostIdentityEvents.at), desc(hostIdentityEvents.id))
+    .all();
+  const byHost = new Map<string, HostRecentIdentityReplacement>();
+  for (const row of rows) {
+    if (!byHost.has(row.hostId)) {
+      byHost.set(row.hostId, {
+        id: row.id,
+        at: row.at.toISOString(),
+        peer: row.peer ?? null,
+      });
+    }
+  }
+  return byHost;
+}
+
+/**
+ * Issue #3435 — marks all open `replaced` events for a host as acknowledged.
+ */
+export function acknowledgeHostIdentityReplacements(app: FastifyInstance, hostId: string): void {
+  app.db
+    .update(hostIdentityEvents)
+    .set({ acknowledgedAt: new Date() })
+    .where(
+      and(
+        eq(hostIdentityEvents.hostId, hostId),
+        eq(hostIdentityEvents.kind, "replaced"),
+        isNull(hostIdentityEvents.acknowledgedAt),
+      ),
+    )
+    .run();
 }
 
 // Shared by rotateSession (below) and verifyHostSession — the read-only

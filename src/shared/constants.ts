@@ -209,6 +209,17 @@ export const HOST_EDITABLE_ROLES = HOST_ROLES.filter((role) => role !== "main") 
 >[];
 export type HostEditableRole = (typeof HOST_EDITABLE_ROLES)[number];
 
+// db/schema.ts — HOST_IDENTITY_EVENT_KINDS / HostIdentityEventKind (issue #3435)
+export const HOST_IDENTITY_EVENT_KINDS = [
+  "enrolled",
+  "claimed",
+  "paired",
+  "replaced",
+  "revoked",
+  "token_rotated",
+] as const;
+export type HostIdentityEventKind = (typeof HOST_IDENTITY_EVENT_KINDS)[number];
+
 /** Content-Type of a streamed file body on the primary->agent hop of the file
  * browser's upload (routes/internal.ts registers the parser for it). Not
  * application/octet-stream: /internal/uploads buffers that type, and a plugin

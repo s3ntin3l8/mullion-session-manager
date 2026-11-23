@@ -31,6 +31,11 @@ export const createHostsSlice: StateCreator<DashboardState, [], [], HostsSlice> 
     await get().refreshHosts();
   },
 
+  acknowledgeHostIdentityReplacement: async (id) => {
+    await api.acknowledgeHostIdentityReplacement(id);
+    await get().refreshHosts();
+  },
+
   updateHost: async (id, patch) => {
     await api.updateHost(id, patch);
     await get().refreshHosts();

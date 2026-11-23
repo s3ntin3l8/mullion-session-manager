@@ -1,0 +1,1 @@
+CREATE INDEX `host_identity_events_ack_kind_at_idx` ON `host_identity_events` (`acknowledged_at`,`kind`,`at`);
