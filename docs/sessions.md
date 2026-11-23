@@ -77,7 +77,13 @@ or moves when a switch is flipped or a menu opened, so the rows below stay put.
      starts at the agent's configured value and overrides it for this launch
      only; the text beside it says which applies.
 4. **Shells and scripts** — shells, `package.json` scripts, `tasks.json` tasks
-   and `.crs/actions.json` actions. They have no options and launch on click.
+   and `.crs/actions.json` actions. Most have no options and launch on click.
+   A row whose command runs an agent that takes a model (a custom
+   `claude --foo`, say) is selected on click instead, as a palette-picked row
+   is, and shows the **Model** choice under Options (only that; skip
+   permissions applies to agent tiles); **Launch** or Enter then starts it with
+   the chosen model. A command that already passes `--model` has no Model
+   choice and launches on click.
 5. **Launch** — starts the selected agent.
 
 **Add project** and **Edit project** replace the launcher's body with the
