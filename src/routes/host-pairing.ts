@@ -9,6 +9,7 @@ import {
 import { refreshHostProtocolSoon } from "../services/host-agents.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { requestScheme } from "../services/request-scheme.js";
+import { getRawRemoteAddress } from "../services/raw-remote-address.js";
 import { createFailureRateLimiter } from "../services/failure-rate-limiter.js";
 import {
   buildPairingLink,
@@ -172,14 +173,19 @@ export async function hostPairingRoute(app: FastifyInstance) {
       ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
-      const result = redeemHostPairingCode(app, code, {
-        requestId,
-        hostname,
-        name,
-        baseUrl,
-        platform,
-        capabilities,
-      });
+      const result = redeemHostPairingCode(
+        app,
+        code,
+        {
+          requestId,
+          hostname,
+          name,
+          baseUrl,
+          platform,
+          capabilities,
+        },
+        getRawRemoteAddress(request) || null,
+      );
       // Uniform answer for unknown, expired, revoked and replayed codes.
       if (!result) return reply.unauthorized("invalid pairing code");
       app.reconfigureRemoteEventSubscriptions({ forceReconnect: [result.hostId] });

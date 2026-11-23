@@ -7,6 +7,7 @@ import type {
   DetectCheckoutsResult,
   Host,
   HostConfig,
+  HostIdentityEvent,
   HostUpdateStatus,
   UpdateStatus,
 } from "./types.js";
@@ -37,6 +38,15 @@ export const hostsApi = {
   // Issue #2622 — unbind a host from the outbound channel transport.
   unbindHost: (id: string) =>
     request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/unbind`, { method: "POST" }),
+
+  // Issue #3435 — audit trail and acknowledgement of replaced machine identities.
+  getHostIdentityEvents: (id: string) =>
+    request<HostIdentityEvent[]>(`/api/hosts/${encodeURIComponent(id)}/identity-events`),
+
+  acknowledgeHostIdentityReplacement: (id: string) =>
+    request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/identity-events/acknowledge`, {
+      method: "POST",
+    }),
 
   // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no new
   // work) or un-parks it. A flag, not an action: nothing is terminated.

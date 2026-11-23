@@ -9,20 +9,25 @@ import {
   LOCAL_HOST_ID,
   HostHasProjectsError,
   UnknownHostError,
+  acknowledgeHostIdentityReplacements,
   createHost,
   deleteHost,
   getHostRow,
   hasLiveMachineIdentity,
+  listHostIdentityEvents,
   listHosts,
+  listRecentIdentityReplacements,
   findPossibleDuplicates,
   activeSessionHostIds,
   mintHostToken,
+  recordHostIdentityEvent,
   revokeMachineIdentity,
   updateHost,
   listHostProjects,
   listProjectSessions,
   deleteProjectRows,
 } from "../services/host-registry.js";
+import { getRawRemoteAddress } from "../services/raw-remote-address.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { listActiveTasksOnHost } from "../services/session-live-info.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
@@ -206,6 +211,7 @@ export async function hostsRoute(app: FastifyInstance) {
     for (const leak of listLeakedBrowserCloses(app)) {
       leakedByHost.set(leak.hostId, (leakedByHost.get(leak.hostId) ?? 0) + 1);
     }
+    const recentReplacements = listRecentIdentityReplacements(app);
     // Issue #2969 — an older offline row a newer registration replaced is a
     // leftover, not an agent waiting for an upgrade: its successor already
     // has an identity, so flagging the leftover would say "upgrade" about an
@@ -283,6 +289,8 @@ export async function hostsRoute(app: FastifyInstance) {
         // Issue #2641 — browsers still running on this host that the primary
         // could not close and stopped retrying.
         leakedBrowsers: leakedByHost.get(host.id) ?? 0,
+        // Issue #3435 — newest unacknowledged identity replacement within 30 days.
+        recentIdentityReplacement: recentReplacements.get(host.id) ?? null,
       };
     });
   });
@@ -401,6 +409,7 @@ export async function hostsRoute(app: FastifyInstance) {
     const token = mintHostToken();
     const updated = updateHost(app, id, { token });
     if (!updated) return reply.notFound();
+    recordHostIdentityEvent(app, id, "token_rotated", getRawRemoteAddress(request) || null);
     onHostCredentialsChanged(app, id);
     return { token };
   });
@@ -411,12 +420,32 @@ export async function hostsRoute(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/hosts/:id/revoke", async (request, reply) => {
     const { id } = request.params;
     if (id === LOCAL_HOST_ID) return reply.badRequest("the local host has no machine identity");
-    if (!revokeMachineIdentity(app, id)) return reply.notFound();
+    if (!revokeMachineIdentity(app, id, getRawRemoteAddress(request) || null)) {
+      return reply.notFound();
+    }
     onHostCredentialsChanged(app, id);
     // A revoked identity must stop being served now, not at the next redial.
     closeAgentChannel(app, id, AgentChannelCloseCode.Revoked);
     reply.code(204);
   });
+
+  // Issue #3435 — audit trail of host identity lifecycle events (newest first,
+  // capped at 100) and acknowledgement of open `replaced` events.
+  app.get<{ Params: { id: string } }>("/api/hosts/:id/identity-events", async (request, reply) => {
+    const { id } = request.params;
+    if (!getHostRow(app, id)) return reply.notFound();
+    return listHostIdentityEvents(app, id);
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/api/hosts/:id/identity-events/acknowledge",
+    async (request, reply) => {
+      const { id } = request.params;
+      if (!getHostRow(app, id)) return reply.notFound();
+      acknowledgeHostIdentityReplacements(app, id);
+      return { ok: true };
+    },
+  );
 
   // Explicit unbind from the outbound channel (#2622). Clears the sticky binding
   // when an agent has stopped dialing, so callers can manage the host.

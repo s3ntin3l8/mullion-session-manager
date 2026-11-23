@@ -15,6 +15,7 @@ import { sql } from "drizzle-orm";
 // TASK_STATUSES is a runtime VALUE, not type-only, so this is a plain
 // import, not `import type`.
 import {
+  HOST_IDENTITY_EVENT_KINDS,
   HOST_ROLES,
   PLACEMENT_MODES,
   TASK_STATUSES,
@@ -148,6 +149,26 @@ export const hostPairings = sqliteTable("host_pairings", {
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+// Issue #3435 — audit trail for host identity lifecycle events (enrollment,
+// claim, pairing, replacement of a live machine identity, revocation, and
+// per-host token rotation). Never stores any credential, token, or code.
+export const hostIdentityEvents = sqliteTable(
+  "host_identity_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    hostId: text("host_id")
+      .notNull()
+      .references(() => hosts.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: HOST_IDENTITY_EVENT_KINDS }).notNull(),
+    at: integer("at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    peer: text("peer"),
+    acknowledgedAt: integer("acknowledged_at", { mode: "timestamp" }),
+  },
+  (table) => [index("host_identity_events_host_at_idx").on(table.hostId, table.at)],
+);
 
 // Issue #820 — a laptop/PC "helper" that dials OUT to the primary over
 // `/ws/agent-bridge`, carrying its SSH agent's traffic to every host that

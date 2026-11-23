@@ -163,6 +163,19 @@ function HostProtocolLine({ host }: { host: Host }) {
   );
 }
 
+function formatIdentityReplacementAge(iso: string, nowMs: number): string {
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "recently";
+  const seconds = Math.max(0, Math.round((nowMs - ms) / 1000));
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
 // Issue #3091 — a host that connects out needs no stored address, so it may be
 // cleared; one without a live machine identity (none, revoked or expired) is
 // reached only by it. The server enforces the same rule.
@@ -181,6 +194,7 @@ export function HostsSection() {
     rotateHostToken,
     revokeHost,
     unbindHost,
+    acknowledgeHostIdentityReplacement,
   } = useDashboardStore();
 
   // Issue #1725 / roadmap 8.11 — park a host, or un-park it.
@@ -236,6 +250,8 @@ export function HostsSection() {
   // Issue #1725 — a failed park/unpark says so, rather than leaving the
   // row unchanged with nothing said.
   const [drainError, setDrainError] = useState<string | null>(null);
+  const [acknowledging, setAcknowledging] = useState<Record<string, boolean>>({});
+  const [ackError, setAckError] = useState<string | null>(null);
 
   // Issue #647 / roadmap 7.8 — per-host update state, keyed like pingStatus
   // above (one global updater's worth of state, per host, not a single flat
@@ -515,6 +531,20 @@ export function HostsSection() {
     );
   };
 
+  const handleAcknowledgeReplacement = (host: Host) => {
+    setAckError(null);
+    setAcknowledging((prev) => ({ ...prev, [host.id]: true }));
+    void acknowledgeHostIdentityReplacement(host.id)
+      .catch((err: unknown) =>
+        setAckError(
+          err instanceof Error ? err.message : "Could not acknowledge identity replacement.",
+        ),
+      )
+      .finally(() => {
+        setAcknowledging((prev) => ({ ...prev, [host.id]: false }));
+      });
+  };
+
   const confirmCascadeDelete = () => {
     if (!cascadePrompt) return;
     const { id } = cascadePrompt;
@@ -685,6 +715,33 @@ export function HostsSection() {
                             .possibleDuplicateOf!.map((id) => hostNameById.get(id) ?? id)
                             .join(", ")}
                         </span>
+                      </>
+                    )}
+                    {host.recentIdentityReplacement && (
+                      <>
+                        {" · "}
+                        <span
+                          data-testid={`host-identity-replaced-${host.id}`}
+                          style={{ color: "var(--y)" }}
+                          title="A registration replaced this host's live machine identity. Expected after an operator re-enroll; if unexpected, revoke the identity or rotate the per-host token."
+                        >
+                          Identity replaced{" "}
+                          {formatIdentityReplacementAge(host.recentIdentityReplacement.at, now)}
+                        </span>
+                        <div
+                          data-testid={`host-identity-replaced-detail-${host.id}`}
+                          style={{ marginTop: 2 }}
+                        >
+                          Identity replaced from peer{" "}
+                          <code>{host.recentIdentityReplacement.peer ?? "unknown"}</code>
+                          {" · "}
+                          <SecondaryButton
+                            onClick={() => handleAcknowledgeReplacement(host)}
+                            disabled={acknowledging[host.id] === true}
+                          >
+                            Acknowledge
+                          </SecondaryButton>
+                        </div>
                       </>
                     )}
                   </>
@@ -885,6 +942,8 @@ export function HostsSection() {
             );
           })}
       </StyledList>
+
+      {ackError && <ErrorText>{ackError}</ErrorText>}
 
       {staleHosts.length > 0 && (
         <div style={{ marginTop: 16 }}>

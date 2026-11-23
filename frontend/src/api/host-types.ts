@@ -1,5 +1,6 @@
 import type {
   PlacementCapability,
+  HostIdentityEventKind,
   HostRole,
   PlacementMode,
 } from "../../../src/shared/constants.js";
@@ -10,6 +11,21 @@ import type { HostProtocolStatus } from "../../../src/shared/agent-protocol.js";
 // Never carries a token, just whether one is set (hasToken), same
 // "no secrets over the API" rule AppSettings/ServerInfo above already follow.
 export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
+
+export interface HostRecentIdentityReplacement {
+  id: number;
+  at: string;
+  peer: string | null;
+}
+
+export interface HostIdentityEvent {
+  id: number;
+  hostId: string;
+  kind: HostIdentityEventKind;
+  at: string;
+  peer: string | null;
+  acknowledgedAt: string | null;
+}
 
 export interface HostChannelStatus {
   ready: boolean;
@@ -57,6 +73,9 @@ export interface Host {
   // Issue #2641 — browsers left running on this host after the primary gave up
   // closing them. Absent from an older primary.
   leakedBrowsers?: number;
+  // Issue #3435 — newest unacknowledged `replaced` identity event within 30
+  // days, else null. Absent from an older primary.
+  recentIdentityReplacement?: HostRecentIdentityReplacement | null;
   health: HostHealthStatus;
   // Why the host is degraded when the primary knows ("channel saturated"). Absent from an older primary.
   healthReason?: string | null;

@@ -11,7 +11,7 @@ import type { PlacementCapability } from "../../../../src/shared/constants.js";
 // Token rotation and the "waiting for the agent" row state. The rest of the
 // section is exercised through its own components' tests.
 
-function stubFetch(opts: { rotate?: () => Response }) {
+function stubFetch(opts: { rotate?: () => Response; acknowledge?: () => Response }) {
   const calls: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -24,6 +24,9 @@ function stubFetch(opts: { rotate?: () => Response }) {
       }
       if (url.endsWith("/rotate-token") && method === "POST" && opts.rotate) {
         return Promise.resolve(opts.rotate());
+      }
+      if (url.endsWith("/identity-events/acknowledge") && method === "POST" && opts.acknowledge) {
+        return Promise.resolve(opts.acknowledge());
       }
       // Per-host update status etc.: unavailable here, which the section swallows.
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
@@ -391,5 +394,51 @@ describe("HostsSection token rotation", () => {
     expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
     expect(screen.queryByTestId("rotate-unaffected")).not.toBeInTheDocument();
     expect(screen.getByText(/can no longer reach this primary/)).toBeInTheDocument();
+  });
+
+  it("renders identity replacement badge and detail when recentIdentityReplacement is set, and Acknowledge clears it", async () => {
+    const user = userEvent.setup();
+    const recentAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "worker-1",
+          recentIdentityReplacement: { id: 10, at: recentAt, peer: "10.0.0.42" },
+        }),
+        makeHost({
+          id: "h2",
+          name: "worker-2",
+          recentIdentityReplacement: null,
+        }),
+      ],
+    });
+    const calls = stubFetch({
+      acknowledge: () => {
+        useDashboardStore.setState((state) => ({
+          hosts: state.hosts.map((h) =>
+            h.id === "h1" ? { ...h, recentIdentityReplacement: null } : h,
+          ),
+        }));
+        return jsonResponse(200, { ok: true });
+      },
+    });
+
+    render(<HostsSection />);
+
+    expect(screen.getByTestId("host-identity-replaced-h1")).toHaveTextContent(
+      /Identity replaced 5 min ago/,
+    );
+    expect(screen.getByTestId("host-identity-replaced-detail-h1")).toHaveTextContent("10.0.0.42");
+    expect(screen.queryByTestId("host-identity-replaced-h2")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Acknowledge" }));
+
+    await vi.waitFor(() =>
+      expect(calls).toContain("POST /api/hosts/h1/identity-events/acknowledge"),
+    );
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId("host-identity-replaced-h1")).not.toBeInTheDocument(),
+    );
   });
 });
