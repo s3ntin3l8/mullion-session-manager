@@ -346,7 +346,9 @@ specific address.
 - **Primary URL the agent calls.** Defaults to the address the dashboard was
   opened on. A login gateway in front of the primary (Authentik forwardAuth)
   blocks `/api/internal/register`, so use the primary's direct address
-  (e.g. `http://dev-01:3100`) if that applies to you.
+  (e.g. `http://dev-01:3100`) if that applies to you, or see
+  [Dedicated agent hostname behind Traefik](#dedicated-agent-hostname-behind-traefik)
+  for exposing only the agent endpoints over HTTPS.
 - **Rotate token** (the host's `…` menu, click twice to confirm) mints a new
   token, shows it once, and clears the host's session. What that means depends
   on the host:
@@ -414,6 +416,61 @@ hand a shared enrollment secret to automation:
    session under that project spawns and runs on the agent, and terminal
    attach streams through the primary's own `/ws/terminal` — the browser
    only ever talks to the primary.
+
+### Dedicated agent hostname behind Traefik
+
+The default and recommended setup is for agents to connect directly over the
+primary's LAN or tailnet address (`MULLION_PRIMARY_URL=http://<direct-host>:<port>`).
+A login gateway (such as Authentik `forwardAuth`) in front of the primary's
+dashboard hostname answers `POST /api/internal/register` with a `302` redirect
+to a browser login, which blocks an agent from registering and from opening
+`/ws/agent-channel`.
+
+When agents must connect over the public internet or outside a LAN/tailnet and
+need TLS, expose a **second Traefik router on a dedicated agent hostname**
+without the `forwardAuth` middleware. Restrict its rule to these exact four
+paths and nothing else:
+
+- `/api/internal/register` (`src/routes/enrollment.ts`)
+- `/api/internal/pair` (`src/routes/host-pairing.ts`)
+- `/api/internal/deregister` (`src/routes/enrollment.ts`)
+- `/ws/agent-channel` (`src/routes/agent-channel.ts`)
+
+Then set `MULLION_PRIMARY_URL=https://<that-hostname>` on the agent. The
+example below follows [`deploy/README.md`](../deploy/README.md)'s Traefik
+conventions and is **illustrative** (not run against a live Traefik instance):
+
+```yaml
+mullion-agent:
+  rule: "Host(`CHANGEME_AGENT_HOSTNAME`) && (Path(`/api/internal/register`) || Path(`/api/internal/pair`) || Path(`/api/internal/deregister`) || Path(`/ws/agent-channel`))"
+  entryPoints:
+    - websecure
+  service: claude-remote-session
+  tls:
+    certResolver: CHANGEME_CERTRESOLVER
+```
+
+**Only the listed paths may be reachable on that hostname.** Use exact `Path()`
+matchers rather than a broad `Host()`-only or prefix rule: a wrong rule exposes
+the whole API without SSO (which still has its own bearer auth when in-process
+auth is configured, or no auth at all when `MULLION_TRUST_GATEWAY=true`).
+
+**Shared failure rate-limit bucket behind a proxy.** Because `trustProxy` is off
+app-wide (see [`docs/auth.md`](auth.md#current-limitations)), every request's
+`request.ip` is the proxy's address rather than the agent's. IP-keyed rate
+limiters — including `/api/internal/pair`'s failure bucket and the app-wide
+rate limiter — therefore share one bucket across all agents behind Traefik.
+
+**`MULLION_ENROLLMENT_ALLOWED_CIDRS` and auto-approve CIDRs see the proxy's address.**
+For the same `trustProxy`-off reason, CIDR checks evaluate the raw TCP peer
+(`request.ip`), which is Traefik's address rather than the connecting agent's.
+Do not rely on `MULLION_ENROLLMENT_ALLOWED_CIDRS` or auto-approve CIDRs to
+distinguish individual remote agents behind the proxy.
+
+**Do not put the user-facing hostname's SSO bypass on `/api/internal/*`.** Keep
+the unauthenticated agent endpoints isolated on their own dedicated hostname
+instead of adding a `/api/internal/*` bypass to the dashboard's `forwardAuth`
+configuration or main Traefik router.
 
 ## Automatic placement
 

@@ -488,6 +488,15 @@ tracker for a follow-up once one of those is actually verified against a
 real deployment, rather than speculatively authoring untested config for a
 platform nobody here runs.
 
+## Optional: dedicated agent hostname behind a forwardAuth gateway
+
+For remote execution agents connecting outside a LAN or tailnet (where the
+recommended direct primary URL is not available), see
+[`docs/multi-host.md`](../docs/multi-host.md#dedicated-agent-hostname-behind-traefik)
+for how to expose only `/api/internal/register`, `/api/internal/pair`,
+`/api/internal/deregister`, and `/ws/agent-channel` on a separate Traefik
+router without `forwardAuth`.
+
 ## Optional: in-dashboard previews (issue #28)
 
 See also [`docs/browser-previews.md`](../docs/browser-previews.md) for the
