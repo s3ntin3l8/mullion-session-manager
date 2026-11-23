@@ -3073,7 +3073,8 @@ button.github-panel-row.gh-issue-row {
 }
 /* #3030 — the touch keyboard's input: focusable (so it can raise the soft
    keyboard) but invisible. Not display:none or visibility:hidden, which
-   cannot take focus; 16px so iOS does not zoom the page on focus. */
+   cannot take focus; 1rem (16px), like the other inputs, so iOS does not
+   zoom the page on focus. */
 .browser-pane-typing-input {
   position: absolute;
   left: 0;
@@ -3085,7 +3086,7 @@ button.github-panel-row.gh-issue-row {
   opacity: 0;
   resize: none;
   overflow: hidden;
-  font-size: 16px;
+  font-size: 1rem;
   pointer-events: none;
 }
 .browser-pane-keyboard-toggle[aria-pressed="true"] {
