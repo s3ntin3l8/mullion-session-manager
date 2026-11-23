@@ -206,6 +206,37 @@ describe("DockSidebarView (#3012)", () => {
       expect(screen.queryByRole("combobox", { name: "Run dock controls on host" })).toBeNull();
     });
 
+    it("follows a control already running on another host, so Restart keeps it there", async () => {
+      const running = {
+        ...dockSession(7, null, "npm run dev"),
+        hostId: "mac",
+        resolvedHostId: "mac",
+      } as Session;
+      resetStore({ projects: [spanning], sessions: [running], hosts: [MAC] });
+      useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+      renderView();
+      await userEvent.click(await screen.findByRole("button", { name: /^dev, running/ }));
+      const picker = screen.getByRole("combobox", { name: "Run dock controls on host" });
+      // Not "this server": it is running on the Mac.
+      expect(dd.dropdownValue(picker)).toBe("mac");
+      const group = screen.getByRole("group", { name: "dev actions" });
+      await userEvent.click(within(group).getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(createSession).toHaveBeenCalled());
+      expect(createSession.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ kind: "dock", targetHostId: "mac" }),
+      );
+
+      // An explicit choice of the project's own host wins over where it runs now.
+      createSession.mockClear();
+      dd.pickDropdownOption(
+        screen.getByRole("combobox", { name: "Run dock controls on host" }),
+        "__own__",
+      );
+      await userEvent.click(within(group).getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(createSession).toHaveBeenCalled());
+      expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+    });
+
     it("starts on the project's own placement until a host is picked, then on that host", async () => {
       resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
       useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });

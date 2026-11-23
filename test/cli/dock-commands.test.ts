@@ -148,6 +148,12 @@ describe("mullion dock", () => {
       await runCommand(["dock", "start", "web", "--host", "--branch", "x"], { client, io }),
     ).toBe(2);
     expect(await runCommand(["dock", "switch", "web", "b", "--host"], { client, io })).toBe(2);
+    expect(
+      await runCommand(["dock", "switch", "web", "1", "--host", "a", "--host", "b"], {
+        client,
+        io,
+      }),
+    ).toBe(2);
     expect(client.request).not.toHaveBeenCalled();
   });
 

@@ -104,6 +104,11 @@ to `mullion dock start`/`switch` or `host` to the MCP `start_dock_session` /
 `switch_dock_branch`. The choice is per launch and is not stored: a fresh Dock
 starts on the project's own placement again.
 
+- A control runs in one place at a time: starting one that is already running
+  (on any host) answers `409`. To move it, pick the host and **Restart** (or
+  `mullion dock switch <control> <branch> --host <id>`). Until you pick, the
+  dropdown follows where the project's dock already runs, so Restart brings a
+  control back on the host it was on.
 - The control is read from `.crs/dock.json` **in the checkout on that host**, so
   its command and `cwd` are that checkout's. A host the project has no checkout
   on is refused with `409 no_checkout_on_host`, before anything stops.

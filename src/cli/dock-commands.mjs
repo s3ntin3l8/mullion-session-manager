@@ -99,6 +99,9 @@ export function createDockCommands({ CliUsageError, requireOne }) {
     // `switch [<projectId>] <controlId> <branch>` or `... --worktree <path>`, either with `--host <id>`.
     async switch(client, rawArgs) {
       const hostAt = rawArgs.indexOf("--host");
+      if (hostAt !== -1 && rawArgs.indexOf("--host", hostAt + 1) !== -1) {
+        throw new CliUsageError("--host given more than once");
+      }
       if (
         hostAt !== -1 &&
         (rawArgs[hostAt + 1] === undefined || rawArgs[hostAt + 1].startsWith("--"))

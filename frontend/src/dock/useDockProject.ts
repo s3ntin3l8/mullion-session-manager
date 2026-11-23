@@ -263,17 +263,32 @@ export function useDockProject(
   const heldMerge = heldState.merge;
 
   const project = projects.find((p) => p.id === projectId) ?? null;
-  // #3425 — where a Start runs. Per launch and per mount: nothing is stored, so
-  // the default (the project's own placement) is what a fresh dock does.
-  const [hostChoice, setHostChoice] = useState<string>(OWN_HOST_VALUE);
+  const dockSessions = sessions.filter(
+    (s) => s.kind === "dock" && s.projectId === projectId && s.status === "active",
+  );
+  // #3425 — where a Start runs. Per launch and per mount: nothing is stored.
+  // Until the user picks, it follows where the project's dock already runs
+  // (a control running on the Mac is not offered "this server" by default, and
+  // Restart brings it back where it was), else the project's own placement.
+  const [hostChoice, setHostChoice] = useState<string | null>(null);
   // Own host first, then each host the project has a checkout on. Auto is not
   // offered: a dock control is somewhere on purpose.
   const hostOptions = project
     ? buildHostTargetOptions(project, hosts).filter((o) => o.value !== AUTO_VALUE)
     : [];
+  const runningElsewhere =
+    project && hostOptions.length > 1
+      ? [...dockSessions]
+          .sort((a, b) => b.id - a.id)
+          .map((s) => s.resolvedHostId)
+          .find((h) => h && h !== project.hostId && hostOptions.some((o) => o.value === h))
+      : undefined;
+  const effectiveHostChoice = hostChoice ?? runningElsewhere ?? OWN_HOST_VALUE;
   const targetHostId =
-    project && hostChoice !== OWN_HOST_VALUE && hostOptions.some((o) => o.value === hostChoice)
-      ? hostChoice
+    project &&
+    effectiveHostChoice !== OWN_HOST_VALUE &&
+    hostOptions.some((o) => o.value === effectiveHostChoice)
+      ? effectiveHostChoice
       : undefined;
   const hostPicker: DockHostPicker | null =
     project && hostOptions.length > 1
@@ -284,9 +299,6 @@ export function useDockProject(
           onChange: setHostChoice,
         }
       : null;
-  const dockSessions = sessions.filter(
-    (s) => s.kind === "dock" && s.projectId === projectId && s.status === "active",
-  );
 
   const gitRefs: GitBranchesResult | undefined = gitBranchesByProject[projectId];
   const worktrees = gitRefs?.worktrees ?? [];

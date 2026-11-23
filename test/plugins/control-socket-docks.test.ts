@@ -584,6 +584,26 @@ describe("docks.* ops (#2494)", () => {
       );
     });
 
+    it("switches a stopped control that exists only on the chosen host's checkout", async () => {
+      const { app, agentSession } = await setupMac();
+      remote.resolveDock.mockResolvedValue([
+        { id: "mac-only", title: "Mac dev", command: "npm run dev" },
+      ]);
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.switch",
+        body: { dockControlId: "mac-only", branch: "b", hostId: "mac" },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls).toHaveLength(1);
+      expect(launch.calls[0]).toMatchObject({
+        command: "npm run dev",
+        target: { hostId: "mac" },
+        worktree: { branch: "b" },
+      });
+    });
+
     it("switch carries the host too, and stops nothing when the host is refused", async () => {
       const { app, agentSession } = await setupMac();
       const { conn, frames } = makeConnectionState("session", agentSession);

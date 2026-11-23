@@ -330,13 +330,19 @@ export async function stopDockControl(
   app: FastifyInstance,
   projectId: number,
   controlId: string,
+  // The host a switch is about to start the control on: with nothing running,
+  // the control is looked up there, not in the project host's dock.json.
+  hostIdWhenStopped?: string,
 ): Promise<DockControlResult<{ sessionId: number | null }>> {
   // A control started on another host is defined by THAT host's dock.json, so
   // it is checked there (#3425), not against the project host's.
   const running = findRunningDockSession(app, projectId, controlId);
   const project = getProjectRow(app, projectId);
-  const runningHostId =
-    running?.hostId && project && running.hostId !== project.hostId ? running.hostId : undefined;
+  const runningHostId = running
+    ? running.hostId && project && running.hostId !== project.hostId
+      ? running.hostId
+      : undefined
+    : hostIdWhenStopped;
   const control = await resolveControl(app, projectId, controlId, runningHostId);
   if (!control.ok) return control;
   if (!running) return { ok: true, value: { sessionId: null } };
@@ -361,7 +367,7 @@ export async function switchDockControl(
   // Validate before stopping: a bad target must not kill a healthy server.
   const checked = await validateTarget(app, projectId, target);
   if (!checked.ok) return checked.error;
-  const stopped = await stopDockControl(app, projectId, controlId);
+  const stopped = await stopDockControl(app, projectId, controlId, target.hostId);
   if (!stopped.ok) return stopped;
   const started = await startDockControl(app, projectId, controlId, target, launch);
   if (started.ok || stopped.value.sessionId === null) return started;
