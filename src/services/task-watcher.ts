@@ -247,6 +247,9 @@ export function upsertIssueTask(
           eq(tasks.issueNumber, issue.number),
           eq(tasks.status, "ready" satisfies TaskStatus),
           isNull(tasks.sessionId),
+          // A proposal row is demoted by the proposal path below, not here: this
+          // branch also runs when the own-bot lookup merely failed this sweep.
+          isNull(tasks.proposalState),
         ),
       )
       .returning({ id: tasks.id })

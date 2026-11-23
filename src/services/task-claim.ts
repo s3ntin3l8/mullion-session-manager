@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
+import { proposalBlocksRun } from "./task-proposal.js";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 // createSessionRecord/withLiveStatus are pure business logic, filed under
@@ -162,6 +163,16 @@ export async function enqueueTask(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-found" };
+
+  // A task from Mullion's own bot that no human has approved (or that was
+  // edited after approval) must not start, whoever asks.
+  if (proposalBlocksRun(task)) {
+    return {
+      ok: false,
+      reason: "not-ready",
+      detail: "Task was filed by Mullion and needs a human Approve before it can run",
+    };
+  }
 
   // An archived task is off the board for good (a merged-away project's
   // superseded copy, say) — claiming it would start a duplicate worker.

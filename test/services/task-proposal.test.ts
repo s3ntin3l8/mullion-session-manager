@@ -28,6 +28,9 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { upsertIssueTask } = await import("../../src/services/task-watcher.js");
+const { enqueueTask } = await import("../../src/services/task-claim.js");
+const { enqueueRetry } = await import("../../src/services/task-retry.js");
+const { dispatchQueuedTasks } = await import("../../src/services/task-dispatch.js");
 const { proposalContentSha } = await import("../../src/services/task-proposal.js");
 const { eq, and } = await import("drizzle-orm");
 
@@ -54,6 +57,16 @@ describe("proposed tasks (own-bot issues)", () => {
       .from(tasks)
       .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, num)))
       .get();
+
+  const post = (id: number, action: string) => {
+    const r = row_(id);
+    return app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/${action}`,
+      payload: action === "approve-proposal" ? { title: r?.title, body: r?.body ?? null } : {},
+    });
+  };
+  const row_ = (id: number) => app.db.select().from(tasks).where(eq(tasks.id, id)).get();
 
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
@@ -118,9 +131,6 @@ describe("proposed tasks (own-bot issues)", () => {
   });
 
   describe("approve / dismiss", () => {
-    const post = (id: number, action: string) =>
-      app.inject({ method: "POST", url: `/api/tasks/${id}/${action}` });
-
     it("approve makes it ready, pins the content and records the transition", async () => {
       const i = issue();
       upsertIssueTask(app, projectId, i, BOT);
@@ -197,6 +207,73 @@ describe("proposed tasks (own-bot issues)", () => {
       upsertIssueTask(app, projectId, i, BOT);
       expect((await post(row(i.number)!.id, "dismiss-proposal")).statusCode).toBe(502);
       expect(mockCloseIssue).not.toHaveBeenCalled();
+    });
+
+    it("approve refuses text the human did not see", async () => {
+      const i = issue();
+      upsertIssueTask(app, projectId, i, BOT);
+      const id = row(i.number)!.id;
+      const stale = await app.inject({
+        method: "POST",
+        url: `/api/tasks/${id}/approve-proposal`,
+        payload: { title: i.title, body: "an older body" },
+      });
+      expect(stale.statusCode).toBe(409);
+      const none = await app.inject({ method: "POST", url: `/api/tasks/${id}/approve-proposal` });
+      expect(none.statusCode).toBe(400);
+      expect(row(i.number)?.proposalState).toBe("proposed");
+    });
+  });
+
+  describe("no other road to a run", () => {
+    it("claim refuses a proposal and an approved-then-edited task", async () => {
+      const i = issue();
+      upsertIssueTask(app, projectId, i, BOT);
+      const id = row(i.number)!.id;
+      expect(await enqueueTask(app, id, { auto: false })).toMatchObject({
+        ok: false,
+        reason: "not-ready",
+      });
+      app.db
+        .update(tasks)
+        .set({ proposalState: "approved", approvedBodySha: "stale", status: "ready" })
+        .where(eq(tasks.id, id))
+        .run();
+      expect(await enqueueTask(app, id, { auto: false })).toMatchObject({ ok: false });
+    });
+
+    it("retry refuses a dismissed proposal", async () => {
+      const i = issue();
+      upsertIssueTask(app, projectId, i, BOT);
+      const id = row(i.number)!.id;
+      await app.inject({ method: "POST", url: `/api/tasks/${id}/dismiss-proposal` });
+      expect(await enqueueRetry(app, id, {})).toMatchObject({ ok: false, reason: "not-failed" });
+      expect(row(i.number)?.status).toBe("failed");
+    });
+
+    it("the dispatch sweep sends an edited, already-queued task back to proposed", async () => {
+      const i = issue();
+      upsertIssueTask(app, projectId, i, BOT);
+      const id = row(i.number)!.id;
+      app.db
+        .update(tasks)
+        .set({
+          proposalState: "approved",
+          approvedBodySha: proposalContentSha(i.title, "the approved body"),
+          status: "claimed",
+        })
+        .where(eq(tasks.id, id))
+        .run();
+      await dispatchQueuedTasks(app);
+      expect(row(i.number)).toMatchObject({ status: "backlog", proposalState: "proposed" });
+    });
+
+    it("an unresolved bot login does not demote an approved proposal", async () => {
+      const i = issue();
+      upsertIssueTask(app, projectId, i, BOT);
+      await post(row(i.number)!.id, "approve-proposal");
+      upsertIssueTask(app, projectId, { ...i }, null);
+      expect(row(i.number)).toMatchObject({ status: "ready", proposalState: "approved" });
     });
   });
 });

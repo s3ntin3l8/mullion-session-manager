@@ -142,6 +142,13 @@ function getGitHubAppCredentials(
 const OWN_BOT_NEGATIVE_TTL_MS = 5 * 60 * 1000;
 let ownBotMiss: { appId: string; at: number } | null = null;
 
+/** The saved bot login, no network: for a request path (a webhook) that must
+ * not wait on GitHub. Null until the slug is saved; the poll fills it in. */
+export function peekOwnBotLogin(app: FastifyInstance): string | null {
+  const row = getRow(app, GITHUB_PROVIDER);
+  return row?.githubAppId && row.githubAppSlug ? `${row.githubAppSlug}[bot]`.toLowerCase() : null;
+}
+
 export async function resolveOwnBotLogin(app: FastifyInstance): Promise<string | null> {
   const row = getRow(app, GITHUB_PROVIDER);
   if (!row?.githubAppId || !row.githubAppPrivateKeyEnc) return null;

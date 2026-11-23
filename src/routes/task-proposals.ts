@@ -25,6 +25,16 @@ export async function taskProposalsRoute(app: FastifyInstance) {
       if (existing.proposalState !== "proposed" || existing.status !== "backlog") {
         return reply.conflict("Task is not a proposal awaiting approval");
       }
+      // What the human is approving is what their screen showed; the watcher may
+      // have refreshed the row since (the issue was edited). Refuse and let them
+      // read the new text.
+      const seen = request.body as { title?: unknown; body?: unknown } | null | undefined;
+      if (!seen || typeof seen.title !== "string" || !("body" in seen)) {
+        return reply.badRequest("Send the title and body being approved");
+      }
+      if (seen.title !== existing.title || (seen.body ?? null) !== (existing.body ?? null)) {
+        return reply.conflict("The issue changed since you opened it — review the new text first");
+      }
       const openChildren = (existing.subIssueTotal ?? 0) - (existing.subIssueCompleted ?? 0) > 0;
       const target: TaskStatus = openChildren || isManualOnly(existing.body) ? "backlog" : "ready";
       const updated = updateTask(

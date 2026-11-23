@@ -18,12 +18,13 @@
 // an import cycle. registerTaskTransitionListener is task-state.ts's own
 // generic escape hatch for exactly this shape of problem — see its doc
 // comment there.
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { dispatchClaimedTask, dispatchQueuedRetry, failQueuedTask } from "./task-claim.js";
-import { registerTaskTransitionListener } from "./task-state.js";
+import { proposalBlocksRun } from "./task-proposal.js";
+import { recordTaskTransition, registerTaskTransitionListener } from "./task-state.js";
 
 // Same backoff shape as task-reconciler.ts's retryStrandedDraftPRs /
 // draftPrRetryBackoff — process-local, not a DB column (a restart resetting
@@ -154,14 +155,48 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
   const maxConcurrent = resolveTaskMasterConfig(app).maxConcurrent;
   const now = Date.now();
   const queued = app.db
-    .select({ id: tasks.id, resumeQueued: tasks.resumeQueued })
+    .select({
+      id: tasks.id,
+      resumeQueued: tasks.resumeQueued,
+      projectId: tasks.projectId,
+      title: tasks.title,
+      body: tasks.body,
+      proposalState: tasks.proposalState,
+      approvedBodySha: tasks.approvedBodySha,
+    })
     .from(tasks)
     .where(eq(tasks.status, "claimed"))
     .orderBy(asc(tasks.boardOrder), asc(tasks.id))
     .all();
 
-  for (const { id: taskId, resumeQueued } of queued) {
+  for (const queuedTask of queued) {
+    const { id: taskId, resumeQueued } = queuedTask;
     if (isBackedOff(taskId, now)) continue;
+
+    // A queued task whose proposal was edited after approval goes back to the
+    // backlog for a fresh Approve instead of starting on text no human saw.
+    if (proposalBlocksRun(queuedTask)) {
+      const sent = app.db
+        .update(tasks)
+        .set({
+          status: "backlog",
+          proposalState: "proposed",
+          approvedBodySha: null,
+          queuedAt: null,
+        })
+        .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed"), isNull(tasks.sessionId)))
+        .run();
+      if (sent.changes > 0) {
+        recordTaskTransition(app, {
+          taskId,
+          projectId: queuedTask.projectId,
+          from: "claimed",
+          to: "backlog",
+          via: "dispatch-proposal-edited",
+        });
+      }
+      continue;
+    }
 
     // Re-checked every iteration, not hoisted above the loop — a prior
     // iteration in THIS sweep may have just filled the last slot.

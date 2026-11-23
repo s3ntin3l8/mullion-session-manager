@@ -1,4 +1,5 @@
 import { and, eq } from "drizzle-orm";
+import { proposalBlocksRun } from "./task-proposal.js";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks } from "../db/schema.js";
 import { killSession } from "./session-lifecycle.js";
@@ -74,6 +75,11 @@ export async function enqueueRetry(
     if (!current || current.status !== "failed") {
       return { reserved: false as const, currentStatus: current?.status };
     }
+    // Retrying must not start a task from Mullion's own bot that no human has
+    // approved (a dismissed one, or one edited after approval).
+    if (proposalBlocksRun(current)) {
+      return { reserved: false as const, needsApproval: true as const };
+    }
     // #2292 — checked before the branch gate: "superseded" is the true
     // diagnosis; a branchless copy would otherwise just reset to ready.
     if (current.supersededAt !== null) {
@@ -132,6 +138,13 @@ export async function enqueueRetry(
   });
 
   if (!reservation.reserved) {
+    if ("needsApproval" in reservation && reservation.needsApproval) {
+      return {
+        ok: false,
+        reason: "not-failed",
+        detail: "Task was filed by Mullion and needs a human Approve before it can run",
+      };
+    }
     if ("superseded" in reservation && reservation.superseded) {
       app.log.info(
         { taskId },

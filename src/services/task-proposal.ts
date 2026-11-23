@@ -6,6 +6,21 @@ import crypto from "node:crypto";
 
 export type ProposalState = "proposed" | "approved";
 
+/** True while a task must not start: still waiting for Approve, or approved and
+ * since edited (title/body no longer what the human saw). */
+export function proposalBlocksRun(t: {
+  proposalState: string | null;
+  approvedBodySha: string | null;
+  title: string;
+  body: string | null;
+}): boolean {
+  if (t.proposalState === "proposed") return true;
+  if (t.proposalState === "approved") {
+    return t.approvedBodySha !== proposalContentSha(t.title, t.body);
+  }
+  return false;
+}
+
 /** The pin: title and body are both what a worker is prompted with. */
 export function proposalContentSha(title: string, body: string | null | undefined): string {
   return crypto

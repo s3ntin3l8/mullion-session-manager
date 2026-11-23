@@ -248,7 +248,7 @@ describe("UnifiedBoard task columns", () => {
       expect(titles.indexOf("proposed one")).toBeLessThan(titles.indexOf("plain one"));
 
       await userEvent.click(screen.getByRole("button", { name: "Approve" }));
-      expect(approveProposal).toHaveBeenCalledWith(2);
+      expect(approveProposal).toHaveBeenCalledWith(2, { title: "proposed one", body: null });
       await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
       expect(dismissProposal).toHaveBeenCalledWith(2);
     });

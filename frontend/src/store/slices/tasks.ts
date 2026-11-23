@@ -225,8 +225,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
-    approveProposal: async (id) => {
-      const task = await api.approveProposal(id);
+    approveProposal: async (id, seen) => {
+      const task = await api.approveProposal(id, seen);
       void get().refreshTasks();
       return task;
     },

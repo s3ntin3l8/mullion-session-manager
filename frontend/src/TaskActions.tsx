@@ -192,7 +192,9 @@ export function TaskActions({
         <button
           className="notif-gate-btn"
           disabled={submitting}
-          onClick={() => void runProposal(approveProposal)}
+          onClick={() =>
+            void runProposal((id) => approveProposal(id, { title: task.title, body: task.body }))
+          }
         >
           Approve
         </button>

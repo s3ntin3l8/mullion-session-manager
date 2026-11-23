@@ -737,8 +737,9 @@ export function TaskCard({
             onClick={(e) => {
               e.stopPropagation();
               setProposalError(null);
-              void approveProposal(task.id).catch((err: unknown) =>
-                setProposalError(err instanceof Error ? err.message : "Could not approve"),
+              void approveProposal(task.id, { title: task.title, body: task.body }).catch(
+                (err: unknown) =>
+                  setProposalError(err instanceof Error ? err.message : "Could not approve"),
               );
             }}
           >

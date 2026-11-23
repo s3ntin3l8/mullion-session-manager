@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
-import { resolveGitHubToken, resolveOwnBotLogin } from "../services/github-integration.js";
+import { peekOwnBotLogin, resolveGitHubToken } from "../services/github-integration.js";
 import {
   findReviewingTaskByPr,
   findTaskBlockerStateByIssue,
@@ -447,7 +447,7 @@ export async function webhookRoutes(app: FastifyInstance) {
                       authorLogin: issue.user?.login ?? null,
                       authorAssociation: issue.author_association,
                     },
-                    await resolveOwnBotLogin(app),
+                    peekOwnBotLogin(app),
                   );
                 } else if (action === "closed" || action === "unlabeled") {
                   // "unlabeled" only proceeds when the label GitHub reports

@@ -164,8 +164,13 @@ export const tasksApi = {
   startFreshTask: (id: number) => request<Task>(`/api/tasks/${id}/start-fresh`, { method: "POST" }),
   // A task from an issue Mullion's own bot filed: Approve makes it claimable,
   // Dismiss closes the issue on GitHub.
-  approveProposal: (id: number) =>
-    request<Task>(`/api/tasks/${id}/approve-proposal`, { method: "POST" }),
+  // Sends the title and body on screen: the server refuses if the issue changed
+  // since, so a human never approves text they did not read.
+  approveProposal: (id: number, seen: { title: string; body: string | null }) =>
+    request<Task>(`/api/tasks/${id}/approve-proposal`, {
+      method: "POST",
+      body: JSON.stringify(seen),
+    }),
   dismissProposal: (id: number) =>
     request<Task>(`/api/tasks/${id}/dismiss-proposal`, { method: "POST" }),
 
