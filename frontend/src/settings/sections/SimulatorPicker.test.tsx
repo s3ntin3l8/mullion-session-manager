@@ -100,8 +100,12 @@ describe("SimulatorPicker", () => {
     const user = userEvent.setup();
     renderPicker({ value: "D" });
     // D (iPhone 17 Pro) is kept visible in the default view; searching elsewhere hides it.
+    // The live region exists, empty, before anything is hidden.
+    const live = document.querySelector(".sim-picker-selected");
+    expect(live).toHaveAttribute("aria-live", "polite");
+    expect(live).toBeEmptyDOMElement();
     await user.type(screen.getByRole("searchbox", { name: "Search simulators" }), "air");
-    expect(screen.getByText("Selected: iPhone 17 Pro (iOS 26.5)")).toBeInTheDocument();
+    expect(live).toHaveTextContent("Selected: iPhone 17 Pro (iOS 26.5)");
   });
 
   it("offers no toggle when there is nothing to reveal", () => {

@@ -1962,3 +1962,8 @@ summary.space-row {
   font-size: 0.71875rem;
   color: var(--dim);
 }
+
+/* Mounted for the screen reader, but takes no room (or flex gap) while empty. */
+.sim-picker-selected:empty {
+  margin-top: -8px;
+}

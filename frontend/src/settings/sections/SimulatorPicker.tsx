@@ -107,11 +107,11 @@ export function SimulatorPicker({
           <div className="sim-picker-empty">No simulators match “{query.trim()}”.</div>
         )}
       </div>
-      {selected && !selectedShown && (
-        <div className="sim-picker-selected" aria-live="polite">
-          Selected: {selected.name} ({selected.runtime})
-        </div>
-      )}
+      {/* Always mounted, so a screen reader that only announces into a live
+          region it already knows says it when a search hides the choice. */}
+      <div className="sim-picker-selected" aria-live="polite">
+        {selected && !selectedShown ? `Selected: ${selected.name} (${selected.runtime})` : ""}
+      </div>
       {!searching && (view.hidden > 0 || showAll) && view.total > 1 && (
         <SecondaryButton onClick={() => setShowAll((all) => !all)}>
           {showAll ? "Show used only" : `Show all ${view.total}`}

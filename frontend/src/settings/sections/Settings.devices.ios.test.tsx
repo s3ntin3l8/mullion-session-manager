@@ -52,6 +52,7 @@ describe("Settings -> Devices iOS Simulator", () => {
   let emptyDeviceTypes: boolean;
   let longDeviceTypeName: boolean;
   let devicesFail: boolean;
+  let hostsFail: boolean;
 
   beforeEach(() => {
     devicesDb = [];
@@ -66,6 +67,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     emptyDeviceTypes = false;
     longDeviceTypeName = false;
     devicesFail = false;
+    hostsFail = false;
 
     const { fetchMock, unexpectedCalls: unexpected } = mockFetch({
       "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
@@ -74,7 +76,8 @@ describe("Settings -> Devices iOS Simulator", () => {
       "GET /api/sessions": () => jsonResponse(200, []),
       "GET /api/devices": () =>
         devicesFail ? jsonResponse(500, { message: "boom" }) : jsonResponse(200, devicesDb),
-      "GET /api/devices/hosts": () => jsonResponse(200, deviceHostsDb),
+      "GET /api/devices/hosts": () =>
+        hostsFail ? jsonResponse(500, { message: "boom" }) : jsonResponse(200, deviceHostsDb),
       "GET /api/devices/discovered": () => jsonResponse(200, []),
       "GET /api/avds": () => jsonResponse(200, { avds: ["pixel_7"] }),
       "GET /api/simulators": ({ url }) => {
@@ -522,6 +525,69 @@ describe("Settings -> Devices iOS Simulator", () => {
 
         // The Mac wakes up (or its agent is updated) and now reports simulators.
         deviceHostsDb = [{ ...deviceHostsDb[0], platforms: ["android", "ios"] }];
+        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        expect(await screen.findByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps the iOS section, and an open add form, when a later host read fails or the Mac goes quiet", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        deviceHostsDb = [
+          {
+            hostId: "local",
+            name: "Primary",
+            status: "ok",
+            deviceKinds: ["emulator"],
+            platforms: ["android", "ios"],
+          },
+        ];
+        simulatorsByHostDb = { local: IOS_SIMS_LOCAL };
+        const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+        render(<Settings onClose={vi.fn()} initialSection="devices" />);
+        await user.click(await screen.findByText("Add a simulator"));
+        await screen.findByRole("radiogroup", { name: "Simulator" });
+
+        // The host list fails once: what was known stays.
+        hostsFail = true;
+        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        expect(screen.getByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
+        expect(screen.getByRole("radiogroup", { name: "Simulator" })).toBeInTheDocument();
+
+        // Then the Mac reports nothing (asleep): the section and the open form stay.
+        hostsFail = false;
+        deviceHostsDb = [
+          { ...deviceHostsDb[0], status: "unreachable", deviceKinds: [], platforms: [] },
+        ];
+        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        expect(screen.getByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
+        expect(screen.getByRole("radiogroup", { name: "Simulator" })).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("falls back to showing Android when the first host read fails, then follows the hosts", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        hostsFail = true;
+        render(<Settings onClose={vi.fn()} initialSection="devices" />);
+        // Hosts unknown: the page is what it was before it had platform sections.
+        expect(await screen.findByRole("region", { name: "Android" })).toBeInTheDocument();
+        expect(screen.queryByRole("region", { name: "iOS Simulator" })).toBeNull();
+
+        hostsFail = false;
+        deviceHostsDb = [
+          {
+            hostId: "local",
+            name: "Primary",
+            status: "ok",
+            deviceKinds: ["emulator"],
+            platforms: ["android", "ios"],
+          },
+        ];
         await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
         expect(await screen.findByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
       } finally {

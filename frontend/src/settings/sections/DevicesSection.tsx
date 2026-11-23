@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { api, ApiError } from "../../api/index.js";
@@ -139,6 +139,7 @@ export function DevicesSection() {
   const [createOpen, setCreateOpen] = useState<"android" | "ios" | null>(null);
   // Which hosts run which platform: decides which platform sections exist.
   const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[] | null>(null);
+  const hostsInFlight = useRef(false);
   // Physical phones are paired from their own dialog (issue #1379) — see
   // PairDeviceDialog.tsx. This section only owns whether it's open.
   const [pairOpen, setPairOpen] = useState(false);
@@ -168,10 +169,18 @@ export function DevicesSection() {
     // The hosts are re-read with the list: a Mac that was asleep, or updated to
     // report simulators, when Settings opened must show up without reopening it.
     // A failed read keeps what was known (null stays "not loaded", then empty).
-    api
-      .listDeviceHosts()
-      .then(setDeviceHosts)
-      .catch(() => setDeviceHosts((prev) => prev ?? []));
+    // One read at a time: the endpoint probes every host, so a slow answer must
+    // not be overtaken by (or pile up behind) the next tick's.
+    if (!hostsInFlight.current) {
+      hostsInFlight.current = true;
+      api
+        .listDeviceHosts()
+        .then(setDeviceHosts)
+        .catch(() => setDeviceHosts((prev) => prev ?? []))
+        .finally(() => {
+          hostsInFlight.current = false;
+        });
+    }
     refreshDevices()
       .then(() => {
         setLoadError(false);
@@ -482,7 +491,12 @@ export function DevicesSection() {
   const [androidSeen, setAndroidSeen] = useState(false);
   if (androidConfirmed && !androidSeen) setAndroidSeen(true);
   const showAndroid = !hostsKnown || androidConfirmed || androidSeen;
-  const showIos = reportsPlatform("ios") || iosDevices.length > 0;
+  // The same for iOS: one failed probe of the only simulator host (a Mac asleep)
+  // must not close an open "Add a simulator" form under the user.
+  const iosConfirmed = reportsPlatform("ios") || iosDevices.length > 0;
+  const [iosSeen, setIosSeen] = useState(false);
+  if (iosConfirmed && !iosSeen) setIosSeen(true);
+  const showIos = iosConfirmed || iosSeen;
   const toggleCreate = (platform: "android" | "ios") =>
     setCreateOpen((open) => (open === platform ? null : platform));
 
