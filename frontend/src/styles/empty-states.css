@@ -3091,6 +3091,10 @@ button.github-panel-row.gh-issue-row {
 .browser-pane-keyboard-toggle[aria-pressed="true"] {
   color: var(--accent-solid);
 }
+.browser-pane-keyboard-toggle:focus-visible {
+  outline: 2px solid var(--accent-solid);
+  outline-offset: 1px;
+}
 .device-pane-canvas {
   touch-action: none;
   user-select: none;

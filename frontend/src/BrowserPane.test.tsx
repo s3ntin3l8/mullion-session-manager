@@ -883,6 +883,41 @@ describe("BrowserPane", () => {
       ]);
     });
 
+    it("keeps the hidden input out of the tab order", () => {
+      const { input } = renderTouchPane();
+      expect(input.tabIndex).toBe(-1);
+    });
+
+    it("forgets the open keyboard when the pointer turns fine", () => {
+      let coarse = true;
+      const listeners: Array<() => void> = [];
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          get matches() {
+            return coarse && query === "(pointer: coarse)";
+          },
+          media: query,
+          addEventListener: vi.fn((_type: string, listener: () => void) =>
+            listeners.push(listener),
+          ),
+          removeEventListener: vi.fn(),
+        })),
+      );
+      const { getByRole, queryByRole } = render(<BrowserPane params={{ sessionId: 1 }} />);
+      fireEvent.click(getByRole("button", { name: "Type into the page" }));
+      expect(getByRole("button", { name: "Hide keyboard" })).toBeTruthy();
+
+      coarse = false;
+      act(() => listeners.forEach((l) => l()));
+      expect(queryByRole("button", { name: "Hide keyboard" })).toBeNull();
+      coarse = true;
+      act(() => listeners.forEach((l) => l()));
+      expect(getByRole("button", { name: "Type into the page" }).getAttribute("aria-pressed")).toBe(
+        "false",
+      );
+    });
+
     function getToggle(container: HTMLElement) {
       return container.querySelector<HTMLButtonElement>(".browser-pane-keyboard-toggle")!;
     }

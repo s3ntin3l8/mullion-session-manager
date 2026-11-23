@@ -248,6 +248,13 @@
     min-height: 44px;
     padding: 0 12px;
   }
+  /* The agent browser's keyboard button (#3030) exists only on a coarse
+     pointer and is the only way to type into the page there, so it gets
+     the touch floor rather than the toolbar's 22px icon size. */
+  .browser-panel-toolbar .browser-pane-keyboard-toggle {
+    min-width: 44px;
+    min-height: 44px;
+  }
   /* The card itself is a drag-and-drop reorder handle (out of scope on
      touch — see the plan's "Explicitly out of scope"), not a tap target;
      this only guards against its own padding/border squeezing the nested

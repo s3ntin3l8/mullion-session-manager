@@ -162,6 +162,9 @@ export function BrowserPane(props: {
   const coarsePointer = useCoarsePointer();
   const typingInputRef = useRef<HTMLTextAreaElement>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  // The textarea unmounts without a blur when the pointer turns fine, so
+  // the open state would otherwise outlive it.
+  if (!coarsePointer && keyboardOpen) setKeyboardOpen(false);
   // The typing effect's commitComposition, for the canvas tap handler.
   const commitTypingRef = useRef<() => void>(() => {});
   const onTitleChangeRef = useRef(props.onTitleChange);
@@ -775,6 +778,9 @@ export function BrowserPane(props: {
             className="browser-pane-typing-input"
             aria-label="Text to type into the page"
             rows={1}
+            // Only ever focused by the keyboard button, never a tab stop: a
+            // hardware keyboard would otherwise tab onto an invisible box.
+            tabIndex={-1}
             // Empty between words, so the keyboard would otherwise treat
             // every word as a sentence start and capitalize it.
             autoCapitalize="off"

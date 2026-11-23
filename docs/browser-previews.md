@@ -166,7 +166,10 @@ always), then tap the button: it focuses a hidden text box, which raises the
 keyboard, and what you type goes to the page. Tap the button again, or
 anywhere outside the browser, to put the keyboard away. With the keyboard
 open, tapping the page still clicks it but keeps the keyboard up, so you can
-move from one field to the next.
+move from one field to the next. (That rests on cancelling the tap's
+`mousedown`, which keeps focus on the hidden box in Chromium; it has not yet
+been checked on a real phone, and iOS may not honour it. #3431 tracks the
+device checks.)
 
 A tap on the page does not raise the keyboard by itself. Whether the tap
 landed on an editable field is only known to the remote page, after a round
