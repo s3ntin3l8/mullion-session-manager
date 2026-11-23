@@ -134,4 +134,19 @@ describe("SessionLauncher — Model choice for a custom launcher (#3058)", () =>
       expect.objectContaining({ command: "claude --foo", model: "opusplan" }),
     );
   });
+
+  it("a second click on the selected model row launches it", async () => {
+    const onCreateSession = setup([CLAUDE, custom("my-claude", "claude --foo")]);
+    const user = userEvent.setup();
+
+    const row = await screen.findByRole("button", { name: /^my-claude/ });
+    await user.click(row);
+    expect(onCreateSession).not.toHaveBeenCalled();
+    await user.click(row);
+
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    expect(onCreateSession.mock.calls[0]![0]).toEqual(
+      expect.objectContaining({ command: "claude --foo" }),
+    );
+  });
 });
