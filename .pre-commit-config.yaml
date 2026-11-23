@@ -17,11 +17,12 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-      # drizzle/ is generated: drizzle-kit writes the SQL, the snapshots and
-      # _journal.json without a final newline (and .prettierignore already
-      # treats the directory as generated). Without this exclude, any push
-      # whose range includes a fresh migration fails here, and "fixing" it
-      # means hand-editing generated files.
+      # drizzle/ is generated, and drizzle-kit does not reliably end the SQL,
+      # the snapshots or _journal.json with a newline (24 files lack one, in
+      # no pattern: 0060-0062 and 0097-0133 with gaps, while 0063-0096 have
+      # it). .prettierignore already treats the directory as generated.
+      # Without this exclude, a push whose range includes such a migration
+      # fails here, and "fixing" it means hand-editing generated files.
       - id: end-of-file-fixer
         exclude: ^drizzle/
       - id: check-yaml
