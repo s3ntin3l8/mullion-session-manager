@@ -17,7 +17,8 @@ export function SimulatorPicker({
   onChange,
 }: {
   simulators: IosSimulator[];
-  /** Simulators already added as active devices (not selectable again). */
+  /** Simulators that are already an active device (not selectable again). A
+   * stopped device does not count: adding it again is allowed. */
   activeUdids: ReadonlySet<string>;
   value: string;
   onChange: (udid: string) => void;
@@ -107,7 +108,7 @@ export function SimulatorPicker({
         )}
       </div>
       {selected && !selectedShown && (
-        <div className="sim-picker-selected">
+        <div className="sim-picker-selected" aria-live="polite">
           Selected: {selected.name} ({selected.runtime})
         </div>
       )}

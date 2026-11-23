@@ -139,12 +139,6 @@ export function DevicesSection() {
   const [createOpen, setCreateOpen] = useState<"android" | "ios" | null>(null);
   // Which hosts run which platform: decides which platform sections exist.
   const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[] | null>(null);
-  useAsyncData(
-    () => api.listDeviceHosts(),
-    (list) => setDeviceHosts(list),
-    () => setDeviceHosts([]),
-    [],
-  );
   // Physical phones are paired from their own dialog (issue #1379) — see
   // PairDeviceDialog.tsx. This section only owns whether it's open.
   const [pairOpen, setPairOpen] = useState(false);
@@ -171,6 +165,13 @@ export function DevicesSection() {
   const [editError, setEditError] = useState<string | null>(null);
 
   const refresh = () => {
+    // The hosts are re-read with the list: a Mac that was asleep, or updated to
+    // report simulators, when Settings opened must show up without reopening it.
+    // A failed read keeps what was known (null stays "not loaded", then empty).
+    api
+      .listDeviceHosts()
+      .then(setDeviceHosts)
+      .catch(() => setDeviceHosts((prev) => prev ?? []));
     refreshDevices()
       .then(() => {
         setLoadError(false);
@@ -475,8 +476,9 @@ export function DevicesSection() {
   // that cannot run simulators has no iOS one). Until the hosts are known,
   // Android stays, as it was before the page had platform sections.
   const androidConfirmed = reportsPlatform("android") || androidDevices.length > 0;
-  // Once shown it stays: a host flapping must not unmount the SDK image state
-  // (an install or a license prompt in flight) under the user.
+  // Once shown it stays: the hosts are re-read as they come and go (a host that
+  // drops out for a poll must not unmount the SDK image state, an install or a
+  // license prompt in flight, under the user).
   const [androidSeen, setAndroidSeen] = useState(false);
   if (androidConfirmed && !androidSeen) setAndroidSeen(true);
   const showAndroid = !hostsKnown || androidConfirmed || androidSeen;

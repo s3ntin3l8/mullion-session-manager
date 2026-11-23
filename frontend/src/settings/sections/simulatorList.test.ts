@@ -36,23 +36,66 @@ describe("runtimes", () => {
   });
 });
 
+// `xcrun simctl list devicetypes -j` on Xcode 27.2, in the order simctl returned
+// it (newest first), trimmed to a representative slice. Captured on a real Mac.
+const XCODE_27_ORDER = [
+  "iPhone 18 Pro",
+  "iPhone 18 Pro Max",
+  "iPhone Duo",
+  "iPhone 17 Pro",
+  "iPhone 17e",
+  "iPhone Air",
+  "iPhone 17",
+  "iPhone 16 Pro",
+  "iPhone 16e",
+  "iPhone 15",
+  "iPhone SE (3rd generation)",
+  "iPhone 13 mini",
+  "iPhone Xʀ",
+  "iPhone 8",
+  "iPhone SE (1st generation)",
+  "iPhone 6s Plus",
+  "iPad mini (A20 Pro)",
+  "iPad Pro 13-inch (M5) (16GB)",
+  "iPad Pro 13-inch (M5)",
+  "iPad Air 13-inch (M4)",
+  "iPad (A16)",
+  "iPad (10th generation)",
+  "iPad Air 2",
+  "iPad mini 4",
+  "iPod touch (7th generation)",
+].map((name) => ({ name }));
+
 describe("sortDeviceTypes", () => {
-  it("is newest first with iPhones before iPads, without mutating its input", () => {
-    // simctl order: oldest first.
-    const input = [
-      { name: "iPhone 15" },
-      { name: "iPad Air" },
-      { name: "iPhone 16" },
-      { name: "iPad Pro" },
-    ];
-    const copy = [...input];
-    expect(sortDeviceTypes(input).map((t) => t.name)).toEqual([
-      "iPhone 16",
-      "iPhone 15",
-      "iPad Pro",
-      "iPad Air",
+  it("keeps Xcode's newest-first order, iPhones then iPads then the rest, and preselects the newest iPhone", () => {
+    const sorted = sortDeviceTypes(XCODE_27_ORDER);
+    expect(sorted.map((t) => t.name)).toEqual(XCODE_27_ORDER.map((t) => t.name));
+    expect(sorted[0].name).toBe("iPhone 18 Pro");
+    expect(sorted[sorted.length - 1].name).toBe("iPod touch (7th generation)");
+  });
+
+  it("gives the same answer when simctl lists oldest first", () => {
+    const oldestFirst = [...XCODE_27_ORDER].reverse();
+    const sorted = sortDeviceTypes(oldestFirst);
+    // The iPod touch is the lone "other"; the iPads and iPhones come back newest first.
+    expect(sorted[0].name).toBe("iPhone 18 Pro");
+    expect(sorted.slice(0, 3).map((t) => t.name)).toEqual([
+      "iPhone 18 Pro",
+      "iPhone 18 Pro Max",
+      "iPhone Duo",
     ]);
+    expect(sorted.findIndex((t) => t.name.startsWith("iPad"))).toBeGreaterThan(
+      sorted.findIndex((t) => t.name === "iPhone 6s Plus"),
+    );
+    expect(sorted[sorted.length - 1].name).toBe("iPod touch (7th generation)");
+  });
+
+  it("does not mutate its input and copes with a short or unnumbered list", () => {
+    const input = [{ name: "iPad Air" }, { name: "iPhone Air" }];
+    const copy = [...input];
+    expect(sortDeviceTypes(input).map((t) => t.name)).toEqual(["iPhone Air", "iPad Air"]);
     expect(input).toEqual(copy);
+    expect(sortDeviceTypes([])).toEqual([]);
   });
 });
 

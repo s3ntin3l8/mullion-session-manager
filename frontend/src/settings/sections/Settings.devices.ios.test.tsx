@@ -7,6 +7,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SERVER_INFO_FIXTURE } from "../../test/serverInfoFixture.js";
 import { Settings } from "../../Settings.js";
+import { DEVICES_POLL_MS } from "../../SidebarDevices.js";
 import type { Device, DeviceHostEntry, IosSimulator } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
@@ -501,6 +502,31 @@ describe("Settings -> Devices iOS Simulator", () => {
       createdAt: "2026-01-01T00:00:00.000Z",
       live: null,
       ...over,
+    });
+
+    it("picks up a platform a host starts reporting after the page opened", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        deviceHostsDb = [
+          {
+            hostId: "local",
+            name: "Primary",
+            status: "ok",
+            deviceKinds: ["emulator"],
+            platforms: ["android"],
+          },
+        ];
+        render(<Settings onClose={vi.fn()} initialSection="devices" />);
+        await screen.findByRole("region", { name: "Android" });
+        expect(screen.queryByRole("region", { name: "iOS Simulator" })).toBeNull();
+
+        // The Mac wakes up (or its agent is updated) and now reports simulators.
+        deviceHostsDb = [{ ...deviceHostsDb[0], platforms: ["android", "ios"] }];
+        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        expect(await screen.findByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("shows the device-load error once, even with both sections on screen", async () => {

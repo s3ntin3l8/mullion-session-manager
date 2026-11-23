@@ -100,14 +100,25 @@ export function viewSimulators(
 
 const deviceFamily = (name: string) => (/^iphone/i.test(name) ? 0 : /^ipad/i.test(name) ? 1 : 2);
 
+/** The model number in "iPhone 17 Pro" (17); undefined for "iPhone Air", "iPhone SE (3rd generation)"... */
+const iphoneModelNumber = (name: string): number | undefined => {
+  const match = /^iphone (\d+)/i.exec(name);
+  return match ? Number(match[1]) : undefined;
+};
+
 /**
- * Device types for the new-simulator form, newest first. simctl lists them by
- * release (oldest first) and carries no date, so the list is reversed; iPhones
- * then come before iPads (a stable sort keeps the newest-first order inside
- * each family).
+ * Device types for the new-simulator form, newest first, iPhones then iPads
+ * then the rest (an iPod touch). simctl carries no release date and its array
+ * order has run both ways, so the direction is read off the iPhone model
+ * numbers (the first numbered iPhone against the last) rather than assumed;
+ * Xcode 27.2 lists newest first. A stable sort keeps that order inside each
+ * family.
  */
 export function sortDeviceTypes<T extends { name: string }>(types: readonly T[]): T[] {
-  return [...types].reverse().sort((a, b) => deviceFamily(a.name) - deviceFamily(b.name));
+  const numbers = types.map((t) => iphoneModelNumber(t.name)).filter((n) => n !== undefined);
+  const oldestFirst = numbers.length > 1 && numbers[0] < numbers[numbers.length - 1];
+  const ordered = oldestFirst ? [...types].reverse() : [...types];
+  return ordered.sort((a, b) => deviceFamily(a.name) - deviceFamily(b.name));
 }
 
 /** Runtimes, newest first ("iOS 27.0" before "iOS 26.5"). */
