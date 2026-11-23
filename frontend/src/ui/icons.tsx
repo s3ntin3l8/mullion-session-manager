@@ -617,18 +617,18 @@ export function PullIcon(props: IconProps) {
   );
 }
 
-// Git rebase (issue #3068) — two stacked commits re-rooted onto a new base:
-// a trunk line, a commit dot on it, and an arrow carrying a commit across.
+// Git rebase (issue #3068) — a trunk whose tip (top dot) receives a commit
+// carried over from a side branch (bottom-right dot), along an arrow.
 // Deliberately unlike PullIcon above: the current branch's Rebase replays
 // local commits, it is not a fast-forward Pull.
 export function RebaseIcon(props: IconProps) {
   return (
     <Svg strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M6 3 v18" />
-      <circle cx="6" cy="7" r="2" />
-      <circle cx="18" cy="17" r="2" />
-      <path d="M8 7 h4 a4 4 0 0 1 4 4 v4" />
-      <path d="M13.5 12.5 l2.5 2.5 2.5-2.5" />
+      <path d="M6 21 V9" />
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="18" cy="18" r="2.5" />
+      <path d="M18 15.5 V11 a4 4 0 0 0 -4 -4 H9.5" />
+      <path d="M12 4.5 L9.5 7 L12 9.5" />
     </Svg>
   );
 }

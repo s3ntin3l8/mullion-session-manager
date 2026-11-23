@@ -642,8 +642,11 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
   // Branches row. Where the branch is checked out decides the guard:
   //   - nowhere: only the ref moves (git-branch-ops.ts's pullBranch), so no
   //     session can be in the way;
-  //   - the project checkout itself: the header Pull's own behaviour, which
-  //     a session there does not block (a dirty tree still does);
+  //   - the main checkout: refused while an active session works in it
+  //     (sessionsInProjectCheckout on that directory, not counting sessions
+  //     in the linked worktrees nested below it). Unlike the header's
+  //     git-pull, which the current row still uses: a project may be rooted
+  //     in a linked worktree, and then the main checkout is someone else's;
   //   - a linked worktree: refused while any session works in it — active,
   //     ended-but-alive, or not confirmable (sessionsUsingWorktree).
   // The checkout the guard was chosen for is passed down, and pullBranch
@@ -701,18 +704,24 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
           return unread;
         }
         const holder = worktrees.find((w) => w.branch === branch) ?? null;
-        if (holder && !isWithinAnyWorktree(project.cwd, [holder.path])) {
-          const sid = sessionId === undefined ? undefined : Number(sessionId);
-          let usage: Awaited<ReturnType<typeof sessionsUsingWorktree>>;
-          try {
-            usage = await sessionsUsingWorktree(app, holder.path, project.hostId, sid);
-          } catch (err) {
-            app.log.warn({ hostId: project.hostId, err }, "worktree usage check failed");
-            return reply.serviceUnavailable(
-              "Could not check whether sessions are using this worktree",
-            );
+        const sid = sessionId === undefined ? undefined : Number(sessionId);
+        if (holder) {
+          let ids: number[];
+          if (holder.isMain) {
+            const nested = worktrees.filter((w) => !w.isMain).map((w) => w.path);
+            ids = sessionsInProjectCheckout(app, { ...project, cwd: holder.path }, nested, sid);
+          } else {
+            let usage: Awaited<ReturnType<typeof sessionsUsingWorktree>>;
+            try {
+              usage = await sessionsUsingWorktree(app, holder.path, project.hostId, sid);
+            } catch (err) {
+              app.log.warn({ hostId: project.hostId, err }, "worktree usage check failed");
+              return reply.serviceUnavailable(
+                "Could not check whether sessions are using this worktree",
+              );
+            }
+            ids = [...new Set([...usage.active, ...usage.alive, ...usage.unknown])];
           }
-          const ids = [...new Set([...usage.active, ...usage.alive, ...usage.unknown])];
           if (ids.length > 0) {
             const inUse: GitBranchOpResult = {
               ok: false,

@@ -202,8 +202,11 @@ does is skip the _warning_, not the _action_.
     ended but still alive, or not confirmable (`sessions-active`); a dirty tree
     (`dirty-tree`); a stopped merge/rebase (`operation-in-progress`); plus the
     fast-forward refusals above;
-  - the project checkout's own branch: the header Pull's guards (a session
-    there does not block it; a dirty tree does);
+  - checked out in the **main checkout**: an active session working there
+    (`sessions-active`; sessions in the linked worktrees below it do not
+    count), plus the header Pull's guards. The current branch's row uses the
+    header's Pull instead, which a session in the checkout does not block (a
+    dirty tree does);
   - the branch moved to another checkout between the session check and the
     update (`failed`, try again), or another git operation holds the clone
     (`busy`).

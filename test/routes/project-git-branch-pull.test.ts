@@ -166,14 +166,57 @@ describe("POST /api/projects/:id/git-branch-pull (issue #3068)", () => {
     }
   });
 
-  it("pulls the checkout's own current branch like the header Pull, a session there notwithstanding", async () => {
+  it("pulls the main checkout's branch only while no session works there", async () => {
     const app = await buildApp();
     const fx = await makeFixture(app);
     try {
-      app.db.insert(sessions).values({ projectId: fx.projectId, command: "bash", cwd: null }).run();
+      // A session in a linked worktree nested below the checkout is not in it.
+      app.db
+        .insert(sessions)
+        .values({ projectId: fx.projectId, command: "bash", cwd: fx.wt })
+        .run();
       const target = fx.advance("main");
       expect((await pull(app, fx.projectId, "main")).json()).toEqual({ ok: true });
       expect(git(fx.repo, ["rev-parse", "HEAD"])).toBe(target);
+
+      const inserted = app.db
+        .insert(sessions)
+        .values({ projectId: fx.projectId, command: "bash", cwd: null })
+        .run();
+      fx.advance("main");
+      expect((await pull(app, fx.projectId, "main")).json()).toEqual({
+        ok: false,
+        reason: "sessions-active",
+        detail: String(Number(inserted.lastInsertRowid)),
+      });
+      expect(git(fx.repo, ["rev-parse", "HEAD"])).toBe(target);
+    } finally {
+      fs.rmSync(fx.root, { recursive: true, force: true });
+      await app.close();
+    }
+  });
+
+  it("guards the main checkout for a project rooted in a nested worktree", async () => {
+    const app = await buildApp();
+    const fx = await makeFixture(app);
+    try {
+      const nested = app.db
+        .insert(projects)
+        .values({ name: "rooted-in-wt", cwd: fx.wt })
+        .returning({ id: projects.id })
+        .get().id;
+      const inMain = app.db
+        .insert(sessions)
+        .values({ projectId: fx.projectId, command: "bash", cwd: fx.repo })
+        .run();
+      fx.advance("main");
+      const before = git(fx.repo, ["rev-parse", "HEAD"]);
+      expect((await pull(app, nested, "main")).json()).toEqual({
+        ok: false,
+        reason: "sessions-active",
+        detail: String(Number(inMain.lastInsertRowid)),
+      });
+      expect(git(fx.repo, ["rev-parse", "HEAD"])).toBe(before);
     } finally {
       fs.rmSync(fx.root, { recursive: true, force: true });
       await app.close();
