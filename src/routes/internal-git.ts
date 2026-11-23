@@ -24,7 +24,12 @@ import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doc
 import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { runGitPull } from "../services/git-pull.js";
-import { checkoutBranch, createBranch, rebaseBranch } from "../services/git-branch-ops.js";
+import {
+  checkoutBranch,
+  createBranch,
+  pullBranch,
+  rebaseBranch,
+} from "../services/git-branch-ops.js";
 import type { GitBranchOpResult } from "../services/git-branch-ops.js";
 import { pushBranch } from "../services/git-push.js";
 import { cloneCheckout } from "../services/git-clone.js";
@@ -33,6 +38,7 @@ import {
   gitCheckoutSchema,
   gitBranchCreateSchema,
   gitRebaseSchema,
+  gitBranchPullSchema,
   gitPushSchema,
   gitCloneSchema,
   gitRepairSchema,
@@ -42,6 +48,7 @@ import type {
   GitCheckoutBody,
   GitBranchCreateBody,
   GitRebaseBody,
+  GitBranchPullBody,
   GitPushBody,
   GitCloneBody,
   GitRepairBody,
@@ -462,6 +469,22 @@ export function registerGitRoutes(app: FastifyInstance): void {
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       return await withClaimedClone(resolvedCwd, () => rebaseBranch(resolvedCwd, onto));
+    },
+  );
+
+  // Issue #3068 — the per-branch fast-forward Pull. The session guard ran on
+  // the primary; `expectedWorktree` is the checkout it guarded, which
+  // pullBranch re-checks against this host's own `git worktree list`.
+  app.post<{ Body: GitBranchPullBody }>(
+    "/internal/git-branch-pull",
+    { ...INTERNAL_RATE_LIMIT, schema: gitBranchPullSchema },
+    async (request, reply) => {
+      const { cwd, branch, expectedWorktree } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await withClaimedClone(resolvedCwd, () =>
+        pullBranch(resolvedCwd, branch, expectedWorktree ?? null),
+      );
     },
   );
 

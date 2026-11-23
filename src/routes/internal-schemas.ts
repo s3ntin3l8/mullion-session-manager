@@ -582,6 +582,9 @@ const GIT_FIELD_DEFS = {
   startPoint: { type: "string", minLength: 1, maxLength: 255 },
   onto: { type: "string", minLength: 1, maxLength: 255 },
   checkout: { type: "boolean" },
+  // Issue #3068 — the checkout the primary guarded for a per-branch Pull
+  // (null: checked out nowhere). Compared by pullBranch, never run in.
+  expectedWorktree: { type: ["string", "null"] },
 } satisfies Record<string, FieldSchema>;
 
 type GitFieldName = keyof typeof GIT_FIELD_DEFS;
@@ -777,6 +780,17 @@ export interface GitRebaseBody {
 export const gitRebaseSchema = schemaFor({
   required: ["cwd"],
   optional: ["onto"],
+});
+
+export interface GitBranchPullBody {
+  cwd: string;
+  branch: string;
+  expectedWorktree?: string | null;
+}
+
+export const gitBranchPullSchema = schemaFor({
+  required: ["cwd", "branch"],
+  optional: ["expectedWorktree"],
 });
 
 export interface GitPushBody {

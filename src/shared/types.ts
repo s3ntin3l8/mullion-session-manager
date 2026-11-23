@@ -292,6 +292,11 @@ export type GitBranchOpReason =
   | "already-up-to-date"
   | "conflicts"
   | "failed"
+  // Issue #3068 — the per-branch fast-forward Pull (`pullBranch`): the branch
+  // tracks nothing (or its upstream is gone), or it has commits its upstream
+  // lacks, so a fast-forward is impossible. Pull never merges or rebases.
+  | "no-upstream"
+  | "not-fast-forward"
   // Added one layer up, by the routes: they need the sessions table and the
   // clone registry, which the DB-less git service has no access to.
   | "sessions-active"

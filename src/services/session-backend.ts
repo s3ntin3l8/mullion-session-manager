@@ -54,6 +54,7 @@ import { deleteBranch, type DeleteBranchResult } from "./git-branch-delete.js";
 import {
   checkoutBranch,
   createBranch,
+  pullBranch,
   rebaseBranch,
   type GitBranchOpResult,
 } from "./git-branch-ops.js";
@@ -402,6 +403,14 @@ export interface SessionBackend {
     opts?: { checkout?: boolean },
   ): Promise<GitBranchOpResult>;
   rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult>;
+  // Issue #3068 — fast-forwards one branch wherever it is checked out (or
+  // only its ref, when nowhere). `expectedWorktree` is the checkout the route
+  // guarded; see git-branch-ops.ts's pullBranch.
+  pullBranch(
+    cwd: string,
+    branch: string,
+    expectedWorktree: string | null,
+  ): Promise<GitBranchOpResult>;
   // Issue #442 — removes any worktree `git worktree list` itself reports
   // for `cwd` (not just a task-scoped one) on whichever host owns it. The
   // `sessions-active` refusal reason isn't produced here either, for the
@@ -737,6 +746,14 @@ class LocalBackend implements SessionBackend {
 
   rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult> {
     return rebaseBranch(cwd, onto);
+  }
+
+  pullBranch(
+    cwd: string,
+    branch: string,
+    expectedWorktree: string | null,
+  ): Promise<GitBranchOpResult> {
+    return pullBranch(cwd, branch, expectedWorktree);
   }
 
   removeListedWorktree(
@@ -1186,6 +1203,17 @@ class RemoteBackend implements SessionBackend {
 
   rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult> {
     return this.mutating("rebase", this.client.resolveGitRebase(cwd, onto));
+  }
+
+  pullBranch(
+    cwd: string,
+    branch: string,
+    expectedWorktree: string | null,
+  ): Promise<GitBranchOpResult> {
+    return this.mutating(
+      "branch pull",
+      this.client.resolveGitBranchPull(cwd, branch, expectedWorktree),
+    );
   }
 
   removeListedWorktree(

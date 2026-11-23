@@ -617,6 +617,22 @@ export function PullIcon(props: IconProps) {
   );
 }
 
+// Git rebase (issue #3068) — a trunk whose tip (top dot) receives a commit
+// carried over from a side branch (bottom-right dot), along an arrow.
+// Deliberately unlike PullIcon above: the current branch's Rebase replays
+// local commits, it is not a fast-forward Pull.
+export function RebaseIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M6 21 V9" />
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="18" cy="18" r="2.5" />
+      <path d="M18 15.5 V11 a4 4 0 0 0 -4 -4 H9.5" />
+      <path d="M12 4.5 L9.5 7 L12 9.5" />
+    </Svg>
+  );
+}
+
 // Browser preview pane trigger (issue #28) — a generic line glyph, matching
 // this file's usual convention (unlike GitHubIcon's brand mark above).
 export function GlobeIcon(props: IconProps) {

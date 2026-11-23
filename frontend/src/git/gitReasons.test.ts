@@ -83,6 +83,8 @@ describe("branchOpReasonMessage copy", () => {
     "already-up-to-date": /Already up to date/i,
     conflicts: /conflicts — aborted/i,
     failed: /operation failed/i,
+    "no-upstream": /No upstream tracking branch/i,
+    "not-fast-forward": /cannot fast-forward/i,
     "sessions-active": /stop it first/i,
     busy: /already running/i,
   };
@@ -92,6 +94,13 @@ describe("branchOpReasonMessage copy", () => {
       expect(branchOpReasonMessage(reason as GitBranchOpReason)).toMatch(matches);
     });
   }
+
+  // Issue #3068 — a gone upstream says which one.
+  it("names a gone upstream", () => {
+    expect(branchOpReasonMessage("no-upstream", "The upstream origin/x no longer exists")).toBe(
+      "The upstream origin/x no longer exists — nothing to pull from.",
+    );
+  });
 
   it("names the conflicting files, capped, and the rebase target", () => {
     const files = ["a", "b", "c", "d", "e", "f", "g"];

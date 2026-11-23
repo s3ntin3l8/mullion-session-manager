@@ -638,6 +638,119 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
       ),
   );
 
+  // Issue #3068 — fast-forward ANY local branch to its upstream, from its
+  // Branches row. Where the branch is checked out decides the guard:
+  //   - nowhere: only the ref moves (git-branch-ops.ts's pullBranch), so no
+  //     session can be in the way;
+  //   - the main checkout: refused while an active session works in it
+  //     (sessionsInProjectCheckout on that directory, not counting sessions
+  //     in the linked worktrees nested below it). Unlike the header's
+  //     git-pull, which the current row still uses: a project may be rooted
+  //     in a linked worktree, and then the main checkout is someone else's;
+  //   - a linked worktree: refused while any session works in it — active,
+  //     ended-but-alive, or not confirmable (sessionsUsingWorktree).
+  // The checkout the guard was chosen for is passed down, and pullBranch
+  // refuses if git disagrees, so a branch that moves between this check and
+  // the update never lands in an unguarded worktree. Fails closed: an
+  // unreadable worktree list or session check refuses rather than proceeds.
+  app.post<{
+    Params: { id: string };
+    Querystring: { sessionId?: string };
+    Body: { branch: string };
+  }>(
+    "/api/projects/:id/git-branch-pull",
+    {
+      schema: {
+        params: projectIdParamsSchema,
+        body: {
+          type: "object",
+          required: ["branch"],
+          additionalProperties: false,
+          properties: { branch: branchRefSchema },
+        },
+      },
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const { branch } = request.body;
+      const sessionId = request.query.sessionId;
+      const project = await loadScopedProject(app, Number(request.params.id), sessionId, reply);
+      if (!project) return reply;
+      if (isCloneBusy(project.hostId, project.cwd)) {
+        const busy: GitBranchOpResult = {
+          ok: false,
+          reason: "busy",
+          detail: "A git operation is already running",
+        };
+        return busy;
+      }
+      markCloneBusy(project.hostId, project.cwd);
+      try {
+        const worktrees =
+          project.hostId === LOCAL_HOST_ID
+            ? await listWorktrees(project.cwd)
+            : ((
+                await getRemoteHostClient(app, project.hostId).resolveGitBranches(
+                  project.cwd,
+                  false,
+                )
+              )?.worktrees ?? null);
+        if (worktrees === null) {
+          const unread: GitBranchOpResult = {
+            ok: false,
+            reason: "failed",
+            detail: "Could not list this project's worktrees",
+          };
+          return unread;
+        }
+        const holder = worktrees.find((w) => w.branch === branch) ?? null;
+        const sid = sessionId === undefined ? undefined : Number(sessionId);
+        if (holder) {
+          let ids: number[];
+          if (holder.isMain) {
+            const nested = worktrees.filter((w) => !w.isMain).map((w) => w.path);
+            ids = sessionsInProjectCheckout(app, { ...project, cwd: holder.path }, nested, sid);
+          } else {
+            let usage: Awaited<ReturnType<typeof sessionsUsingWorktree>>;
+            try {
+              usage = await sessionsUsingWorktree(app, holder.path, project.hostId, sid);
+            } catch (err) {
+              app.log.warn({ hostId: project.hostId, err }, "worktree usage check failed");
+              return reply.serviceUnavailable(
+                "Could not check whether sessions are using this worktree",
+              );
+            }
+            ids = [...new Set([...usage.active, ...usage.alive, ...usage.unknown])];
+          }
+          if (ids.length > 0) {
+            const inUse: GitBranchOpResult = {
+              ok: false,
+              reason: "sessions-active",
+              detail: ids.join(","),
+            };
+            return inUse;
+          }
+        }
+        return await resolveBackend(app, project.hostId).pullBranch(
+          project.cwd,
+          branch,
+          holder?.path ?? null,
+        );
+      } catch (err) {
+        if (isHostBusyError(err)) {
+          return reply
+            .status(503)
+            .send({ message: `Host ${project.hostId} is busy`, retryable: true });
+        }
+        if (!(err instanceof HostUnreachableError || err instanceof HostRequestError)) throw err;
+        if (replyUnsupportedOnAgent(err, sessionId, project.hostId, reply)) return reply;
+        return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "git branch pull"));
+      } finally {
+        releaseClone(project.hostId, project.cwd);
+      }
+    },
+  );
+
   // A3 — one branch's drilldown: upstream / base ahead-behind, the commits
   // only it has, worktree, task claim and PR. Local projects only (a remote
   // host's git is behind the agent; History on remote hosts is A4's seam).

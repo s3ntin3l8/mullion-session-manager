@@ -453,7 +453,9 @@ describe("Branches", () => {
     expect(
       within(rowOf("feat/open")).getByRole("button", { name: /in use by feat-open/ }),
     ).toBeDisabled();
-    await userEvent.click(within(rowOf("main")).getByRole("button", { name: /Rebase onto/ }));
+    await userEvent.click(
+      within(rowOf("main")).getByRole("button", { name: /^Rebase — replay local commits onto/ }),
+    );
     expect(m.rebaseProjectGitBranch).not.toHaveBeenCalled();
     // Armed, the icon-sized button announces the confirm step in its title.
     await userEvent.click(

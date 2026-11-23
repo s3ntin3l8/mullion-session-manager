@@ -178,6 +178,12 @@ export function branchOpReasonMessage(
       return "Nothing to rebase onto: no upstream and no origin default branch.";
     case "already-up-to-date":
       return `Already up to date${detail ? ` with ${detail}` : ""}.`;
+    case "no-upstream":
+      return detail && detail !== "No upstream tracking branch configured"
+        ? `${detail} — nothing to pull from.`
+        : "No upstream tracking branch configured.";
+    case "not-fast-forward":
+      return "Branch has diverged from upstream (cannot fast-forward).";
     case "conflicts": {
       const files = conflicts ?? [];
       const shown = files.slice(0, 5).join(", ");
