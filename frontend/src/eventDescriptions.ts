@@ -1,4 +1,7 @@
 import type { NotificationEvent } from "./api/index.js";
+// The store's own dismissal-key format, imported rather than re-spelled: a
+// second copy is how the tab badge drifted to a two-part key (#1427, #3458).
+import { eventKey } from "./store/helpers.js";
 
 // Issue #428 — mirrors src/services/background-tasks.ts's TERMINAL_STATUSES
 // set. Duplicated rather than imported: this is a separate npm workspace
@@ -998,9 +1001,9 @@ export interface UnreadEventSummary {
 // #168 / mobile UI overhaul, PR #613 Hermes review) — the identical "events
 // newer than the read cursor, minus anything already dismissed from the
 // notification panel, that classify as notify-worthy" derivation, previously
-// duplicated verbatim in both places. Inlines the `sessionId:seq` key format
-// directly rather than importing store.ts's own eventKey, so this leaf util
-// module doesn't pull store.ts's whole import graph into every consumer.
+// duplicated verbatim in both places. The dismissal key comes from
+// store/helpers.ts's eventKey (a light module, not the store itself): an
+// inlined copy kept the pre-#1427 two-part format and never matched.
 export function unreadEventSummary(
   sessionId: number,
   events: NotificationEvent[] | undefined,
@@ -1008,7 +1011,7 @@ export function unreadEventSummary(
   dismissedEventKeys: Record<string, true>,
 ): UnreadEventSummary {
   const kinds = (events ?? [])
-    .filter((e) => e.seq > lastSeenSeq && !dismissedEventKeys[`${sessionId}:${e.seq}:${e.ts}`])
+    .filter((e) => e.seq > lastSeenSeq && !dismissedEventKeys[eventKey(sessionId, e.seq, e.ts)])
     .map(notifyKind)
     .filter((k): k is "attention" | "exited" => k !== null);
   return {
@@ -1360,7 +1363,7 @@ export function sessionOpenDecisions(
           open = false;
       }
     }
-    if (open && !dismissedEventKeys[`${session.id}:${e.seq}:${e.ts}`]) {
+    if (open && !dismissedEventKeys[eventKey(session.id, e.seq, e.ts)]) {
       out.push({ event: e, cls: cls as OpenDecisionClass });
     }
 
@@ -1406,7 +1409,7 @@ export function sessionGroupedSummary(
   for (let i = events.length - 1; i >= 0; i--) {
     const e = events[i];
     if (bellClass(e) !== "grouped") continue;
-    if (dismissedEventKeys[`${sessionId}:${e.seq}:${e.ts}`]) continue;
+    if (dismissedEventKeys[eventKey(sessionId, e.seq, e.ts)]) continue;
     const isExit = e.kind === "status_change";
     if (isExit && failedExit) continue;
     summary ??= { finished: false, exited: false, seqs: [], newestTs: e.ts, unread: false };
