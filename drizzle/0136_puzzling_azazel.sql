@@ -1,0 +1,1 @@
+ALTER TABLE `host_pairings` ADD `target_host_id` text;

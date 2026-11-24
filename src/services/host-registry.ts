@@ -801,6 +801,44 @@ export function createPairedHost(
 }
 
 /**
+ * Issue #3438 — re-pairs an existing host in place from a host-bound pairing
+ * code. Issues a fresh session and machine credential, clears any revocation,
+ * and drops the displaced credential immediately (no grace slot) so the old
+ * agent is rejected on its next renewal. Preserves the operator-configured
+ * host name. Returns null if the host no longer exists or is local.
+ */
+export function rePairHost(
+  app: FastifyInstance,
+  hostId: string,
+  input: Omit<RegisterAgentInput, "baseUrl" | "wantsMachineCredential"> & { baseUrl?: string },
+  peer: string | null = null,
+): HostRegistration | null {
+  const row = getHostRow(app, hostId);
+  if (!row || row.id === LOCAL_HOST_ID) return null;
+  app.db
+    .update(hosts)
+    .set({
+      ...(input.baseUrl !== undefined
+        ? { baseUrl: input.baseUrl }
+        : row.origin === "enrolled"
+          ? { baseUrl: null }
+          : {}),
+      agentMetadata: JSON.stringify({
+        hostname: input.hostname,
+        capabilities: input.capabilities ?? null,
+      }),
+      ...(input.platform ? { platform: input.platform } : {}),
+    })
+    .where(eq(hosts.id, hostId))
+    .run();
+  recordHostIdentityEvent(app, hostId, "paired", peer);
+  return {
+    ...issueSession(app, hostId),
+    machineCredential: issueMachineCredential(app, hostId, peer, { noGrace: true }),
+  };
+}
+
+/**
  * Issue #2449 — a retried pairing redeem whose response was lost: the host
  * already exists, so hand the Helper a fresh session and credential for the
  * SAME identity. Refuses a revoked, unknown or already-renewed identity (the
@@ -839,15 +877,19 @@ function issueMachineCredential(
   app: FastifyInstance,
   hostId: string,
   peer: string | null = null,
+  opts: { noGrace?: boolean } = {},
 ): string {
   const credential = crypto.randomBytes(32).toString("hex");
   // A claim cannot tell a deliberate re-enroll from a second agent sharing the
   // same per-host token. Keep a still-live credential in the grace slot so a
   // displaced agent converges onto the new one at its next renewal instead of
-  // being 401-ed permanently.
+  // being 401-ed permanently. Re-pairing (noGrace) is an explicit operator
+  // action that must disconnect the old agent immediately.
   const existing = getHostRow(app, hostId);
   const prevEnc =
-    existing && hasLiveMachineIdentity(existing) ? existing.machineCredentialEnc : null;
+    !opts.noGrace && existing && hasLiveMachineIdentity(existing)
+      ? existing.machineCredentialEnc
+      : null;
   // An expired credential is already dead (renewMachineCredential rejects the
   // row), so it must not be revived into the grace slot.
   const replacesLive = prevEnc !== null;

@@ -153,20 +153,28 @@ in `machine_credential`.
   the row's menu → _Revoke identity_) drops the credential, its grace copy
   and the live session. The agent's next registration gets `401`, and it
   does **not** fall back to its bootstrap token to regain the identity: it
-  logs the rejection and stops. A revoked row can no longer be claimed with
-  its per-host token. To re-enroll an agent that uses the fleet secret, stop
-  it, delete `agent-identity.json`, and restart it; it registers as a new
-  host. For an agent that claimed a manual host with its per-host token, that
-  does not work (the token still matches only the revoked row): rotate the
-  host's token (`POST /api/hosts/:id/rotate-token`, which re-arms the row),
-  put the new token in the agent's `.env` (`MULLION_ENROLLMENT_TOKEN`; the
-  variable `install.sh` reads it from is `MULLION_AGENT_ENROLLMENT_TOKEN`),
-  delete `agent-identity.json`, then **restart the agent unit** (a rejected
-  agent is terminal in memory, so nothing short of a restart re-reads either
-  file; `install.sh` restarts a unit that was running when it rewrote the
-  `.env`). The recipe is tested through the real boot path
-  (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not at rotation time: rotating to retire a leaked token (rotate and discard) does not need it, but it leaves the `.env` token dead, so a later re-pairing needs a second, fresh rotation. A credential unused for 90 days is rejected the same way as a
-  revoked one, so the agent log's "revoked or unknown" can also mean expiry.
+  logs the rejection and stops. To bring a revoked host back onto the **same**
+  host row, use Settings → Hosts → row menu → _Re-pair_ (or `POST
+/api/host-pairings` with `{"hostId": "<id>"}`) and run the agent-side redeem
+  with the code; redeeming a host-bound code issues a fresh session and machine
+  credential in place and rejects any displaced credential immediately (no
+  grace period). Alternatively, to re-enroll an agent that uses the fleet
+  secret as a **new** host, stop it, delete `agent-identity.json`, and restart
+  it. For an older per-host-token agent that cannot redeem a pairing code,
+  rotate the host's token (`POST /api/hosts/:id/rotate-token`, which re-arms
+  the row), put the new token in the agent's `.env`
+  (`MULLION_ENROLLMENT_TOKEN`; the variable `install.sh` reads it from is
+  `MULLION_AGENT_ENROLLMENT_TOKEN`), delete `agent-identity.json`, then
+  **restart the agent unit** (a rejected agent is terminal in memory, so
+  nothing short of a restart re-reads either file; `install.sh` restarts a
+  unit that was running when it rewrote the `.env`). The legacy recipe is
+  tested through the real boot path
+  (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not
+  at rotation time: rotating to retire a leaked token (rotate and discard) does
+  not need it, but it leaves the `.env` token dead, so a later re-pairing
+  needs a second, fresh rotation. A credential unused for 90 days is rejected
+  the same way as a revoked one, so the agent log's "revoked or unknown" can
+  also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
   credential is compared, so a caller who guesses an id can tell a revoked host

@@ -16,7 +16,9 @@ import {
   normalizePairingOrigin,
   PAIRING_CODE_PATTERN,
 } from "../shared/pairing-link.js";
-import type { HostRegistration } from "../services/host-registry.js";
+import { getHostRow, LOCAL_HOST_ID, type HostRegistration } from "../services/host-registry.js";
+import { closeAgentChannel } from "./agent-channel.js";
+import { AgentChannelCloseCode } from "../shared/agent-channel.js";
 
 // Issue #2449 — one-time execution-host pairing. The dashboard half
 // (POST/GET/DELETE /api/host-pairings) sits behind normal auth; the redeem
@@ -36,6 +38,7 @@ const REDEEM_FAILURE_LIMIT = { max: 20, windowMs: 60_000 };
 
 interface CreateBody {
   label?: string;
+  hostId?: string;
 }
 
 interface RedeemBody {
@@ -52,7 +55,10 @@ const createSchema = {
   body: {
     type: "object",
     additionalProperties: false,
-    properties: { label: { type: "string", maxLength: 80 } },
+    properties: {
+      label: { type: "string", maxLength: 80 },
+      hostId: { type: "string", minLength: 1, maxLength: 128 },
+    },
   },
 };
 
@@ -98,8 +104,13 @@ export async function hostPairingRoute(app: FastifyInstance) {
   app.post<{ Body: CreateBody }>(
     "/api/host-pairings",
     { schema: createSchema, config: { rateLimit: ISSUE_RATE_LIMIT } },
-    async (request) => {
-      const pairing = issueHostPairingCode(app, { label: request.body?.label });
+    async (request, reply) => {
+      const hostId = request.body?.hostId;
+      if (hostId !== undefined) {
+        if (hostId === LOCAL_HOST_ID) return reply.badRequest("cannot re-pair the local host");
+        if (!getHostRow(app, hostId)) return reply.notFound("host not found");
+      }
+      const pairing = issueHostPairingCode(app, { label: request.body?.label, hostId });
       // MULLION_PUBLIC_URL (validated at boot) wins: behind a proxy the Host
       // header and scheme may not be what a Helper can reach.
       const url =
@@ -188,6 +199,12 @@ export async function hostPairingRoute(app: FastifyInstance) {
       );
       // Uniform answer for unknown, expired, revoked and replayed codes.
       if (!result) return reply.unauthorized("invalid pairing code");
+      // Disconnect any displaced agent holding an open channel for this host
+      // immediately rather than waiting for the periodic credential recheck.
+      closeAgentChannel(app, result.hostId, AgentChannelCloseCode.Expired);
+      app.hostHeartbeatTracker?.invalidateHost(result.hostId);
+      app.hostCapacityTracker?.invalidateHost(result.hostId);
+      app.hostAgentTracker?.invalidateHost(result.hostId);
       app.reconfigureRemoteEventSubscriptions({ forceReconnect: [result.hostId] });
       refreshHostProtocolSoon(app, result.hostId);
       app.reconfigureSshAgentFanout();

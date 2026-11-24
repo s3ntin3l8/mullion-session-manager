@@ -11,7 +11,11 @@ import type { PlacementCapability } from "../../../../src/shared/constants.js";
 // Token rotation and the "waiting for the agent" row state. The rest of the
 // section is exercised through its own components' tests.
 
-function stubFetch(opts: { rotate?: () => Response; acknowledge?: () => Response }) {
+function stubFetch(opts: {
+  rotate?: () => Response;
+  acknowledge?: () => Response;
+  createPairing?: (body: unknown) => Response;
+}) {
   const calls: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -21,6 +25,13 @@ function stubFetch(opts: { rotate?: () => Response; acknowledge?: () => Response
       calls.push(`${method} ${url}`);
       if (url === "/api/hosts" && method === "GET") {
         return Promise.resolve(jsonResponse(200, useDashboardStore.getState().hosts));
+      }
+      if (url === "/api/host-pairings" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, []));
+      }
+      if (url === "/api/host-pairings" && method === "POST" && opts.createPairing) {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        return Promise.resolve(opts.createPairing(body));
       }
       if (url.endsWith("/rotate-token") && method === "POST" && opts.rotate) {
         return Promise.resolve(opts.rotate());
@@ -443,5 +454,70 @@ describe("HostsSection token rotation", () => {
       expect(screen.queryByTestId("host-identity-replaced-h1")).not.toBeInTheDocument(),
     );
     expect(screen.getByTestId("host-row-h1")).not.toHaveClass("stacked");
+  });
+
+  it("shows Re-pair for hosts with a machine identity (including revoked), hides it for manual hosts, and shows the code in the pairing panel", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({ id: "local", name: "This machine", isLocal: true }),
+        makeHost({
+          id: "h-live",
+          name: "mac-live",
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+        }),
+        makeHost({
+          id: "h-revoked",
+          name: "mac-revoked",
+          hasMachineIdentity: false,
+          machineIdentityRevoked: true,
+        }),
+        makeHost({
+          id: "h-manual",
+          name: "manual-unclaimed",
+          hasMachineIdentity: false,
+          machineIdentityRevoked: false,
+        }),
+      ],
+    });
+    const postedBodies: unknown[] = [];
+    const calls = stubFetch({
+      createPairing: (body) => {
+        postedBodies.push(body);
+        return jsonResponse(200, {
+          id: "pair-1",
+          pairing_link: "mullion://pair?url=http%3A%2F%2Fprimary.test&code=" + "a".repeat(64),
+          url: "http://primary.test",
+          code: "a".repeat(64),
+          expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+        });
+      },
+    });
+
+    render(<HostsSection />);
+
+    const menus = screen.getAllByRole("button", { name: "More…" });
+    // Manual host (3rd remote row) has no Re-pair action.
+    await user.click(menus[2]);
+    expect(screen.queryByText("Re-pair")).not.toBeInTheDocument();
+
+    // Revoked host (2nd remote row) has Re-pair.
+    await user.click(menus[1]);
+    expect(screen.getByText("Re-pair")).toBeInTheDocument();
+
+    // Live host (1st remote row) has Re-pair with disconnect confirmation.
+    await user.click(menus[0]);
+    await user.click(screen.getByText("Re-pair"));
+    await user.click(
+      screen.getByText("Click again to re-pair (disconnects running agent immediately)"),
+    );
+
+    await vi.waitFor(() => expect(calls).toContain("POST /api/host-pairings"));
+    expect(postedBodies).toEqual([{ hostId: "h-live" }]);
+    const panel = await screen.findByTestId("pairing-link-panel");
+    expect(panel).toHaveTextContent("http://primary.test");
+    expect(panel).toHaveTextContent("a".repeat(64));
+    expect(panel).toHaveTextContent(/mullion:\/\/pair\?/);
   });
 });

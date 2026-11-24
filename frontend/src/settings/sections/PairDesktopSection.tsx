@@ -29,11 +29,18 @@ const STAGE_COLOR: Record<PairingStage, string> = {
   revoked: "var(--dim)",
 };
 
-export function PairDesktopSection() {
+interface PairDesktopSectionProps {
+  created?: HostPairingCreated | null;
+  onCreatedChange?: (created: HostPairingCreated | null) => void;
+}
+
+export function PairDesktopSection(props: PairDesktopSectionProps = {}) {
   const hosts = useDashboardStore((s) => s.hosts);
   const refreshHosts = useDashboardStore((s) => s.refreshHosts);
   const [pairings, setPairings] = useState<HostPairingSummary[]>([]);
-  const [created, setCreated] = useState<HostPairingCreated | null>(null);
+  const [internalCreated, setInternalCreated] = useState<HostPairingCreated | null>(null);
+  const created = props.created !== undefined ? props.created : internalCreated;
+  const setCreated = props.onCreatedChange ?? setInternalCreated;
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
@@ -130,7 +137,8 @@ export function PairDesktopSection() {
             </div>
             <div style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>
               If the link does nothing, install the Helper, then retry — or paste the link (or this
-              server address and code) into the Helper by hand.
+              server address and code) into the Helper by hand. Expires{" "}
+              {formatRelativeUntil(Date.parse(created.expires_at))}.
             </div>
             {(
               [

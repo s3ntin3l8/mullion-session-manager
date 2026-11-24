@@ -6,6 +6,7 @@ import { timingSafeTokenMatch } from "./crypto-utils.js";
 import {
   createPairedHost,
   reissuePairedIdentity,
+  rePairHost,
   type HostRegistration,
   type RegisterAgentInput,
 } from "./host-registry.js";
@@ -82,7 +83,7 @@ function cleanupHostPairings(app: FastifyInstance): void {
 
 export function issueHostPairingCode(
   app: FastifyInstance,
-  opts: { label?: string } = {},
+  opts: { label?: string; hostId?: string } = {},
 ): IssuedHostPairing {
   cleanupHostPairings(app);
   const id = crypto.randomUUID();
@@ -95,6 +96,7 @@ export function issueHostPairingCode(
       codeHash: sha256Hex(code),
       expiresAt,
       label: opts.label?.trim() || null,
+      targetHostId: opts.hostId ?? null,
     })
     .run();
   return { id, code, expiresAt };
@@ -120,7 +122,7 @@ export function listHostPairings(app: FastifyInstance): HostPairingSummary[] {
       state: stateOf(row),
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
-      hostId: row.redeemedHostId,
+      hostId: row.redeemedHostId ?? row.targetHostId,
     }));
 }
 
@@ -250,17 +252,17 @@ export function consumeHostPairing(
       .returning()
       .all();
     if (claimed.length === 0) return null;
-    const registration = createPairedHost(
-      app,
-      {
-        hostname: input.hostname,
-        name: input.name ?? pairing.label ?? undefined,
-        baseUrl: input.baseUrl,
-        platform: input.platform,
-        capabilities: input.capabilities,
-      },
-      peer,
-    );
+    const pairingInput = {
+      hostname: input.hostname,
+      name: input.name ?? pairing.label ?? undefined,
+      baseUrl: input.baseUrl,
+      platform: input.platform,
+      capabilities: input.capabilities,
+    };
+    const registration = claimed[0].targetHostId
+      ? rePairHost(app, claimed[0].targetHostId, pairingInput, peer)
+      : createPairedHost(app, pairingInput, peer);
+    if (!registration) return null;
     tx.update(hostPairings)
       .set({ redeemedHostId: registration.hostId })
       .where(eq(hostPairings.id, pairing.id))
