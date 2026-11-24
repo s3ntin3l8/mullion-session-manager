@@ -981,7 +981,7 @@ different from every other op above — its **three-tier scope story**.
   scope).
 - **`device.action`** — `body.deviceId` plus the same `action` union
   `POST /api/devices/:id/action` accepts (`screenshot`/`tap`/`swipe`/`text`/
-  `key`/`logcat`/`clipboard`); `deviceId` is stripped before forwarding, the
+  `key`/`logcat`/`clipboard`/`openurl`); `deviceId` is stripped before forwarding, the
   rest is the action body verbatim. `clipboard` additionally carries
   `{op: "get"}` (returns `{text: string | null}` from a last-known cache,
   never a live device round-trip) or `{op: "set", text, paste?}` (writes via

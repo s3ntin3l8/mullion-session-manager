@@ -44,7 +44,7 @@ function usePreviewConfig(projectId: number) {
  * same browser-destinations answer the Browser pane uses (it resolves the host
  * from the running Dock control, which is not always the project's own host).
  * Fetched only when a running iOS Simulator exists, and again if the saved dev
- * server changes. */
+ * server or the project's running Dock sessions change. */
 function useDevServerDestination(
   projectId: number,
   devices: Device[],
@@ -52,7 +52,15 @@ function useDevServerDestination(
 ): { address: string; hostId: string } | null {
   const hasSimulator = devices.some((d) => d.platform === "ios" && d.status === "active" && d.live);
   const [found, setFound] = useState<{ key: string; address: string; hostId: string } | null>(null);
-  const key = `${projectId}:${devServerUrl ?? ""}`;
+  // The dev-server host follows the running Dock control, so starting or
+  // stopping one re-resolves it. A primitive, so it only changes with the set.
+  const dockSessions = useDashboardStore((s) =>
+    s.sessions
+      .filter((x) => x.kind === "dock" && x.status === "active" && x.projectId === projectId)
+      .map((x) => x.id)
+      .join(","),
+  );
+  const key = `${projectId}:${devServerUrl ?? ""}:${dockSessions}`;
   useEffect(() => {
     if (!hasSimulator || !devServerUrl) return;
     let cancelled = false;

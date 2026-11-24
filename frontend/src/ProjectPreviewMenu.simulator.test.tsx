@@ -7,7 +7,7 @@ import { api } from "./api/index.js";
 import type { Device } from "./api/index.js";
 import { ProjectPreviewMenu } from "./ProjectPreviewMenu.js";
 import { useDashboardStore } from "./store/index.js";
-import { makeProject } from "./test/fixtures.js";
+import { makeProject, makeSession } from "./test/fixtures.js";
 import { resetStore } from "./test/resetStore.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { mockFetch } from "./test/mockFetch.js";
@@ -111,6 +111,15 @@ describe("Preview menu: Open in simulator", () => {
       sim({ id: 3, live: null }),
     ]);
     expect(screen.queryByRole("menuitem", { name: /Open in simulator/ })).toBeNull();
+  });
+
+  it("re-resolves the dev server's host when a Dock session starts", async () => {
+    await openMenu([sim({})]);
+    expect(api.getBrowserDestinations).toHaveBeenCalledTimes(1);
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 91, projectId: 1, kind: "dock", status: "active" })],
+    });
+    await waitFor(() => expect(api.getBrowserDestinations).toHaveBeenCalledTimes(2));
   });
 
   it("reports a failed open instead of swallowing it", async () => {

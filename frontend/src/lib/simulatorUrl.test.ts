@@ -17,6 +17,15 @@ describe("simulatorOpenUrl", () => {
     );
   });
 
+  it("keeps an https default port instead of silently moving it to 80", () => {
+    expect(simulatorOpenUrl("https://localhost/x", { hostId: "local" }, "local")).toBe(
+      "http://127.0.0.1:443/x",
+    );
+    expect(simulatorOpenUrl("http://localhost/x", { hostId: "local" }, "local")).toBe(
+      "http://127.0.0.1/x",
+    );
+  });
+
   it("refuses a simulator on a different host than the dev server", () => {
     expect(simulatorOpenUrl("http://localhost:3005/", { hostId: "mac-1" }, "local")).toBeNull();
   });

@@ -22,7 +22,11 @@ export function simulatorOpenUrl(
     return null;
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  // Switching the scheme re-normalises a default port away (443 -> 80), so carry
+  // the original port across explicitly.
+  const port = u.port || (u.protocol === "https:" ? "443" : "80");
   u.protocol = "http:";
   u.hostname = "127.0.0.1";
+  u.port = port;
   return u.toString();
 }
