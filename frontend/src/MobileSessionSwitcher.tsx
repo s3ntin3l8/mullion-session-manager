@@ -378,7 +378,7 @@ export function MobileSessionSwitcher({
                             <button
                               type="button"
                               className={`mobile-session-spawned-by link${
-                                row.spawnedBy.state === "exited" ? " exited" : ""
+                                row.spawnedBy.state === "exited" ? " ended" : ""
                               }`}
                               onClick={() => {
                                 closeSheet();
@@ -390,15 +390,19 @@ export function MobileSessionSwitcher({
                               {row.spawnedBy.state === "exited" ? " · ended" : ""}
                             </button>
                           ) : (
+                            // No handler (or a removed parent): not a link. A
+                            // live/exited parent keeps the button's full text.
                             <span
-                              className={`mobile-session-spawned-by${
-                                row.spawnedBy.state === "live" || row.spawnedBy.state === "exited"
-                                  ? " exited"
-                                  : " removed"
+                              className={`mobile-session-spawned-by static${
+                                row.spawnedBy.state === "exited" ? " ended" : ""
                               }`}
                             >
                               {row.spawnedBy.state === "live" || row.spawnedBy.state === "exited"
-                                ? `spawned by ${row.spawnedBy.title}`
+                                ? `spawned by ${row.spawnedBy.title}${
+                                    row.spawnedBy.projectName
+                                      ? ` · ${row.spawnedBy.projectName}`
+                                      : ""
+                                  }${row.spawnedBy.state === "exited" ? " · ended" : ""}`
                                 : "spawned by a removed session"}
                             </span>
                           )}

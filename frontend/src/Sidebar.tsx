@@ -458,6 +458,7 @@ export function Sidebar({
   // row is on screen. A project that is not in the tree (filtered out or
   // hidden) is skipped silently: the pane still opens. `reveal` carries the
   // expand to a mounted ProjectSection, whose collapse state is its own.
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
   const [reveal, setReveal] = useState<{ projectId: number; nonce: number } | null>(null);
   const openSpawnParent = useCallback(
     (parent: Session) => {
@@ -476,8 +477,9 @@ export function Sidebar({
       // Bring the row into view once the expand has rendered. Best effort: a
       // virtualized tree only has the row in the DOM once it is in range.
       requestAnimationFrame(() => {
-        document
-          .querySelector<HTMLElement>(`.session-item[data-session-id="${parent.id}"]`)
+        // Inside the sidebar: the board's lane cards render the same row.
+        sidebarRef.current
+          ?.querySelector<HTMLElement>(`.session-item[data-session-id="${parent.id}"]`)
           ?.scrollIntoView?.({ block: "nearest" });
       });
     },
@@ -556,7 +558,7 @@ export function Sidebar({
   ]);
 
   return (
-    <div className="sidebar">
+    <div className="sidebar" ref={sidebarRef}>
       <>
         <div className="sidebar-section-header">
           <h2 className="sidebar-section-title">Projects</h2>

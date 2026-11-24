@@ -511,13 +511,13 @@ describe("MobileSessionSwitcher spawned-by line (#3456)", () => {
     await userEvent.click(trigger());
     expect(
       screen.getByRole("button", { name: "spawned by coordinator · hermes · ended" }),
-    ).toHaveClass("exited");
+    ).toHaveClass("ended");
   });
 
   it("renders plain text, not a dead button, when no handler is given", async () => {
     renderSwitcher({ sections: sectionsWith("live") });
     await userEvent.click(trigger());
-    expect(screen.getByText("spawned by coordinator").tagName).toBe("SPAN");
+    expect(screen.getByText("spawned by coordinator · hermes").tagName).toBe("SPAN");
     expect(screen.queryByRole("button", { name: /spawned by/ })).toBeNull();
   });
 

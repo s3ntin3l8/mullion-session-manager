@@ -2733,7 +2733,8 @@ button.mobile-session-spawned-by {
   color: var(--accent, var(--fg));
   cursor: pointer;
 }
-.mobile-session-spawned-by.exited,
-button.mobile-session-spawned-by.exited {
+.mobile-session-spawned-by.ended,
+button.mobile-session-spawned-by.ended,
+.mobile-session-spawned-by.static {
   color: var(--dim);
 }
