@@ -6,6 +6,8 @@ import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
 import { useDashboardStore } from "./store/index.js";
 import { Presence } from "./ui/Presence.js";
+import { makeWorkspace } from "./test/fixtures.js";
+import { ACTIVE_TERMINAL_FOCUS_SELECTOR, WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { installExitAnimations } from "./test/exitAnimations.js";
 import type { ExitAnimations } from "./test/exitAnimations.js";
@@ -58,8 +60,14 @@ describe("CommandPalette exit", () => {
 
   // #3037 — App.tsx mounts it in a <Presence>: every close plays the exit,
   // including the ones the palette's own controls never see.
-  function PaletteHost({ onOpenTasks }: { onOpenTasks: () => void }) {
-    const [open, setOpen] = useState(false);
+  function PaletteHost({
+    onOpenTasks,
+    initialOpen = false,
+  }: {
+    onOpenTasks: () => void;
+    initialOpen?: boolean;
+  }) {
+    const [open, setOpen] = useState(initialOpen);
     return (
       <>
         <button onClick={() => setOpen(true)}>Open palette</button>
@@ -157,5 +165,48 @@ describe("CommandPalette exit", () => {
     await exits.finishExits();
     expect(document.querySelector(".cmd-palette-backdrop")).not.toBeInTheDocument();
     expect(exits.pending()).toBe(0);
+  });
+
+  // The workspace switch places focus a tick after the close: with the
+  // palette now still mounted (leaving), that tick must still land.
+  it("moves focus to the workspace row while it leaves, after a switch from a grid opener", async () => {
+    const gridClass = ACTIVE_TERMINAL_FOCUS_SELECTOR.split(/\s+/)[0]!.replace(/^\./, "");
+    const grid = document.createElement("div");
+    grid.className = gridClass;
+    const trigger = document.createElement("button");
+    trigger.textContent = "old terminal";
+    grid.append(trigger);
+    const row = document.createElement("div");
+    row.dataset.focusFallback = WORKSPACE_FOCUS_FALLBACK;
+    row.tabIndex = 0;
+    row.textContent = "sidebar workspace";
+    const host = document.createElement("div");
+    host.append(grid, row);
+    document.body.append(host);
+    try {
+      trigger.focus();
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 9, name: "Release train" })],
+        activeWorkspaceId: null,
+      });
+      const user = userEvent.setup();
+      render(<PaletteHost onOpenTasks={() => {}} initialOpen />);
+      const input = await screen.findByPlaceholderText(
+        "Run a command, or find a session or agent…",
+      );
+      await user.type(input, "release");
+      await user.click(await screen.findByText("Release train"));
+      expect(document.querySelector(".cmd-palette-backdrop")).toHaveAttribute(
+        "data-presence",
+        "leaving",
+      );
+      await vi.waitFor(() => expect(row).toHaveFocus());
+      expect(trigger).not.toHaveFocus();
+      await exits.finishExits();
+      expect(document.querySelector(".cmd-palette-backdrop")).not.toBeInTheDocument();
+      expect(row).toHaveFocus();
+    } finally {
+      host.remove();
+    }
   });
 });

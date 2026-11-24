@@ -1055,28 +1055,30 @@ export function HostsSection() {
           }
         />
       </Presence>
-      {editing && (
-        <CreateHostModal
-          mode="edit"
-          initialName={editing.name}
-          initialBaseUrl={editing.baseUrl ?? ""}
-          hasToken={editing.hasToken}
-          canClearBaseUrl={canClearAddress(editing)}
-          onClose={() => setEditing(null)}
-          onSave={(name, baseUrl, token) =>
-            updateHost(editing.id, {
-              name,
-              // An emptied address on a host with an identity is a clear (#3091).
-              ...(baseUrl
-                ? { baseUrl }
-                : editing.baseUrl && canClearAddress(editing)
-                  ? { baseUrl: null }
-                  : {}),
-              ...(token ? { token } : {}),
-            })
-          }
-        />
-      )}
+      <Presence when={editing !== null}>
+        {editing && (
+          <CreateHostModal
+            mode="edit"
+            initialName={editing.name}
+            initialBaseUrl={editing.baseUrl ?? ""}
+            hasToken={editing.hasToken}
+            canClearBaseUrl={canClearAddress(editing)}
+            onClose={() => setEditing(null)}
+            onSave={(name, baseUrl, token) =>
+              updateHost(editing.id, {
+                name,
+                // An emptied address on a host with an identity is a clear (#3091).
+                ...(baseUrl
+                  ? { baseUrl }
+                  : editing.baseUrl && canClearAddress(editing)
+                    ? { baseUrl: null }
+                    : {}),
+                ...(token ? { token } : {}),
+              })
+            }
+          />
+        )}
+      </Presence>
       <Presence when={Boolean(rotated)}>
         {rotated && (
           <AgentInstallInstructions
