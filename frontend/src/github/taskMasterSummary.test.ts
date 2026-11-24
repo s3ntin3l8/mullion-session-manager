@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { Task } from "../api/types.js";
-import { needsYouReason, needsYouTasks, taskBucket } from "./taskMasterSummary.js";
+import { needsYouReason, needsYouTasks, taskBucket, taskNeedsYou } from "./taskMasterSummary.js";
 
 const t = (o: Partial<Task>): Task =>
   ({ id: 1, projectId: 1, status: "ready", archivedAt: null, ...o }) as Task;
@@ -84,4 +84,54 @@ it("includes an unstarted worker in needs-you tasks only while in progress", () 
   expect(needsYouTasks([task])).toHaveLength(1);
   expect(needsYouReason(task)).toMatch(/worker has not started a turn/);
   expect(needsYouReason({ ...task, status: "done" })).toBeNull();
+});
+
+const kindOf = (task: Task) => taskNeedsYou(task)?.kind ?? null;
+
+describe("taskNeedsYou's kind (#3459)", () => {
+  it("names the kind of every needs-you reason, and nothing else", () => {
+    expect(kindOf(t({ status: "failed", failureReason: "x" }))).toBe("failed");
+    expect(kindOf(t({ status: "reviewing", approvalState: "awaiting-human" }))).toBe("review");
+    expect(kindOf(t({ status: "reviewing", autoReturnCapped: true }))).toBe("stopped");
+    expect(kindOf(t({ status: "reviewing", needsHumanReason: "rebase-exhausted" }))).toBe(
+      "stopped",
+    );
+    expect(kindOf(t({ status: "done", mergeError: "conflict" }))).toBe("failed");
+    expect(kindOf(t({ status: "done", releaseError: "denied" }))).toBe("failed");
+    expect(kindOf(t({ status: "in_progress" }))).toBeNull();
+    // The branches the kind used to re-derive on its own, and got wrong: a
+    // worker that never started, and a parked red check under an approval.
+    expect(kindOf(t({ status: "in_progress", needsHumanReason: "worker-not-started" }))).toBe(
+      "stopped",
+    );
+    expect(
+      kindOf(
+        t({
+          status: "reviewing",
+          approvalState: "awaiting-human",
+          needsHumanReason: "ci-still-red",
+          autoReturnCapAnnouncedAt: "2026-01-01T00:00:00Z",
+        }),
+      ),
+    ).toBe("stopped");
+    expect(kindOf(t({ status: "failed", archivedAt: "2026-01-01T00:00:00Z" }))).toBeNull();
+  });
+});
+
+describe("taskNeedsYou (#3459)", () => {
+  it("is the one source of a task's reason and kind: null exactly when needsYouReason is", () => {
+    const tasks = [
+      t({ status: "failed", failureReason: "boom" }),
+      t({ status: "reviewing", approvalState: "awaiting-human" }),
+      t({ status: "done", mergeError: "x" }),
+      t({ status: "in_progress" }),
+      t({ status: "ready" }),
+    ];
+    for (const task of tasks) {
+      const needs = taskNeedsYou(task);
+      expect(needs?.reason ?? null).toBe(needsYouReason(task));
+      expect(needs?.kind ?? null).toBe(kindOf(task));
+    }
+    expect(needsYouTasks(tasks).map((e) => e.kind)).toEqual(["failed", "review", "failed"]);
+  });
 });

@@ -987,3 +987,57 @@
 .notif-panel:focus {
   outline: none;
 }
+/* #3459 — the Sessions | Tasks switch: two segments, each with its own
+   needs-you count, under the panel's title. */
+.notif-sections {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 6px;
+}
+.notif-section-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.notif-section-btn:hover {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.notif-section-btn.active {
+  color: var(--fg);
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 14%, transparent);
+}
+.notif-section-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  /* The bell badge's own fill (toolbar.css's .attention-badge). */
+  background: var(--accent-fill);
+  color: #fff;
+  font-size: 0.65625rem;
+  font-weight: 700;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+/* A task row's second line: why it needs you (needsYouReason). */
+/* It is a .notif-event-text too (the same two-line clamp); only its size,
+   weight and colour differ. */
+.notif-task-reason {
+  font-size: 0.71875rem;
+  font-weight: 400;
+  color: var(--muted);
+}

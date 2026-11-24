@@ -1103,13 +1103,17 @@ describe("NotificationBell popover — focus management (P11)", () => {
     expect(dialog).not.toHaveAttribute("aria-modal");
   });
 
-  it("moves focus into the panel when it opens, and Tab reaches the first row", async () => {
+  it("moves focus into the panel when it opens, and Tab reaches the section switch, then the first row", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
 
     // The dialog itself: its rows are virtualized and mount after it opens,
     // and Tab moves on into them from here.
     expect(screen.getByRole("dialog", { name: "Notifications" })).toHaveFocus();
+    // Tab moves on: the section switch first, then the rows.
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: /^Sessions/ })).toHaveFocus();
+    await userEvent.tab();
     await userEvent.tab();
     await waitFor(() => expect(document.querySelector("button.notif-event-open")).toHaveFocus());
   });

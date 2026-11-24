@@ -2658,6 +2658,15 @@ button.discover-header:hover {
   min-height: 44px;
   font-size: 0.8125rem;
 }
+/* #3459 — the section switch's touch targets in the sheet. */
+.mobile-notif-sheet .notif-sections {
+  padding: 8px 12px 4px;
+  gap: 8px;
+}
+.mobile-notif-sheet .notif-section-btn {
+  min-height: 44px;
+  font-size: 0.875rem;
+}
 
 /* #3456 — the "spawned by" marker of a session spawned into this project by a
    coordinator in another one. Its own line under the row, like the meta line,
