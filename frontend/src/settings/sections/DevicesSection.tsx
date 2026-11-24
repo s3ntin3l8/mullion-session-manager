@@ -215,6 +215,7 @@ export function DevicesSection() {
   // "emulator" is not among them (#1854: a physical-only platform). An older
   // server, or one with the panel off (empty list), keeps today's UI.
   const deviceKinds = serverInfo?.features.deviceKinds;
+  const noAndroidKind = deviceKinds?.length === 0;
   const emulatorOn = !deviceKinds?.length || deviceKinds.includes("emulator");
   const hasPhysical = devices.some((d) => d.kind === "physical" && d.status === "active");
   usePolling(
@@ -534,7 +535,11 @@ export function DevicesSection() {
           Android devices are turned off on this server. The server administrator can enable them.
         </div>
       )}
-      <DeviceDiscoverySetting />
+      {/* An iOS-only host (no Android kind, #3436) has no discovery socket, so
+          the row would be inert. An older server omits deviceKinds: keep it. */}
+      {serverInfo && (serverInfo.features.deviceDiscovery || !noAndroidKind) && (
+        <DeviceDiscoverySetting />
+      )}
       {!loaded && <div className="settings-readonly-value">Loading…</div>}
       {loaded && loadError && devices.length === 0 && (
         <ErrorText style={{ marginTop: 10 }}>Couldn't load devices.</ErrorText>

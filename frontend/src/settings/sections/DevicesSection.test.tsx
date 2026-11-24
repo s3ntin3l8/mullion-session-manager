@@ -333,4 +333,52 @@ describe("DevicesSection — the useAsyncData loads (issue #2411)", () => {
       expect(screen.queryByText("No system images available.")).not.toBeInTheDocument();
     });
   });
+
+  describe("an iOS-only host (#3472)", () => {
+    function serveFeatures(features: Record<string, unknown>) {
+      const { fetchMock, unexpectedCalls } = mockFetch({
+        "GET /api/server-info": () =>
+          jsonResponse(200, {
+            ...SERVER_INFO_FIXTURE,
+            features: { ...SERVER_INFO_FIXTURE.features, ...features },
+          }),
+        "GET /api/devices": () => jsonResponse(200, []),
+        "GET /api/devices/hosts": () => jsonResponse(200, []),
+        "GET /api/devices/discovered": () => jsonResponse(200, []),
+        "GET /api/avds": () => jsonResponse(200, { avds: [] }),
+        "GET /api/simulators": () => jsonResponse(200, []),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      unexpectedRequestLog = unexpectedCalls;
+    }
+
+    it("hides the inert network-discovery row when no Android kind exists", async () => {
+      serveFeatures({
+        devices: true,
+        deviceKinds: [],
+        devicePlatforms: ["ios"],
+        deviceDiscovery: false,
+      });
+      render(<DevicesSection />);
+      await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
+      expect(screen.queryByText("Find phones on the network")).not.toBeInTheDocument();
+    });
+
+    it("keeps the discovery row on a host that can run Android", async () => {
+      serveFeatures({
+        devices: true,
+        deviceKinds: ["physical", "emulator"],
+        devicePlatforms: ["android"],
+        deviceDiscovery: false,
+      });
+      render(<DevicesSection />);
+      expect(await screen.findByText("Find phones on the network")).toBeInTheDocument();
+    });
+
+    it("keeps the discovery row on an older server that omits deviceKinds", async () => {
+      serveFeatures({ devices: true, deviceKinds: undefined, deviceDiscovery: false });
+      render(<DevicesSection />);
+      expect(await screen.findByText("Find phones on the network")).toBeInTheDocument();
+    });
+  });
 });

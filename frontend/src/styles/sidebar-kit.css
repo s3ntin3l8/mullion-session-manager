@@ -1386,13 +1386,18 @@ button.sb-chip--label[aria-pressed="true"] {
   margin-bottom: 6px;
   font-size: 0.75rem;
 }
+/* Same wrapping row as the full task detail's .task-detail-actions-row (#3356):
+   the transition buttons and Delete share a line while they fit, and wrap only
+   when they don't. Delete keeps its `margin-left: auto` push to the right edge
+   (.task-detail-actions-delete) so it is never a mis-click neighbour of the
+   routine buttons; the confirm note is a full-width line of its own. */
 .sb-actions-block {
   padding: 8px var(--rs-pad-x, 12px);
   border-bottom: 1px solid var(--border-soft);
-}
-/* Delete/Abandon under the transition buttons: its own row, not a mis-click neighbour. */
-.sb-actions-block .task-detail-actions-delete {
-  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
 }
 .sb-body {
   margin-top: 8px;

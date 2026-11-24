@@ -927,8 +927,9 @@
     {
       "name": "settings-devices-ios-form",
       "path": "/",
-      "tags": ["presentation", "audit"],
+      "tags": ["presentation", "check", "audit"],
       "viewports": ["desktop"],
+      "baseline": true,
       "steps": [
         {
           "click": "role=button[name=\"Settings\"]"

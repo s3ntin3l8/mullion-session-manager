@@ -500,7 +500,11 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
             {props.api.title}
           </span>
         )}
-        {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
+        {!narrow && branchLabel && (
+          <span className="pane-tab-branch" title={branchLabel}>
+            {branchLabel}
+          </span>
+        )}
         {!narrow && badge}
         {!narrow && session && <SetupBadge sessionId={session.id} status={session.setupStatus} />}
         {!narrow && hostBadge && (

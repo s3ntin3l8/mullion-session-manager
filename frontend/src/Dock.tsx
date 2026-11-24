@@ -363,21 +363,29 @@ export function Dock({
     return Math.max(DOCK_MIN_HEIGHT, available - GRID_MIN_HEIGHT);
   };
 
-  const { onMouseDown: onHeightHandleMouseDown } = useDragResize({
-    axis: "y",
-    invert: true,
-    min: DOCK_MIN_HEIGHT,
-    getMax: getDockMaxHeight,
-    value: height,
-    onChange: setHeight,
-    onCommit: (v) => writeNumber(STORAGE_KEYS.dockHeight, v),
-    cursor: "ns-resize",
-  });
+  const { onMouseDown: onHeightHandleMouseDown, keyboardProps: heightKeyboardProps } =
+    useDragResize({
+      axis: "y",
+      invert: true,
+      min: DOCK_MIN_HEIGHT,
+      getMax: getDockMaxHeight,
+      value: height,
+      onChange: setHeight,
+      onCommit: (v) => writeNumber(STORAGE_KEYS.dockHeight, v),
+      cursor: "ns-resize",
+      keyboardStep: DIVIDER_KEYBOARD_STEP_PX,
+    });
 
+  // The height handle's `aria-valuemax`/`aria-valuenow` are derived from
+  // `getDockMaxHeight()` at render, which reads 0 until `dockRef` attaches.
+  // Flipping this once, in the layout effect below, re-renders after the refs
+  // exist, so the bounds are right before the first paint (#3451 review).
+  const [, setBoundsMeasured] = useState(false);
   useLayoutEffect(() => {
     const max = getDockMaxHeight();
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setHeight((h) => (h > max ? max : h));
+    setBoundsMeasured(true);
   }, []);
 
   // ---- Split-width measurement (unified-rail dock rework) ----
@@ -538,7 +546,15 @@ export function Dock({
       className={`dock${collapsed ? " collapsed" : ""}`}
       style={collapsed ? undefined : { height }}
     >
-      {!collapsed && <div className="dock-resize-handle" onMouseDown={onHeightHandleMouseDown} />}
+      {!collapsed && (
+        <div
+          className="dock-resize-handle"
+          role="separator"
+          aria-label="Resize dock height"
+          onMouseDown={onHeightHandleMouseDown}
+          {...heightKeyboardProps}
+        />
+      )}
       <div className="dock-header">
         <DockIcon size={14} style={{ color: collapsed ? "var(--muted)" : "var(--dim)" }} />
         <span className="dock-title">
