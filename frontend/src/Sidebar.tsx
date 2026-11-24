@@ -79,6 +79,16 @@ const SIDEBAR_FILTER_CHIPS: { id: KanbanColumnId; label: string }[] = [
 // rendering strategy out from under the user mid-keystroke.
 const VIRTUALIZE_SESSION_THRESHOLD = 20;
 
+// #3062 — the same switch, on project count. Every listed project mounts a
+// ProjectHeader (its own store subscriptions and ⋯ menu), so a dashboard with
+// many projects and few sessions — the expanded "Other projects" section
+// especially — mounted them all at once while the session count stayed under
+// the threshold above. Counted on every project the tree can list (the
+// workspace's own plus "Other projects"), whatever is expanded or filtered:
+// opening a section or typing in the filter must not swap the rendering path
+// (and so remount the row holding focus) under the user.
+const VIRTUALIZE_PROJECT_THRESHOLD = 30;
+
 export interface SidebarProps {
   // Source Control lives in the right sidebar from 700px; only the phone's
   // hidden sidebar (the phone has no right sidebar) still renders it here.
@@ -347,7 +357,9 @@ export function Sidebar({
     () => Array.from(baseSessionsByProject.values()).reduce((sum, list) => sum + list.length, 0),
     [baseSessionsByProject],
   );
-  const shouldVirtualize = totalBaseSessionCount > VIRTUALIZE_SESSION_THRESHOLD;
+  const shouldVirtualize =
+    totalBaseSessionCount > VIRTUALIZE_SESSION_THRESHOLD ||
+    treeProjects.length + otherProjects.length > VIRTUALIZE_PROJECT_THRESHOLD;
 
   // The same task titles and numbers the rows show (#3285), so the search
   // matches the text a row displays.
@@ -460,6 +472,12 @@ export function Sidebar({
   // expand to a mounted ProjectSection, whose collapse state is its own.
   const sidebarRef = useRef<HTMLDivElement | null>(null);
   const [reveal, setReveal] = useState<{ projectId: number; nonce: number } | null>(null);
+  // The virtualized tree mounts only the rows near the viewport, so the
+  // coordinator's row may not exist to scroll to: it is asked to bring the
+  // row into range itself (#3062).
+  const [scrollRequest, setScrollRequest] = useState<{ sessionId: number; nonce: number } | null>(
+    null,
+  );
   const openSpawnParent = useCallback(
     (parent: Session) => {
       const project = visibleProjects.find((p) => p.id === parent.projectId);
@@ -474,8 +492,16 @@ export function Sidebar({
         }
       }
       onOpenSession(parent);
-      // Bring the row into view once the expand has rendered. Best effort: a
-      // virtualized tree only has the row in the DOM once it is in range.
+      // Only for a row the tree will list (its project shown, the parent
+      // matching any filter, its project expanded above): a request for a
+      // row that never enters the model would linger and scroll the tree on
+      // some later, unrelated re-flatten. Retired once served.
+      const listed =
+        project !== undefined &&
+        (filteredSessionsByProject.get(project.id) ?? []).some((s) => s.id === parent.id);
+      if (listed) setScrollRequest((r) => ({ sessionId: parent.id, nonce: (r?.nonce ?? 0) + 1 }));
+      // Bring the row into view once the expand has rendered. The virtualized
+      // tree scrolls to it on `scrollRequest` instead, row mounted or not.
       requestAnimationFrame(() => {
         // Inside the sidebar: the board's lane cards render the same row.
         sidebarRef.current
@@ -483,7 +509,17 @@ export function Sidebar({
           ?.scrollIntoView?.({ block: "nearest" });
       });
     },
-    [visibleProjects, baseSessionsByProject, filterActive, onOpenSession],
+    [
+      visibleProjects,
+      baseSessionsByProject,
+      filteredSessionsByProject,
+      filterActive,
+      onOpenSession,
+    ],
+  );
+  const scrollServed = useCallback(
+    (nonce: number) => setScrollRequest((r) => (r?.nonce === nonce ? null : r)),
+    [],
   );
 
   // U3's flattened tree: projects → sessions, respecting collapse state and
@@ -724,6 +760,8 @@ export function Sidebar({
                 openSessionIds={openSessionIdSet}
                 onOpenSession={onOpenSession}
                 onOpenSpawnParent={openSpawnParent}
+                scrollRequest={scrollRequest}
+                onScrollServed={scrollServed}
                 onOpenSessionAsFloat={onOpenSessionAsFloat}
                 onSessionEnded={onSessionEnded}
                 onOpenProjectLauncher={onOpenProjectLauncher}
@@ -1049,7 +1087,8 @@ function sessionEndHandlers(
 
 // Exported (mirrors SessionRow below) so ProjectSection.test.tsx can render
 // it directly with a selector-based store mock, rather than mounting the
-// whole Sidebar. Used for the plain (below VIRTUALIZE_SESSION_THRESHOLD)
+// whole Sidebar. Used for the plain (below VIRTUALIZE_SESSION_THRESHOLD and
+// VIRTUALIZE_PROJECT_THRESHOLD)
 // rendering path; VirtualizedProjectTree below is the above-threshold
 // counterpart and shares ProjectHeader/SessionRow with this component
 // rather than re-implementing them.
@@ -1216,6 +1255,8 @@ function VirtualizedProjectTree({
   openSessionIds,
   onOpenSession,
   onOpenSpawnParent,
+  scrollRequest = null,
+  onScrollServed,
   onOpenSessionAsFloat,
   onSessionEnded,
   onOpenProjectLauncher,
@@ -1224,6 +1265,10 @@ function VirtualizedProjectTree({
   onOpenProjectSetup,
 }: {
   rows: SidebarFlatRow[];
+  /** Scroll this session's row into range (the spawned-by marker, #3456). */
+  scrollRequest?: { sessionId: number; nonce: number } | null;
+  /** The request was served: Sidebar drops it, so a remount can't replay it. */
+  onScrollServed?: (nonce: number) => void;
   hosts: Host[];
   spansHostsByProject: ReadonlyMap<number, boolean>;
   openSessionIds: ReadonlySet<number> | null;
@@ -1264,6 +1309,17 @@ function VirtualizedProjectTree({
     estimateSize: (index) => estimateSidebarRowHeight(rows[index], expandedSessionRows),
     overscan: 8,
   });
+
+  // #3062 — a request is served once its row is in the model: the expand
+  // that puts it there re-flattens `rows` a render later, so an unserved
+  // request waits for that rather than giving up.
+  useEffect(() => {
+    if (!scrollRequest) return;
+    const index = rows.findIndex((row) => row.key === `s-${scrollRequest.sessionId}`);
+    if (index < 0) return;
+    rowVirtualizer.scrollToIndex(index, { align: "auto" });
+    onScrollServed?.(scrollRequest.nonce);
+  }, [scrollRequest, rows, rowVirtualizer, onScrollServed]);
 
   return (
     // `getTotalSize()` does NOT include `scrollMargin` in its return value

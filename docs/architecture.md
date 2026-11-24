@@ -743,6 +743,17 @@ sidebar still mounts there, hidden, because it loads projects, sessions, hosts
 and tasks and owns the GitHub subscriptions. A forced `tablet` layout mode
 resolves to the two-halves band, so it gets no left sidebar either.
 
+The project tree renders plainly (one `ProjectSection` per project) until it
+holds more than 20 sessions or more than 30 projects (the workspace's own plus
+"Other projects"), and from there as one flattened list windowed by
+`@tanstack/react-virtual` (`VirtualizedProjectTree`), so only the rows near the
+viewport mount (#3062: a dashboard with many projects and few sessions used to
+mount every project header). Both counts ignore the filter box and what is
+expanded, so typing or opening a section never swaps the rendering path under
+the focused row. Collapse state, drag, keyboard focus and the "spawned by"
+marker work the same on both paths; on the windowed one the marker scrolls the
+list to the coordinator's row, which may not be mounted yet.
+
 **Right rail and sidebar** (`right-sidebar/`): docked at every width from
 700px, never floating. The rail's views are Git, History, GitHub, Tasks (when
 Task Master is on), Files, Project and Devices, plus **Browser** and **Dock**

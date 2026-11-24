@@ -338,3 +338,73 @@ describe.each([
     expect(screen.queryByRole("button", { name: /spawned by/ })).toBeNull();
   });
 });
+
+// #3062 — with many projects the tree virtualizes on project count, and the
+// coordinator's row can be far outside the mounted window: the marker asks
+// the virtualizer to scroll there, so the row mounts instead of the scroll
+// being skipped.
+describe("Sidebar spawned-by marker, coordinator outside the virtualized window (#3062)", () => {
+  let scrollTo: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    stubVirtualizerLayout();
+    // jsdom does no scrolling: let the scroll container take the offset the
+    // virtualizer asks for and announce it, as a browser would.
+    scrollTo = vi.fn(function (this: HTMLElement, opts?: ScrollToOptions) {
+      Object.defineProperty(this, "scrollTop", { configurable: true, value: opts?.top ?? 0 });
+      this.dispatchEvent(new Event("scroll"));
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      writable: true,
+      value: scrollTo,
+    });
+    // The scrollable extent the virtualizer clamps its target to.
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 10_000,
+    });
+    const base = 870;
+    projects = Array.from({ length: 60 }, (_, i) =>
+      makeProject({ id: base * 100 + i, name: `p-${i}` }),
+    );
+    sessions = [
+      makeSession({ id: base * 1000, projectId: projects[59].id, command: "coordinator agent" }),
+      makeSession({
+        id: base * 1000 + 1,
+        projectId: projects[0].id,
+        command: "spawned worker",
+        parentSessionId: base * 1000,
+      }),
+    ];
+  });
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+    delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+  });
+
+  it("scrolls the virtualizer to the coordinator's row and mounts it", async () => {
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    const { container } = renderSidebar({ onOpenSession });
+    expect(container.querySelector("[data-index]")).not.toBeNull();
+    expect(coordinatorTitle()).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: /spawned by coordinator agent/ }));
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(coordinatorTitle()).toBeDefined());
+    expect(scrollTo).toHaveBeenCalled();
+  });
+
+  it("asks for no scroll when the filter hides the coordinator's row", async () => {
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenSession });
+    await user.type(screen.getByLabelText("Filter sessions"), "spawned");
+    scrollTo.mockClear();
+    await user.click(screen.getByRole("button", { name: /spawned by coordinator agent/ }));
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+    // Nothing pending either: clearing the filter re-flattens without a scroll.
+    await user.clear(screen.getByLabelText("Filter sessions"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+});
