@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildTestApp } from "../helpers/app.js";
-import { projects, sessions, webhookRegistrations } from "../../src/db/schema.js";
+import { hosts, projects, sessions, webhookRegistrations } from "../../src/db/schema.js";
+import { LOCAL_HOST_ID } from "../../src/services/host-registry.js";
 import {
   deleteProject,
   dockSessionIdsByProject,
@@ -81,9 +82,32 @@ describe("project-store", () => {
       .values({ projectId: a.id, command: "bash", kind: "dock", status: "exited" })
       .run();
     app.db.insert(sessions).values({ projectId: b.id, command: "bash", status: "active" }).run();
-    expect(dockSessionIdsByProject(app)).toEqual(new Map([[a.id, [String(d1.id)]]]));
+    expect(dockSessionIdsByProject(app)).toEqual(
+      new Map([[a.id, new Map([[LOCAL_HOST_ID, [String(d1.id)]]])]]),
+    );
     expect(listSessionsForProject(app, a.id)).toHaveLength(2);
     expect(listSessionsForProject(app, b.id)).toHaveLength(1);
+  });
+
+  it("groups a dock session under the host it runs on, not its project's host (#3427)", () => {
+    const a = add("a");
+    const own = app.db
+      .insert(sessions)
+      .values({ projectId: a.id, command: "bash", kind: "dock", status: "active" })
+      .returning()
+      .get();
+    app.db.insert(hosts).values({ id: "mac", name: "mac", baseUrl: "http://m" }).run();
+    const away = app.db
+      .insert(sessions)
+      .values({ projectId: a.id, command: "bash", kind: "dock", status: "active", hostId: "mac" })
+      .returning()
+      .get();
+    expect(dockSessionIdsByProject(app).get(a.id)).toEqual(
+      new Map([
+        [LOCAL_HOST_ID, [String(own.id)]],
+        ["mac", [String(away.id)]],
+      ]),
+    );
   });
 
   it("reads a project's webhook registration", () => {

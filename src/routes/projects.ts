@@ -121,9 +121,8 @@ import {
 import { projectGitHubRoute } from "./project-github.js";
 import { projectGitRoute } from "./project-git.js";
 import { projectGitWritesRoute } from "./project-git-writes.js";
-import { projectDockerRoute, discoveredServicesForProject } from "./project-docker.js";
-import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
-import { toDockControls } from "../services/docker-service-detect.js";
+import { projectDockerRoute, discoveredDockerControls } from "./project-docker.js";
+import { detectDevServerPortAcrossHosts } from "../services/dev-server-remote.js";
 import { SETUP_RECIPE_MAX_LENGTH } from "../services/setup-recipe-shared.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
@@ -841,15 +840,13 @@ export async function projectsRoute(app: FastifyInstance) {
           currentBranch,
           ruleFiles,
           conventionsDrifted,
-          // Remote-hosted projects are skipped outright, not just "usually
-          // null": app.pty only tracks sessions spawned/attached by this
-          // same process, and a remote project's dock session lives in its
-          // owning agent's own PtyManager instead — see dev-server-detect.ts's
-          // own comment.
-          detectedDevServerPort:
-            row.hostId === LOCAL_HOST_ID
-              ? detectDevServerPortForSessionIds(app, dockSessionIdsForProject.get(row.id) ?? [])
-              : null,
+          // Issue #3427 — grouped by the host each dock SESSION runs on: this
+          // process reads its own PtyManager, an agent host answers for the
+          // sessions it holds (see services/dev-server-remote.ts).
+          detectedDevServerPort: await detectDevServerPortAcrossHosts(
+            app,
+            dockSessionIdsForProject.get(row.id),
+          ),
         };
       }),
     );
@@ -1101,13 +1098,10 @@ export async function projectsRoute(app: FastifyInstance) {
   // turning one "on" is just POST /api/sessions with kind: "dock" (see
   // sessions.ts) using this control's own id/command/cwd.
   //
-  // Issue #73 — for a local-host project, merges in a control per
-  // discovered Docker Compose service, UNDER whatever `.crs/dock.json`
-  // already configures (configured wins on an `id` collision — the issue's
-  // "manual overrides win"). Local-host only: resolveProjectDock,
-  // /internal/dock, and RemoteHostClient.resolveDock are untouched, so a
-  // remote-hosted project simply never sees discovered controls (same
-  // posture as dev-server port detection — docs/dock.md).
+  // Issue #73 — merges in a control per discovered Docker Compose service,
+  // UNDER whatever `.crs/dock.json` already configures (configured wins on an
+  // `id` collision — the issue's "manual overrides win"). Issue #3427: a
+  // remote-hosted project's services are discovered on its agent.
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/dock",
     // This route now shells out to `docker` for a local-host project, so it
@@ -1128,26 +1122,39 @@ export async function projectsRoute(app: FastifyInstance) {
       const project = getProjectById(app, projectId);
       if (!project) return reply.notFound();
 
+      // Issue #3427 — the configured controls come from the project's own host
+      // (local file read, or the agent's /internal/dock), and the discovered
+      // Docker Compose services from that same host, merged UNDER the
+      // configured ones (configured wins on an `id` collision).
+      let configured: ReturnType<typeof resolveProjectDock>;
       if (project.hostId === LOCAL_HOST_ID) {
-        const configured = resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR);
-        if (!getStoredSettings(app.db).dock.dockerServices) return configured;
+        configured = resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR);
+      } else {
+        try {
+          configured = await getRemoteHostClient(app, project.hostId).resolveDock(project.cwd);
+        } catch (err) {
+          app.log.warn({ hostId: project.hostId, err }, "host unreachable, dock unavailable");
+          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
+      }
+      if (!getStoredSettings(app.db).dock.dockerServices) return configured;
 
-        const discovered = await discoveredServicesForProject(app, project);
-        const discoveredControls = await toDockControls(discovered);
-        const merged = new Map<
-          string,
-          (typeof discoveredControls)[number] | (typeof configured)[number]
-        >();
-        for (const control of discoveredControls) merged.set(control.id, control);
-        for (const control of configured) merged.set(control.id, control);
-        return [...merged.values()];
-      }
+      // A remote host with no Docker (or an older agent without the route)
+      // simply contributes no discovered controls.
+      let discoveredControls: Awaited<ReturnType<typeof discoveredDockerControls>> = [];
       try {
-        return await getRemoteHostClient(app, project.hostId).resolveDock(project.cwd);
+        discoveredControls = await discoveredDockerControls(app, project);
       } catch (err) {
-        app.log.warn({ hostId: project.hostId, err }, "host unreachable, dock unavailable");
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        if (project.hostId === LOCAL_HOST_ID) throw err;
+        app.log.warn({ hostId: project.hostId, err }, "docker discovery on host unavailable");
       }
+      const merged = new Map<
+        string,
+        (typeof discoveredControls)[number] | (typeof configured)[number]
+      >();
+      for (const control of discoveredControls) merged.set(control.id, control);
+      for (const control of configured) merged.set(control.id, control);
+      return [...merged.values()];
     },
   );
 
