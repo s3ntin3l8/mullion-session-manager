@@ -16,9 +16,11 @@ import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { HostRequestError } from "./remote-host-errors.js";
 import type { DeviceSpawnSpec, LiveDevicesResponse } from "./device-wire.js";
+import { DEMO_SIMULATORS, DEMO_SIMULATOR_CATALOG } from "./demo-fixtures.js";
 import type { DiscoveredDevice } from "./device-discovery.js";
 import {
   createIosSimulator,
+  SimulatorRequestError,
   listIosSimulators,
   listSimulatorCatalog,
   type CreateSimulatorInput,
@@ -136,15 +138,19 @@ class LocalDeviceHost implements DeviceHost {
     return performDeviceAction(driver, action);
   }
 
-  simulators(): Promise<IosSimulator[]> {
-    return listIosSimulators();
+  async simulators(): Promise<IosSimulator[]> {
+    return this.app.config.MULLION_DEMO ? DEMO_SIMULATORS : listIosSimulators();
   }
 
-  simulatorCatalog(): Promise<SimulatorCatalog> {
-    return listSimulatorCatalog();
+  async simulatorCatalog(): Promise<SimulatorCatalog> {
+    return this.app.config.MULLION_DEMO ? DEMO_SIMULATOR_CATALOG : listSimulatorCatalog();
   }
 
   createSimulator(input: CreateSimulatorInput): Promise<IosSimulator> {
+    // The demo reports iOS without Xcode: never reach a real `simctl create`.
+    if (this.app.config.MULLION_DEMO) {
+      throw new SimulatorRequestError("Simulators cannot be created in the demo.");
+    }
     return createIosSimulator(input);
   }
 

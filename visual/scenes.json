@@ -898,6 +898,61 @@
           "wait": 800
         }
       ]
+    },
+    {
+      "name": "settings-devices",
+      "path": "/",
+      "baseline": true,
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Settings\"]"
+        },
+        {
+          "click": ".settings-nav-item:has-text(\"Devices\")"
+        },
+        {
+          "waitFor": "[data-testid=\"devices-ios\"]"
+        },
+        {
+          "waitFor": "text=\"iPhone 16 Pro \u00b7 iOS 18.2\" >> nth=0"
+        },
+        {
+          "hover": "role=button[name=\"Add a simulator\"]"
+        }
+      ],
+      "settle": 500
+    },
+    {
+      "name": "settings-devices-ios-form",
+      "path": "/",
+      "tags": ["presentation", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Settings\"]"
+        },
+        {
+          "click": ".settings-nav-item:has-text(\"Devices\")"
+        },
+        {
+          "waitFor": "[data-testid=\"devices-ios\"]"
+        },
+        {
+          "waitFor": "text=\"iPhone 16 Pro \u00b7 iOS 18.2\" >> nth=0"
+        },
+        {
+          "click": "role=button[name=\"Add a simulator\"]"
+        },
+        {
+          "waitFor": "input[placeholder=\"iPhone 16\"]"
+        },
+        {
+          "hover": "input[placeholder=\"iPhone 16\"]"
+        }
+      ],
+      "settle": 500
     }
   ],
   "viewports": {

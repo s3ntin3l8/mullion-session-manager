@@ -711,5 +711,14 @@ export async function seedDemo({
     }),
   });
 
+  // Settings → Devices: an Android emulator, a physical phone and an iOS
+  // Simulator. The demo has no adb or Xcode; the backend answers the hosts and
+  // simulator routes from fixtures when MULLION_DEMO is set (settings-devices scene).
+  // visual-kit renders the base with THIS seed against the merge base's app, which
+  // has no such route yet: a 404 there only means there are no device fixtures.
+  await api("/api/demo/fixtures/devices", { method: "POST", body: "{}" }).catch((err) => {
+    if (!String(err).includes("-> 404")) throw err;
+  });
+
   return { scratchRoot, scriptsDir, auroraProject, orbitProject, authReleaseFile };
 }

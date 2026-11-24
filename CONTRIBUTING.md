@@ -177,6 +177,12 @@ one of its sessions. `scripts/demo/env.mjs` enforces that, and
   "N minutes ago" count back from; `MULLION_DEMO_STATE=<file>` records the seeded
   scripts directory (where the release files go) while the demo is up. Once
   seeded it prints `DEMO_READY <url>`, and it tears down on SIGINT or SIGTERM.
+- Settings → Devices has fixtures too, with no adb or Xcode on the host. With `MULLION_DEMO` the backend reports the
+  device panel on (both Android kinds) and iOS from `GET /api/devices/hosts`, and answers `GET /api/simulators` and its
+  catalog from `DEMO_SIMULATORS` / `DEMO_SIMULATOR_CATALOG` (`src/services/demo-fixtures.ts`); the device manager
+  itself stays off, so nothing can start. The seed posts `/api/demo/fixtures/devices` for the rows: a Pixel 8 emulator,
+  a physical Pixel 7 and an iOS Simulator (iPhone 16 Pro, iOS 18.2). The `settings-devices` and
+  `settings-devices-ios-form` scenes cover them.
 - The backend's per-address rate limit (`RATE_LIMIT_MAX`, 300 a minute by default) is
   lifted for the demo: a renderer that loads the app dozens of times from one address
   otherwise gets 429 on every read and sees an empty sidebar.

@@ -75,7 +75,12 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // platform's ability to run the panel at all. Every device route checks
   // THIS, so the panel is off in one place and the reason for it is said in
   // one place.
-  const panelEnabled = app.config.DEVICE_ENABLED && panelSupported;
+  // The demo instance (MULLION_DEMO) reports the panel on, with both Android
+  // kinds, so Settings → Devices renders for its screenshots; the manager below
+  // stays off (it takes the raw flag), so nothing can start. The demo's
+  // simulators come from services/demo-fixtures.ts.
+  const demo = app.config.MULLION_DEMO;
+  const panelEnabled = demo || (app.config.DEVICE_ENABLED && panelSupported);
   // An empty DEVICE_ADB_PATH means Android is not configured (an iOS-only Mac
   // host, #3436): no adb server is started and the Android kinds are not offered.
   const androidConfigured = app.config.DEVICE_ADB_PATH.trim() !== "";
@@ -104,16 +109,18 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   app.decorate("deviceEmulatorSupported", emulatorSupported);
   app.decorate(
     "deviceEmulatorEnabled",
-    app.config.DEVICE_ENABLED && emulatorSupported && androidConfigured,
+    demo || (app.config.DEVICE_ENABLED && emulatorSupported && androidConfigured),
   );
   app.decorate("deviceEmulatorUnavailableMessage", emulatorUnavailableMessage);
   // The Android device KINDS only: "ios-simulator" is a capability, not a kind,
   // and is reported through the platforms list instead.
   app.decorate(
     "deviceKinds",
-    androidConfigured
-      ? [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator")
-      : [],
+    demo
+      ? (["physical", "emulator"] satisfies DeviceKind[])
+      : androidConfigured
+        ? [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator")
+        : [],
   );
 
   // Issue #1770 — resolved ONCE, here: the dir the sockets live in and the
