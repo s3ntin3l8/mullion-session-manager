@@ -323,10 +323,12 @@ chose it.
 - **Counts:** the Tasks segment is `needsYouTasks(tasks).length` over the
   store's `tasks`, the same expression `LeftRail.tsx` and `PhoneModeBar.tsx`
   use. The bell's badge is the Sessions count plus this one.
-- **Rows:** one per task: its kind (`taskNeedsYouKind`: Failed for a failed
-  task, merge or release; Review for an approval waiting on you; Stopped for a
-  review-loop or merge hold), title, `needsYouReason` and project. No read or
-  dismiss state. A tap calls `useOpenTask` and closes the panel.
+- **Rows:** one per task: its kind, title, reason and project, all from
+  `taskNeedsYou`, the one definition `needsYouReason` also reads, so a reason
+  and its kind cannot drift. Failed: a failed task, merge or release. Review:
+  an approval waiting on you. Stopped: a review-loop or merge hold, a parked
+  red CI check (even under a held approval) and a worker that never started.
+  No read or dismiss state. A tap calls `useOpenTask` and closes the panel.
 - **Default section:** Sessions when it has an open decision, else Tasks when
   it has one, else Sessions. The sheet's "Needs you | All" filter and "Read
   all" belong to the Sessions section.

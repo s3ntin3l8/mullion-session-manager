@@ -74,10 +74,6 @@ export function needsYouReason(t: Task): string | null {
   return taskNeedsYou(t)?.reason ?? null;
 }
 
-export function taskNeedsYouKind(t: Task): TaskNeedsYouKind | null {
-  return taskNeedsYou(t)?.kind ?? null;
-}
-
 export function needsYouTasks(
   tasks: Task[],
 ): Array<{ task: Task; reason: string; kind: TaskNeedsYouKind }> {
