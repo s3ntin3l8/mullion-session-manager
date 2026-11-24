@@ -90,15 +90,31 @@ The rules below are applied once, in `frontend/src/styles/motion.css`
 
 ### Keeping an overlay mounted while it leaves
 
-`hooks/usePresence.ts` has the two shapes:
+There are two shapes:
 
-- `usePresence(open, ref)` for an overlay that owns its `open` state (a menu,
-  a popover): render while `present`, put `state` on its root as
-  `data-presence`.
-- `useDismissExit(onClose, ref)` for an overlay its parent mounts
-  (`{open && <Modal/>}`): its own dismiss controls call `dismiss`, which plays
-  the exit and then calls `onClose`. A close the parent makes by itself (a
-  submit that succeeded) still unmounts at once.
+- `usePresence(open, ref)` (`hooks/usePresence.ts`) for an overlay that owns
+  its `open` state (a menu, a popover): render while `present`, put `state`
+  on its root as `data-presence`.
+- `<Presence when={open}>` (`ui/Presence.tsx`) around an overlay its parent
+  mounts: every `Modal` and the command palette. However the parent closes
+  it (a submit that succeeded, a palette command that ran, the global
+  Escape, or the overlay's own Escape, backdrop and close button, which now
+  call `onClose` at once), the overlay stays mounted for its exit and then
+  unmounts. Write `<Presence when={open}><XModal … /></Presence>` in place of
+  `{open && <XModal … />}`; a call site whose dialog needs a payload keeps its
+  guard inside (`<Presence when={x !== null}>{x && <XModal x={x} />}</Presence>`):
+  while leaving, Presence renders the children it last had while open. A
+  reopen during the exit mounts a fresh overlay.
+
+  `Modal` and the palette read the leaving state from context
+  (`useParentPresence`) and hand Presence their root to wait on. Nothing
+  waits on the exit but the picture: the state change, the action behind it
+  and the focus move all happen at the close. The focus trap lets go at once
+  (restoring to the opener, unless the action called `suppressRestore()`, as
+  the palette's launch path does), focus still inside is blurred, and the
+  leaving overlay is `inert`. A `Modal` rendered without a Presence (a test)
+  falls back to `useDismissExit`: its own controls play the exit before
+  `onClose`, and anything else closes it at once.
 
 Both wait on the overlay's own clock-driven animations (`lib/presence.ts`),
 not a timer: nothing there knows how long an exit is. Infinite and

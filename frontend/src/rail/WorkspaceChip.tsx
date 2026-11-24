@@ -36,6 +36,7 @@ import {
   renameGroup,
   renameWorkspace,
 } from "../workspaceActions.js";
+import { Presence } from "../ui/Presence.js";
 
 export interface WorkspaceChipProps {
   /** Switch to a workspace (App's handleSelectWorkspace). */
@@ -235,7 +236,7 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
           document.body,
         )
       )}
-      {newGroupOpen && (
+      <Presence when={newGroupOpen}>
         <ThemedPortal>
           <CreateGroupModal
             onClose={() => {
@@ -250,7 +251,7 @@ export function WorkspaceChip({ onSelectWorkspace, sheet }: WorkspaceChipProps) 
             }
           />
         </ThemedPortal>
-      )}
+      </Presence>
     </>
   );
 }

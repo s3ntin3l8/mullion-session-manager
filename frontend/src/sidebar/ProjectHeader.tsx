@@ -17,6 +17,7 @@ import {
   RenameIcon,
   SkillIcon,
 } from "../ui/icons.js";
+import { Presence } from "../ui/Presence.js";
 
 // Above this many commits behind origin, the badge switches to a louder
 // color (issue #433 scope A's "color the badge to draw attention" ask) — an
@@ -314,11 +315,11 @@ export function ProjectHeader({
             ]}
           />
         </span>
-        {editOpen && (
+        <Presence when={editOpen}>
           <span onClick={(e) => e.stopPropagation()}>
             <ProjectEditModal project={project} hosts={hosts} onClose={() => setEditOpen(false)} />
           </span>
-        )}
+        </Presence>
       </div>
       {deleteError && (
         <div className="project-row-error" title={deleteError}>

@@ -7,6 +7,7 @@ import { GroupHeading, Row, Toggle } from "../../ui/primitives.js";
 import { BundleSyncPanel } from "../BundleSyncPanel.js";
 import { WorkflowConventionsWizardModal } from "../WorkflowConventionsWizardModal.js";
 import { SkillsSection } from "./SkillsSection.js";
+import { Presence } from "../../ui/Presence.js";
 
 export function AgentContextSection() {
   const { settings, updateSettings } = useDashboardStore();
@@ -143,7 +144,7 @@ export function AgentContextSection() {
           </button>
         </div>
       </div>
-      {wizardOpen && (
+      <Presence when={wizardOpen}>
         <WorkflowConventionsWizardModal
           onClose={() => setWizardOpen(false)}
           initialAnswers={s.workflowConventionAnswers}
@@ -159,7 +160,7 @@ export function AgentContextSection() {
             })
           }
         />
-      )}
+      </Presence>
 
       <Row
         label="Inject Mullion tooling bundle"

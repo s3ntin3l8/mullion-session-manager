@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { useState } from "react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandPalette } from "./CommandPalette.js";
 import { useDashboardStore } from "./store/index.js";
+import { Presence } from "./ui/Presence.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { installExitAnimations } from "./test/exitAnimations.js";
 import type { ExitAnimations } from "./test/exitAnimations.js";
@@ -26,9 +28,9 @@ describe("CommandPalette exit", () => {
     vi.unstubAllGlobals();
   });
 
-  function renderPalette(onClose: () => void) {
+  function palette(onClose: () => void, onOpenTasks: () => void = () => {}) {
     const noop = () => {};
-    return render(
+    return (
       <CommandPalette
         scope="global"
         projectId={null}
@@ -45,9 +47,25 @@ describe("CommandPalette exit", () => {
         onOpenBrowser={noop}
         onOpenBlankBrowser={noop}
         onOpenSettingsSection={noop}
-        onOpenTasks={noop}
+        onOpenTasks={onOpenTasks}
         onOpenBrowserUrl={noop}
-      />,
+      />
+    );
+  }
+  function renderPalette(onClose: () => void) {
+    return render(palette(onClose));
+  }
+
+  // #3037 — App.tsx mounts it in a <Presence>: every close plays the exit,
+  // including the ones the palette's own controls never see.
+  function PaletteHost({ onOpenTasks }: { onOpenTasks: () => void }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button onClick={() => setOpen(true)}>Open palette</button>
+        <button onClick={() => setOpen(false)}>Global escape</button>
+        <Presence when={open}>{palette(() => setOpen(false), onOpenTasks)}</Presence>
+      </>
     );
   }
 
@@ -91,5 +109,53 @@ describe("CommandPalette exit", () => {
     );
     await exits.finishExits();
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs a command at once and then plays its exit, focus back on the opener", async () => {
+    const user = userEvent.setup();
+    const onOpenTasks = vi.fn();
+    render(<PaletteHost onOpenTasks={onOpenTasks} />);
+    const opener = screen.getByRole("button", { name: "Open palette" });
+    await user.click(opener);
+    const input = await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+    await user.type(input, "Task board");
+    // A click, not Enter: user-event would send Enter's keypress on to the
+    // opener the focus just went back to, and open the palette again.
+    await user.click(screen.getByText("Task board"));
+    expect(onOpenTasks).toHaveBeenCalledTimes(1);
+    const backdrop = document.querySelector(".cmd-palette-backdrop");
+    expect(backdrop).toHaveAttribute("data-presence", "leaving");
+    expect(opener).toHaveFocus();
+    await exits.finishExits();
+    expect(document.querySelector(".cmd-palette-backdrop")).not.toBeInTheDocument();
+  });
+
+  it("plays its exit when the parent closes it (the global Escape)", async () => {
+    const user = userEvent.setup();
+    render(<PaletteHost onOpenTasks={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Open palette" }));
+    await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+    act(() => screen.getByRole("button", { name: "Global escape" }).click());
+    expect(document.querySelector(".cmd-palette-backdrop")).toHaveAttribute(
+      "data-presence",
+      "leaving",
+    );
+    await exits.finishExits();
+    expect(document.querySelector(".cmd-palette-backdrop")).not.toBeInTheDocument();
+  });
+
+  it("closes at once from Escape inside a Presence, and plays the one exit", async () => {
+    const user = userEvent.setup();
+    render(<PaletteHost onOpenTasks={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "Open palette" }));
+    await screen.findByPlaceholderText("Run a command, or find a session or agent…");
+    await user.keyboard("{Escape}");
+    expect(document.querySelector(".cmd-palette-backdrop")).toHaveAttribute(
+      "data-presence",
+      "leaving",
+    );
+    await exits.finishExits();
+    expect(document.querySelector(".cmd-palette-backdrop")).not.toBeInTheDocument();
+    expect(exits.pending()).toBe(0);
   });
 });

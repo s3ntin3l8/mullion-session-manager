@@ -38,6 +38,7 @@ import { isHeaderSplitHidden } from "./lib/paneHeaderSplit.js";
 import { selectSessionTitleContexts } from "./lib/sessionDisplay.js";
 import { BottomSheet } from "./ui/BottomSheet.js";
 import { describeError } from "./lib/describeError.js";
+import { Presence } from "./ui/Presence.js";
 
 // Mobile UI/UX overhaul, item A.4 (see .claude/plans/we-need-to-work-
 // iterative-planet.md) — the kill/rename/timeline/browser/promote overflow
@@ -735,20 +736,22 @@ export function PaneActionsMenu({
           </div>
         </BottomSheet>
       )}
-      {promoteOpen && session && project && (
-        <PromoteDialog
-          session={session}
-          project={project}
-          onClose={() => setPromoteOpen(false)}
-          onPromoted={(newSession) => {
-            // This pane's own session is the one that just got killed by
-            // promote — close it, then open/focus the replacement, so the
-            // pane visibly hands off rather than just going dead.
-            api.close();
-            openOrFocusSessionPanel(containerApi, newSession, layout, projects);
-          }}
-        />
-      )}
+      <Presence when={Boolean(promoteOpen && session && project)}>
+        {promoteOpen && session && project && (
+          <PromoteDialog
+            session={session}
+            project={project}
+            onClose={() => setPromoteOpen(false)}
+            onPromoted={(newSession) => {
+              // This pane's own session is the one that just got killed by
+              // promote — close it, then open/focus the replacement, so the
+              // pane visibly hands off rather than just going dead.
+              api.close();
+              openOrFocusSessionPanel(containerApi, newSession, layout, projects);
+            }}
+          />
+        )}
+      </Presence>
     </>
   );
 }

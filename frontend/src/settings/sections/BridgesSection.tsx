@@ -11,6 +11,7 @@ import { GripIcon, HostsIcon, PlusIcon } from "../../ui/icons.js";
 import { AddButton, GroupHeading, ListRow, StyledList } from "../../ui/primitives.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
+import { Presence } from "../../ui/Presence.js";
 
 // Issue #1313 — drag-to-reorder priority among enrolled bridges. Bridge
 // ids are string UUIDs (bridges.id, src/db/schema.ts), but reorder.ts's
@@ -315,14 +316,14 @@ export function BridgesSection() {
         </div>
       )}
 
-      {pairOpen && (
+      <Presence when={pairOpen}>
         <PairBridgeModal
           onClose={() => setPairOpen(false)}
           onPaired={() => {
             refresh();
           }}
         />
-      )}
+      </Presence>
     </>
   );
 }

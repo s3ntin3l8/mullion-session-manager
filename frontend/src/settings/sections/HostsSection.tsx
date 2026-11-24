@@ -28,6 +28,7 @@ import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
 import { PairDesktopSection } from "./PairDesktopSection.js";
 import { HostHeartbeatSetting, HostStaleAfterSetting } from "../RuntimeSettings.js";
+import { Presence } from "../../ui/Presence.js";
 
 // Issue #647 / roadmap 7.8 — separate from ServerInfoSection's own
 // UPDATE_STATUS_POLL_MS (2000ms), which only gates the primary's own
@@ -1046,14 +1047,14 @@ export function HostsSection() {
         </div>
       )}
 
-      {addOpen && (
+      <Presence when={addOpen}>
         <CreateHostModal
           onClose={() => setAddOpen(false)}
           onSave={(name, baseUrl, token) =>
             createHost(name, baseUrl || undefined, token || undefined)
           }
         />
-      )}
+      </Presence>
       {editing && (
         <CreateHostModal
           mode="edit"
@@ -1076,23 +1077,27 @@ export function HostsSection() {
           }
         />
       )}
-      {rotated && (
-        <AgentInstallInstructions
-          kind="rotate"
-          token={rotated.token}
-          hostName={rotated.name}
-          agentUnaffected={rotated.liveIdentity}
-          primaryUrl={window.location.origin}
-          onClose={() => setRotated(null)}
-        />
-      )}
-      {viewingConfig && (
-        <HostConfigModal
-          hostId={viewingConfig.id}
-          hostName={viewingConfig.name}
-          onClose={() => setViewingConfig(null)}
-        />
-      )}
+      <Presence when={Boolean(rotated)}>
+        {rotated && (
+          <AgentInstallInstructions
+            kind="rotate"
+            token={rotated.token}
+            hostName={rotated.name}
+            agentUnaffected={rotated.liveIdentity}
+            primaryUrl={window.location.origin}
+            onClose={() => setRotated(null)}
+          />
+        )}
+      </Presence>
+      <Presence when={viewingConfig !== null}>
+        {viewingConfig && (
+          <HostConfigModal
+            hostId={viewingConfig.id}
+            hostName={viewingConfig.name}
+            onClose={() => setViewingConfig(null)}
+          />
+        )}
+      </Presence>
 
       <div style={{ marginTop: 16 }}>
         <HostHeartbeatSetting />

@@ -35,6 +35,7 @@ import {
   useLaunchTarget,
   useProjectLaunchers,
 } from "./useSessionLaunch.js";
+import { Presence } from "../ui/Presence.js";
 
 // Issue #3013 — the New session launcher. "New session" opens this; ⌘K stays
 // the command palette (commands, and launchers by typing). The same choices,
@@ -103,17 +104,22 @@ export function SessionLauncherHost({
   );
 
   if (!coarse) {
-    if (!open || request === null) return null;
+    // #3037 — the dialog leaves on its exit when it closes, a launch included;
+    // the launch itself (and the new terminal's focus) does not wait for it.
     return (
       <LauncherProjectActionsContext.Provider value={projectActions}>
-        <LauncherDialog
-          key={request.seq}
-          request={request}
-          phone={phone}
-          onClose={close}
-          onLaunched={onLaunched}
-          suppressRestoreRef={suppressRestoreRef}
-        />
+        <Presence when={open && request !== null}>
+          {open && request !== null && (
+            <LauncherDialog
+              key={request.seq}
+              request={request}
+              phone={phone}
+              onClose={close}
+              onLaunched={onLaunched}
+              suppressRestoreRef={suppressRestoreRef}
+            />
+          )}
+        </Presence>
       </LauncherProjectActionsContext.Provider>
     );
   }

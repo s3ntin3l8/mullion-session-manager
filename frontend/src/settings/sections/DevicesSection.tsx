@@ -42,6 +42,7 @@ import {
   EmulatorGpuSetting,
   EmulatorWindowSetting,
 } from "../RuntimeSettings.js";
+import { Presence } from "../../ui/Presence.js";
 
 // Settings -> Devices (issue #1326) — the full-lifecycle management surface
 // (create / pair / edit address / start / stop / delete) for the Android
@@ -800,7 +801,7 @@ export function DevicesSection() {
       </div>
 
       {/* License acceptance modal */}
-      {showLicenseModal && (
+      <Presence when={showLicenseModal}>
         <Modal onClose={() => setShowLicenseModal(false)} title="Accept SDK licenses">
           <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 12 }}>
             Some Android SDK packages require accepting Google's license agreements before they can
@@ -828,7 +829,7 @@ export function DevicesSection() {
             <SecondaryButton onClick={() => setShowLicenseModal(false)}>Cancel</SecondaryButton>
           </div>
         </Modal>
-      )}
+      </Presence>
     </>
   );
 }

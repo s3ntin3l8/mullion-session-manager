@@ -33,6 +33,7 @@ import { usePointerReorder } from "./hooks/usePointerReorder.js";
 import type { PointerReorderState } from "./hooks/usePointerReorder.js";
 import { TextInput } from "./ui/primitives.js";
 import { InlineRenameInput } from "./ui/InlineRenameInput.js";
+import { Presence } from "./ui/Presence.js";
 
 // Workspaces (named, persistent split-layouts — Mullion's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals
@@ -231,12 +232,12 @@ export function WorkspaceSwitcher({ onSelectWorkspace }: WorkspaceSwitcherProps 
         </button>
       </div>
 
-      {addGroupOpen && (
+      <Presence when={addGroupOpen}>
         <CreateGroupModal
           onClose={() => setAddGroupOpen(false)}
           onCreate={(name, color) => useDashboardStore.getState().createGroup(name, color)}
         />
-      )}
+      </Presence>
 
       {!sectionCollapsed && (
         <div id="workspaces-section-body" ref={listRef}>
@@ -439,7 +440,7 @@ function GroupSection({
           />
         </span>
       </div>
-      {editOpen && (
+      <Presence when={editOpen}>
         <div onClick={(e) => e.stopPropagation()}>
           <CreateGroupModal
             mode="edit"
@@ -452,7 +453,7 @@ function GroupSection({
             }}
           />
         </div>
-      )}
+      </Presence>
       {!group.collapsed && (
         <div className="ws-group-body" id={`ws-group-body-${group.id}`}>
           <WorkspaceList

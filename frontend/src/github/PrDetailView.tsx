@@ -50,6 +50,7 @@ import { parseWorkflowChange } from "../workflowChange.js";
 import { TaskActions } from "../TaskActions.js";
 import { hasStripActions } from "../taskStatusModel.js";
 import { goSidebarBack } from "../sidebarBack.js";
+import { Presence } from "../ui/Presence.js";
 
 // The PR drill-in: status first (Checks / Reviews / Merge, each an expandable
 // row), then the pinned latest review, the Mullion links, the change summary
@@ -694,16 +695,18 @@ export function PrDetailView({
           </div>
         )}
       </div>
-      {mergeOpen && pr.state === "OPEN" && (
-        <MergeConfirmModal
-          pr={pr}
-          busy={busy === "merge"}
-          onCancel={() => setMergeOpen(false)}
-          // Stays up while the merge runs (its label and disabled state are
-          // the progress), and closes either way: a failure shows in the view.
-          onConfirm={() => void merge().then(() => setMergeOpen(false))}
-        />
-      )}
+      <Presence when={Boolean(mergeOpen && pr.state === "OPEN")}>
+        {mergeOpen && pr.state === "OPEN" && (
+          <MergeConfirmModal
+            pr={pr}
+            busy={busy === "merge"}
+            onCancel={() => setMergeOpen(false)}
+            // Stays up while the merge runs (its label and disabled state are
+            // the progress), and closes either way: a failure shows in the view.
+            onConfirm={() => void merge().then(() => setMergeOpen(false))}
+          />
+        )}
+      </Presence>
       <div className="pr-detail-scroll">
         {error && (
           <div className="pr-detail-pad">
