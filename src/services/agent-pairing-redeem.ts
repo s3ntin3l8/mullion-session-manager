@@ -155,8 +155,14 @@ export async function redeemPairingCode(
       // API. The `Location` header is deliberately NOT included: it can carry
       // a session token, and the error must not echo anything the caller did
       // not ask for. The pairing code is not in the message either.
+      //
+      // Both spellings of the primary's address are named: `install.sh` takes
+      // the pairing primary from `MULLION_AGENT_PRIMARY_URL` and only falls
+      // back to `MULLION_PRIMARY_URL` read out of an existing `.env`, so an
+      // operator who only sets the latter in their shell would hit the same
+      // redirect again. The `.env` spelling is what the agent itself reads.
       throw new Error(
-        `Pairing failed: the primary answered with a redirect (HTTP ${res.status}), which usually means a login gateway sits in front of it. Use the primary's direct address as MULLION_PRIMARY_URL (docs/multi-host.md)`,
+        `Pairing failed: the primary answered with a redirect (HTTP ${res.status}), which usually means a login gateway sits in front of it. Use the primary's direct address as MULLION_AGENT_PRIMARY_URL (MULLION_PRIMARY_URL in .env); see docs/multi-host.md`,
       );
     }
     throw new Error(`Pairing failed with HTTP ${res.status}`);

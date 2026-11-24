@@ -228,6 +228,7 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
   // Issue #3499 — a redirect, a stale request file and a transient failure.
   it("explains a redirect from a login gateway without leaking the code or the Location", async () => {
     newSessionsDir();
+    const requestPath = path.join(sessionsDir, "pairing-request.json");
     const code = "ab".repeat(32); // pragma: allowlist secret
     const location = "https://login.example.com/?token=super-secret";
     vi.stubGlobal("fetch", async () => new Response(null, { status: 302, headers: { location } }));
@@ -245,12 +246,19 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
 
     expect(message).toMatch(/redirect/i);
     expect(message).toContain("302");
+    // Both spellings must be named: `install.sh` reads the pairing primary
+    // from MULLION_AGENT_PRIMARY_URL and only falls back to MULLION_PRIMARY_URL
+    // in an existing `.env`, so naming just one of them leaves a dead end.
+    expect(message).toContain("MULLION_AGENT_PRIMARY_URL");
     expect(message).toContain("MULLION_PRIMARY_URL");
     // Neither the gateway's address nor the code may appear in the message.
     expect(message).not.toContain("login.example.com");
     expect(message).not.toContain("super-secret");
     expect(message).not.toContain(code);
     expect(loadAgentIdentity(statePath)).toBeNull();
+    // A redirect is not a definitive rejection: the primary never processed
+    // the body, so the request file stays and the retry reuses the requestId.
+    expect(fs.existsSync(requestPath)).toBe(true);
   });
 
   it.each([400, 401])(
