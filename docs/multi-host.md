@@ -465,9 +465,10 @@ without the `forwardAuth` middleware. Restrict its rule to these exact four
 paths and nothing else:
 
 - `/api/internal/register` (`src/routes/enrollment.ts`)
-- `/api/internal/pair` (`src/routes/host-pairing.ts` — the desktop Helper's
-  pairing-code redeem endpoint; an enrolled agent itself only calls register,
-  deregister, and `/ws/agent-channel`)
+- `/api/internal/pair` (`src/routes/host-pairing.ts` — pairing-code redeem
+  endpoint used by the desktop Helper and by `deploy/install.sh` via
+  `dist/agent-pair.js`; an already-enrolled or paired agent only calls
+  register, deregister, and `/ws/agent-channel`)
 - `/api/internal/deregister` (`src/routes/enrollment.ts`)
 - `/ws/agent-channel` (`src/routes/agent-channel.ts`)
 
@@ -2619,10 +2620,12 @@ The SSH agent bridge is **not** this path — see
 - `install.sh --role agent` reads the enrollment token from the first line of
   stdin when `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1` (the shell counterpart of
   the Windows bootstrap's `-TokenFromStdin`, which has its own test in
-  `test/scripts/windows-mullion-install.test.ts`). It never appears in a process
-  argument or the install log; an empty first line is refused. Tested in a
-  sandbox in `test/scripts/install-identity.test.ts`. This closes the stdin
-  token item of #2452; nothing about it is descoped.
+  `test/scripts/windows-mullion-install.test.ts`), or a one-time pairing code
+  from the first line of stdin when `MULLION_AGENT_PAIRING_CODE_STDIN=1` (redeemed
+  immediately into `agent-identity.json` without writing any secret to `.env`).
+  Neither ever appears in a process argument or the install log; an empty first
+  line is refused. Tested in a sandbox in `test/scripts/install-identity.test.ts`.
+  This closes the stdin token item of #2452; nothing about it is descoped.
 - The Ansible example task and the revoked-agent recipe as tasks are in
   `deploy/README.md` ("Reruns, upgrades and changing credentials").
 - The headless test (`test/plugins/headless-agent-control.test.ts`) carries a

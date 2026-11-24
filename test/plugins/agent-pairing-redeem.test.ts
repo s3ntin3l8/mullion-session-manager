@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type { FastifyInstance } from "fastify";
+import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts, hostPairings } from "../../src/db/schema.js";
@@ -406,14 +407,33 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
         "cli-host",
         "--advertise-url",
         "https://agent.example.com",
+        "--hostname",
+        "custom-box",
+        "--platform",
+        "linux",
+        "--timeout",
+        "5000",
       ]),
     ).toEqual({
       primaryUrl: "http://primary.invalid",
       sessionsDir,
       name: "cli-host",
       advertiseUrl: "https://agent.example.com",
+      hostname: "custom-box",
+      platform: "linux",
+      timeoutMs: 5000,
     });
 
+    expect(() =>
+      parseArgs([
+        "--primary-url",
+        "http://primary.invalid",
+        "--sessions-dir",
+        sessionsDir,
+        "--timeout",
+        "0",
+      ]),
+    ).toThrow(/--timeout must be a positive number/);
     expect(() => parseArgs(["--bogus"])).toThrow(/Unknown or incomplete argument/);
     expect(() => parseArgs(["--sessions-dir", sessionsDir])).toThrow(/--primary-url is required/);
     expect(() => parseArgs(["--primary-url", "http://primary.invalid"])).toThrow(
@@ -437,6 +457,7 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
     ).rejects.toThrow(/Pairing code must be provided on stdin/);
 
     let output = "";
+    let stderrOutput = "";
     await runAgentPair(
       [
         "--primary-url",
@@ -445,6 +466,10 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
         sessionsDir,
         "--name",
         "cli-host",
+        "--hostname",
+        "custom-box",
+        "--platform",
+        "linux",
       ],
       chunks([`${code}\n`]),
       {
@@ -453,10 +478,36 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
           return true;
         },
       },
+      {
+        write: (chunk: string | Uint8Array) => {
+          stderrOutput += String(chunk);
+          return true;
+        },
+      },
     );
 
     const identity = loadAgentIdentity(statePath);
     expect(identity).not.toBeNull();
     expect(output).toBe(`Paired host ${identity!.hostId}\n`);
+    expect(stderrOutput).toContain("plain http://");
+    const hostRow = primary.db.select().from(hosts).where(eq(hosts.id, identity!.hostId)).get();
+    expect(JSON.parse(hostRow!.agentMetadata!)).toMatchObject({ hostname: "custom-box" });
+    expect(hostRow?.platform).toBe("linux");
+
+    // Loopback http:// does not emit the plain-text warning.
+    const loopbackCode = await issueCode("cli-pair-loopback");
+    let loopbackStderr = "";
+    await runAgentPair(
+      ["--primary-url", "http://127.0.0.1:3000", "--sessions-dir", sessionsDir],
+      chunks([`${loopbackCode}\n`]),
+      { write: () => true },
+      {
+        write: (chunk: string | Uint8Array) => {
+          loopbackStderr += String(chunk);
+          return true;
+        },
+      },
+    );
+    expect(loopbackStderr).toBe("");
   });
 });

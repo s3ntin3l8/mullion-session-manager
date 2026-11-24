@@ -23,7 +23,6 @@ export interface RedeemPairingCodeOptions {
 
 export interface RedeemPairingCodeResult {
   hostId: string;
-  statePath: string;
 }
 
 interface PersistedPairingRequest {
@@ -157,5 +156,5 @@ export async function redeemPairingCode(
   });
   fs.rmSync(requestPath, { force: true });
 
-  return { hostId: json.host_id, statePath };
+  return { hostId: json.host_id };
 }

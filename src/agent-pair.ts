@@ -1,17 +1,24 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { redeemPairingCode } from "./services/agent-pairing-redeem.js";
+import { isLoopbackHostname } from "./services/browser-handoff.js";
 
 export function parseArgs(argv: string[]): {
   primaryUrl: string;
   sessionsDir: string;
   name?: string;
   advertiseUrl?: string;
+  hostname?: string;
+  platform?: string;
+  timeoutMs?: number;
 } {
   let primaryUrl = "";
   let sessionsDir = "";
   let name: string | undefined;
   let advertiseUrl: string | undefined;
+  let hostname: string | undefined;
+  let platform: string | undefined;
+  let timeoutMs: number | undefined;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -28,6 +35,19 @@ export function parseArgs(argv: string[]): {
     } else if (arg === "--advertise-url" && next !== undefined) {
       advertiseUrl = next;
       i++;
+    } else if (arg === "--hostname" && next !== undefined) {
+      hostname = next;
+      i++;
+    } else if (arg === "--platform" && next !== undefined) {
+      platform = next;
+      i++;
+    } else if (arg === "--timeout" && next !== undefined) {
+      const parsed = Number(next);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        throw new Error("--timeout must be a positive number of milliseconds");
+      }
+      timeoutMs = parsed;
+      i++;
     } else {
       throw new Error(`Unknown or incomplete argument: ${arg}`);
     }
@@ -35,7 +55,7 @@ export function parseArgs(argv: string[]): {
 
   if (!primaryUrl.trim()) throw new Error("--primary-url is required");
   if (!sessionsDir.trim()) throw new Error("--sessions-dir is required");
-  return { primaryUrl, sessionsDir, name, advertiseUrl };
+  return { primaryUrl, sessionsDir, name, advertiseUrl, hostname, platform, timeoutMs };
 }
 
 export async function readFirstLineFromStdin(
@@ -54,11 +74,22 @@ export async function main(
   argv: string[] = process.argv.slice(2),
   stdin: AsyncIterable<Buffer | string> = process.stdin,
   stdout: Pick<NodeJS.WritableStream, "write"> = process.stdout,
+  stderr: Pick<NodeJS.WritableStream, "write"> = process.stderr,
 ): Promise<void> {
   const args = parseArgs(argv);
   const code = await readFirstLineFromStdin(stdin);
   if (!code) {
     throw new Error("Pairing code must be provided on stdin");
+  }
+  try {
+    const parsedUrl = new URL(args.primaryUrl.trim());
+    if (parsedUrl.protocol === "http:" && !isLoopbackHostname(parsedUrl.hostname)) {
+      stderr.write(
+        "WARNING: primary URL is plain http://; the pairing code and machine credential are sent unencrypted. Use https:// outside a trusted network.\n",
+      );
+    }
+  } catch {
+    // Let redeemPairingCode report the invalid URL error consistently.
   }
   const result = await redeemPairingCode({
     primaryUrl: args.primaryUrl,
@@ -66,6 +97,9 @@ export async function main(
     sessionsDir: args.sessionsDir,
     name: args.name,
     advertiseUrl: args.advertiseUrl,
+    hostname: args.hostname,
+    platform: args.platform,
+    timeoutMs: args.timeoutMs,
   });
   stdout.write(`Paired host ${result.hostId}\n`);
 }

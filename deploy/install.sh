@@ -492,6 +492,15 @@ set_env_value() {
   mv -f "$tmp" "$f"
 }
 
+PAIR_SESSIONS_DIR=""
+if [ "$ROLE" = "agent" ]; then
+  PAIR_SESSIONS_DIR="$(env_value SESSIONS_DIR)"
+  if is_blank "$PAIR_SESSIONS_DIR"; then
+    PAIR_SESSIONS_DIR="$MULLION_HOME/data/sessions"
+  fi
+fi
+
+PAIRED_THIS_RUN=false
 if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
   PAIR_PRIMARY_URL="${MULLION_AGENT_PRIMARY_URL:-}"
   if is_blank "$PAIR_PRIMARY_URL" && [ -f "$MULLION_HOME/.env" ]; then
@@ -507,7 +516,7 @@ if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
     exit 1
   fi
   echo "==> Redeeming pairing code with primary"
-  PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$MULLION_HOME/data/sessions")
+  PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$PAIR_SESSIONS_DIR")
   if [ -n "${MULLION_AGENT_NAME:-}" ]; then
     PAIR_ARGS+=(--name "$MULLION_AGENT_NAME")
   fi
@@ -515,6 +524,7 @@ if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
     PAIR_ARGS+=(--advertise-url "$MULLION_AGENT_ADVERTISE_URL")
   fi
   printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}"
+  PAIRED_THIS_RUN=true
   unset MULLION_AGENT_PAIRING_CODE
 fi
 
@@ -681,12 +691,14 @@ EOF
     fi
     cat >>"$MULLION_HOME/.env" <<'EOF'
 
-# --- Pick ONE of the two credential paths below; src/app.ts refuses to
-# boot an agent with neither configured. See docs/multi-host.md. ---
+# --- Pick ONE of the credential paths below; src/app.ts refuses to
+# boot an agent with none configured. See docs/multi-host.md. ---
 
-# Path 1 (recommended for automated fleets): self-registration — no manual
-# step on the primary at all. Requires MULLION_ENROLLMENT_SECRET to be set
-# on the primary too.
+# Path 1 (recommended for a single new host): one-time pairing code redeemed
+# during install into $SESSIONS_DIR/agent-identity.json (only MULLION_PRIMARY_URL
+# is set here; MULLION_ENROLLMENT_TOKEN and MULLION_AGENT_TOKEN stay empty).
+# For automated fleets: set MULLION_ENROLLMENT_TOKEN (requires
+# MULLION_ENROLLMENT_SECRET on the primary too).
 EOF
     printf 'MULLION_PRIMARY_URL=%s\n' "${MULLION_AGENT_PRIMARY_URL:-}" >>"$MULLION_HOME/.env"
     printf 'MULLION_ENROLLMENT_TOKEN=%s\n' "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" >>"$MULLION_HOME/.env"
@@ -735,7 +747,7 @@ EOF
     HAS_ENROLLMENT_PATH=true
   fi
   HAS_PAIRING_IDENTITY=false
-  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$MULLION_HOME/data/sessions/agent-identity.json" ]; then
+  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$PAIR_SESSIONS_DIR/agent-identity.json" ]; then
     HAS_PAIRING_IDENTITY=true
   fi
   if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_ENROLLMENT_PATH" = false ] && [ "$HAS_PAIRING_IDENTITY" = false ]; then
@@ -1208,13 +1220,14 @@ else
   if systemctl --user --quiet is-active "$UNIT_NAME" 2>/dev/null; then UNIT_WAS_ACTIVE=true; fi
   systemctl --user enable --now "$UNIT_NAME"
 
-  # Issue #2703 — a unit that was already running keeps the credentials it
-  # booted with. When this run rewrote the .env (a deleted .env re-templated
-  # with a new token, a filled-in HOST/PORT), restart it so the change takes
-  # effect; an agent that was revoked is terminal in memory until restarted.
+  # Issue #2703 / #3437 — a unit that was already running keeps the credentials
+  # it booted with. When this run rewrote the .env (a deleted .env re-templated
+  # with a new token, a filled-in HOST/PORT) or redeemed a pairing code into
+  # agent-identity.json, restart it so the change takes effect; an agent that
+  # was revoked is terminal in memory until restarted.
   ENV_SUM_AFTER="$(cksum <"$MULLION_HOME/.env" 2>/dev/null || echo none)"
-  if [ "$UNIT_WAS_ACTIVE" = true ] && [ "$ENV_SUM_BEFORE" != "$ENV_SUM_AFTER" ]; then
-    echo "==> $MULLION_HOME/.env changed while $UNIT_NAME was running; restarting it"
+  if [ "$UNIT_WAS_ACTIVE" = true ] && { [ "$ENV_SUM_BEFORE" != "$ENV_SUM_AFTER" ] || [ "$PAIRED_THIS_RUN" = true ]; }; then
+    echo "==> Credentials or $MULLION_HOME/.env changed while $UNIT_NAME was running; restarting it"
     systemctl --user restart "$UNIT_NAME"
   fi
 

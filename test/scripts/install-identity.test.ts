@@ -326,4 +326,54 @@ fs.writeFileSync(
     ).rejects.toMatchObject({ stderr: expect.stringContaining("stdin carried no pairing code") });
     expect(fs.existsSync(path.join(home, ".env"))).toBe(false);
   });
+
+  it("writes the paired identity to a pre-created .env's SESSIONS_DIR and restarts an active unit", async () => {
+    const pairingCode = "cd".repeat(32); // pragma: allowlist secret
+    const home = freshHome();
+    const customSessionsDir = path.join(home, "custom-sessions");
+    const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+    fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+    fs.writeFileSync(
+      pairScript,
+      `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = process.argv[idx + 1];
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-custom-1", machineCredential: "ef".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+    );
+
+    fs.writeFileSync(
+      path.join(home, ".env"),
+      [
+        "MULLION_ROLE=agent",
+        `MULLION_HOME=${home}`,
+        `SESSIONS_DIR=${customSessionsDir}`,
+        "MULLION_PRIMARY_URL=https://primary.example.com",
+        "PROJECTS_ROOTS=/srv/projects",
+      ].join("\n") + "\n",
+      { mode: 0o600 },
+    );
+
+    // Report mullion-agent.service as active so the restart condition is exercised.
+    writeShim(
+      binDir,
+      "systemctl",
+      `#!/usr/bin/env bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "systemctl $*" >> "$DIR/commands.log"\ncase "$*" in *"is-enabled mullion.service"*|*"is-active mullion.service"*) exit 1;; *is-enabled*|*is-active*) exit 0;; *) exit 0;; esac\n`,
+    );
+
+    await run(home, { MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, `${pairingCode}\n`);
+
+    expect(fs.existsSync(identityFile(home))).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(customSessionsDir, "agent-identity.json"), "utf8")),
+    ).toMatchObject({ hostId: "paired-custom-1" });
+    const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+    expect(commands).toContain("systemctl --user restart mullion-agent.service");
+  });
 });
