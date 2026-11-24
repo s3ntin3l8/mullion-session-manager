@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Task } from "../api/types.js";
 import { useOpenTask } from "../hooks/useOpenTask.js";
 import { useDashboardStore } from "../store/index.js";
@@ -55,8 +56,18 @@ function TaskRowButtons({
   const tmOn = useDashboardStore((s) => s.taskMasterEnabled);
   const openTask = useOpenTask();
   const actions = useTaskActions(task, { onError });
-  const busy = actions.submitting;
-  const gated = busy || !tmOn;
+  // Which action is in flight: its button spins (`busy`, which also ignores
+  // clicks) rather than going inert, and the row's other actions wait.
+  const [running, setRunning] = useState<"claim" | "retry" | "reReview" | "approve" | null>(null);
+  const run = async <T,>(name: NonNullable<typeof running>, action: () => Promise<T>) => {
+    setRunning(name);
+    try {
+      return await action();
+    } finally {
+      setRunning(null);
+    }
+  };
+  const waiting = (name: NonNullable<typeof running>) => running !== null && running !== name;
   const hint = tmOn ? "" : OFF_HINT;
 
   switch (task.status) {
@@ -64,8 +75,9 @@ function TaskRowButtons({
       return (
         <IconButton
           label={`Claim task${hint}`}
-          disabled={gated}
-          onClick={() => void actions.claim()}
+          busy={running === "claim"}
+          disabled={!tmOn || waiting("claim")}
+          onClick={() => void run("claim", actions.claim)}
         >
           <PlayTriangleIcon size={14} />
         </IconButton>
@@ -74,8 +86,9 @@ function TaskRowButtons({
       return (
         <IconButton
           label={`Retry task${hint}`}
-          disabled={gated}
-          onClick={() => void actions.retry()}
+          busy={running === "retry"}
+          disabled={!tmOn || waiting("retry")}
+          onClick={() => void run("retry", actions.retry)}
         >
           <RotateIcon size={14} />
         </IconButton>
@@ -86,8 +99,9 @@ function TaskRowButtons({
           {taskReReviewEligible(task) && (
             <IconButton
               label="Re-review task"
-              disabled={busy}
-              onClick={() => void actions.reReview()}
+              busy={running === "reReview"}
+              disabled={waiting("reReview")}
+              onClick={() => void run("reReview", actions.reReview)}
             >
               <RefreshIcon size={14} />
             </IconButton>
@@ -97,13 +111,17 @@ function TaskRowButtons({
               compact
               variant="neutral"
               title={`Approve task${hint}`}
-              disabled={gated}
+              disabled={!tmOn || running !== null}
               onConfirm={() =>
-                void actions.approve().then((outcome) => {
+                void run("approve", () => actions.approve()).then((outcome) => {
                   if (outcome !== "tracking-epic") return;
-                  onError(
-                    "This task tracks an epic with open sub-issues — confirm the approval in the task.",
-                  );
+                  // Guidance, not a failure: a notice, and the task's detail,
+                  // whose Approve asks to close the epic anyway.
+                  useDashboardStore.getState().pushToast({
+                    kind: "info",
+                    message:
+                      "This task tracks an epic with open sub-issues: approve it from the task.",
+                  });
                   openTask(task.id);
                 })
               }

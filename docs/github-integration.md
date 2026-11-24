@@ -32,7 +32,10 @@ connected GitHub identity.
   where `tm` is an issue a task tracks): it scans every page, up to the same
   20-page cap as a title search, so a match on a later page is found and the
   section count is the number of matches (a lower bound when the scan stopped
-  at the cap). The PR count is the filtered count too.
+  at the cap). The scanned pages are kept for a minute per repo, query and
+  token, so "Load more" and refetches filter them in memory; the match is
+  re-applied each time, so a newly queued issue counts at once. The PR count is
+  the filtered count too.
 
 Owner/repo is derived by parsing the project's own `.git/config` — no
 `git remote` shell-out. Non-github.com remotes (GitHub Enterprise, GitLab,

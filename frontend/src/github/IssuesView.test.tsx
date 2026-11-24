@@ -988,6 +988,20 @@ describe("Issue row task quick actions", () => {
     expect(await screen.findByText("Branch is gone")).toBeInTheDocument();
   });
 
+  it("a running Retry spins (busy, still focusable) instead of going inert", async () => {
+    let finish: () => void = () => {};
+    const retryTask = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    await renderWith(failed, { retryTask });
+    const button = screen.getByRole("button", { name: "Retry task" });
+    await userEvent.click(button);
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).not.toBeDisabled();
+    await userEvent.click(button);
+    expect(retryTask).toHaveBeenCalledTimes(1);
+    finish();
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-busy", "true"));
+  });
+
   it("Retry is disabled, and says why, while Task Master is off", async () => {
     await renderWith(failed, { taskMasterEnabled: false });
     expect(screen.getByRole("button", { name: "Retry task — Task Master is off" })).toBeDisabled();
@@ -1017,7 +1031,12 @@ describe("Issue row task quick actions", () => {
     await userEvent.click(screen.getByTitle("Approve task"));
     await userEvent.click(screen.getByRole("button", { name: /click again to confirm/ }));
     await waitFor(() => expect(openRightSidebarTask).toHaveBeenCalledWith(4));
-    expect(screen.getByText(/confirm the approval in the task/)).toBeInTheDocument();
+    // A notice, not the section's red error line.
+    expect(useDashboardStore.getState().toasts.at(-1)).toMatchObject({
+      kind: "info",
+      message: expect.stringMatching(/approve it from the task/),
+    });
+    expect(screen.queryByText(/approve it from the task/)).toBeNull();
   });
 
   it("no Approve while a workflow change holds the task", async () => {

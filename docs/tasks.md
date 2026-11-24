@@ -750,7 +750,8 @@ The view has a rail button only while Task Master is on. With it off, a stored
 or requested Tasks list opens the default view instead (`guardTasksView`, once
 settings and server-info have loaded, so a cold start keeps the stored view); a
 task's own detail still opens there, since Reject and Give up stay usable with
-Task Master off.
+Task Master off. The fallback is not written back: the stored Tasks view comes
+back on the next load once Task Master is on again.
 
 The detail reads, top to bottom:
 

@@ -472,7 +472,9 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       if (s.selectedTaskId !== null) return;
       const view = guardTasksView(s.rightSidebarView, s);
       if (view === s.rightSidebarView) return;
-      writeString(STORAGE_KEYS.rightSidebarView, view);
+      // In memory only: the stored Tasks view is the user's choice, and it
+      // comes back on the next load once Task Master is on again (the same
+      // posture as the GitHub origin pick, kept while the filter is hidden).
       set({ rightSidebarView: view, sidebarHistory: [], ...sidebarEntryReset(s, view) });
     },
 

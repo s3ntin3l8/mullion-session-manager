@@ -916,7 +916,8 @@ export interface UiSlice {
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;
   /** #2461 — moves a stored Tasks list off the drawer once Task Master is
-   *  known to be off (see `guardTasksView`), without opening or closing it. */
+   *  known to be off (see `guardTasksView`), without opening or closing it
+   *  and without overwriting the stored view. */
   settleRightSidebarView: () => void;
   setRightSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;

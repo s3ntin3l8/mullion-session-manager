@@ -1047,7 +1047,7 @@ describe("RightSidebar Tasks view with Task Master off", () => {
     }),
   );
 
-  it("falls back to the default view, persisted, keeping the drawer open", () => {
+  it("falls back to the default view, keeping the drawer open and the stored view", () => {
     useDashboardStore.setState({
       ...known,
       rightSidebarView: "tasks",
@@ -1055,10 +1055,12 @@ describe("RightSidebar Tasks view with Task Master off", () => {
       taskMasterEnabled: false,
       selectedTaskId: null,
     });
+    localStorage.setItem("crs.rightSidebarView", "tasks");
     renderSidebar();
     expect(useDashboardStore.getState().rightSidebarView).toBe("git");
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
-    expect(localStorage.getItem("crs.rightSidebarView")).toBe("git");
+    // The stored choice survives, to come back once Task Master is on again.
+    expect(localStorage.getItem("crs.rightSidebarView")).toBe("tasks");
     expect(screen.queryByText(/Task Master is off/)).toBeNull();
     expect(screen.getByRole("button", { name: "Git" })).toHaveAttribute("aria-pressed", "true");
   });

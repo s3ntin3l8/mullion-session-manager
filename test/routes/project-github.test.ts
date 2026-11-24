@@ -67,6 +67,10 @@ beforeEach(async () => {
 
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
+  // The origin filter's kept page scans (#2461) are per repo and token, and
+  // every test here uses the same ones.
+  const { clearIssueScanCacheForTests } = await import("../../src/services/github-issues.js");
+  clearIssueScanCacheForTests();
 });
 
 afterEach(() => {
@@ -353,6 +357,22 @@ describe("projects route", () => {
           const manual3 = (await get("origin=manual&page=3")).json();
           expect(manual3.issues).toHaveLength(7);
           expect(manual3.hasMore).toBe(false);
+
+          // #2461 review — paging and refetching filter the kept scan: no
+          // GitHub page is read again, and a task queued since then counts
+          // at once (the match is never cached).
+          fetchMock.mockClear();
+          app.db
+            .insert(tasks)
+            .values({ projectId: id, title: "t2", issueNumber: 2, status: "ready" })
+            .run();
+          const again = (await get("origin=tm")).json();
+          expect(again.issues.map((i: { number: number }) => i.number)).toEqual([2, 3, 77, 105]);
+          expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("/issues?"))).toHaveLength(
+            0,
+          );
+          const manualAfter = (await get("origin=manual")).json();
+          expect(manualAfter.total).toBe(106);
 
           // Combined with a title search, both have to match.
           const both = (await get("origin=tm&q=issue 7")).json();

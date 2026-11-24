@@ -9,12 +9,32 @@
 // Bodies come back as GitHub-rendered HTML (`body_html`), so no markdown
 // library is needed here; the frontend sanitizes before inserting it.
 
+import { createHash } from "node:crypto";
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
 import { parseParentIssueUrl } from "./github.js";
 
 const PAGE_SIZE = 50;
 /** Most raw list pages a title search reads (1000 issues) before giving up and flagging `truncated`. */
 const MAX_SEARCH_PAGES = 20;
+
+/**
+ * #2461 — a counting scan (the sidebar's origin filter) reads every page up
+ * to the cap, and each "Load more" or refetch asks again from page 1. The
+ * scanned open issues are kept briefly per repo, query and token, so those
+ * repeats filter in memory instead of re-walking GitHub. The match itself is
+ * never cached: it is re-applied to the kept pages on every request, so a
+ * task queued in the meantime shows up at once.
+ */
+const FULL_SCAN_TTL_MS = 60_000;
+const fullScanCache = new Map<
+  string,
+  { at: number; scan: Promise<{ issues: IssueListItem[]; exhausted: boolean }> }
+>();
+
+/** Test hook: forget the kept scans. */
+export function clearIssueScanCacheForTests(): void {
+  fullScanCache.clear();
+}
 const HTML_ACCEPT = "application/vnd.github.html+json";
 
 export interface IssueLabel {
@@ -275,18 +295,47 @@ export async function listIssues(
     // already applied) until the matches cover the requested page plus one
     // more — or, when counting, every page — the repo is exhausted, or the
     // scan cap is hit.
-    const matches: IssueListItem[] = [];
-    const scanned: IssueListItem[] = [];
+    let matches: IssueListItem[] = [];
+    let scanned: IssueListItem[] = [];
     const wanted = page * PAGE_SIZE + 1;
     let exhausted = false;
-    for (let n = 1; n <= MAX_SEARCH_PAGES && (query.countMatches || matches.length < wanted); n++) {
-      const raw = await fetchRawPage(n);
-      const issues = toIssues(raw);
-      scanned.push(...issues);
-      matches.push(...issues.filter(keep));
-      if (raw.length < PAGE_SIZE) {
-        exhausted = true;
-        break;
+    if (query.countMatches) {
+      const scanAll = async () => {
+        const issues: IssueListItem[] = [];
+        for (let n = 1; n <= MAX_SEARCH_PAGES; n++) {
+          const raw = await fetchRawPage(n);
+          issues.push(...toIssues(raw));
+          if (raw.length < PAGE_SIZE) return { issues, exhausted: true };
+        }
+        return { issues, exhausted: false };
+      };
+      const tokenKey = createHash("sha256").update(token).digest("hex").slice(0, 16);
+      const key = `${repoPath}?${base.toString()}#${tokenKey}`;
+      const now = Date.now();
+      let hit = fullScanCache.get(key);
+      if (!hit || now - hit.at > FULL_SCAN_TTL_MS) {
+        for (const [k, v] of fullScanCache)
+          if (now - v.at > FULL_SCAN_TTL_MS) fullScanCache.delete(k);
+        const entry = { at: now, scan: scanAll() };
+        hit = entry;
+        fullScanCache.set(key, entry);
+        // A failed scan is not kept: the next request tries GitHub again.
+        entry.scan.catch(() => {
+          if (fullScanCache.get(key) === entry) fullScanCache.delete(key);
+        });
+      }
+      ({ issues: scanned, exhausted } = await hit.scan);
+      matches = scanned.filter(keep);
+    } else {
+      for (let n = 1; n <= MAX_SEARCH_PAGES && matches.length < wanted; n++) {
+        const raw = await fetchRawPage(n);
+        const issues = toIssues(raw);
+        scanned.push(...issues);
+        matches.push(...issues.filter(keep));
+        if (raw.length < PAGE_SIZE) {
+          exhausted = true;
+          break;
+        }
       }
     }
     items = matches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
