@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { access, constants as fsConstants, stat } from "node:fs/promises";
 import type { DeviceKind, DevicePlatform } from "./device-drivers/types.js";
-import { isDeviceKindSupported } from "./device-manager.js";
+import { ANDROID_NOT_CONFIGURED_MESSAGE, isDeviceKindSupported } from "./device-manager.js";
 import { getCachedCapabilities } from "./host-capabilities.js";
 
 /** The two kinds a device can be — an emulator or a physical device. The
@@ -17,6 +17,19 @@ export function isDeviceKind(value: unknown): value is DeviceKind {
 export function localDeviceKinds(app: FastifyInstance): DeviceKind[] {
   if (!app.devicePanelEnabled) return [];
   return app.deviceKinds.filter((kind) => kind !== "emulator" || app.deviceEmulatorEnabled);
+}
+
+/** Whether this host can add/start a physical (adb) device: the panel is on AND
+ * Android is configured (an empty DEVICE_ADB_PATH is an iOS-only host, #3436). */
+export function physicalDeviceEnabled(app: FastifyInstance): boolean {
+  return app.devicePanelEnabled && app.deviceKinds.includes("physical");
+}
+
+/** Why {@link physicalDeviceEnabled} is false. */
+export function physicalDeviceUnavailableMessage(app: FastifyInstance): string {
+  return app.devicePanelEnabled
+    ? ANDROID_NOT_CONFIGURED_MESSAGE
+    : app.devicePanelUnavailableMessage;
 }
 
 /**

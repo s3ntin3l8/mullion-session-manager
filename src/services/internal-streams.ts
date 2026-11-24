@@ -21,7 +21,12 @@ import { getPinnedWsAgent } from "./pinned-connect.js";
 import { normalizePreviewDestination, CONFIGURED_PREVIEW_POLICY } from "./preview-targets.js";
 import { attachSocketToSession } from "./session-attach.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./session-events.js";
-import { isDeviceKind, iosSimulatorAvailable } from "./device-kinds.js";
+import {
+  isDeviceKind,
+  iosSimulatorAvailable,
+  physicalDeviceEnabled,
+  physicalDeviceUnavailableMessage,
+} from "./device-kinds.js";
 import { DEVICE_ID_PATTERN } from "./device-wire.js";
 import { attachSocketToDevice, type AttachDeviceParams } from "./device-attach.js";
 import type { DeviceKind, DevicePlatform } from "./device-drivers/types.js";
@@ -354,10 +359,10 @@ export async function deviceQueryError(
       return "iOS Simulator is not available on this host";
     }
     if (!query.udid) return "udid is required for an ios device";
-  } else if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+  } else if (kind === "emulator" ? !app.deviceEmulatorEnabled : !physicalDeviceEnabled(app)) {
     return kind === "emulator"
       ? app.deviceEmulatorUnavailableMessage
-      : app.devicePanelUnavailableMessage;
+      : physicalDeviceUnavailableMessage(app);
   }
   const { port } = query;
   // The same 1-65535 the spawn schema bounds the port to.

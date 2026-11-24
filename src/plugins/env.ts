@@ -769,8 +769,8 @@ export const schema = {
     // idempotently at startup (device-manager.ts talks to the running
     // server directly over TCP via @yume-chan/adb-server-node-tcp after
     // that, never shells out to `adb` again). Empty (the default) means
-    // "not configured" — DEVICE_ENABLED with this unset fails loudly rather
-    // than guessing a path.
+    // "not configured": no adb server is started and the Android device kinds
+    // are not offered (an iOS-only Mac host leaves it unset, #3436).
     DEVICE_ADB_PATH: {
       type: "string",
       default: "",

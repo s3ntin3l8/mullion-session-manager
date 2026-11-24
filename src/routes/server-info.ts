@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { localDevicePlatforms } from "../services/device-kinds.js";
+import { localDeviceKinds, localDevicePlatforms } from "../services/device-kinds.js";
 import { runtimeEnvDefaults } from "../services/runtime-config.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 
@@ -132,7 +132,8 @@ export async function serverInfoRoute(app: FastifyInstance) {
         // Which device platforms the primary's own host can run (empty when the
         // panel is off), so the UI never offers iOS where the server refuses it.
         devicePlatforms: app.devicePanelEnabled ? await localDevicePlatforms(app) : [],
-        deviceDiscovery: app.bootDeviceDiscoveryEnabled && app.devicePanelEnabled,
+        // No Android kind (an iOS-only host, #3436) means no discovery socket either.
+        deviceDiscovery: app.bootDeviceDiscoveryEnabled && localDeviceKinds(app).length > 0,
       },
     };
   });

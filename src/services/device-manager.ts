@@ -135,6 +135,10 @@ export function unsupportedKindMessage(
     : `Physical devices are not supported on ${platform}.`;
 }
 
+/** The one wording for "Android is not configured" (an empty DEVICE_ADB_PATH). */
+export const ANDROID_NOT_CONFIGURED_MESSAGE =
+  "Android devices are not configured (set DEVICE_ADB_PATH).";
+
 /** Whether the device panel does ANYTHING on `platform`. */
 export function isDevicePanelSupported(platform: NodeJS.Platform = process.platform): boolean {
   return deviceCapabilities(platform).size > 0;
@@ -1106,7 +1110,9 @@ export class DeviceManager {
     for (const port of opts.initialPorts ?? []) {
       this.allocatedPorts.add(port);
     }
-    if (opts.enabled) {
+    // An empty adbPath is "Android not configured" (an iOS-only host, #3436): there
+    // is no adb to start, and `spawn("")` would throw synchronously.
+    if (opts.enabled && opts.adbPath) {
       // Idempotent — a no-op if a server is already listening. Best-effort,
       // fire-and-forget: a failure here surfaces later, on the first real
       // operation against `this.serverClient`, rather than blocking
@@ -1120,35 +1126,47 @@ export class DeviceManager {
       // (issue #2115): adb takes it from ANDROID_ADB_SERVER_PORT, and
       // without it a non-default DEVICE_ADB_SERVER_PORT never meets the
       // server this starts on 5037.
-      const child = spawnChild(opts.adbPath, ["start-server"], {
+      this.startAdbServer();
+    }
+  }
+
+  /** Fire-and-forget `adb start-server`; never throws — a synchronous spawn failure is reported, not raised. */
+  private startAdbServer(): void {
+    const opts = this.opts;
+    let reported = false;
+    const report = (result: Parameters<NonNullable<typeof opts.onAdbServerStart>>[0]): void => {
+      // 'error' and 'exit' can both fire (a failed spawn still emits exit
+      // on some platforms) — one outcome per start.
+      if (reported) return;
+      reported = true;
+      opts.onAdbServerStart?.(result);
+    };
+    let child: ReturnType<typeof spawnChild>;
+    try {
+      child = spawnChild(opts.adbPath, ["start-server"], {
         stdio: ["ignore", "ignore", "pipe"],
         env: { ...process.env, ANDROID_ADB_SERVER_PORT: String(opts.adbServerPort) },
       });
-      let stderr = "";
-      child.stderr?.on("data", (chunk: Buffer) => {
-        if (stderr.length <= ADB_STDERR_LIMIT) stderr += chunk.toString();
-      });
-      let reported = false;
-      const report = (result: Parameters<NonNullable<typeof opts.onAdbServerStart>>[0]): void => {
-        // 'error' and 'exit' can both fire (a failed spawn still emits exit
-        // on some platforms) — one outcome per start.
-        if (reported) return;
-        reported = true;
-        opts.onAdbServerStart?.(result);
-      };
-      child.on("error", (error) => report({ ok: false, error, stderr: clipStderr(stderr) }));
-      child.on("exit", (code, signal) =>
-        report(
-          code === 0
-            ? { ok: true }
-            : {
-                ok: false,
-                error: new Error(`adb start-server exited with ${code ?? `signal ${signal}`}`),
-                stderr: clipStderr(stderr),
-              },
-        ),
-      );
+    } catch (error) {
+      report({ ok: false, error: error as Error, stderr: "" });
+      return;
     }
+    let stderr = "";
+    child.stderr?.on("data", (chunk: Buffer) => {
+      if (stderr.length <= ADB_STDERR_LIMIT) stderr += chunk.toString();
+    });
+    child.on("error", (error) => report({ ok: false, error, stderr: clipStderr(stderr) }));
+    child.on("exit", (code, signal) =>
+      report(
+        code === 0
+          ? { ok: true }
+          : {
+              ok: false,
+              error: new Error(`adb start-server exited with ${code ?? `signal ${signal}`}`),
+              stderr: clipStderr(stderr),
+            },
+      ),
+    );
   }
 
   private assertEnabled(kind: DeviceCapability): void {
@@ -1160,6 +1178,9 @@ export class DeviceManager {
     }
     if (!this.opts.enabled) {
       throw new Error("device panel is disabled (set DEVICE_ENABLED=true)");
+    }
+    if (kind !== "ios-simulator" && !this.opts.adbPath) {
+      throw new Error(ANDROID_NOT_CONFIGURED_MESSAGE);
     }
   }
 

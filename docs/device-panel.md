@@ -87,6 +87,18 @@ or installing a system image additionally needs the SDK's command-line tools
 (`avdmanager`, `sdkmanager`); without them those routes report so and existing
 AVDs still run.
 
+### iOS-only hosts (no Android SDK)
+
+An empty `DEVICE_ADB_PATH` means "Android is not configured" (#3436). Mullion
+then starts no adb server, `features.deviceKinds` omits `physical` and
+`emulator`, `features.devicePlatforms` lists only `ios` (when the iOS Simulator
+is available) and any Android create/start answers "Android devices are not
+configured (set `DEVICE_ADB_PATH`)". A Mac with Xcode and no Android SDK can
+therefore enable just the simulator with `DEVICE_ENABLED=true`,
+`DEVICE_IOS_ENABLED=true` and `DEVICE_IDB_COMPANION_PATH`. A failing
+`adb start-server` (bad path, missing binary) is logged and never stops the
+backend; the first real Android operation reports it.
+
 ### iOS Simulator
 
 The iOS Simulator driver (`src/services/device-drivers/ios-simulator.ts`,

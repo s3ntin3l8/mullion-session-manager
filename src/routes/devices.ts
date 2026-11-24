@@ -26,6 +26,8 @@ import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.
 import {
   iosSimulatorAvailable,
   localDeviceKinds,
+  physicalDeviceEnabled,
+  physicalDeviceUnavailableMessage,
   localDevicePlatforms,
 } from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
@@ -220,7 +222,7 @@ async function kindRefusal(host: DeviceHost, kind: DeviceKind): Promise<string |
   const kinds = support.deviceKinds;
   if (kinds.includes(kind)) return null;
   return kinds.length === 0
-    ? `Host ${host.hostId} cannot run devices right now: its device panel is off (DEVICE_ENABLED=true) or its platform supports none.`
+    ? `Host ${host.hostId} cannot run devices right now: its device panel is off (DEVICE_ENABLED=true), Android is not configured (DEVICE_ADB_PATH is empty) or its platform supports none.`
     : `Host ${host.hostId} cannot run ${kind} devices (it supports: ${kinds.join(", ")}).`;
 }
 
@@ -370,11 +372,11 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // on an agent host is gated on what THAT host reports it can run (#3200),
     // before a row exists for something it cannot.
     if (host.isLocal) {
-      if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+      if (kind === "emulator" ? !app.deviceEmulatorEnabled : !physicalDeviceEnabled(app)) {
         return reply.badRequest(
           kind === "emulator"
             ? app.deviceEmulatorUnavailableMessage
-            : app.devicePanelUnavailableMessage,
+            : physicalDeviceUnavailableMessage(app),
         );
       }
     } else {
@@ -495,8 +497,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       const hostId = resolvePlacementHostId(app, requestedHostId, undefined);
       if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
       const host = getDeviceHost(app, hostId);
-      if (host.isLocal && !app.devicePanelEnabled) {
-        return reply.badRequest(app.devicePanelUnavailableMessage);
+      if (host.isLocal && !physicalDeviceEnabled(app)) {
+        return reply.badRequest(physicalDeviceUnavailableMessage(app));
       }
       if (!isValidDeviceAddress(pairingAddress)) {
         return reply.badRequest("pairingAddress must be host:port (e.g. 192.168.1.23:41234)");
@@ -551,8 +553,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     const hostId = resolvePlacementHostId(app, requestedHostId, undefined);
     if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
     const host = getDeviceHost(app, hostId);
-    if (host.isLocal && !app.devicePanelEnabled) {
-      return reply.badRequest(app.devicePanelUnavailableMessage);
+    if (host.isLocal && !physicalDeviceEnabled(app)) {
+      return reply.badRequest(physicalDeviceUnavailableMessage(app));
     }
 
     if (!isValidPairingCode(pairingCode)) {
@@ -933,6 +935,11 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         return reply.badRequest("only a physical device's address can be edited");
       }
       const host = getDeviceHost(app, row.hostId);
+      // Only THIS host's own Android config gates a local row; an agent
+      // enforces its own (#3436).
+      if (host.isLocal && !physicalDeviceEnabled(app)) {
+        return reply.badRequest(physicalDeviceUnavailableMessage(app));
+      }
       const { address } = request.body ?? {};
       if (!isValidDeviceAddress(address)) {
         return reply.badRequest("address must be host:port (e.g. 192.168.1.23:37251)");

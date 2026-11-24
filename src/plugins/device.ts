@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import {
+  ANDROID_NOT_CONFIGURED_MESSAGE,
   DeviceManager,
   deviceCapabilities,
   unsupportedKindMessage,
@@ -75,6 +76,9 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // THIS, so the panel is off in one place and the reason for it is said in
   // one place.
   const panelEnabled = app.config.DEVICE_ENABLED && panelSupported;
+  // An empty DEVICE_ADB_PATH means Android is not configured (an iOS-only Mac
+  // host, #3436): no adb server is started and the Android kinds are not offered.
+  const androidConfigured = app.config.DEVICE_ADB_PATH.trim() !== "";
   // Why the panel is unavailable, when it is. The platform reason DOMINATES:
   // telling a macOS operator to set DEVICE_ENABLED=true would send them off
   // to change a .env and restart for nothing.
@@ -83,7 +87,9 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     : `The device panel is not supported on ${platform}.`;
   const emulatorUnavailableMessage = !emulatorSupported
     ? unsupportedKindMessage("emulator", platform)
-    : panelUnavailableMessage;
+    : panelEnabled && !androidConfigured
+      ? ANDROID_NOT_CONFIGURED_MESSAGE
+      : panelUnavailableMessage;
   if (!panelSupported) {
     app.log.info({ platform }, "[device] the device panel is not supported on this platform");
   } else if (!emulatorSupported) {
@@ -96,13 +102,18 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   app.decorate("devicePanelSupported", panelSupported);
   app.decorate("devicePanelUnavailableMessage", panelUnavailableMessage);
   app.decorate("deviceEmulatorSupported", emulatorSupported);
-  app.decorate("deviceEmulatorEnabled", app.config.DEVICE_ENABLED && emulatorSupported);
+  app.decorate(
+    "deviceEmulatorEnabled",
+    app.config.DEVICE_ENABLED && emulatorSupported && androidConfigured,
+  );
   app.decorate("deviceEmulatorUnavailableMessage", emulatorUnavailableMessage);
   // The Android device KINDS only: "ios-simulator" is a capability, not a kind,
   // and is reported through the platforms list instead.
   app.decorate(
     "deviceKinds",
-    [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator"),
+    androidConfigured
+      ? [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator")
+      : [],
   );
 
   // Issue #1770 — resolved ONCE, here: the dir the sockets live in and the
@@ -125,7 +136,7 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // OFF on a platform it was already off by default on. Linux is unchanged.
     enabled: app.config.DEVICE_ENABLED && panelSupported,
     capabilities,
-    adbPath: app.config.DEVICE_ADB_PATH,
+    adbPath: app.config.DEVICE_ADB_PATH.trim(),
     adbServerPort: app.config.DEVICE_ADB_SERVER_PORT,
     emulatorPath: app.config.DEVICE_EMULATOR_PATH,
     scrcpyServerPath: app.config.DEVICE_SCRCPY_SERVER_PATH,
@@ -153,7 +164,12 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
       if (result.ok) app.log.info({ port }, "adb server started");
       else {
         app.log.warn(
-          { err: result.error, port, adbPath: app.config.DEVICE_ADB_PATH, stderr: result.stderr },
+          {
+            err: result.error,
+            port,
+            adbPath: app.config.DEVICE_ADB_PATH.trim(),
+            stderr: result.stderr,
+          },
           "adb start-server failed — devices cannot connect until an adb server runs on this port",
         );
       }
@@ -196,8 +212,8 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // Gated on the platform too: the mDNS scanner finds PHYSICAL phones, so it
     // runs wherever the panel does at all (macOS included, #1854); a platform
     // whose panel is off must not bind a multicast socket or emit 5353
-    // queries.
-    enabled: app.config.DEVICE_ENABLED && discoveryEnabled && panelSupported,
+    // queries. An iOS-only host (no adb, #3436) cannot add or pair a phone either.
+    enabled: app.config.DEVICE_ENABLED && discoveryEnabled && panelSupported && androidConfigured,
   });
   discovery.start();
   app.decorate("deviceDiscovery", discovery);
