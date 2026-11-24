@@ -218,9 +218,7 @@ export function ServerInfoSection() {
         </div>
         <div className="settings-info-row zebra">
           <span className="settings-info-key">Android devices</span>
-          <span className="settings-info-value">
-            {androidDevicesLabel(info.features)}
-          </span>
+          <span className="settings-info-value">{androidDevicesLabel(info.features)}</span>
         </div>
       </div>
 
