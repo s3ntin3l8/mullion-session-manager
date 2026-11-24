@@ -119,7 +119,7 @@ export function TaskRow({
         <span className="notif-event-text" title={title}>
           {title}
         </span>
-        <span className="notif-task-reason" title={reason}>
+        <span className="notif-event-text notif-task-reason" title={reason}>
           {reason}
         </span>
         <span className="notif-event-time">{project}</span>

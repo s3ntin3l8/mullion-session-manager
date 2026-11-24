@@ -77,7 +77,7 @@ mullion task unarchive <id>
 mullion task push
 mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
-               stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
+               stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard|openurl
 mullion bundle status|resync|remove
 mullion events tail [--children]
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]
@@ -338,6 +338,8 @@ sessionId), not scoped to any project or session.
 - `device clipboard set <id> <text...> [--paste]` — sets the device clipboard
   via the scrcpy control channel; `--paste` also simulates a paste after
   setting it.
+- `device openurl <id> <url>` — iOS Simulator only: opens an http(s) URL in the
+  simulator's browser (`xcrun simctl openurl`). Answers 400 on Android.
 
 `x`/`y` are in the device's native **screen pixels** — the same space as a
 `screenshot`, and independent of the (downscaled) live-panel stream. Every verb

@@ -131,7 +131,8 @@ export type DeviceAction =
   | { action: "button"; button: DeviceButton }
   | { action: "logcat"; lines?: number; filter?: string }
   | { action: "clipboard"; op: "get" }
-  | { action: "clipboard"; op: "set"; text: string; paste?: boolean };
+  | { action: "clipboard"; op: "set"; text: string; paste?: boolean }
+  | { action: "openurl"; url: string };
 
 export type DeviceActionName = DeviceAction["action"];
 
@@ -205,4 +206,7 @@ export interface DeviceDriver {
   /** Whether this platform implements an action; an unsupported one is
    * answered with a 4xx naming the action and platform. */
   supports(action: DeviceActionName): boolean;
+  /** Opens a URL in the device's browser (`openurl`). Only a driver whose
+   * `supports("openurl")` is true implements it. */
+  openUrl?(url: string): Promise<void>;
 }

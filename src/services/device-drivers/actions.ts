@@ -71,8 +71,23 @@ export function isDeviceAction(value: unknown): value is DeviceAction {
       }
       return false;
     }
+    case "openurl":
+      return typeof v.url === "string" && isOpenableUrl(v.url);
     default:
       return false;
+  }
+}
+
+/** Only an http(s) URL may be handed to a device's browser: `simctl openurl`
+ * also launches any registered URL scheme (tel:, itms-apps:, custom app
+ * schemes), which is not what the verb is for. */
+export function isOpenableUrl(value: string): boolean {
+  if (value.length === 0 || value.length > 2048) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
   }
 }
 
@@ -127,6 +142,15 @@ export async function performDeviceAction(
       return { ok: true };
     case "logcat":
       return { logcat: await driver.logs({ lines: action.lines, filter: action.filter }) };
+    case "openurl":
+      if (!driver.openUrl) {
+        throw new DeviceActionError(
+          400,
+          `action "openurl" is not supported on ${driver.platform} devices`,
+        );
+      }
+      await driver.openUrl(action.url);
+      return { ok: true };
     case "clipboard":
       if (action.op === "get") return { text: await driver.clipboard.get() };
       await driver.clipboard.set(action.text, action.paste ?? false);

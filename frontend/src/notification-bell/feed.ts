@@ -253,7 +253,7 @@ export const TASK_KIND_LABEL: Record<TaskNeedsYouKind, string> = {
 // decisions of the sessions that count), "All" (every open decision, muted
 // sessions' too, and the grouped lines), and one chip per decision category
 // (decisionCategory, derived from bellClass). Tasks: "Needs you" (every task
-// that needs a human) and one chip per kind (taskNeedsYouKind). Tasks has no
+// that needs a human) and one chip per kind (taskNeedsYou). Tasks has no
 // "All": it lists open items only, so "All" would be "Needs you" again.
 
 export type SessionsFilter = "needs" | "all" | DecisionCategory;
