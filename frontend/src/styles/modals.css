@@ -1952,6 +1952,12 @@ summary.space-row {
   color: var(--dim);
 }
 
+/* --dim on the lightened hover/selected row fell under 4.5:1 in dark (#3468). */
+.sim-picker-row:hover:not(:disabled) .sim-picker-meta,
+.sim-picker-row.selected .sim-picker-meta {
+  color: var(--muted);
+}
+
 .sim-picker-empty {
   padding: 10px 12px;
   font-size: 0.71875rem;
