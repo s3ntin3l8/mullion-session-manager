@@ -179,6 +179,29 @@ http:
     #   tls:
     #     certResolver: CHANGEME_CERTRESOLVER
 
+    # --- optional dedicated agent hostname router (see docs/multi-host.md) ---
+    # Uncomment this if remote execution agents must connect over the public
+    # internet or outside a LAN/tailnet behind a forwardAuth gateway. See
+    # docs/multi-host.md's "Dedicated agent hostname behind Traefik" section
+    # and deploy/README.md's "Optional: dedicated agent hostname behind a
+    # forwardAuth gateway" section before uncommenting.
+    #
+    # Uses exact Path() matchers on its own dedicated hostname (not a broad
+    # Host()-only or PathPrefix rule) so only the agent enrollment, pairing,
+    # and channel endpoints are reachable without forwardAuth.
+    # CHANGEME_AGENT_HOSTNAME must be distinct from CHANGEME_HOSTNAME — reusing
+    # the dashboard hostname makes this longer rule win Traefik's tiebreak and
+    # disables forwardAuth on those four paths. Illustrative — not run against
+    # a live Traefik instance.
+    #
+    # mullion-agent:
+    #   rule: "Host(`CHANGEME_AGENT_HOSTNAME`) && (Path(`/api/internal/register`) || Path(`/api/internal/pair`) || Path(`/api/internal/deregister`) || Path(`/ws/agent-channel`))"
+    #   entryPoints:
+    #     - websecure
+    #   service: claude-remote-session
+    #   tls:
+    #     certResolver: CHANGEME_CERTRESOLVER
+
   services:
     claude-remote-session:
       loadBalancer:

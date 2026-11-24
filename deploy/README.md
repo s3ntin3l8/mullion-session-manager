@@ -51,10 +51,12 @@ applied by anything in this repo or its CI. `install.sh` and
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
   pointing at the app's local port. Also includes a commented-out webhook
   router for GitHub webhook delivery — see
-  [`docs/github-integration.md`](../docs/github-integration.md) — and a
+  [`docs/github-integration.md`](../docs/github-integration.md) — a
   commented-out router exempting the SSH-agent bridge helper's two paths
   from forwardAuth — see "Optional: SSH-agent bridge behind a forwardAuth
-  gateway" below.
+  gateway" below — and a commented-out `mullion-agent` router for remote
+  execution agents on a dedicated hostname — see "Optional: dedicated agent
+  hostname behind a forwardAuth gateway" below.
 - `authentik-middleware-example.yml` — reference only; you almost certainly
   already have a forwardAuth middleware defined and just need to reference
   its existing name in `traefik-dynamic.yml`, not create a new one.
@@ -487,6 +489,17 @@ a live Traefik deployment to verify config shape against. See the issue
 tracker for a follow-up once one of those is actually verified against a
 real deployment, rather than speculatively authoring untested config for a
 platform nobody here runs.
+
+## Optional: dedicated agent hostname behind a forwardAuth gateway
+
+For remote execution agents connecting outside a LAN or tailnet (where the
+recommended direct primary URL is not available), `deploy/traefik-dynamic.yml`
+includes a commented-out `mullion-agent` router (illustrative, using
+`CHANGEME_AGENT_HOSTNAME` and `CHANGEME_CERTRESOLVER`) that exposes only
+`/api/internal/register`, `/api/internal/pair`, `/api/internal/deregister`, and
+`/ws/agent-channel` on a dedicated hostname without `forwardAuth`. See
+[`docs/multi-host.md`](../docs/multi-host.md#dedicated-agent-hostname-behind-traefik)
+for the full pattern and cautions before uncommenting it.
 
 ## Optional: in-dashboard previews (issue #28)
 
