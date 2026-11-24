@@ -244,10 +244,20 @@ export async function listBrowserDestinations(
     .all()
     .filter((row) => row.branch !== CHECKOUT_BRANCH && !isPortPreviewBranch(row.branch))
     .sort((a, b) => a.branch.localeCompare(b.branch));
+  // The sessions serving them, in one query rather than one per branch.
+  const ownerIds = branches.flatMap((row) => (row.sessionId === null ? [] : [row.sessionId]));
+  const owners = new Map(
+    ownerIds.length === 0
+      ? []
+      : app.db
+          .select()
+          .from(sessions)
+          .where(inArray(sessions.id, ownerIds))
+          .all()
+          .map((s) => [s.id, s] as const),
+  );
   for (const row of branches) {
-    const owner = row.sessionId
-      ? app.db.select().from(sessions).where(eq(sessions.id, row.sessionId)).get()
-      : undefined;
+    const owner = row.sessionId !== null ? owners.get(row.sessionId) : undefined;
     destinations.push({
       key: `branch:${row.slug}`,
       group: "saved",

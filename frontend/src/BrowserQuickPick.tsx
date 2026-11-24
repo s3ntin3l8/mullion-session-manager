@@ -194,7 +194,9 @@ export function BrowserQuickPick({
   };
 
   const body = (
-    <div className="browser-quick-pick-list" role="menu" aria-label="Open in this browser">
+    // A labelled group of plain buttons, not role="menu": Tab moves through
+    // the rows, and there is no arrow-key menu contract to promise.
+    <div className="browser-quick-pick-list" role="group" aria-label="Open in this browser">
       {loaded.status === "loading" && <div className="browser-quick-pick-status">Loading…</div>}
       {loaded.status === "error" && (
         <div className="browser-quick-pick-status" role="alert">
@@ -224,7 +226,6 @@ export function BrowserQuickPick({
               <button
                 key={row.key}
                 type="button"
-                role="menuitem"
                 className="browser-quick-pick-item"
                 aria-disabled={reason != null || undefined}
                 title={reason ?? row.detail ?? row.label}
@@ -249,7 +250,6 @@ export function BrowserQuickPick({
         className="browser-panel-reload browser-quick-pick-btn"
         aria-label="Quick pick: running services, saved and recent pages"
         title="Running services, saved and recent pages"
-        aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => (open ? setOpen(false) : openList())}
       >

@@ -132,7 +132,9 @@ const DESTINATIONS: BrowserDestination[] = [
 
 const trigger = () =>
   screen.getByRole("button", { name: "Quick pick: running services, saved and recent pages" });
-const item = (name: RegExp | string) => screen.getByRole("menuitem", { name });
+const list = () => screen.getByRole("group", { name: "Open in this browser" });
+const queryList = () => screen.queryByRole("group", { name: "Open in this browser" });
+const item = (name: RegExp | string) => within(list()).getByRole("button", { name });
 
 describe("BrowserQuickPick (#3003)", () => {
   let previewsEnabled: boolean;
@@ -208,12 +210,14 @@ describe("BrowserQuickPick (#3003)", () => {
       renderList();
       await userEvent.click(trigger());
       await waitFor(() => expect(item(/storybook/)).toBeInTheDocument());
-      const groups = screen.getAllByRole("group").map((g) => ({
-        title: g.getAttribute("aria-label"),
-        items: within(g)
-          .queryAllByRole("menuitem")
-          .map((i) => i.querySelector(".browser-quick-pick-label")?.textContent),
-      }));
+      const groups = within(list())
+        .getAllByRole("group")
+        .map((g) => ({
+          title: g.getAttribute("aria-label"),
+          items: within(g)
+            .queryAllByRole("button")
+            .map((i) => i.querySelector(".browser-quick-pick-label")?.textContent),
+        }));
       expect(groups).toEqual([
         { title: "Running now", items: ["storybook", "web"] },
         { title: "Saved", items: ["Dev server", "API docs", "feat/cart"] },
@@ -232,7 +236,7 @@ describe("BrowserQuickPick (#3003)", () => {
         expect.objectContaining({ source: "destination" }) as QuickPickEntry,
         { previewsEnabled: true, agentHostId: null, agentHostReason: null },
       );
-      expect(screen.queryByRole("menu")).toBeNull();
+      expect(queryList()).toBeNull();
     });
 
     it("shows why an entry cannot open, and does not pick it", async () => {
@@ -260,9 +264,11 @@ describe("BrowserQuickPick (#3003)", () => {
       recordBrowserRecent("agent", "https://docs.example.com/");
       renderList({ projectId: null, mode: "agent" });
       await userEvent.click(trigger());
-      expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual([
-        "Recent",
-      ]);
+      expect(
+        within(list())
+          .getAllByRole("group")
+          .map((g) => g.getAttribute("aria-label")),
+      ).toEqual(["Recent"]);
       expect(item("https://docs.example.com/")).toBeInTheDocument();
       expect(requests).toEqual([]);
     });
@@ -284,12 +290,12 @@ describe("BrowserQuickPick (#3003)", () => {
     it("closes on Escape and on a click outside", async () => {
       renderList();
       await userEvent.click(trigger());
-      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(list()).toBeInTheDocument();
       await userEvent.keyboard("{Escape}");
-      expect(screen.queryByRole("menu")).toBeNull();
+      expect(queryList()).toBeNull();
       await userEvent.click(trigger());
       await userEvent.click(document.body);
-      expect(screen.queryByRole("menu")).toBeNull();
+      expect(queryList()).toBeNull();
     });
 
     it("closes when the pane moves to another project or mode", async () => {
@@ -298,11 +304,11 @@ describe("BrowserQuickPick (#3003)", () => {
       await userEvent.click(trigger());
       await waitFor(() => expect(item(/storybook/)).toBeInTheDocument());
       rerender(<BrowserQuickPick projectId={2} mode="preview" {...props} />);
-      expect(screen.queryByRole("menu")).toBeNull();
+      expect(queryList()).toBeNull();
       await userEvent.click(trigger());
-      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(list()).toBeInTheDocument();
       rerender(<BrowserQuickPick projectId={2} mode="agent" {...props} />);
-      expect(screen.queryByRole("menu")).toBeNull();
+      expect(queryList()).toBeNull();
     });
 
     it("opens as a sheet under a coarse pointer", async () => {
