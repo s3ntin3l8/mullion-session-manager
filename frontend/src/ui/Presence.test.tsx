@@ -244,4 +244,38 @@ describe("ui/Presence", () => {
     await exits.finishExits();
     expect(document.querySelector(".outer")).not.toBeInTheDocument();
   });
+
+  // PromoteDialog's warning view and CreateHostModal's install instructions
+  // swap one dialog for another inside the same Presence: the new one must be
+  // the root the exit waits on.
+  it("plays the exit of a dialog that replaced another inside it", async () => {
+    function Swap() {
+      const [open, setOpen] = useState(true);
+      const [second, setSecond] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(false)}>Parent close</button>
+          <Presence when={open}>
+            {second ? (
+              <Modal title="Second" onClose={() => setOpen(false)} backdropClassName="second">
+                <p>second</p>
+              </Modal>
+            ) : (
+              <Modal title="First" onClose={() => setOpen(false)} backdropClassName="first">
+                <button onClick={() => setSecond(true)}>Next</button>
+              </Modal>
+            )}
+          </Presence>
+        </>
+      );
+    }
+    render(<Swap />);
+    act(() => screen.getByRole("button", { name: "Next" }).click());
+    expect(document.querySelector(".first")).not.toBeInTheDocument();
+    act(() => screen.getByRole("button", { name: "Parent close" }).click());
+    expect(document.querySelector(".second")).toHaveAttribute("data-presence", "leaving");
+    expect(exits.pending()).toBe(1);
+    await exits.finishExits();
+    expect(document.querySelector(".second")).not.toBeInTheDocument();
+  });
 });

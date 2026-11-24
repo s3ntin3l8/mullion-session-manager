@@ -46,14 +46,20 @@ export function Presence({ when, children }: { when: boolean; children: ReactNod
 
   useLayoutEffect(() => {
     if (!leaving) return;
+    // Gone: the kept children (and the props they hold, such as a one-time
+    // token) are released, as the parent's own state clear released them.
+    const gone = () => {
+      setPresent(false);
+      setKept(null);
+    };
     const done = exitFinished(rootRef.current);
     if (!done) {
-      setPresent(false);
+      gone();
       return;
     }
     let live = true;
     void done.then(() => {
-      if (live) setPresent(false);
+      if (live) gone();
     });
     return () => {
       live = false;

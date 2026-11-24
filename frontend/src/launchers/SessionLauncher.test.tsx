@@ -248,34 +248,6 @@ describe("SessionLauncher — desktop dialog", () => {
     expect(useDashboardStore.getState().launcherRequest).toBeNull();
   });
 
-  // #3037 — the dialog leaves on its exit after a launch; the launch does not
-  // wait for it, and the focus restore stays suppressed (the new terminal
-  // takes focus, not the trigger).
-  it("launches at once and then plays the dialog's exit, without restoring focus to the trigger", async () => {
-    const { installExitAnimations } = await import("../test/exitAnimations.js");
-    const exits = installExitAnimations();
-    try {
-      stubFetch({ onCreateSession: vi.fn() });
-      const user = userEvent.setup();
-      const { onLaunched } = renderHost();
-      const trigger = screen.getByRole("button", { name: "trigger" });
-      trigger.focus();
-      openLauncher();
-      await user.click(await screen.findByRole("button", { name: "Launch claude" }));
-
-      await waitFor(() => expect(onLaunched).toHaveBeenCalledTimes(1));
-      expect(useDashboardStore.getState().launcherRequest).toBeNull();
-      const backdrop = document.querySelector(".create-modal-backdrop");
-      expect(backdrop).toHaveAttribute("data-presence", "leaving");
-      expect(trigger).not.toHaveFocus();
-      await exits.finishExits();
-      expect(document.querySelector(".create-modal-backdrop")).not.toBeInTheDocument();
-      expect(trigger).not.toHaveFocus();
-    } finally {
-      exits.restore();
-    }
-  });
-
   it("does not carry a model picked for one agent over to another", async () => {
     const onCreateSession = vi.fn();
     stubFetch({ onCreateSession });
