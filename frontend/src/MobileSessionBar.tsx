@@ -147,6 +147,7 @@ export function MobileSessionBar({
       workspace: row.workspace,
       projectName: row.projectName,
       searchFields: row.searchFields,
+      spawnedBy: row.spawnedBy ?? null,
     })),
   }));
 
@@ -246,6 +247,10 @@ export function MobileSessionBar({
           .flatMap((section) => section.rows)
           .find((r) => r.key === row.key)?.session;
         if (session) onOpenSession(session);
+      }}
+      onSelectSpawnParent={(sessionId) => {
+        const parent = sessions.find((s) => s.id === sessionId);
+        if (parent) onOpenSession(parent);
       }}
       onClose={(id) => findPanel(id)?.api.close()}
       onNewSession={onNewSession}

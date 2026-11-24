@@ -86,13 +86,10 @@ export function parseDevServerPort(text: string): string | null {
 /**
  * Looks up each of a project's dock-session ids in this process's own
  * PtyManager (app.pty.get) and returns the first detected port among them,
- * or null. Only ever meaningful for a *local*-host project — see
- * pty-manager.ts's own scoping: `app.pty` only tracks sessions this process
- * has itself spawned/attached to, and a remote-hosted project's dock
- * session lives in a different process's PtyManager entirely, with no
- * scrollback-read path exposed through RemoteHostClient today. Callers are
- * expected to skip this for a non-local project rather than call it with
- * an empty list (see routes/projects.ts).
+ * or null. Reads THIS process's PtyManager only (`app.pty` tracks the sessions
+ * it spawned/attached to), so it answers for the sessions on this host; the
+ * agent's GET /internal/dev-server-port runs it for the ones on that host, and
+ * services/dev-server-remote.ts fans out across hosts (issue #3427).
  */
 export function detectDevServerPortForSessionIds(
   app: FastifyInstance,

@@ -33,6 +33,7 @@ import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
 import * as dock from "./remote-host-dock.js";
+import * as docker from "./remote-host-docker.js";
 import { createBrowserClient, type BrowserClient } from "./remote-host-browser.js";
 import { createAvdsClient, type AvdsClient } from "./remote-host-avds.js";
 import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
@@ -588,6 +589,25 @@ export class RemoteHostClient {
     devServerUrl: string | null;
   }): Promise<dock.DockPortCheckAnswer | null> {
     return dock.resolveDockPortCheck(this.boundRequest, body);
+  }
+
+  /** Issue #3427 — mirrors GET /internal/docker-services. */
+  resolveDockerServices(cwd: string): Promise<docker.RemoteDockerServices> {
+    return docker.resolveDockerServices(this.boundRequest, cwd);
+  }
+
+  /** Issue #3427 — mirrors POST /internal/docker-compose-action (mutating). */
+  runDockerComposeAction<T>(
+    cwd: string,
+    service: { composeProject: string; service: string },
+    action: docker.DockerComposeAction,
+  ): Promise<T> {
+    return docker.runDockerComposeAction<T>(this.boundRequest, cwd, service, action);
+  }
+
+  /** Issue #3427 — mirrors GET /internal/dev-server-port. */
+  resolveDevServerPort(sessionIds: string[]): Promise<{ port: string | null }> {
+    return docker.resolveDevServerPort(this.boundRequest, sessionIds);
   }
 
   resolveGitBranch(cwd: string): Promise<string | null> {

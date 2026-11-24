@@ -70,6 +70,8 @@ const MUTATING_INTERNAL_POSTS = [
   "/internal/git-branch-delete",
   "/internal/git-worktree/remove-listed",
   "/internal/git-worktree/prune-metadata",
+  // Restart/stop/start change containers and check-update pulls an image.
+  "/internal/docker-compose-action",
   "/internal/sessions",
   "/internal/sessions/:id/terminate",
   "/internal/sessions/:id/stash-seed",

@@ -8,6 +8,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, webhookRegistrations } from "../db/schema.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
 
 export type ProjectRow = typeof projects.$inferSelect;
 export type ProjectInsert = typeof projects.$inferInsert;
@@ -113,18 +114,30 @@ export function listSessionsForProject(app: FastifyInstance, projectId: number):
   return app.db.select().from(sessions).where(eq(sessions.projectId, projectId)).all();
 }
 
-/** The active dock sessions, grouped project id → session ids (as strings). */
-export function dockSessionIdsByProject(app: FastifyInstance): Map<number, string[]> {
+/**
+ * The active dock sessions, grouped project id -> host id -> session ids (as
+ * strings). The host is the SESSION's own (its recorded host, else its
+ * project's), not the project's: a project can run a dock session on another
+ * host than the one it lives on, and the session's output is only readable on
+ * the host it runs on (issue #3427).
+ */
+export function dockSessionIdsByProject(app: FastifyInstance): Map<number, Map<string, string[]>> {
   const active = app.db
-    .select()
+    .select({
+      id: sessions.id,
+      projectId: sessions.projectId,
+      hostId: sql<string>`coalesce(${sessions.hostId}, ${projects.hostId})`,
+    })
     .from(sessions)
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
     .where(and(eq(sessions.kind, "dock"), eq(sessions.status, "active")))
     .all();
-  const byProject = new Map<number, string[]>();
+  const byProject = new Map<number, Map<string, string[]>>();
   for (const session of active) {
-    const ids = byProject.get(session.projectId) ?? [];
-    ids.push(String(session.id));
-    byProject.set(session.projectId, ids);
+    const byHost = byProject.get(session.projectId) ?? new Map<string, string[]>();
+    const hostId = session.hostId ?? LOCAL_HOST_ID;
+    byHost.set(hostId, [...(byHost.get(hostId) ?? []), String(session.id)]);
+    byProject.set(session.projectId, byHost);
   }
   return byProject;
 }

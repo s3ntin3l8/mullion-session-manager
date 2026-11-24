@@ -126,9 +126,10 @@ starts on the project's own placement again.
 - A simulator or emulator on that host reaches the dev server at the host's own
   localhost (`http://127.0.0.1:<port>` in the simulator's Safari); nothing links
   the two yet.
-- Not yet on a remote host: dev-server port detection and Docker discovery (set
-  `devServerUrl` to a bare port by hand), and branch previews
-  (`409 remote_unsupported`).
+- Dev-server port detection and Docker Compose discovery run on the agent too
+  (see "Docker Compose services" and the detection section below); a host
+  without Docker, or an older agent, just contributes no Docker monitors.
+- Not yet on a remote host: branch previews (`409 remote_unsupported`).
 
 ### Port conflicts
 
@@ -308,7 +309,7 @@ personal ones, so only `id`-based merge is supported.
 
 ## Docker Compose services (issue #73)
 
-For a local-host project, the Dock also discovers any Docker Compose
+The Dock also discovers any Docker Compose
 service already running on the host whose stack directory (the
 `working_dir` compose recorded at `up` time) is the project's own directory
 or a descendant of it, and merges one monitor per service in — under
@@ -498,8 +499,16 @@ starts or stops anything already running.
 
 ### Known limitations
 
-- **Local-host only** — a remote-hosted project's Docker services aren't
-  discovered (same scoping as dev-server port detection below).
+- **Remote projects** are discovered on their agent
+  (`GET /internal/docker-services`): the agent reports the services under the
+  project's directory and whether `docker compose` is available there, and the
+  primary maps them to projects with the same nesting rule. The per-service
+  actions and "Check for update" run on the agent
+  (`POST /internal/docker-compose-action`, which re-resolves the service on the
+  agent rather than trusting any docker argument); stack-wide actions run as dock
+  sessions on the project's host as usual. An agent without Docker or an older
+  agent shows no Docker monitors, never an error; an unreachable one makes the
+  stack action report failure rather than a 5xx.
 - **Only stacks already linked to a registered project.** A Compose stack
   whose directory isn't inside any registered project's directory doesn't
   show up anywhere in the Dock — register a project pointing at that
@@ -542,9 +551,11 @@ output includes color/bold formatting). Only the _last_ matching port
 is returned, so a dev server that restarts on a different port produces
 the right result.
 
-Only works for local-host projects (the same process's PtyManager).
-A remote-hosted project's dock sessions live on a different machine and
-are not scanned.
+Dock sessions are grouped by the host each one runs on (not the project's
+host): this process reads the ones in its own PtyManager, and asks each agent
+host for the sessions it holds (`GET /internal/dev-server-port`, answered from a
+10 s cache, offline hosts skipped), so a remote project's dev server is
+detected too.
 
 ## Dev server auto-detect in plain sessions (issue #404)
 
@@ -770,7 +781,8 @@ stack action's rows, the selection and an armed kill.
   Mullion process (its own user must be in the `docker` group, or
   equivalent). Discovery is best-effort: `docker` missing or unreachable
   degrades to no Docker monitors at all, never an error.
-- **No dev server port detected.** Only local-host projects are scanned.
+- **No dev server port detected.** An agent host that cannot be reached, or an
+  older agent without the route, is not scanned.
   The banner must contain `Local:` followed by an `http(s)://localhost`
   URL — some frameworks use different labels or non-standard ports
   without the word "Local".
