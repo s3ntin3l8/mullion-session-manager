@@ -133,6 +133,8 @@ export function BrowserPane(props: {
   toolbarStart?: ReactNode;
   /** Rendered last in the toolbar, after reload. */
   toolbarEnd?: ReactNode;
+  /** #3003 — rendered right after the address: the Browser pane's quick pick. */
+  addressEnd?: ReactNode;
   /** #3373 — the page's own address, as the server reports it. */
   onUrlChange?: (url: string) => void;
   /** #3373 — an address to load, once per `rev`. Held until the socket is
@@ -744,6 +746,7 @@ export function BrowserPane(props: {
             if (event.key === "Enter") navigate();
           }}
         />
+        {props.addressEnd}
         <button className="browser-panel-go" onClick={navigate} title="Go">
           Go
         </button>

@@ -129,6 +129,11 @@ export interface ComposeService {
    * recreate-precondition check (projects.ts) to tell a caller "this action
    * will recreate the container" before it runs. */
   configHash: string;
+  /** #3003 — the TCP ports this container publishes on the host (`docker ps`'s
+   * `{{.Ports}}`, host side only, v4/v6 duplicates collapsed, ascending). Empty
+   * for a container that publishes nothing or is not running. Optional only so
+   * hand-built test fixtures need not name it; discovery always sets it. */
+  publishedPorts?: number[];
 }
 
 function warn(message: string, err?: unknown): void {
@@ -222,6 +227,8 @@ const PS_FORMAT = [
   '{{.Label "com.docker.compose.project.config_files"}}',
   '{{.Label "com.docker.compose.project.environment_file"}}',
   '{{.Label "com.docker.compose.config-hash"}}',
+  // Last, so a row without it (an older fixture) still parses positionally.
+  "{{.Ports}}",
 ].join("\t");
 
 interface RawRow {
@@ -238,6 +245,24 @@ interface RawRow {
   configFiles: string;
   envFile: string;
   configHash: string;
+  ports: string;
+}
+
+/**
+ * #3003 — the host ports in `docker ps`'s `{{.Ports}}` column, e.g.
+ * `0.0.0.0:8080->80/tcp, [::]:8080->80/tcp, 5432/tcp`: only a published
+ * mapping (`<host ip>:<host port>->…`) counts, TCP only, each host port once.
+ * A range (`0.0.0.0:8000-8001->8000-8001/tcp`) counts its first port only.
+ */
+export function parsePublishedPorts(raw: string): number[] {
+  const ports = new Set<number>();
+  for (const part of raw.split(",")) {
+    const match = /:(\d{1,5})(?:-\d{1,5})?->\d{1,5}(?:-\d{1,5})?\/tcp$/.exec(part.trim());
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port >= 1 && port <= 65535) ports.add(port);
+  }
+  return [...ports].sort((a, b) => a - b);
 }
 
 function parsePsOutput(output: string): RawRow[] {
@@ -262,6 +287,7 @@ function parsePsOutput(output: string): RawRow[] {
       configFiles,
       envFile,
       configHash,
+      ports,
     ] = fields;
     if (!composeProject || !service || !workingDir) continue;
     rows.push({
@@ -278,6 +304,7 @@ function parsePsOutput(output: string): RawRow[] {
       configFiles: configFiles ?? "",
       envFile: envFile ?? "",
       configHash: configHash ?? "",
+      ports: ports ?? "",
     });
   }
   return rows;
@@ -597,6 +624,7 @@ function toComposeService(row: RawRow): ComposeService {
     configFiles,
     envFile,
     configHash: row.configHash,
+    publishedPorts: row.state === "running" ? parsePublishedPorts(row.ports) : [],
   };
 }
 

@@ -228,7 +228,8 @@ written back to the layout, so a reload keeps it, belongs to follow-up 2.
 
 - Any change to either engine.
 - Typing into the agent's browser on a touch screen (#3030).
-- The quick pick beside the address (#3003). The note only says where it sits.
+- The quick pick beside the address (#3003). The note only says where it sits;
+  `docs/browser-previews.md` ("Quick pick") describes what shipped.
 
 ## Follow-up issues
 

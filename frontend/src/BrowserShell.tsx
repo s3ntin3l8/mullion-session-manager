@@ -9,8 +9,19 @@ import { BrowserPane } from "./BrowserPane.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import type { BrowserMode } from "./lib/browserTitles.js";
 import { HandoffButton } from "./BrowserHandoff.js";
+import { BrowserQuickPick } from "./BrowserQuickPick.js";
+import type { QuickPickContext, QuickPickEntry } from "./BrowserQuickPick.js";
+import { recordBrowserRecent } from "./lib/browserRecents.js";
 import { useAgentAddressForPreview, usePreviewForAgentAddress } from "./hooks/useBrowserHandoff.js";
-import { addressLabel, previewTargetKey, retargetedPreviewParams } from "./lib/browserHandoff.js";
+import {
+  HANDOFF_PROXY_ADDRESS,
+  addressLabel,
+  isHttpAddress,
+  isLoopbackAddress,
+  isPreviewProxyAddress,
+  previewTargetKey,
+  retargetedPreviewParams,
+} from "./lib/browserHandoff.js";
 import type { PreviewSource } from "./lib/browserHandoff.js";
 import { useDashboardStore } from "./store/index.js";
 import { describeError } from "./lib/describeError.js";
@@ -217,14 +228,19 @@ export function BrowserShell({
   const toAgentReason =
     agentDisabledReason ??
     (agentSession == null ? "No session in this project" : toAgent.ok ? null : toAgent.reason);
-  const openInAgent = () => {
-    if (!toAgent.ok || agentSession == null || toAgentReason != null) return;
+  // Loads `url` in the session's browser and shows it. An explicit open (⇄,
+  // the quick pick): it attaches, and so launches, the browser.
+  const openInAgentAt = (url: string) => {
+    if (agentSession == null) return;
     const rev = handoffRev + 1;
     setHandoffRev(rev);
-    setAgentNav({ url: toAgent.value, rev, sessionId: agentSession.id });
-    // ⇄ is an explicit open: it attaches (and so launches) the browser.
+    setAgentNav({ url, rev, sessionId: agentSession.id });
     setOpened((prev) => new Set(prev).add(agentSession.id));
     onModeChange("agent");
+  };
+  const openInAgent = () => {
+    if (!toAgent.ok || toAgentReason != null) return;
+    openInAgentAt(toAgent.value);
   };
 
   // Agent's browser -> preview: the page the server reports, mapped by the
@@ -241,6 +257,17 @@ export function BrowserShell({
   useEffect(() => {
     clickContextRef.current = clickContext;
   });
+  // Opens `next` in the preview and shows it: ⇄ and the quick pick.
+  const retargetPreview = (next: BrowserPanelParams, label: string) => {
+    setPreviewOverride(next);
+    setPreviewEpoch((e) => e + 1);
+    // Written where the preview keeps its params (a grid pane's layout, the
+    // rail's stored preview), so a reload or a remount opens what ⇄ opened.
+    previewApi?.updateParameters(next);
+    onPreviewRetarget?.(label);
+    onModeChange("preview");
+  };
+
   const openInPreview = async () => {
     if (!toPreview.ok) return;
     const startedIn = clickContext;
@@ -271,14 +298,125 @@ export function BrowserShell({
       });
       label = found.label;
     }
-    setPreviewOverride(next);
-    setPreviewEpoch((e) => e + 1);
-    // Written where the preview keeps its params (a grid pane's layout, the
-    // rail's stored preview), so a reload or a remount opens what ⇄ opened.
-    previewApi?.updateParameters(next);
-    onPreviewRetarget?.(label);
-    onModeChange("preview");
+    retargetPreview(next, label);
   };
+
+  // #3003 — the quick pick ("▾" beside the address). What an entry opens
+  // depends on the mode: Preview shows it through the preview proxy when one
+  // is configured (decision 2: the proxied address works from a phone too),
+  // else at its own address; Agent's browser loads its own address, which the
+  // server-side browser reaches from its host, and never a proxy address
+  // (#3373 keeps the preview token out of it).
+  const quickPickRefusal = (entry: QuickPickEntry, ctx: QuickPickContext): string | null => {
+    if (mode === "agent") {
+      if (agentSession == null) return agentDisabledReason ?? "No session in this project";
+      const url = entry.source === "recent" ? entry.url : entry.destination.address;
+      if (url == null || !isHttpAddress(url)) return "No address the agent's browser can open";
+      if (isPreviewProxyAddress(url)) return HANDOFF_PROXY_ADDRESS;
+      // Where the session's browser runs comes from the server, resolved as
+      // ⇄ resolves it (its binding first), not guessed from the session.
+      if (entry.source === "destination" && isLoopbackAddress(url)) {
+        if (ctx.agentHostId == null) {
+          return ctx.agentHostReason ?? "Cannot tell where this session's browser runs";
+        }
+        if (entry.destination.hostId !== ctx.agentHostId) {
+          return "Runs on another host than this session's browser";
+        }
+      }
+      return null;
+    }
+    if (entry.source === "recent") return null;
+    const d = entry.destination;
+    if (d.kind === "target" && !ctx.previewsEnabled) {
+      return "Named targets need the preview proxy (PREVIEW_BASE_HOST)";
+    }
+    if (d.kind === "branch" && (!ctx.previewsEnabled || d.previewSlug == null)) {
+      return "Branch previews need the preview proxy (PREVIEW_BASE_HOST)";
+    }
+    if ((d.kind === "dock" || d.kind === "compose") && !ctx.previewsEnabled && d.address == null) {
+      return "No address to open";
+    }
+    return null;
+  };
+  const quickPickContext = `${mode}|${previewProjectId ?? ""}|${agentSession?.id ?? ""}`;
+  const quickPickContextRef = useRef(quickPickContext);
+  useEffect(() => {
+    quickPickContextRef.current = quickPickContext;
+  });
+  const pickDestination = async (entry: QuickPickEntry, ctx: QuickPickContext) => {
+    if (mode === "agent") {
+      const url = entry.source === "recent" ? entry.url : entry.destination.address;
+      if (url != null) openInAgentAt(url);
+      return;
+    }
+    if (entry.source === "recent") {
+      retargetPreview(
+        retargetedPreviewParams(previewProjectId, { kind: "external", url: entry.url }),
+        addressLabel(entry.url),
+      );
+      return;
+    }
+    const d = entry.destination;
+    if (d.kind === "dev-server") {
+      retargetPreview(retargetedPreviewParams(previewProjectId, {}), "");
+      return;
+    }
+    if (d.kind === "branch" && d.previewSlug != null) {
+      retargetPreview(
+        retargetedPreviewParams(previewProjectId, { previewSlug: d.previewSlug }),
+        d.label,
+      );
+      return;
+    }
+    if ((d.kind === "dock" || d.kind === "compose") && !ctx.previewsEnabled) {
+      if (d.address != null) {
+        retargetPreview(
+          retargetedPreviewParams(previewProjectId, { kind: "external", url: d.address }),
+          d.label,
+        );
+      }
+      return;
+    }
+    if (previewProjectId == null) return;
+    const startedIn = quickPickContext;
+    let slug: string;
+    try {
+      slug =
+        d.kind === "target" && d.targetId != null
+          ? (await browserApi.createTargetPreview(previewProjectId, d.targetId)).slug
+          : (await browserApi.openDestinationPreview(previewProjectId, d.key)).slug;
+    } catch (err) {
+      if (quickPickContextRef.current === startedIn) {
+        useDashboardStore.getState().reportError("Could not open preview", describeError(err));
+      }
+      return;
+    }
+    if (quickPickContextRef.current !== startedIn) return;
+    retargetPreview(
+      retargetedPreviewParams(previewProjectId, {
+        previewSlug: slug,
+        targetName: d.kind === "target" ? d.label : undefined,
+      }),
+      d.label,
+    );
+  };
+  const quickPick = (
+    <BrowserQuickPick
+      projectId={previewProjectId ?? null}
+      sessionId={mode === "agent" ? (agentSession?.id ?? null) : null}
+      mode={mode}
+      refusal={quickPickRefusal}
+      onPick={(entry, ctx) => void pickDestination(entry, ctx)}
+    />
+  );
+
+  // Recent addresses, per mode: what each engine itself opened.
+  useEffect(() => {
+    if (previewSource?.kind === "address") recordBrowserRecent("preview", previewSource.url);
+  }, [previewSource]);
+  useEffect(() => {
+    if (agentPageUrl) recordBrowserRecent("agent", agentPageUrl);
+  }, [agentPageUrl]);
 
   const toAgentButton = browserEnabled ? (
     <HandoffButton
@@ -301,6 +439,7 @@ export function BrowserShell({
     <div className="browser-panel-toolbar">
       {modeSwitch}
       <span className="browser-panel-url" />
+      {quickPick}
       {toPreviewButton}
       {toolbarEnd}
     </div>
@@ -344,6 +483,7 @@ export function BrowserShell({
             params={previewOverride ?? previewParams}
             api={previewApi}
             toolbarStart={modeSwitch}
+            addressEnd={quickPick}
             toolbarEnd={
               <>
                 {toAgentButton}
@@ -361,6 +501,7 @@ export function BrowserShell({
             key={attachedId}
             params={{ sessionId: attachedId }}
             toolbarStart={modeSwitch}
+            addressEnd={quickPick}
             toolbarEnd={
               <>
                 {toPreviewButton}

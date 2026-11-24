@@ -16,6 +16,7 @@ import { removeCheckoutForced } from "./checkout-removal.js";
 import {
   bindBranchPreview,
   findBranchPreview,
+  isPortPreviewBranch,
   listUpstreamPorts,
   upsertBranchPreview,
   type PreviewSummary,
@@ -267,6 +268,12 @@ async function createBranchPreview(
   // worktreeRefresh then follows it too.
   if (opts.fastForward) await ensureLocalBranch(project.cwd, branch, { fastForward: true });
 
+  // #3003 — `port:<n>` keys a running service's port preview, never a branch
+  // (a colon cannot appear in a ref name): the lookup below must not hand
+  // that row back as a branch preview.
+  if (isPortPreviewBranch(branch)) {
+    throw new BranchPreviewError("unknown_branch", `No branch ${branch} here or on origin`);
+  }
   const existing = findBranchPreview(app, projectId, branch);
   if (existing?.sessionId != null && (await isServing(app, existing.sessionId))) return existing;
 

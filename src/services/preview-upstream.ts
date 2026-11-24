@@ -135,9 +135,18 @@ export async function resolvePreviewTarget(
       return { ok: false, status: 503 };
     }
     hostId = ctx.context.hostId;
-  } else if (preview.upstreamPort !== null) {
+  } else if (preview.upstreamPort !== null && !preview.portPreview) {
     // A branch preview's port only means something on its session's host.
     return { ok: false, status: 503 };
+  } else if (preview.portPreview) {
+    // #3003 — a port preview with no session: a running Compose service's
+    // published port, which is only discovered on the project's own host
+    // (docker-service-detect.ts), or a Dock command's port whose session row
+    // was since deleted (SET NULL). Both were picked from this host's own
+    // discovery, which only covers local projects. Like the checkout preview,
+    // the row keeps serving the port after the service stops; nothing prunes
+    // it yet (follow-up issue linked from the PR).
+    hostId = project.hostId;
   } else {
     hostId = await resolveDevServerHostId(app, project);
   }

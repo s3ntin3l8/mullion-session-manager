@@ -79,6 +79,7 @@ import { githubWSRoute } from "./routes/ws-github.js";
 import { tasksWSRoute } from "./routes/ws-tasks.js";
 import { previewTargetsRoute } from "./routes/preview-targets.js";
 import { previewsRoute } from "./routes/previews.js";
+import { browserDestinationsRoute } from "./routes/browser-destinations.js";
 import { projectUrlsRoute } from "./routes/project-urls.js";
 import { agentRulesRoute } from "./routes/agent-rules.js";
 import { projectFilesRoute } from "./routes/project-files.js";
@@ -611,6 +612,7 @@ export async function buildApp() {
   await app.register(webhookRoutes);
   await app.register(previewTargetsRoute);
   await app.register(previewsRoute);
+  await app.register(browserDestinationsRoute);
   await app.register(projectUrlsRoute);
   await app.register(agentRulesRoute);
   await app.register(projectFilesRoute);

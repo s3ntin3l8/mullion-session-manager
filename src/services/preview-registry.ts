@@ -28,12 +28,30 @@ export interface PreviewSummary {
    * project-checkout preview it is derived by the route (the registry stays
    * a pure table view). */
   branch?: string | null;
+  /** #3003 — a preview of a running service's port, opened from the Browser
+   * pane's quick pick (`getOrCreatePortPreview`). It serves no branch of its
+   * own, so it is never a branch preview. */
+  portPreview?: true;
 }
 
 type PreviewRow = typeof previews.$inferSelect;
 
 /** The `previews.branch` sentinel for the project-checkout preview (schema.ts). */
 export const CHECKOUT_BRANCH = "";
+
+/**
+ * #3003 — the `previews.branch` key of a running service's port preview,
+ * `port:<n>`. A colon cannot appear in a git ref name, so it never collides
+ * with a branch preview's own branch.
+ */
+export function portPreviewBranch(port: number): string {
+  return `port:${port}`;
+}
+
+/** Whether a `previews.branch` value is a port preview's key, not a branch. */
+export function isPortPreviewBranch(branch: string | null | undefined): boolean {
+  return typeof branch === "string" && /^port:\d{1,5}$/.test(branch);
+}
 
 /** Targetless conflict handling supports SQLite's partial project index.
  * A conflict may also be on the random slug: only accept an existing row
@@ -82,7 +100,11 @@ function toSummary(row: PreviewRow): PreviewSummary {
     sessionId: row.sessionId,
     upstreamPort: row.upstreamPort,
     createdAt: row.createdAt,
-    ...(row.branch !== CHECKOUT_BRANCH ? { branch: row.branch } : {}),
+    ...(isPortPreviewBranch(row.branch)
+      ? { portPreview: true as const }
+      : row.branch !== CHECKOUT_BRANCH
+        ? { branch: row.branch }
+        : {}),
   };
 }
 
@@ -184,6 +206,31 @@ export function upsertBranchPreview(
 ): PreviewSummary {
   if (branch === CHECKOUT_BRANCH) throw new Error("a branch preview needs a branch");
   return toSummary(ensureProjectPreviewRow(app, projectId, branch));
+}
+
+/**
+ * #3003 — the preview of a running service's port (a Dock command's detected
+ * dev server, a Compose service's published port), created on first pick and
+ * reused after, one per (project, port). `sessionId` is the Dock session
+ * serving it (its host is where the port is), or null for a Compose service,
+ * which is only discovered on the project's own, local host. The caller
+ * derives the port from its own live discovery, never from a request.
+ */
+export function getOrCreatePortPreview(
+  app: FastifyInstance,
+  projectId: number,
+  port: number,
+  sessionId: number | null,
+): PreviewSummary {
+  const row = ensureProjectPreviewRow(app, projectId, portPreviewBranch(port));
+  if (row.upstreamPort === port && row.sessionId === sessionId) return toSummary(row);
+  const [bound] = app.db
+    .update(previews)
+    .set({ upstreamPort: port, sessionId })
+    .where(eq(previews.slug, row.slug))
+    .returning()
+    .all();
+  return toSummary(bound);
 }
 
 export function bindBranchPreview(

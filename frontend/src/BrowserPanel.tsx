@@ -180,6 +180,7 @@ export function BrowserPanel({
   api: panelApi,
   toolbarStart,
   toolbarEnd,
+  addressEnd,
   onSourceChange,
   onShowInAgentBrowser,
 }: {
@@ -189,6 +190,8 @@ export function BrowserPanel({
   toolbarStart?: ReactNode;
   /** Rendered last in the toolbar, after reload. */
   toolbarEnd?: ReactNode;
+  /** #3003 — rendered right after the address: the Browser pane's quick pick. */
+  addressEnd?: ReactNode;
   /** #3373 — what the preview loaded, for the ⇄ button. Never the iframe's
    * address (see PreviewSource). */
   onSourceChange?: (source: PreviewSource | null) => void;
@@ -668,13 +671,14 @@ export function BrowserPanel({
   // A project preview that has nothing to show yet returns a bare message.
   // Inside the Browser pane it still needs its toolbar, or the mode switch
   // would go missing exactly when the preview cannot load (#3371).
-  const hasToolbarSlots = toolbarStart != null || toolbarEnd != null;
+  const hasToolbarSlots = toolbarStart != null || toolbarEnd != null || addressEnd != null;
   const withToolbar = (body: ReactNode) =>
     hasToolbarSlots ? (
       <div className="browser-panel">
         <div className="browser-panel-toolbar">
           {toolbarStart}
           <span className="browser-panel-url" />
+          {addressEnd}
           {toolbarEnd}
         </div>
         {body}
@@ -765,6 +769,7 @@ export function BrowserPanel({
           <span className="browser-panel-url" title={currentSrc}>
             {state.src}
           </span>
+          {addressEnd}
           {devServerOnline !== null && (
             <span
               className={`dev-server-status-dot ${devServerOnline ? "online" : "offline"}`}
@@ -881,6 +886,7 @@ export function BrowserPanel({
             if (e.key === "Enter") navigate();
           }}
         />
+        {addressEnd}
         <button className="browser-panel-go" onClick={navigate} title="Go">
           Go
         </button>

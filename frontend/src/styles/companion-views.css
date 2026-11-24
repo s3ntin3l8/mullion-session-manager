@@ -361,3 +361,109 @@
   flex: 1 1 auto;
   justify-content: center;
 }
+
+/* #3003 — the Browser pane's quick pick (BrowserQuickPick.tsx): the "▾"
+   beside the address in both modes. A popover under a fine pointer; a bottom
+   sheet under a coarse one, whose rows are at least 48px tall. */
+.browser-quick-pick {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+}
+.browser-quick-pick-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  width: min(320px, 80vw);
+  max-height: 360px;
+  overflow-y: auto;
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  padding: 4px;
+}
+.browser-quick-pick-group + .browser-quick-pick-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-soft);
+}
+.browser-quick-pick-heading {
+  padding: 4px 10px 2px;
+  color: var(--muted);
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.browser-quick-pick-empty,
+.browser-quick-pick-status {
+  padding: 4px 10px 6px;
+  color: var(--dim);
+  font-size: 0.6875rem;
+}
+.browser-quick-pick-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.browser-quick-pick-item:hover:not([aria-disabled="true"]) {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.browser-quick-pick-item:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+.browser-quick-pick-item[aria-disabled="true"] {
+  cursor: default;
+}
+.browser-quick-pick-item[aria-disabled="true"] .browser-quick-pick-label {
+  color: var(--dim);
+}
+.browser-quick-pick-label,
+.browser-quick-pick-detail {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browser-quick-pick-label {
+  font-size: 0.75rem;
+}
+.browser-quick-pick-detail {
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+.browser-quick-pick-sheet {
+  max-height: min(85dvh, 720px);
+}
+.browser-quick-pick-sheet .browser-quick-pick-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 8px 16px;
+}
+.browser-quick-pick-sheet .browser-quick-pick-item {
+  min-height: 48px;
+  justify-content: center;
+  padding: 6px 12px;
+}
+.browser-quick-pick-sheet .browser-quick-pick-label {
+  font-size: 0.9375rem;
+}
+.browser-quick-pick-sheet .browser-quick-pick-detail {
+  font-size: 0.8125rem;
+}

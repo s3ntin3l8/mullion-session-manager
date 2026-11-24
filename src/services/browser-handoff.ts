@@ -31,7 +31,7 @@ import {
 import { bindingBrowserTarget } from "./browser-binding-target.js";
 import { resolveExecutionContext } from "./execution-context.js";
 import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
-import { CHECKOUT_BRANCH, getPreviewBySlug } from "./preview-registry.js";
+import { CHECKOUT_BRANCH, getPreviewBySlug, isPortPreviewBranch } from "./preview-registry.js";
 import { listSessionBrowserBindings } from "./session-browsers.js";
 
 type SessionRow = typeof sessions.$inferSelect;
@@ -142,6 +142,26 @@ function addressFrom(
   const url = new URL(upstream.url.href);
   url.hostname = "localhost";
   return { ok: true, url: url.href };
+}
+
+/**
+ * #3003 — the host a session's browser runs on (where `localhost` means
+ * something to it), as ⇄ resolves it; for the quick pick, which sends an
+ * entry's own address to the agent's browser. Null for an unknown session.
+ */
+export async function sessionBrowserHost(
+  app: FastifyInstance,
+  sessionId: number,
+): Promise<{
+  projectId: number;
+  result: { ok: true; hostId: string } | { ok: false; reason: string };
+} | null> {
+  const loaded = loadSessionAndProject(app, sessionId);
+  if (!loaded) return null;
+  return {
+    projectId: loaded.project.id,
+    result: await sessionBrowserHostId(app, loaded.session, loaded.project),
+  };
 }
 
 function loadSessionAndProject(
@@ -297,7 +317,9 @@ export async function previewForAddress(
       return {
         kind: "project",
         previewSlug: row.slug,
-        label: row.branch,
+        label: isPortPreviewBranch(row.branch)
+          ? row.branch.replace("port:", "localhost:")
+          : row.branch,
         path: pathBelow(up.url, page),
       };
     }

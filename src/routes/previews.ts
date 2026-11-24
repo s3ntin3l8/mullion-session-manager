@@ -121,6 +121,10 @@ async function resolvePreviewBranch(
   live: Map<number, string>,
 ): Promise<string | null> {
   if (preview.kind !== "project" || preview.projectId === null) return null;
+  // #3003 — a running service's port preview serves no branch of its own; a
+  // branch derived from its session or checkout would pose it as that
+  // branch's preview (useMullionLinks matches previews by branch).
+  if (preview.portPreview) return null;
   // A branch preview's branch is its own column, never derived.
   if (preview.branch) return preview.branch;
   // A bound session owns the target: its own host and checkout answer, and an

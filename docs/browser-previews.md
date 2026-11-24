@@ -83,6 +83,49 @@ copy of the address field, because the two engines see addresses differently:
   target) puts back the pane's own target if ⇄ had opened something else in
   it.
 
+**Quick pick (▾).** The "▾" right after the address, in both modes, lists
+where the pane's project can be opened (#3003). It is a popover with a mouse
+and a sheet with 48px rows on a touch screen. Three groups, in this order:
+
+1. **Running now**: the project's Dock commands whose output printed a dev
+   server banner (the same detection as below, so it reads the port the
+   server printed), and the Docker Compose services that publish a port, one
+   row per published TCP port, labelled with their stack. Every published
+   port is listed, so a database's port shows too; picking one shows whatever it
+   answers. Both are detected on
+   this server only: for a project on another host the group says so instead.
+   A Dock session serving a branch preview is listed as that branch preview.
+   Compose services follow **Settings → Dock → "Docker Compose services"**.
+2. **Saved**: the project's dev server (`devServerUrl`), its named targets
+   (see "Named project targets" below) and its branch previews.
+3. **Recent**: the addresses this browser opened lately in that mode, kept on
+   this device only (up to eight per mode). A preview proxy address is never
+   kept.
+
+What a pick opens depends on the mode:
+
+- **Preview**, with the preview proxy (`PREVIEW_BASE_HOST`): every entry opens
+  through the proxy, so it also works from a phone or tablet. A running
+  service's port gets a preview of its own on first pick
+  (`POST /api/projects/:id/browser-destinations/preview` with the entry's
+  key; the server looks the port up again in its own discovery and never
+  takes a port from the request), unless the dev server already names that
+  port, which opens the project's own preview. Such a port preview is never
+  a branch preview. Without the proxy, a running service and the dev server
+  open at their own address (direct embed), and named targets and branch
+  previews, which need the proxy, are disabled with that reason.
+- **Agent's browser** loads the entry's own address, which the server-side
+  browser reaches from its own host. It never loads a proxy address (the
+  preview token stays out of it, as for ⇄). A `localhost` entry on another
+  host than the session's browser is disabled with that reason; where the
+  session's browser runs comes from the server
+  (`GET …/browser-destinations?sessionId=`), resolved as ⇄ resolves it (its
+  browser binding first). Picking is an
+  explicit open: it attaches, and so launches, the session's browser.
+
+The list is `GET /api/projects/:id/browser-destinations`
+(`src/services/browser-destinations.ts`); listing creates nothing.
+
 There are two kinds of preview, in either mode:
 
 - **Project preview** — one per project (opening it again reuses the same

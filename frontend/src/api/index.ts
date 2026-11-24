@@ -266,6 +266,7 @@ export type {
   ProbeMeta,
 } from "./types.js";
 export type { ClearDoneBranchResult } from "./clearDoneTypes.js";
+export type { BrowserDestination, BrowserDestinations } from "./browserDestinationTypes.js";
 
 export { ApiError, AuthExpiredError, RateLimitedError } from "./client.js";
 
