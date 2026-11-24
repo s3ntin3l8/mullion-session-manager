@@ -3122,6 +3122,27 @@ describe("runCommand", () => {
       expect(io.stderr.write).toHaveBeenCalledWith(`${msg}\n`);
     });
 
+    describe("device openurl (issue #3429)", () => {
+      it("forwards the url and requires both arguments", async () => {
+        const client = fakeClient();
+        await runCommand(["device", "openurl", "5", "http://127.0.0.1:3000"], {
+          client,
+          io: fakeIo(),
+        });
+        expect(client.request).toHaveBeenCalledWith("device.action", {
+          deviceId: "5",
+          action: "openurl",
+          url: "http://127.0.0.1:3000",
+        });
+        expect(
+          await runCommand(["device", "openurl", "5"], { client: fakeClient(), io: fakeIo() }),
+        ).toBe(2);
+        expect(
+          await runCommand(["device", "openurl"], { client: fakeClient(), io: fakeIo() }),
+        ).toBe(2);
+      });
+    });
+
     describe("device clipboard (issue #1422)", () => {
       it("device clipboard get forwards op: get, prints cached text or empty line, and requires deviceId", async () => {
         const client = fakeClient({ request: vi.fn(async () => ({ text: "copied text" })) });

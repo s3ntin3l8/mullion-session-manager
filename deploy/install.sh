@@ -233,6 +233,10 @@ NPM_CI_TIMEOUT_SECONDS=600
 # MULLION_AGENT_ENROLLMENT_TOKEN (the Windows bootstrap's -TokenFromStdin does
 # the same). It never appears in a process argument. Agent role only, so a
 # primary install never consumes stdin it was not asked to.
+if [ "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" = "1" ] && [ "${MULLION_AGENT_PAIRING_CODE_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; then
+  echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1 and MULLION_AGENT_PAIRING_CODE_STDIN=1 cannot both be set." >&2
+  exit 1
+fi
 if [ "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; then
   stdin_token=""
   IFS= read -r stdin_token || true
@@ -244,6 +248,18 @@ if [ "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" 
   MULLION_AGENT_ENROLLMENT_TOKEN="$stdin_token"
   export MULLION_AGENT_ENROLLMENT_TOKEN
   unset stdin_token
+fi
+if [ "${MULLION_AGENT_PAIRING_CODE_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; then
+  stdin_code=""
+  IFS= read -r stdin_code || true
+  stdin_code="${stdin_code%$'\r'}"
+  if [ -z "${stdin_code//[[:space:]]/}" ]; then
+    echo "MULLION_AGENT_PAIRING_CODE_STDIN=1 was set but stdin carried no pairing code on its first line." >&2
+    exit 1
+  fi
+  MULLION_AGENT_PAIRING_CODE="$stdin_code"
+  export MULLION_AGENT_PAIRING_CODE
+  unset stdin_code
 fi
 
 mkdir -p "$MULLION_HOME_INPUT"
@@ -476,6 +492,52 @@ set_env_value() {
   mv -f "$tmp" "$f"
 }
 
+PAIR_SESSIONS_DIR=""
+if [ "$ROLE" = "agent" ]; then
+  if [ -f "$MULLION_HOME/.env" ]; then
+    PAIR_SESSIONS_DIR="$(env_value SESSIONS_DIR)"
+    if is_blank "$PAIR_SESSIONS_DIR"; then
+      PAIR_SESSIONS_DIR="./data/sessions"
+    fi
+  else
+    PAIR_SESSIONS_DIR="$MULLION_HOME/data/sessions"
+  fi
+fi
+
+PAIRED_THIS_RUN=false
+if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
+  PAIR_PRIMARY_URL="${MULLION_AGENT_PRIMARY_URL:-}"
+  if is_blank "$PAIR_PRIMARY_URL" && [ -f "$MULLION_HOME/.env" ]; then
+    PAIR_PRIMARY_URL="$(env_value MULLION_PRIMARY_URL)"
+  fi
+  if is_blank "$PAIR_PRIMARY_URL"; then
+    echo "error: MULLION_AGENT_PAIRING_CODE requires MULLION_AGENT_PRIMARY_URL (or MULLION_PRIMARY_URL in $MULLION_HOME/.env) to be set." >&2
+    exit 1
+  fi
+  PAIR_SCRIPT="$MULLION_HOME/current/dist/agent-pair.js"
+  if [ ! -f "$PAIR_SCRIPT" ]; then
+    echo "error: pairing helper not found at $PAIR_SCRIPT — upgrade to a release that supports pairing codes." >&2
+    exit 1
+  fi
+  echo "==> Redeeming pairing code with primary"
+  case "$PAIR_SESSIONS_DIR" in
+    /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
+    *)
+      echo "WARNING: SESSIONS_DIR ($PAIR_SESSIONS_DIR) is relative, so the paired agent-identity.json will be written inside $MULLION_HOME/current and orphaned on the next release upgrade. Set SESSIONS_DIR to an absolute path outside the release directory (for example $MULLION_HOME/data/sessions) in $MULLION_HOME/.env." >&2
+      ;;
+  esac
+  PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$PAIR_SESSIONS_DIR")
+  if [ -n "${MULLION_AGENT_NAME:-}" ]; then
+    PAIR_ARGS+=(--name "$MULLION_AGENT_NAME")
+  fi
+  if [ -n "${MULLION_AGENT_ADVERTISE_URL:-}" ]; then
+    PAIR_ARGS+=(--advertise-url "$MULLION_AGENT_ADVERTISE_URL")
+  fi
+  printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | ( cd "$MULLION_HOME/current" && "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}" )
+  PAIRED_THIS_RUN=true
+  unset MULLION_AGENT_PAIRING_CODE
+fi
+
 if [ -f "$MULLION_HOME/.env" ]; then
   # Role-mismatch already checked and enforced right after $MULLION_HOME
   # was resolved, above — before any expensive/mutating step ran.
@@ -639,12 +701,14 @@ EOF
     fi
     cat >>"$MULLION_HOME/.env" <<'EOF'
 
-# --- Pick ONE of the two credential paths below; src/app.ts refuses to
-# boot an agent with neither configured. See docs/multi-host.md. ---
+# --- Pick ONE of the credential paths below; src/app.ts refuses to
+# boot an agent with none configured. See docs/multi-host.md. ---
 
-# Path 1 (recommended for automated fleets): self-registration — no manual
-# step on the primary at all. Requires MULLION_ENROLLMENT_SECRET to be set
-# on the primary too.
+# Path 1 (recommended for a single new host): one-time pairing code redeemed
+# during install into $SESSIONS_DIR/agent-identity.json (only MULLION_PRIMARY_URL
+# is set here; MULLION_ENROLLMENT_TOKEN and MULLION_AGENT_TOKEN stay empty).
+# For automated fleets: set MULLION_ENROLLMENT_TOKEN (requires
+# MULLION_ENROLLMENT_SECRET on the primary too).
 EOF
     printf 'MULLION_PRIMARY_URL=%s\n' "${MULLION_AGENT_PRIMARY_URL:-}" >>"$MULLION_HOME/.env"
     printf 'MULLION_ENROLLMENT_TOKEN=%s\n' "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" >>"$MULLION_HOME/.env"
@@ -692,7 +756,11 @@ EOF
   if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && ! is_blank "${MULLION_AGENT_ENROLLMENT_TOKEN:-}"; then
     HAS_ENROLLMENT_PATH=true
   fi
-  if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_ENROLLMENT_PATH" = false ]; then
+  HAS_PAIRING_IDENTITY=false
+  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$PAIR_SESSIONS_DIR/agent-identity.json" ]; then
+    HAS_PAIRING_IDENTITY=true
+  fi
+  if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_ENROLLMENT_PATH" = false ] && [ "$HAS_PAIRING_IDENTITY" = false ]; then
     # Unlike PROJECTS_ROOTS, this one IS fail-closed — but only at
     # process-boot time (src/app.ts's own check), which under
     # `Restart=on-failure` means `enable --now` below starts a unit that
@@ -702,7 +770,7 @@ EOF
     # the .env KEYS the operator would actually grep for
     # (MULLION_ENROLLMENT_TOKEN/MULLION_AGENT_TOKEN, written via the
     # printf appends above), not the install.sh-side input variable names.
-    echo "WARNING: this agent has no complete credential path in the generated .env — neither MULLION_AGENT_TOKEN, nor both MULLION_PRIMARY_URL and MULLION_ENROLLMENT_TOKEN, are set. It will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_AGENT_TOKEN, or both MULLION_AGENT_PRIMARY_URL and MULLION_AGENT_ENROLLMENT_TOKEN, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+    echo "WARNING: this agent has no complete credential path in the generated .env — neither MULLION_AGENT_TOKEN, nor MULLION_PRIMARY_URL with MULLION_ENROLLMENT_TOKEN or a paired agent-identity.json, are set. It will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_AGENT_TOKEN, or MULLION_AGENT_PRIMARY_URL with MULLION_AGENT_PAIRING_CODE (recommended) or MULLION_AGENT_ENROLLMENT_TOKEN, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
   # Hermes review, PR #529: this file holds the fleet-wide
   # MULLION_ENROLLMENT_TOKEN (or a per-agent MULLION_AGENT_TOKEN) — real
@@ -1162,13 +1230,14 @@ else
   if systemctl --user --quiet is-active "$UNIT_NAME" 2>/dev/null; then UNIT_WAS_ACTIVE=true; fi
   systemctl --user enable --now "$UNIT_NAME"
 
-  # Issue #2703 — a unit that was already running keeps the credentials it
-  # booted with. When this run rewrote the .env (a deleted .env re-templated
-  # with a new token, a filled-in HOST/PORT), restart it so the change takes
-  # effect; an agent that was revoked is terminal in memory until restarted.
+  # Issue #2703 / #3437 — a unit that was already running keeps the credentials
+  # it booted with. When this run rewrote the .env (a deleted .env re-templated
+  # with a new token, a filled-in HOST/PORT) or redeemed a pairing code into
+  # agent-identity.json, restart it so the change takes effect; an agent that
+  # was revoked is terminal in memory until restarted.
   ENV_SUM_AFTER="$(cksum <"$MULLION_HOME/.env" 2>/dev/null || echo none)"
-  if [ "$UNIT_WAS_ACTIVE" = true ] && [ "$ENV_SUM_BEFORE" != "$ENV_SUM_AFTER" ]; then
-    echo "==> $MULLION_HOME/.env changed while $UNIT_NAME was running; restarting it"
+  if [ "$UNIT_WAS_ACTIVE" = true ] && { [ "$ENV_SUM_BEFORE" != "$ENV_SUM_AFTER" ] || [ "$PAIRED_THIS_RUN" = true ]; }; then
+    echo "==> Credentials or $MULLION_HOME/.env changed while $UNIT_NAME was running; restarting it"
     systemctl --user restart "$UNIT_NAME"
   fi
 
@@ -1198,10 +1267,10 @@ else
   cat <<EOF
 
 Next steps (see https://github.com/$REPO/blob/main/docs/multi-host.md):
-  - If you used self-registration (Path 1 in $MULLION_HOME/.env), this
-    agent should already be self-registering with the primary — check
-    Settings -> Hosts on the primary for a new "enrolled" host, or watch
-    this service's logs: $SERVICE_LOG_HINT
+  - If you paired with a one-time code or used self-registration (Path 1 in
+    $MULLION_HOME/.env), this agent should already be connecting to the
+    primary — check Settings -> Hosts on the primary, or watch this
+    service's logs: $SERVICE_LOG_HINT
   - If you used a manual token (Path 2), register this host by hand on
     the primary: Settings -> Hosts -> Add host, with this host's reachable
     base URL and the MULLION_AGENT_TOKEN value from $MULLION_HOME/.env.

@@ -1415,6 +1415,13 @@ const deviceCommands = {
       throw new CliUsageError(`button must be one of: ${DEVICE_BUTTON_VALUES.join(", ")}`);
     return { json: await client.request("device.action", { deviceId, action: "button", button }) };
   },
+  // iOS Simulator only: opens an http(s) URL in the simulator's browser.
+  async openurl(client, args) {
+    const deviceId = requireOne(args, "device id");
+    const url = args[1];
+    if (url === undefined) throw new CliUsageError("url is required");
+    return { json: await client.request("device.action", { deviceId, action: "openurl", url }) };
+  },
   logcat: runDeviceLogcat,
   logs: runDeviceLogcat,
   // Unlike every other verb here, `clipboard` itself takes a sub-verb
@@ -1933,7 +1940,7 @@ Commands:
   project list|actions|targets|dock|tooling
   preview create|get|delete|list
   dock start|stop|list
-  device list|get|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard
+  device list|get|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard|openurl
   device pair|pair-and-connect|discovered take [--host <hostId>] (an agent host instead of the primary)
   task list [--status <s>] [--project <id>]
   task get <id>

@@ -175,6 +175,41 @@ describe("POST /api/devices/:id/action through the DeviceDriver seam", () => {
     expect(androidDriver.button).not.toHaveBeenCalled();
   });
 
+  it("runs openurl on an iOS driver, 400s a non-http(s) URL and an Android driver (#3429)", async () => {
+    const app = await buildTestAppOnPlatform("linux");
+    const id = await createDevice(app);
+    const openUrl = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(app.device, "getDriver").mockReturnValue(fakeDriver({ platform: "ios", openUrl }));
+
+    const ok = await app.inject({
+      method: "POST",
+      url: `/api/devices/${id}/action`,
+      payload: { action: "openurl", url: "http://127.0.0.1:5173" },
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ ok: true });
+    expect(openUrl).toHaveBeenCalledWith("http://127.0.0.1:5173");
+
+    const bad = await app.inject({
+      method: "POST",
+      url: `/api/devices/${id}/action`,
+      payload: { action: "openurl", url: "tel:123" },
+    });
+    expect(bad.statusCode).toBe(400);
+    expect(openUrl).toHaveBeenCalledTimes(1);
+
+    vi.spyOn(app.device, "getDriver").mockReturnValue(
+      fakeDriver({ platform: "android", unsupported: ["openurl"] }),
+    );
+    const android = await app.inject({
+      method: "POST",
+      url: `/api/devices/${id}/action`,
+      payload: { action: "openurl", url: "http://127.0.0.1:5173" },
+    });
+    expect(android.statusCode).toBe(400);
+    expect(android.json().message).toBe('action "openurl" is not supported on android devices');
+  });
+
   it("maps a DeviceActionError to its own status", async () => {
     const app = await buildTestAppOnPlatform("linux");
     const id = await createDevice(app);

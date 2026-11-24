@@ -100,6 +100,7 @@ import { taskBlockingAlertDismissRoute } from "./routes/task-blocking-alert-dism
 import { demoFixturesRoute } from "./routes/demo-fixtures.js";
 import { closePinnedConnectors } from "./services/pinned-connect.js";
 import { registerDispatchCleanup } from "./services/task-dispatch.js";
+import { identityStatePath, loadAgentIdentity } from "./services/agent-identity.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -122,25 +123,27 @@ export async function buildApp() {
   // shared secret at all, since that would mean serving an unauthenticated
   // internal API the moment anything reaches it.
   //
-  // Issue #245 / roadmap 7.1 relaxes this to an *either/or*: the original
-  // manual MULLION_AGENT_TOKEN (today's Settings → Add host flow, checked
-  // as an inbound bearer token by internal.ts), or MULLION_PRIMARY_URL +
-  // MULLION_ENROLLMENT_TOKEN (agent-enrollment.ts's onReady hook uses these
-  // to self-register with the primary and obtain a rotating session
-  // credential instead — see MULLION_ENROLLMENT_TOKEN's own doc comment in
-  // env.ts for why that's a distinct variable, never a reuse of
-  // MULLION_AGENT_TOKEN). An enrolled agent legitimately boots with
-  // MULLION_AGENT_TOKEN empty; what's never legitimate is neither path
-  // configured at all.
+  // Issue #245 / roadmap 7.1 (and #3437 for pairing-code identities) relaxes
+  // this to an *either/or*: the original manual MULLION_AGENT_TOKEN (today's
+  // Settings → Add host flow, checked as an inbound bearer token by
+  // internal.ts), or MULLION_PRIMARY_URL with either MULLION_ENROLLMENT_TOKEN
+  // (agent-enrollment.ts's onReady hook uses it to self-register with the
+  // primary and obtain a rotating session credential) or a stored
+  // agent-identity.json redeemed from a one-time pairing code. An enrolled or
+  // paired agent legitimately boots with MULLION_AGENT_TOKEN (and, after
+  // pairing, MULLION_ENROLLMENT_TOKEN) empty; what's never legitimate is no
+  // credential path configured at all.
   const hasManualToken = app.config.MULLION_AGENT_TOKEN.trim() !== "";
-  const hasEnrollmentPath =
-    app.config.MULLION_PRIMARY_URL.trim() !== "" &&
-    app.config.MULLION_ENROLLMENT_TOKEN.trim() !== "";
+  const hasPrimaryUrl = app.config.MULLION_PRIMARY_URL.trim() !== "";
+  const hasEnrollmentToken = app.config.MULLION_ENROLLMENT_TOKEN.trim() !== "";
+  const hasStoredIdentity =
+    hasPrimaryUrl && loadAgentIdentity(identityStatePath(app.config.SESSIONS_DIR)) !== null;
+  const hasEnrollmentPath = hasPrimaryUrl && (hasEnrollmentToken || hasStoredIdentity);
   if (app.config.MULLION_ROLE === "agent" && !hasManualToken && !hasEnrollmentPath) {
     throw new Error(
-      "MULLION_ROLE=agent requires either MULLION_AGENT_TOKEN, or both " +
-        "MULLION_PRIMARY_URL and MULLION_ENROLLMENT_TOKEN, to be set — refusing to boot " +
-        "an agent with no path to a shared secret at all (see issues #26 and #245).",
+      "MULLION_ROLE=agent requires either MULLION_AGENT_TOKEN, or MULLION_PRIMARY_URL " +
+        "with either MULLION_ENROLLMENT_TOKEN or a stored agent-identity.json, to be set — " +
+        "refusing to boot an agent with no path to a shared secret at all (see issues #26 and #245).",
     );
   }
 
@@ -440,9 +443,9 @@ export async function buildApp() {
     // Before internalRoutes: decorates app.agentSession, which
     // internalRoutes' own onRequest gate additively checks alongside the
     // static MULLION_AGENT_TOKEN (issue #245 / roadmap 7.1). Inert
-    // (registers no onReady/timer at all) unless both MULLION_PRIMARY_URL
-    // and MULLION_ENROLLMENT_TOKEN are set — a manual-token-only agent is
-    // completely unaffected.
+    // (registers no onReady/timer at all) unless MULLION_PRIMARY_URL is set
+    // with either MULLION_ENROLLMENT_TOKEN or a stored agent-identity.json —
+    // a manual-token-only agent is completely unaffected.
     await app.register(agentEnrollmentPlugin);
     await app.register(agentChannelClientPlugin);
     // Before internalRoutes: decorates app.requestNonceStore, which
