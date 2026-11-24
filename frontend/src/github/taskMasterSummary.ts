@@ -65,3 +65,18 @@ export function needsYouTasks(tasks: Task[]): Array<{ task: Task; reason: string
   }
   return out;
 }
+
+/** What kind of needs-you a task is, for the bell's Tasks section (#3459):
+ * "failed" (the task, its merge or its release failed), "review" (a review
+ * approved it and it waits on your approval), or "stopped" (the review loop or
+ * a merge holds it for a human). Mirrors needsYouReason's branches, in its
+ * order; null exactly when needsYouReason is null. */
+export type TaskNeedsYouKind = "failed" | "review" | "stopped";
+
+export function taskNeedsYouKind(t: Task): TaskNeedsYouKind | null {
+  if (needsYouReason(t) === null) return null;
+  if (t.status === "failed") return "failed";
+  if (t.approvalState === "awaiting-human") return "review";
+  if (isMergeNeedsHumanReason(t.needsHumanReason) || t.autoReturnCapped) return "stopped";
+  return "failed"; // a merge or release error
+}

@@ -318,6 +318,19 @@ chose it.
   so dismissing a row in the bell never cleared the tab's badge. Fixed with
   #3458.
 
+### The Tasks section (#3459)
+
+- **Counts:** the Tasks segment is `needsYouTasks(tasks).length` over the
+  store's `tasks`, the same expression `LeftRail.tsx` and `PhoneModeBar.tsx`
+  use. The bell's badge is the Sessions count plus this one.
+- **Rows:** one per task: its kind (`taskNeedsYouKind`: Failed for a failed
+  task, merge or release; Review for an approval waiting on you; Stopped for a
+  review-loop or merge hold), title, `needsYouReason` and project. No read or
+  dismiss state. A tap calls `useOpenTask` and closes the panel.
+- **Default section:** Sessions when it has an open decision, else Tasks when
+  it has one, else Sessions. The sheet's "Needs you | All" filter and "Read
+  all" belong to the Sessions section.
+
 ## Implementation issues
 
 Ordered; each is one PR. Filed as sub-issues of the UI/UX epic

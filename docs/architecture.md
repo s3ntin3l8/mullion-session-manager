@@ -705,6 +705,12 @@ sit in a collapsed "Earlier, no decision needed" group, never counted; opening
 the bell and "Read all" advance the read cursor only for sessions with no open
 decision, since that cursor also drives the pane tab badges. Byte-parsed
 signals (bell, silence, ...) and tool failures stay in the timeline only.
+A Sessions | Tasks switch splits it in two, each with its own needs-you
+count: Tasks lists `needsYouTasks(tasks)` (`github/taskMasterSummary.ts`), the
+list behind the rail's and the phone bar's Tasks badge, one row per task with
+`needsYouReason` as its text, opened through `useOpenTask`. The bell's badge is
+the sum of the two counts, and the panel opens on Sessions unless only Tasks
+has something.
 
 **Left sidebar** (projects and their sessions, workspaces; `Sidebar.tsx` with
 `WorkspaceSwitcher.tsx`): docked from 1100px, pushing the grid, never

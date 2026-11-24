@@ -34,6 +34,9 @@ import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { panelPosition, railPanelPosition } from "./lib/notifPanelPosition.js";
 import type { NotifPanelPosition } from "./lib/notifPanelPosition.js";
 import { TextInput } from "./ui/primitives.js";
+import { needsYouTasks, taskNeedsYouKind } from "./github/taskMasterSummary.js";
+import type { TaskNeedsYouKind } from "./github/taskMasterSummary.js";
+import { useOpenTask } from "./hooks/useOpenTask.js";
 
 // The notification bell (#169, reworked by #3458/#3460; design note
 // docs/design/notification-bell/note.md). It lists what waits on a human
@@ -58,8 +61,15 @@ import { TextInput } from "./ui/primitives.js";
 // (`dismissedEventKeys`), so dismissing one row never touches another's read
 // state.
 //
-// The badge is the number of sessions with an open decision (a muted session
-// counts for nothing), not an unread count.
+// Two sections (#3459), each with its own needs-you count: Sessions (the
+// above) and Tasks, the tasks Task Master holds for a human
+// (taskMasterSummary.ts's needsYouTasks, the same list behind the rail's and
+// the phone bar's Tasks badge, so the three can never disagree). Tasks have no
+// events, so that section is a live list of derived state: no read state, no
+// dismiss; a task leaves when its state clears.
+//
+// The badge is the sum of the two needs-you counts (a muted session counts for
+// nothing), not an unread count.
 
 const HEADER_ROW_HEIGHT = 34;
 const EVENT_ROW_ESTIMATE_HEIGHT = 60;
@@ -305,6 +315,12 @@ function kindTreatment(item: FeedEventItem): { icon: ReactNode; className: strin
   }
 }
 
+const TASK_KIND_LABEL: Record<TaskNeedsYouKind, string> = {
+  failed: "Failed",
+  review: "Review",
+  stopped: "Stopped",
+};
+
 function needsYouText(count: number): string {
   return count > 0 ? `${count} need${count === 1 ? "s" : ""} you` : "nothing needs you";
 }
@@ -374,6 +390,7 @@ export function NotificationBell({
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
 
   const [open, setOpen] = useState(false);
+  const [section, setSection] = useState<"sessions" | "tasks">("sessions");
   const onOpenChangeRef = useRef(onOpenChange);
   useEffect(() => {
     onOpenChangeRef.current = onOpenChange;
@@ -405,7 +422,13 @@ export function NotificationBell({
     () => collectNeedsYouIds(sessions, events, dismissedEventKeys, mutedSessionIds, taskOwned),
     [sessions, events, dismissedEventKeys, mutedSessionIds, taskOwned],
   );
-  const needsYouCount = needsYouIds.size;
+  const sessionsCount = needsYouIds.size;
+  // The Tasks section: every task that needs a human, from the same store
+  // `tasks` the rail's badge reads.
+  const taskEntries = useMemo(() => needsYouTasks(tasks), [tasks]);
+  const tasksCount = taskEntries.length;
+  const needsYouCount = sessionsCount + tasksCount;
+  const openTask = useOpenTask();
 
   // The full build (describe, fold, sort) only runs while the panel is open:
   // while closed this returns the same EMPTY_FEED_ITEMS reference whatever
@@ -634,6 +657,13 @@ export function NotificationBell({
     ackAttention(session.id);
     openRightSidebarPr(session.projectId, number);
   };
+  // A task row asks the one "show me this task" entry point; it does not
+  // pick the surface itself.
+  const openTaskFromRow = (taskId: number) => {
+    suppress();
+    setOpen(false);
+    openTask(taskId);
+  };
   const openTimelineFromRow = onOpenTimeline
     ? (session: Session) => {
         suppress();
@@ -688,6 +718,30 @@ export function NotificationBell({
     }
   };
 
+  const sectionSwitch = (
+    <SectionSwitch
+      section={section}
+      sessionsCount={sessionsCount}
+      tasksCount={tasksCount}
+      onSelect={setSection}
+    />
+  );
+  const taskList =
+    taskEntries.length === 0 ? (
+      <div className="notif-empty">No task needs you</div>
+    ) : (
+      taskEntries.map(({ task, reason }) => (
+        <TaskRow
+          key={task.id}
+          title={task.title}
+          project={task.projectName}
+          reason={reason}
+          kind={taskNeedsYouKind(task) ?? "failed"}
+          onOpen={() => openTaskFromRow(task.id)}
+        />
+      ))
+    );
+
   const hasDecisions = items.some((i) => i.type === "event");
   const readAllButton = (className: string) =>
     readAllIds.length > 0 && (
@@ -724,8 +778,11 @@ export function NotificationBell({
           e.currentTarget.focus();
           if (!open && btnRef.current) {
             reposition();
-            // Opens on "Needs you" when something does, else everything.
-            setFilter(needsYouCount > 0 ? "needs" : "all");
+            // Opens on the section with something to decide: Sessions
+            // first, and Sessions when neither has anything.
+            setSection(sessionsCount === 0 && tasksCount > 0 ? "tasks" : "sessions");
+            // Opens on "Needs you" when a session does, else everything.
+            setFilter(sessionsCount > 0 ? "needs" : "all");
             setOpenCursor(lastSeenSeq);
             markGroupedRead();
           }
@@ -754,42 +811,51 @@ export function NotificationBell({
           backStack
           sheetRef={panelRef}
           suppressRestoreRef={phoneSuppressRestoreRef}
-          headerActions={filter === "all" && readAllButton("mobile-notif-readall")}
+          headerActions={
+            section === "sessions" && filter === "all" && readAllButton("mobile-notif-readall")
+          }
         >
-          <div className="mobile-notif-filters" role="group" aria-label="Filter notifications">
-            <button
-              className={`mobile-notif-filter${filter === "needs" ? " active" : ""}`}
-              aria-pressed={filter === "needs"}
-              onClick={() => setFilter("needs")}
-            >
-              Needs you{needsYouCount > 0 ? ` ${needsYouCount}` : ""}
-            </button>
-            <button
-              className={`mobile-notif-filter${filter === "all" ? " active" : ""}`}
-              aria-pressed={filter === "all"}
-              onClick={() => setFilter("all")}
-            >
-              All
-            </button>
-          </div>
-          <div className="mobile-notif-scroll">
-            {!shownItems.some((i) => i.type === "event") && (
-              <div className="notif-empty">
-                {filter === "needs" || shownItems.length > 0
-                  ? "Nothing needs you right now"
-                  : "No notifications yet"}
+          {sectionSwitch}
+          {section === "tasks" ? (
+            <div className="mobile-notif-scroll">{taskList}</div>
+          ) : (
+            <>
+              <div className="mobile-notif-filters" role="group" aria-label="Filter notifications">
+                <button
+                  className={`mobile-notif-filter${filter === "needs" ? " active" : ""}`}
+                  aria-pressed={filter === "needs"}
+                  onClick={() => setFilter("needs")}
+                >
+                  Needs you{sessionsCount > 0 ? ` ${sessionsCount}` : ""}
+                </button>
+                <button
+                  className={`mobile-notif-filter${filter === "all" ? " active" : ""}`}
+                  aria-pressed={filter === "all"}
+                  onClick={() => setFilter("all")}
+                >
+                  All
+                </button>
               </div>
-            )}
-            {/* Direct children of the scroller, not wrapped: a wrapper would
+              <div className="mobile-notif-scroll">
+                {!shownItems.some((i) => i.type === "event") && (
+                  <div className="notif-empty">
+                    {filter === "needs" || shownItems.length > 0
+                      ? "Nothing needs you right now"
+                      : "No notifications yet"}
+                  </div>
+                )}
+                {/* Direct children of the scroller, not wrapped: a wrapper would
                 confine each sticky header to its own box. */}
-            {shownItems.map((item) => (
-              <Fragment
-                key={`${item.type}-${item.sessionId}-${"event" in item ? item.event.seq : 0}`}
-              >
-                {renderItem(item)}
-              </Fragment>
-            ))}
-          </div>
+                {shownItems.map((item) => (
+                  <Fragment
+                    key={`${item.type}-${item.sessionId}-${"event" in item ? item.event.seq : 0}`}
+                  >
+                    {renderItem(item)}
+                  </Fragment>
+                ))}
+              </div>
+            </>
+          )}
         </BottomSheet>
       )}
       {panelPresent &&
@@ -819,14 +885,16 @@ export function NotificationBell({
           >
             <div className="notif-panel-header">
               <span className="notif-panel-title">Notifications</span>
-              {readAllButton("notif-mark-all-btn")}
+              {section === "sessions" && readAllButton("notif-mark-all-btn")}
             </div>
-            {!hasDecisions && (
+            {sectionSwitch}
+            {section === "tasks" && <div className="notif-feed-scroll">{taskList}</div>}
+            {section === "sessions" && !hasDecisions && (
               <div className="notif-empty">
                 {items.length > 0 ? "Nothing needs you right now" : "No notifications yet"}
               </div>
             )}
-            {items.length > 0 && (
+            {section === "sessions" && items.length > 0 && (
               <div ref={scrollRef} className="notif-feed-scroll">
                 <div
                   style={{
@@ -872,6 +940,87 @@ export function NotificationBell({
           document.body,
         )}
     </>
+  );
+}
+
+// The Sessions | Tasks switch (#3459), each segment with its needs-you count.
+function SectionSwitch({
+  section,
+  sessionsCount,
+  tasksCount,
+  onSelect,
+}: {
+  section: "sessions" | "tasks";
+  sessionsCount: number;
+  tasksCount: number;
+  onSelect: (section: "sessions" | "tasks") => void;
+}) {
+  const segment = (value: "sessions" | "tasks", label: string, count: number) => (
+    <button
+      type="button"
+      className={`notif-section-btn${section === value ? " active" : ""}`}
+      aria-pressed={section === value}
+      onClick={() => onSelect(value)}
+    >
+      {label}
+      {count > 0 && (
+        <>
+          {" "}
+          <span className="notif-section-count">{count}</span>
+        </>
+      )}
+    </button>
+  );
+  return (
+    <div className="notif-sections" role="group" aria-label="Section">
+      {segment("sessions", "Sessions", sessionsCount)}
+      {segment("tasks", "Tasks", tasksCount)}
+    </div>
+  );
+}
+
+// One task that needs you: its title, why (needsYouReason), its project. No
+// read or dismiss state: it stays until the task's state clears.
+function TaskRow({
+  title,
+  project,
+  reason,
+  kind,
+  onOpen,
+}: {
+  title: string;
+  project: string;
+  reason: string;
+  kind: TaskNeedsYouKind;
+  onOpen: () => void;
+}) {
+  const label = TASK_KIND_LABEL[kind];
+  const treatment =
+    kind === "failed"
+      ? { icon: <WarningTriangleIcon size={13} />, className: "notif-sev-error" }
+      : kind === "review"
+        ? { icon: <CheckIcon size={13} />, className: "notif-sev-done" }
+        : { icon: <BlockedIcon size={13} />, className: "notif-sev-blocked" };
+  return (
+    <div className="notif-event-row notif-task-row" onClick={onOpen}>
+      {/* Same structure as EventRow (#3106): one open button for the keyboard. */}
+      <button
+        type="button"
+        className="visually-hidden row-open-btn notif-event-open"
+        aria-label={`${label}: ${title} — ${reason} — ${project}`}
+      />
+      <span className={`notif-event-icon ${treatment.className}`}>{treatment.icon}</span>
+      <span className="notif-event-body">
+        <span className="notif-event-kind-pill">{label}</span>
+        <span className="notif-event-text" title={title}>
+          {title}
+        </span>
+        <span className="notif-task-reason" title={reason}>
+          {reason}
+        </span>
+        <span className="notif-event-time">{project}</span>
+      </span>
+    </div>
   );
 }
 

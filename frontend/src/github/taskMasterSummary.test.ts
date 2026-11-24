@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import type { Task } from "../api/types.js";
-import { needsYouReason, needsYouTasks, taskBucket } from "./taskMasterSummary.js";
+import {
+  needsYouReason,
+  needsYouTasks,
+  taskBucket,
+  taskNeedsYouKind,
+} from "./taskMasterSummary.js";
 
 const t = (o: Partial<Task>): Task =>
   ({ id: 1, projectId: 1, status: "ready", archivedAt: null, ...o }) as Task;
@@ -84,4 +89,23 @@ it("includes an unstarted worker in needs-you tasks only while in progress", () 
   expect(needsYouTasks([task])).toHaveLength(1);
   expect(needsYouReason(task)).toMatch(/worker has not started a turn/);
   expect(needsYouReason({ ...task, status: "done" })).toBeNull();
+});
+
+describe("taskNeedsYouKind (#3459)", () => {
+  it("names the kind of every needs-you reason, and nothing else", () => {
+    expect(taskNeedsYouKind(t({ status: "failed", failureReason: "x" }))).toBe("failed");
+    expect(taskNeedsYouKind(t({ status: "reviewing", approvalState: "awaiting-human" }))).toBe(
+      "review",
+    );
+    expect(taskNeedsYouKind(t({ status: "reviewing", autoReturnCapped: true }))).toBe("stopped");
+    expect(taskNeedsYouKind(t({ status: "reviewing", needsHumanReason: "rebase-exhausted" }))).toBe(
+      "stopped",
+    );
+    expect(taskNeedsYouKind(t({ status: "done", mergeError: "conflict" }))).toBe("failed");
+    expect(taskNeedsYouKind(t({ status: "done", releaseError: "denied" }))).toBe("failed");
+    expect(taskNeedsYouKind(t({ status: "in_progress" }))).toBeNull();
+    expect(
+      taskNeedsYouKind(t({ status: "failed", archivedAt: "2026-01-01T00:00:00Z" })),
+    ).toBeNull();
+  });
 });
