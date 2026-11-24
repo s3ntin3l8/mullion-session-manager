@@ -43,6 +43,13 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+  /* #3388 — a hard stop: whatever the items inside cannot shrink out of
+     (a long branch, host badge, unread pill), they are cut at this box
+     instead of painting over .pane-tab-actions. `clip`, not `hidden`, with a
+     margin so the rename input's focus ring (below) is still drawn; the
+     margin stays inside the 8px gap before the actions. */
+  overflow: clip;
+  overflow-clip-margin: 4px;
   /* Hermes review, PR #1366, line 43 — the `overflow: hidden` here clipped
      the rename input's 3px `box-shadow` focus ring, which extends beyond
      the wrapper's content-box on focus. The parent `.pane-tab` is now a
@@ -122,7 +129,9 @@
      size to its content width and short titles would leave dead space
      before the close/kebab cluster (Hermes review, PR #1366, line 90). */
   flex: 1;
-  min-width: 0;
+  /* #3388 — the title keeps a few characters before the branch/badges give
+     way; `0` here let the other items take the whole row at 190-260px. */
+  min-width: 2.5rem;
 }
 /* Branch sub-label (issue #96) — inline after the name rather than a second
    line, so the tab strip's fixed row height (.pane-tab) doesn't need to
@@ -133,7 +142,23 @@
   color: var(--dim);
   font-family: "Geist Mono", monospace;
   white-space: nowrap;
-  flex-shrink: 0;
+  /* #3388 — shrinks with an ellipsis (it was `flex-shrink: 0`, so a long
+     branch pushed past .pane-tab-leading into the close/⋯ buttons). */
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 10rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* #3388 — the other optional items in the leading row (setup badge, host
+   health label) give way the same way, so none of them can hold the row wider
+   than the tab. */
+.pane-tab-leading .setup-badge,
+.pane-tab-leading .host-derived-status {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .pane-tab-rename-input {
   flex: 1;
