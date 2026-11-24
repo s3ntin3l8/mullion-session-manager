@@ -8,12 +8,11 @@ import { useDashboardStore } from "./store/index.js";
 import { themeClassName } from "./store/theme.js";
 import { sessionGroupedSummary, sessionOpenDecisions } from "./eventDescriptions.js";
 import type { Session } from "./api/index.js";
-import { BellIcon, CheckIcon } from "./ui/icons.js";
+import { BellIcon, CheckIcon, CloseIcon } from "./ui/icons.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
-import { panelPosition, railPanelPosition } from "./lib/notifPanelPosition.js";
-import type { NotifPanelPosition } from "./lib/notifPanelPosition.js";
+import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import { needsYouTasks, taskNeedsYouKind } from "./github/taskMasterSummary.js";
 import { useOpenTask } from "./hooks/useOpenTask.js";
 import {
@@ -23,16 +22,20 @@ import {
   EVENT_ROW_ESTIMATE_HEIGHT,
   GROUPED_LINE_ESTIMATE_HEIGHT,
   HEADER_ROW_HEIGHT,
+  filterFeedItems,
   needsYouText,
+  sessionChipOptions,
+  taskChipOptions,
   taskOwnedSessionIds,
 } from "./notification-bell/feed.js";
-import type { FeedItem } from "./notification-bell/feed.js";
+import type { FeedItem, SessionsFilter, TasksFilter } from "./notification-bell/feed.js";
 import {
   EventRow,
   FeedHeader,
   GroupedLine,
   GroupedToggle,
   SectionSwitch,
+  StatusChips,
   TaskRow,
 } from "./notification-bell/rows.js";
 
@@ -74,8 +77,7 @@ export function NotificationBell({
   onOpenTimeline,
   onOpenBrowser,
   sheet = false,
-  sheetClassName,
-  placement = "below",
+  touch = false,
   triggerClassName = "toolbar-icon-btn",
   label,
   labelClassName,
@@ -95,17 +97,14 @@ export function NotificationBell({
   // dev_server_detected offer is accepted, so the user lands straight on
   // the now-wired-up preview rather than having to find it themselves.
   onOpenBrowser: (projectId: number) => void;
-  // Render the feed as a full-height bottom sheet (tap a row = open the
-  // session's terminal, "Needs you | All" filter, 44px targets) instead of
-  // the desktop dropdown popover. Set on the phone tier and on touch
-  // tablets; a mouse-driven desktop/tablet window leaves it unset and gets
-  // the popover exactly as before.
+  // The phone: the feed is a full-height bottom sheet (#3461; tap a row =
+  // open its target, 44px targets). Everywhere else it is one full-height
+  // side panel beside the left rail that holds the bell (#3462).
   sheet?: boolean;
-  // Extra class on the sheet (e.g. the tablet variant that caps its width).
-  sheetClassName?: string;
-  // Where the popover opens: under the bell (the phone's top bar) or beside it,
-  // growing upward from its bottom edge (the left rail's bottom cluster, #3009).
-  placement?: "below" | "beside";
+  // A touch tablet: the side panel is wider (480px), modal over a scrim, and
+  // the back gesture closes it. A mouse-driven window gets it at 420px with
+  // no scrim; Esc and an outside click close it on both.
+  touch?: boolean;
   // The trigger's class: the rail's icon button, or the phone tab bar's entry.
   triggerClassName?: string;
   // A visible label under the icon, which also names the trigger (the phone
@@ -132,6 +131,8 @@ export function NotificationBell({
   const dismissEvents = useDashboardStore((s) => s.dismissEvents);
   const ackAttention = useDashboardStore((s) => s.ackAttention);
   const mutedSessionIds = useDashboardStore((s) => s.mutedSessionIds);
+  const setBellReturn = useDashboardStore((s) => s.setBellReturn);
+  const bellReturn = useDashboardStore((s) => s.bellReturn);
 
   const [open, setOpen] = useState(false);
   const [section, setSection] = useState<"sessions" | "tasks">("sessions");
@@ -145,22 +146,26 @@ export function NotificationBell({
     wasOpen.current = open;
     onOpenChangeRef.current?.(open);
   }, [open]);
-  // Sheet only: decisions alone, or everything (the grouped lines too).
-  const [filter, setFilter] = useState<"needs" | "all">("all");
+  // The status chips (#3461): one per section, each remembered while the
+  // other section shows.
+  const [sessionsFilter, setSessionsFilter] = useState<SessionsFilter>("all");
+  const [tasksFilter, setTasksFilter] = useState<TasksFilter>("needs");
   // "Earlier, no decision needed" starts collapsed.
   const [groupedExpanded, setGroupedExpanded] = useState(false);
   // The read cursors as they were when the panel opened: the grouped lines'
   // "new" marking reads this, so the lines opening marked read stay marked
   // new until the panel closes (#3460).
   const [openCursor, setOpenCursor] = useState<Record<number, number>>({});
-  const [pos, setPos] = useState<NotifPanelPosition | null>(null);
+  // The side panel's left edge: the right edge of the rail that holds the
+  // bell (#3462).
+  const [panelLeft, setPanelLeft] = useState<number | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const taskOwned = useMemo(() => taskOwnedSessionIds(tasks), [tasks]);
 
-  // The badge, the sheet's "Needs you" count and its filter: one set,
+  // The badge, the Sessions count and its "Needs you" chip: one set,
   // computed every tick (cheap: see collectNeedsYouIds).
   const needsYouIds = useMemo(
     () => collectNeedsYouIds(sessions, events, dismissedEventKeys, mutedSessionIds, taskOwned),
@@ -169,7 +174,10 @@ export function NotificationBell({
   const sessionsCount = needsYouIds.size;
   // The Tasks section: every task that needs a human, from the same store
   // `tasks` the rail's badge reads.
-  const taskEntries = useMemo(() => needsYouTasks(tasks), [tasks]);
+  const taskEntries = useMemo(
+    () => needsYouTasks(tasks).map((e) => ({ ...e, kind: taskNeedsYouKind(e.task) ?? "failed" })),
+    [tasks],
+  );
   const tasksCount = taskEntries.length;
   const needsYouCount = sessionsCount + tasksCount;
   const openTask = useOpenTask();
@@ -184,21 +192,27 @@ export function NotificationBell({
         : EMPTY_FEED_ITEMS,
     [open, sessions, projects, events, openCursor, dismissedEventKeys, taskOwned],
   );
-  // The grouped lines hide while their group is collapsed.
+  // What the Sessions section lists under its chip, the grouped lines hidden
+  // while their group is collapsed.
   const items = useMemo(
-    () => (groupedExpanded ? allItems : allItems.filter((i) => i.type !== "grouped")),
-    [allItems, groupedExpanded],
-  );
-  // What the sheet lists under "Needs you": the decision rows of the sessions
-  // that count. The desktop popover always shows everything.
-  const shownItems = useMemo(
     () =>
-      sheet && filter === "needs"
-        ? items.filter(
-            (i) => (i.type === "header" || i.type === "event") && needsYouIds.has(i.sessionId),
-          )
-        : items,
-    [sheet, filter, items, needsYouIds],
+      filterFeedItems(allItems, sessionsFilter, needsYouIds).filter(
+        (i) => groupedExpanded || i.type !== "grouped",
+      ),
+    [allItems, sessionsFilter, needsYouIds, groupedExpanded],
+  );
+  const sessionChips = useMemo(
+    () => sessionChipOptions(allItems, sessionsCount, sessionsFilter),
+    [allItems, sessionsCount, sessionsFilter],
+  );
+  const shownTasks = useMemo(
+    () =>
+      tasksFilter === "needs" ? taskEntries : taskEntries.filter((e) => e.kind === tasksFilter),
+    [taskEntries, tasksFilter],
+  );
+  const taskChips = useMemo(
+    () => taskChipOptions(taskEntries, tasksFilter),
+    [taskEntries, tasksFilter],
   );
 
   // Sessions whose grouped lines "Read all" may mark: no open decision, and
@@ -292,7 +306,7 @@ export function NotificationBell({
   });
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || sheet) return;
     const onOutsideClick = (e: MouseEvent) => {
       const target = e.target as Node;
       if (btnRef.current?.contains(target)) return;
@@ -307,20 +321,16 @@ export function NotificationBell({
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [open]);
+  }, [open, sheet]);
 
-  // P11 — this popover previously had no focus management: no role="dialog",
-  // no focus-in on open, no Tab trap, no focus-restore on close. Same shared
-  // hook as Settings/CommandPalette/PaneTab's menu. No `aria-modal` — same
-  // "no backdrop, background stays interactive" rule as PaneTab's menu and
-  // UnifiedBoard.tsx's drawer. Popover only (`!sheet`) — the bottom sheet
-  // below is a ui/BottomSheet.tsx, which runs its own instance of this same
-  // hook against the very same `panelRef`; without this gate both instances
-  // would fight over focus-in/restore-on-close on the one DOM node.
+  // P11 — focus management for the side panel: dialog semantics, focus in on
+  // open, a Tab trap, focus back to the bell on close. The phone's sheet is a
+  // ui/BottomSheet.tsx, which runs its own instance of this same hook against
+  // the very same `panelRef`; the `!sheet` gate keeps the two from fighting.
   // Initial focus goes to the dialog itself (tabIndex -1 below): its rows are
-  // virtualized and mount a frame after it opens, and with no "Read all" to
-  // land on, a first-focusable lookup would find nothing and leave focus
-  // outside, where the panel's own Escape handler never hears the key.
+  // virtualized and mount a frame after it opens, and a first-focusable
+  // lookup could land on nothing and leave focus outside, where the panel's
+  // own Escape handler never hears the key.
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: !sheet && open,
     containerRef: panelRef,
@@ -328,16 +338,17 @@ export function NotificationBell({
   });
   // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
   const { present: panelPresent, state: panelPresence } = usePresence(!sheet && open, panelRef);
+  // A touch tablet's panel is modal, so the back gesture closes it, as it
+  // closed the bottom sheet it replaces (usePhoneBackStack's compact contract).
+  usePhoneBackStack(!sheet && touch && open, () => setOpen(false));
   // The phone sheet's own suppressRestore (a separate useFocusTrap instance,
   // above) — written to by BottomSheet during render, read by the phone
   // row-tap handlers below, same U7 race useFocusTrap.ts's own doc comment
-  // covers for the desktop popover's `suppressRestore` right above.
+  // covers for the side panel's `suppressRestore` right above.
   const phoneSuppressRestoreRef = useRef<(() => void) | null>(null);
-  // Escape scoped to the popover's own onKeyDown (bubbling), not a
-  // window-level listener — same reasoning as PaneTab's menu/UnifiedBoard's
-  // drawer: a global listener would also catch an Escape meant for some
-  // other overlay (the command palette, Settings) sitting above the
-  // toolbar.
+  // Escape scoped to the panel's own onKeyDown (bubbling), not a window-level
+  // listener: a global listener would also catch an Escape meant for some
+  // other overlay (the command palette, Settings) above it.
   const onPanelKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Escape") {
       e.stopPropagation();
@@ -347,21 +358,16 @@ export function NotificationBell({
     onTrapKeyDown(e);
   };
 
-  // A resize or orientation change can move the bell (the phone's top bar,
-  // the left rail) while the panel is open — recompute rather than leave
-  // it anchored to a stale rect. Issue #1399 — same for an iOS visual-viewport
-  // pan/resize: since #1398 `.app` (toolbar and bell included) tracks the
-  // visual viewport's offsetTop, which moves without a window `resize`.
+  // The panel's left edge follows the rail: a resize or an orientation change
+  // can move it while the panel is open. Issue #1399 — same for an iOS
+  // visual-viewport pan, which moves without a window `resize`.
   const reposition = useCallback(() => {
-    if (!btnRef.current) return;
-    const rect = btnRef.current.getBoundingClientRect();
-    setPos(
-      placement === "beside"
-        ? railPanelPosition(rect, window.innerWidth, window.innerHeight)
-        : panelPosition(rect, window.innerWidth),
-    );
-  }, [placement]);
-  useVisualViewportChange(open, reposition);
+    const btn = btnRef.current;
+    if (!btn) return;
+    const rail = btn.closest(".left-rail") ?? btn;
+    setPanelLeft(Math.round(rail.getBoundingClientRect().right));
+  }, []);
+  useVisualViewportChange(open && !sheet, reposition);
 
   // "Read all" (#3460): the grouped lines of the sessions with no open
   // decision. Advances each to its latest seq (also clearing its tab badges)
@@ -380,40 +386,76 @@ export function NotificationBell({
     });
   };
 
+  // Opens the panel: on the state a row left it in, when coming back from
+  // that row's target (#3463, consumed once); otherwise on the section with
+  // something to decide (Sessions first, and Sessions when neither has
+  // anything) with its "Needs you" chip when it has something.
+  const openPanel = () => {
+    reposition();
+    const back = bellReturn;
+    if (back) {
+      setBellReturn(null);
+      setSection(back.section);
+      if (back.section === "sessions") setSessionsFilter(back.filter as SessionsFilter);
+      else setTasksFilter(back.filter as TasksFilter);
+    } else {
+      setSection(sessionsCount === 0 && tasksCount > 0 ? "tasks" : "sessions");
+      setSessionsFilter(sessionsCount > 0 ? "needs" : "all");
+      setTasksFilter("needs");
+    }
+    setOpenCursor(lastSeenSeq);
+    markGroupedRead();
+    setOpen(true);
+  };
+  const openPanelRef = useRef(openPanel);
+  useEffect(() => {
+    openPanelRef.current = openPanel;
+  });
+  // The phone's back gesture from a row's target asks the bell to reopen
+  // itself (App.tsx, #3463).
+  const reopenSeq = useDashboardStore((s) => s.bellReopenSeq);
+  const lastReopenSeq = useRef(reopenSeq);
+  useEffect(() => {
+    if (reopenSeq === lastReopenSeq.current) return;
+    lastReopenSeq.current = reopenSeq;
+    openPanelRef.current();
+  }, [reopenSeq]);
+
   // Leaving the panel for whatever a row opens. `suppress` keeps the focus
   // trap from snapping focus back to the bell once the target has it (P11,
-  // PR13/U7); the sheet and the popover each have their own.
+  // PR13/U7); the sheet and the panel each have their own. `remember` runs
+  // after the target opened, so a mode switch the target made (a session row
+  // from Tasks mode) does not clear the return it writes (#3463).
   const suppress = () => (sheet ? phoneSuppressRestoreRef.current?.() : suppressRestore());
-  const openSessionFromRow = (session: Session) => {
+  const leaveFor = (go: () => void) => {
     suppress();
     setOpen(false);
-    // Issue #1429 — one click destination everywhere (the sheet, push, the
-    // ?session= deep link): the terminal, marked read. The timeline is a
-    // secondary action.
-    markSessionRead(session.id);
-    ackAttention(session.id);
-    onOpenSession(session);
+    go();
+    setBellReturn({
+      section,
+      filter: section === "sessions" ? sessionsFilter : tasksFilter,
+    });
   };
-  const openPrFromRow = (session: Session, number: number) => {
-    suppress();
-    setOpen(false);
-    markSessionRead(session.id);
-    ackAttention(session.id);
-    openRightSidebarPr(session.projectId, number);
-  };
+  const openSessionFromRow = (session: Session) =>
+    leaveFor(() => {
+      // Issue #1429 — one click destination everywhere (the sheet, push, the
+      // ?session= deep link): the terminal, in Workspace, marked read. The
+      // timeline is a secondary action.
+      markSessionRead(session.id);
+      ackAttention(session.id);
+      onOpenSession(session);
+    });
+  const openPrFromRow = (session: Session, number: number) =>
+    leaveFor(() => {
+      markSessionRead(session.id);
+      ackAttention(session.id);
+      openRightSidebarPr(session.projectId, number);
+    });
   // A task row asks the one "show me this task" entry point; it does not
   // pick the surface itself.
-  const openTaskFromRow = (taskId: number) => {
-    suppress();
-    setOpen(false);
-    openTask(taskId);
-  };
+  const openTaskFromRow = (taskId: number) => leaveFor(() => openTask(taskId));
   const openTimelineFromRow = onOpenTimeline
-    ? (session: Session) => {
-        suppress();
-        setOpen(false);
-        onOpenTimeline(session);
-      }
+    ? (session: Session) => leaveFor(() => onOpenTimeline(session))
     : undefined;
 
   const renderItem = (item: FeedItem): ReactNode => {
@@ -446,8 +488,6 @@ export function NotificationBell({
             onOpen={openSessionFromRow}
             // The phone has no right sidebar: a PR row opens the terminal.
             onOpenPr={sheet ? undefined : openPrFromRow}
-            // The sheet's tap opens the terminal, so the timeline (this
-            // panel's per-session complement) is its own action there.
             onTimeline={openTimelineFromRow}
             onOpenBrowser={onOpenBrowser}
             // A collapsed row dismisses every folded seq, not just the
@@ -462,42 +502,68 @@ export function NotificationBell({
     }
   };
 
-  const sectionSwitch = (
-    <SectionSwitch
-      section={section}
-      sessionsCount={sessionsCount}
-      tasksCount={tasksCount}
-      onSelect={setSection}
-    />
-  );
-  const taskList =
-    taskEntries.length === 0 ? (
-      <div className="notif-empty">No task needs you</div>
-    ) : (
-      taskEntries.map(({ task, reason }) => (
-        <TaskRow
-          key={task.id}
-          title={task.title}
-          project={task.projectName}
-          reason={reason}
-          kind={taskNeedsYouKind(task) ?? "failed"}
-          onOpen={() => openTaskFromRow(task.id)}
-        />
-      ))
-    );
-
-  const hasDecisions = items.some((i) => i.type === "event");
   const readAllButton = (className: string) =>
+    section === "sessions" &&
+    sessionsFilter === "all" &&
     readAllIds.length > 0 && (
       <button
         className={className}
         onClick={markAllRead}
         title="Mark the rows that need no decision read"
       >
-        <CheckIcon size={className === "notif-mark-all-btn" ? 12 : 13} />
+        <CheckIcon size={13} />
         Read all
       </button>
     );
+
+  // The panel's contents, the same on every tier (#3462): the section switch
+  // with its counts and the status chips stay put at the top; the list under
+  // them scrolls.
+  const controls = (
+    <>
+      <SectionSwitch
+        section={section}
+        sessionsCount={sessionsCount}
+        tasksCount={tasksCount}
+        onSelect={setSection}
+      />
+      {section === "sessions" ? (
+        <StatusChips
+          options={sessionChips}
+          selected={sessionsFilter}
+          onSelect={(v) => setSessionsFilter(v as SessionsFilter)}
+        />
+      ) : (
+        <StatusChips
+          options={taskChips}
+          selected={tasksFilter}
+          onSelect={(v) => setTasksFilter(v as TasksFilter)}
+        />
+      )}
+    </>
+  );
+  const taskList =
+    shownTasks.length === 0 ? (
+      <div className="notif-empty">No task needs you</div>
+    ) : (
+      shownTasks.map(({ task, reason, kind }) => (
+        <TaskRow
+          key={task.id}
+          title={task.title}
+          project={task.projectName}
+          reason={reason}
+          kind={kind}
+          onOpen={() => openTaskFromRow(task.id)}
+        />
+      ))
+    );
+  const emptySessions = !items.some((i) => i.type === "event") && (
+    <div className="notif-empty">
+      {sessionsFilter === "all" && items.length === 0
+        ? "No notifications yet"
+        : "Nothing needs you right now"}
+    </div>
+  );
 
   return (
     <>
@@ -507,11 +573,9 @@ export function NotificationBell({
         title={
           needsYouCount > 0 ? `Notifications — ${needsYouText(needsYouCount)}` : "Nothing needs you"
         }
-        // Issue #1894 — "dialog", not the generic "true". `aria-haspopup="true"`
-        // maps to `menu` in the ARIA spec, so assistive technology was told
-        // this trigger opens a menu; what it opens is the notifications
-        // panel, which carries `role="dialog"` (the desktop popover) or is
-        // a `ui/BottomSheet.tsx` on the phone — itself `role="dialog"`.
+        // Issue #1894 — "dialog", not the generic "true", which maps to
+        // `menu`: what this opens is the notifications panel or sheet, both
+        // `role="dialog"`.
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`${label ?? "Notifications"}, ${needsYouText(needsYouCount)}`}
@@ -520,17 +584,8 @@ export function NotificationBell({
           // iOS does not focus a tapped button, and the sheet returns focus to
           // what was focused when it opened: this trigger, then (#3288).
           e.currentTarget.focus();
-          if (!open && btnRef.current) {
-            reposition();
-            // Opens on the section with something to decide: Sessions
-            // first, and Sessions when neither has anything.
-            setSection(sessionsCount === 0 && tasksCount > 0 ? "tasks" : "sessions");
-            // Opens on "Needs you" when a session does, else everything.
-            setFilter(sessionsCount > 0 ? "needs" : "all");
-            setOpenCursor(lastSeenSeq);
-            markGroupedRead();
-          }
-          setOpen((v) => !v);
+          if (open) setOpen(false);
+          else openPanel();
         }}
       >
         <BellIcon size={iconSize} aria-hidden="true" />
@@ -549,138 +604,134 @@ export function NotificationBell({
           label="Notifications"
           closeLabel="Close notifications"
           title="Notifications"
-          sheetClassName={`mobile-notif-sheet${sheetClassName ? ` ${sheetClassName}` : ""}`}
-          // Android / browser back closes the sheet on any tier that renders it
-          // (phone and touch tablet), via usePhoneBackStack's compact contract.
+          // Full height (#3461): the section switch and the chips pinned at
+          // the top, the list scrolling under them.
+          sheetClassName="mobile-notif-sheet"
+          // The back gesture closes the sheet (usePhoneBackStack).
           backStack
           sheetRef={panelRef}
           suppressRestoreRef={phoneSuppressRestoreRef}
-          headerActions={
-            section === "sessions" && filter === "all" && readAllButton("mobile-notif-readall")
-          }
+          headerActions={readAllButton("mobile-notif-readall")}
         >
-          {sectionSwitch}
-          {section === "tasks" ? (
-            <div className="mobile-notif-scroll">{taskList}</div>
-          ) : (
-            <>
-              <div className="mobile-notif-filters" role="group" aria-label="Filter notifications">
-                <button
-                  className={`mobile-notif-filter${filter === "needs" ? " active" : ""}`}
-                  aria-pressed={filter === "needs"}
-                  onClick={() => setFilter("needs")}
-                >
-                  Needs you{needsYouCount > 0 ? ` ${needsYouCount}` : ""}
-                </button>
-                <button
-                  className={`mobile-notif-filter${filter === "all" ? " active" : ""}`}
-                  aria-pressed={filter === "all"}
-                  onClick={() => setFilter("all")}
-                >
-                  All
-                </button>
-              </div>
-              <div className="mobile-notif-scroll">
-                {!shownItems.some((i) => i.type === "event") && (
-                  <div className="notif-empty">
-                    {filter === "needs" || shownItems.length > 0
-                      ? "Nothing needs you right now"
-                      : "No notifications yet"}
-                  </div>
-                )}
-                {/* Direct children of the scroller, not wrapped: a wrapper would
-                confine each sticky header to its own box. */}
-                {shownItems.map((item) => (
+          {controls}
+          <div className="mobile-notif-scroll">
+            {section === "tasks" ? (
+              taskList
+            ) : (
+              <>
+                {emptySessions}
+                {/* Direct children of the scroller, not wrapped: a wrapper
+                    would confine each sticky header to its own box. */}
+                {items.map((item) => (
                   <Fragment
                     key={`${item.type}-${item.sessionId}-${"event" in item ? item.event.seq : 0}`}
                   >
                     {renderItem(item)}
                   </Fragment>
                 ))}
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </div>
         </BottomSheet>
       )}
       {panelPresent &&
         !sheet &&
-        pos &&
+        panelLeft !== null &&
         createPortal(
-          <div
-            ref={panelRef}
-            data-presence={panelPresence}
-            inert={panelPresence === "leaving"}
-            className={themeClassName(theme, "pane-tab-overflow-menu", "notif-panel")}
-            // Every side is set: the shared `.pane-tab-overflow-menu` shell
-            // (terminal.css) carries `top: 31px; right: 6px` for PaneTab's
-            // in-pane menu. The rail's bell sets only `bottom`, and with the
-            // panel's height capped by max-height a leftover `top` wins over
-            // `bottom`, which pinned the panel to the window's top edge
-            // instead of beside the bell (#3072).
-            style={{ position: "fixed", top: "auto", right: "auto", bottom: "auto", ...pos }}
-            // Opening upward from the rail's bell, it grows from its bottom
-            // edge (styles/motion.css), toward the bell it came from.
-            data-placement={placement === "beside" ? "top" : undefined}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={onPanelKeyDown}
-            role="dialog"
-            aria-label="Notifications"
-            tabIndex={-1}
-          >
-            <div className="notif-panel-header">
-              <span className="notif-panel-title">Notifications</span>
-              {section === "sessions" && readAllButton("notif-mark-all-btn")}
-            </div>
-            {sectionSwitch}
-            {section === "tasks" && <div className="notif-feed-scroll">{taskList}</div>}
-            {section === "sessions" && !hasDecisions && (
-              <div className="notif-empty">
-                {items.length > 0 ? "Nothing needs you right now" : "No notifications yet"}
-              </div>
+          <>
+            {touch && (
+              // The touch tablet's scrim: modal, and a tap on it closes.
+              <div
+                className={themeClassName(theme, "motion-scrim", "notif-scrim")}
+                data-presence={panelPresence}
+                style={{ left: panelLeft }}
+                aria-hidden="true"
+                onClick={() => setOpen(false)}
+              />
             )}
-            {section === "sessions" && items.length > 0 && (
-              <div ref={scrollRef} className="notif-feed-scroll">
-                <div
-                  style={{
-                    height: rowVirtualizer.getTotalSize(),
-                    position: "relative",
-                    width: "100%",
-                  }}
-                >
-                  {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const item = items[virtualRow.index];
-                    // Issue #1229 — the active sticky row (see rangeExtractor
-                    // above) switches from the normal virtualized "absolute +
-                    // translateY" positioning to `sticky`, pinning it to the
-                    // top of `.notif-feed-scroll`. Only one row is ever sticky.
-                    const isActiveSticky =
-                      (item.type === "header" || item.type === "grouped-toggle") &&
-                      virtualRow.index === activeStickyIndexRef.current;
-                    return (
-                      <div
-                        key={virtualRow.key}
-                        data-index={virtualRow.index}
-                        ref={rowVirtualizer.measureElement}
-                        style={
-                          isActiveSticky
-                            ? { position: "sticky", top: 0, left: 0, width: "100%", zIndex: 1 }
-                            : {
-                                position: "absolute",
-                                top: 0,
-                                left: 0,
-                                width: "100%",
-                                transform: `translateY(${virtualRow.start}px)`,
-                              }
-                        }
-                      >
-                        {renderItem(item)}
-                      </div>
-                    );
-                  })}
+            <div
+              ref={panelRef}
+              data-presence={panelPresence}
+              inert={panelPresence === "leaving"}
+              className={themeClassName(
+                theme,
+                "pane-tab-overflow-menu",
+                "notif-panel",
+                touch && "notif-panel--touch",
+              )}
+              style={{ left: panelLeft }}
+              // It slides out of the rail's edge (styles/motion.css).
+              data-placement="side"
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={onPanelKeyDown}
+              role="dialog"
+              aria-label="Notifications"
+              aria-modal={touch || undefined}
+              tabIndex={-1}
+            >
+              <div className="notif-panel-header">
+                <span className="notif-panel-title">Notifications</span>
+                <span className="notif-panel-header-actions">
+                  {readAllButton("notif-mark-all-btn")}
+                  <button
+                    type="button"
+                    className="notif-panel-close"
+                    aria-label="Close notifications"
+                    title="Close (Esc)"
+                    onClick={() => setOpen(false)}
+                  >
+                    <CloseIcon size={14} />
+                  </button>
+                </span>
+              </div>
+              {controls}
+              {section === "tasks" && <div className="notif-feed-scroll">{taskList}</div>}
+              {section === "sessions" && emptySessions}
+              {section === "sessions" && items.length > 0 && (
+                <div ref={scrollRef} className="notif-feed-scroll">
+                  <div
+                    style={{
+                      height: rowVirtualizer.getTotalSize(),
+                      position: "relative",
+                      width: "100%",
+                    }}
+                  >
+                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                      const item = items[virtualRow.index];
+                      // Issue #1229 — the active sticky row (see
+                      // rangeExtractor above) switches from the normal
+                      // virtualized "absolute + translateY" positioning to
+                      // `sticky`, pinned to the top of `.notif-feed-scroll`.
+                      // Only one row is ever sticky.
+                      const isActiveSticky =
+                        (item.type === "header" || item.type === "grouped-toggle") &&
+                        virtualRow.index === activeStickyIndexRef.current;
+                      return (
+                        <div
+                          key={virtualRow.key}
+                          data-index={virtualRow.index}
+                          ref={rowVirtualizer.measureElement}
+                          style={
+                            isActiveSticky
+                              ? { position: "sticky", top: 0, left: 0, width: "100%", zIndex: 1 }
+                              : {
+                                  position: "absolute",
+                                  top: 0,
+                                  left: 0,
+                                  width: "100%",
+                                  transform: `translateY(${virtualRow.start}px)`,
+                                }
+                          }
+                        >
+                          {renderItem(item)}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>,
+              )}
+            </div>
+          </>,
           document.body,
         )}
     </>

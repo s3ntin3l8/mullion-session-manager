@@ -20,8 +20,9 @@ export interface LeftRailProps {
   onOpenSession: (session: Session) => void;
   onOpenTimeline?: (session: Session) => void;
   onOpenBrowser: (projectId: number) => void;
-  /** Touch tablets: the bell's feed as a bottom sheet instead of a popover. */
-  notificationSheet?: boolean;
+  /** Touch tablets: the bell's side panel is wider and modal over a scrim
+   *  (#3462). */
+  notificationTouch?: boolean;
   /**
    * The rail's middle region in Workspace mode (Tasks mode fills its own,
    * the board's statuses), the one part of
@@ -43,7 +44,7 @@ export function LeftRail({
   onOpenSession,
   onOpenTimeline,
   onOpenBrowser,
-  notificationSheet = false,
+  notificationTouch = false,
   middle,
 }: LeftRailProps) {
   const tasksMode = useDashboardStore((s) => s.viewMode === "kanban");
@@ -153,9 +154,7 @@ export function LeftRail({
           onOpenSession={onOpenSession}
           onOpenTimeline={onOpenTimeline}
           onOpenBrowser={onOpenBrowser}
-          sheet={notificationSheet}
-          sheetClassName={notificationSheet ? "mobile-notif-sheet--tablet" : undefined}
-          placement="beside"
+          touch={notificationTouch}
           triggerClassName="left-rail-btn"
         />
         <button

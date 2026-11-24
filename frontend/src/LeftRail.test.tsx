@@ -12,11 +12,11 @@ import railCss from "./styles/left-rail.css?raw";
 // The bell has its own suite; here it only has to show where it was mounted
 // and with which presentation.
 vi.mock("./NotificationBell.js", () => ({
-  NotificationBell: (p: { placement?: string; sheet?: boolean; triggerClassName?: string }) => (
+  NotificationBell: (p: { sheet?: boolean; touch?: boolean; triggerClassName?: string }) => (
     <button
       data-testid="bell"
-      data-placement={p.placement}
       data-sheet={String(!!p.sheet)}
+      data-touch={String(!!p.touch)}
       className={p.triggerClassName}
     />
   ),
@@ -57,7 +57,8 @@ describe("LeftRail in Workspace mode", () => {
     expect(middle).not.toBeNull();
     expect(middle).toHaveTextContent("CHIP");
     expect(screen.getByRole("button", { name: "Command palette" })).toBeEnabled();
-    expect(screen.getByTestId("bell")).toHaveAttribute("data-placement", "beside");
+    // The rail's bell is never the phone's sheet: it opens the side panel.
+    expect(screen.getByTestId("bell")).toHaveAttribute("data-sheet", "false");
     expect(screen.getByTestId("bell")).toHaveClass("left-rail-btn");
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   });
@@ -91,9 +92,10 @@ describe("LeftRail in Workspace mode", () => {
     expect(localStorage.getItem("crs.viewMode")).toBe("kanban");
   });
 
-  it("passes the touch-tablet sheet through to the bell", () => {
-    renderRail({ notificationSheet: true });
-    expect(screen.getByTestId("bell")).toHaveAttribute("data-sheet", "true");
+  it("passes the touch tablet's panel variant through to the bell", () => {
+    renderRail({ notificationTouch: true });
+    expect(screen.getByTestId("bell")).toHaveAttribute("data-touch", "true");
+    expect(screen.getByTestId("bell")).toHaveAttribute("data-sheet", "false");
   });
 });
 

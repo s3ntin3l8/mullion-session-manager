@@ -1417,3 +1417,33 @@ export function sessionGroupedSummary(
   }
   return summary;
 }
+
+/** The bell's status-filter chip an open decision falls under (#3461), or
+ * null for one only "Needs you" and "All" show (a dev-server offer). Derived
+ * from bellClass: failures and verdicts are their own chips; a decision is a
+ * permission (a tool, a review gate, a promote), a plan, or a question (a
+ * question, an elicitation, an agent's generic "needs your input"). */
+export type DecisionCategory = "permission" | "plan" | "question" | "failed" | "review";
+
+export function decisionCategory(
+  event: Pick<NotificationEvent, "kind" | "payload">,
+): DecisionCategory | null {
+  const cls = bellClass(event);
+  if (cls === "failed") return "failed";
+  if (cls === "verdict") return "review";
+  if (cls !== "decision") return null;
+  switch (event.kind) {
+    case "permission_request":
+    case "review_gate":
+    case "promote_request":
+      return "permission";
+    case "plan_ready":
+      return "plan";
+    case "question":
+    case "elicitation":
+    case "attention":
+      return "question";
+    default:
+      return null;
+  }
+}

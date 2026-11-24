@@ -233,6 +233,26 @@
 .custom-select-menu[data-presence="leaving"] {
   animation: motionPopOut var(--motion-fade) var(--motion-ease) forwards;
 }
+/* The bell's side panel (#3462) slides out of the rail's edge it is anchored
+   to, and back into it. Translate and opacity only. */
+@keyframes notifPanelIn {
+  from {
+    opacity: 0;
+    translate: -12px 0;
+  }
+}
+@keyframes notifPanelOut {
+  to {
+    opacity: 0;
+    translate: -12px 0;
+  }
+}
+.pane-tab-overflow-menu.notif-panel {
+  animation: notifPanelIn var(--motion-fade) var(--motion-ease);
+}
+.pane-tab-overflow-menu.notif-panel[data-presence="leaving"] {
+  animation: notifPanelOut var(--motion-fade) var(--motion-ease) forwards;
+}
 
 /* Dialogs: the scrim fades, the dialog settles in. */
 .motion-scrim {
@@ -298,10 +318,18 @@
   --status-merged-fg: var(--material-status-merged-fg);
   --status-neutral-fg: var(--material-status-neutral-fg);
 }
-/* The notification feed's sticky group header matches its panel (#1229), so
-   it moves to material with it instead of showing as a solid band. */
-.notif-panel .notif-group-header {
-  background: var(--material);
+/* The notification feed's sticky group header (#1229, #3466): a deliberate
+   solid band, --sticky-band, in the side panel and the phone's sheet alike.
+   It has to hide the rows scrolling under it, and over a translucent panel
+   anything that does adds the panel's alpha a second time: a --material
+   header read as an unintended band, darker or lighter depending on the page
+   behind. A blur of what is behind it (no surface of its own) matched the
+   panel at rest but, measured, either showed the rows through or doubled the
+   tint once the scroller stopped being a backdrop root. So the band is
+   named and solid, and reads as a section header. */
+.notif-panel .notif-group-header,
+.mobile-notif-sheet .notif-group-header {
+  background: var(--sticky-band);
 }
 /* The light edge: on the side the layer came from. */
 .mobile-session-sheet {
@@ -318,7 +346,8 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
-  .notif-panel .notif-group-header {
+  .notif-panel .notif-group-header,
+  .mobile-notif-sheet .notif-group-header {
     background: var(--chrome);
   }
   .mobile-session-sheet {
@@ -336,7 +365,9 @@
    first row is never masked, so nothing is harder to read; the header's own
    border stays. Driven by the scroll position itself (a scroll timeline), so
    nothing runs while the list is still. Where scroll timelines are not
-   supported there is no mask at all. */
+   supported there is no mask at all. Not the notification feed's two
+   scrollers (#3466): their sticky group header is their edge, and the mask
+   would fade that header's own top as well. */
 @property --scroll-edge {
   syntax: "<length>";
   inherits: false;
@@ -350,10 +381,8 @@
 @supports (animation-timeline: scroll()) {
   .task-board-lanes,
   .mobile-session-list,
-  .mobile-notif-scroll,
   .tasks-phone-filter-body,
-  .rail-ws-scroll,
-  .notif-feed-scroll {
+  .rail-ws-scroll {
     -webkit-mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-edge));
     mask-image: linear-gradient(to bottom, transparent, #000 var(--scroll-edge));
     animation: scrollEdgeIn auto linear both;

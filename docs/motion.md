@@ -83,6 +83,15 @@ The rules below are applied once, in `frontend/src/styles/motion.css`
   `styles/motion.css` remaps each token; a new text role used on material
   needs a `--material-*` value and a line in both. To change the alpha, rerun
   the contrast test: it reads the percentage from `--material`.
+  A sticky header inside material never paints a second `--material`: that
+  adds the layer's alpha twice and shows as a band, darker or lighter by what
+  is behind (#3466). It paints `--sticky-band`, a deliberate solid band
+  (`--chrome`), which also hides the rows scrolling under it; the notification
+  feed's group headers are the one case today. A header that blurs instead
+  (no surface of its own) matched the panel at rest but let the rows show, or
+  doubled the tint once its scroller stopped being a backdrop root. Such a
+  scroller also stays out of the soft scroll edge below: its sticky header is
+  its edge, and the mask would fade the header too.
 - **Layout changes.** A right-sidebar view arriving or replacing another
   fades and settles in (`.motion-arrive`); the mode switch fades the board in,
   and the grid and the Dock back in. Nothing that holds a terminal changes

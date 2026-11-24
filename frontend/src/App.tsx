@@ -897,6 +897,14 @@ export function App() {
   usePhoneBackStack(isMobile && crossLinkReturn !== null && viewMode === "list", () =>
     useDashboardStore.getState().returnFromCrossLink(),
   );
+  // Phone (#3463): after a notification-bell row opened its target, back
+  // reopens the bell on the section and status chip it was left on. Written
+  // by the bell's open-target handler after the target opened; cleared by a
+  // real mode change and consumed by the reopen.
+  const bellReturn = useDashboardStore((s) => s.bellReturn);
+  usePhoneBackStack(isMobile && bellReturn !== null, () =>
+    useDashboardStore.getState().requestBellReopen(),
+  );
   // ---- Sidebar width drag (same pattern as Dock's height drag) ----
   // Persists on drag end only, via the store action (not a direct
   // `writeNumber` call the way Dock/UnifiedBoard persist — `setSidebarWidth`
@@ -1420,7 +1428,7 @@ export function App() {
             onOpenSession={onOpenSession}
             onOpenTimeline={onOpenTimeline}
             onOpenBrowser={onOpenBrowser}
-            notificationSheet={compact && isCoarsePointer}
+            notificationTouch={compact && isCoarsePointer}
           />
         )}
         {/* No left sidebar on the phone (#3014) or from 700 to 1099px

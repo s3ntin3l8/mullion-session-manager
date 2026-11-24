@@ -770,6 +770,14 @@ export interface UiSlice {
    *  (#3014): the phone's back gesture then returns to Tasks, reopening the
    *  task the switch came from. Cleared by any other mode change. */
   crossLinkReturn: { taskId: number | null } | null;
+  /** The notification bell's section and status filter as they were when one
+   *  of its rows opened a target (#3463). The next opening of the bell
+   *  restores them, once; on the phone the back gesture from the target
+   *  reopens the bell (App.tsx). Cleared by a real mode change, like
+   *  crossLinkReturn. In memory only: a reload closes the panel. */
+  bellReturn: BellPanelState | null;
+  /** Bumped to ask the bell to open itself (the phone's back from a target). */
+  bellReopenSeq: number;
   /** Whether the Tasks board's new-task form is open (#3288). In the store,
    *  not the board, so the phone's tab bar "New" entry and the board's own
    *  New task button reach the same form. */
@@ -919,6 +927,10 @@ export interface UiSlice {
   /** Back from a cross-link (#3014): Tasks mode again, with the task the
    *  switch came from opened in the right sidebar. A no-op without one. */
   returnFromCrossLink: () => void;
+  /** Remembers the bell's panel state for the return from a target (#3463). */
+  setBellReturn: (state: BellPanelState | null) => void;
+  /** Asks the bell to open itself, restoring bellReturn. */
+  requestBellReopen: () => void;
   /** #3010 — per workspace, which panes show on which half between 800 and
    *  1099px. Device-local (crs.foldHalves), never in the saved layout. */
   foldHalves: Record<number, FoldHalvesState>;
@@ -1265,4 +1277,10 @@ export interface RailBrowserState {
   mode: BrowserMode;
   preview: BrowserPanelParams | null;
   rev: number;
+}
+
+/** The bell's section and status filter (#3461, #3463). */
+export interface BellPanelState {
+  section: "sessions" | "tasks";
+  filter: string;
 }

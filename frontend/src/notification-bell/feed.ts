@@ -7,7 +7,8 @@ import {
   sessionGroupedSummary,
   sessionOpenDecisions,
 } from "../eventDescriptions.js";
-import type { GroupedSummary, OpenDecisionClass } from "../eventDescriptions.js";
+import { decisionCategory } from "../eventDescriptions.js";
+import type { DecisionCategory, GroupedSummary, OpenDecisionClass } from "../eventDescriptions.js";
 import type { NotificationEvent, Project, Session, Task } from "../api/index.js";
 import type { TaskNeedsYouKind } from "../github/taskMasterSummary.js";
 export const HEADER_ROW_HEIGHT = 34;
@@ -244,3 +245,89 @@ export const TASK_KIND_LABEL: Record<TaskNeedsYouKind, string> = {
   review: "Review",
   stopped: "Stopped",
 };
+
+// ---- Status chips (#3461) ----------------------------------------------------
+// One row of single-select chips per section. Sessions: "Needs you" (the open
+// decisions of the sessions that count), "All" (every open decision, muted
+// sessions' too, and the grouped lines), and one chip per decision category
+// (decisionCategory, derived from bellClass). Tasks: "Needs you" (every task
+// that needs a human) and one chip per kind (taskNeedsYouKind). Tasks has no
+// "All": it lists open items only, so "All" would be "Needs you" again.
+
+export type SessionsFilter = "needs" | "all" | DecisionCategory;
+export type TasksFilter = "needs" | TaskNeedsYouKind;
+
+export interface ChipOption {
+  value: string;
+  label: string;
+  count: number | null;
+}
+
+const CATEGORY_LABEL: Record<DecisionCategory, string> = {
+  permission: "Permission",
+  plan: "Plan",
+  question: "Question",
+  failed: "Failed",
+  review: "Review",
+};
+
+/** The Sessions section's rows under `filter`: a category keeps its rows and
+ * the headers of the sessions that still have one. */
+export function filterFeedItems(
+  items: FeedItem[],
+  filter: SessionsFilter,
+  needsYouIds: ReadonlySet<number>,
+): FeedItem[] {
+  if (filter === "all") return items;
+  if (filter === "needs") {
+    return items.filter(
+      (i) => (i.type === "header" || i.type === "event") && needsYouIds.has(i.sessionId),
+    );
+  }
+  const keep = items.filter(
+    (i): i is FeedEventItem => i.type === "event" && decisionCategory(i.event) === filter,
+  );
+  const sessions = new Set(keep.map((i) => i.sessionId));
+  return items.filter(
+    (i) =>
+      (i.type === "header" && sessions.has(i.sessionId)) ||
+      (i.type === "event" && decisionCategory(i.event) === filter),
+  );
+}
+
+/** Sessions chips: Needs you (its count is sessions, as on the badge), All, and
+ * each category with an open row (or the one selected), counting rows. */
+export function sessionChipOptions(
+  items: FeedItem[],
+  sessionsCount: number,
+  selected: SessionsFilter,
+): ChipOption[] {
+  const counts = new Map<DecisionCategory, number>();
+  for (const i of items) {
+    if (i.type !== "event") continue;
+    const c = decisionCategory(i.event);
+    if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
+  }
+  const chips: ChipOption[] = [
+    { value: "needs", label: "Needs you", count: sessionsCount },
+    { value: "all", label: "All", count: null },
+  ];
+  for (const c of Object.keys(CATEGORY_LABEL) as DecisionCategory[]) {
+    const n = counts.get(c) ?? 0;
+    if (n > 0 || selected === c) chips.push({ value: c, label: CATEGORY_LABEL[c], count: n });
+  }
+  return chips;
+}
+
+/** Tasks chips: Needs you, and each kind with a task (or the one selected). */
+export function taskChipOptions(
+  entries: ReadonlyArray<{ kind: TaskNeedsYouKind }>,
+  selected: TasksFilter,
+): ChipOption[] {
+  const chips: ChipOption[] = [{ value: "needs", label: "Needs you", count: entries.length }];
+  for (const k of ["failed", "review", "stopped"] as const) {
+    const n = entries.filter((e) => e.kind === k).length;
+    if (n > 0 || selected === k) chips.push({ value: k, label: TASK_KIND_LABEL[k], count: n });
+  }
+  return chips;
+}

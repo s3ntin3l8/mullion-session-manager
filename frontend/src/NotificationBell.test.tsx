@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { expectNameHasVisibleText, expectNoNestedInteractive } from "./test/a11y.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 import { NotificationBell } from "./NotificationBell.js";
+import terminalCss from "./styles/terminal.css?raw";
 import type { NotificationEvent, Project, Session, Task } from "./api/index.js";
 import {
   flushRaf,
@@ -25,6 +26,10 @@ let lastSeenSeq: Record<number, number>;
 let dismissedEventKeys: Record<string, true>;
 let tasks: Task[] = [];
 let mutedSessionIds: number[] = [];
+let bellReturn: { section: "sessions" | "tasks"; filter: string } | null = null;
+const setBellReturn = vi.fn((v: typeof bellReturn) => {
+  bellReturn = v;
+});
 
 // Issue #1427 — gained a third `ts` segment (see store/helpers.ts's real
 // eventKey doc comment for why: seq alone is no longer unique across a
@@ -82,6 +87,9 @@ function storeState() {
     ackAttention,
     mutedSessionIds,
     toggleSessionMute: vi.fn(),
+    bellReturn,
+    bellReopenSeq: 0,
+    setBellReturn,
     tasks,
   };
 }
@@ -291,7 +299,7 @@ function scrollFeedTo(px: number) {
 // render+click boilerplate.
 async function openPanel(onOpenSession = vi.fn()) {
   render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} />);
-  await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+  await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
   return onOpenSession;
 }
 
@@ -299,6 +307,8 @@ beforeEach(() => {
   sessions = [asking()];
   tasks = [];
   mutedSessionIds = [];
+  bellReturn = null;
+  setBellReturn.mockClear();
   projects = [{ id: 1, name: "mullion", cwd: "/x", hostId: "local" } as Project];
   events = {};
   lastSeenSeq = {};
@@ -346,7 +356,7 @@ describe("NotificationBell", () => {
     const { rerender } = render(
       <NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     expect(screen.getByText("Working")).toBeInTheDocument();
 
     // A poll tick gives `sessions` a fresh array identity (per this file's
@@ -460,7 +470,7 @@ describe("NotificationBell", () => {
     // the exact same ts, the way the server's ring buffer replays it.
     events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
     const first = render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     expect(screen.getByText(ROW_TEXT)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
@@ -473,7 +483,7 @@ describe("NotificationBell", () => {
     // stays filtered, dismissal is keyed on (sessionId, seq, ts).
     events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
     render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     expect(screen.queryByText(ROW_TEXT)).not.toBeInTheDocument();
     expect(screen.getByText("No notifications yet")).toBeInTheDocument();
   });
@@ -535,7 +545,7 @@ describe("NotificationBell", () => {
         onOpenBrowser={vi.fn()}
       />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     await userEvent.click(screen.getByRole("button", { name: "Timeline" }));
     expect(onOpenTimeline).toHaveBeenCalledWith(sessions[0]);
     expect(onOpenSession).not.toHaveBeenCalled();
@@ -553,7 +563,7 @@ describe("NotificationBell", () => {
     expect(markSessionRead).toHaveBeenCalledWith(1);
     expect(onOpenSession).not.toHaveBeenCalled();
 
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     await userEvent.click(screen.getByRole("button", { name: "Session" }));
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
   });
@@ -579,7 +589,7 @@ describe("NotificationBell", () => {
           onOpenBrowser={vi.fn()}
         />,
       );
-      await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+      await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
       const row = document.querySelector<HTMLElement>(".notif-event-row")!;
       const open = row.querySelector<HTMLElement>("button.notif-event-open")!;
       return { onOpenSession, onOpenTimeline, row, open };
@@ -641,7 +651,7 @@ describe("NotificationBell — the trigger's popup semantics (issue #1894)", () 
   // opens something" value, which the ARIA spec maps to `menu`. What it
   // opens is the notifications panel — `role="dialog"` on the desktop, a
   // `ui/BottomSheet.tsx` on the phone — so the token now says so.
-  const trigger = () => screen.getByRole("button", { name: /notifications/i });
+  const trigger = () => screen.getByRole("button", { name: /^Notifications,/ });
 
   it('names what it opens: aria-haspopup="dialog", not the generic "true"', () => {
     render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
@@ -938,7 +948,7 @@ describe("dev server detection Use/Dismiss (issue #404)", () => {
     const onOpenSession = vi.fn();
     const onOpenBrowser = vi.fn();
     render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={onOpenBrowser} />);
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
 
     await userEvent.click(screen.getByRole("button", { name: "Use this port" }));
 
@@ -953,7 +963,7 @@ describe("dev server detection Use/Dismiss (issue #404)", () => {
     const onOpenSession = vi.fn();
     const onOpenBrowser = vi.fn();
     render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={onOpenBrowser} />);
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
 
     await userEvent.click(screen.getByRole("button", { name: "Ignore port" }));
 
@@ -1103,26 +1113,38 @@ describe("NotificationBell popover — focus management (P11)", () => {
     expect(dialog).not.toHaveAttribute("aria-modal");
   });
 
-  it("moves focus into the panel when it opens, and Tab reaches the section switch, then the first row", async () => {
+  it("moves focus into the panel when it opens, and Tab reaches the close button, the section switch, the chips, then the first row", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
 
     // The dialog itself: its rows are virtualized and mount after it opens,
     // and Tab moves on into them from here.
     expect(screen.getByRole("dialog", { name: "Notifications" })).toHaveFocus();
-    // Tab moves on: the section switch first, then the rows.
-    await userEvent.tab();
-    expect(screen.getByRole("button", { name: /^Sessions/ })).toHaveFocus();
-    await userEvent.tab();
-    await userEvent.tab();
-    await waitFor(() => expect(document.querySelector("button.notif-event-open")).toHaveFocus());
+    // Tab moves on: the close button, the section switch, the chips, then
+    // the rows.
+    const stops: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      await userEvent.tab();
+      const el = document.activeElement as HTMLElement;
+      if (el.classList.contains("notif-event-open")) break;
+      stops.push(el.getAttribute("aria-label") ?? el.textContent ?? "");
+    }
+    expect(stops).toEqual([
+      "Close notifications",
+      "Sessions 1",
+      "Tasks",
+      "Needs you 1",
+      "All",
+      "Question 1",
+    ]);
+    expect(document.activeElement).toHaveClass("notif-event-open");
   });
 
   it("restores focus to the bell button on close", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
 
-    const bell = screen.getByRole("button", { name: /notifications/i });
+    const bell = screen.getByRole("button", { name: /^Notifications,/ });
     await userEvent.click(document.body);
 
     expect(bell).toHaveFocus();
@@ -1136,7 +1158,7 @@ describe("NotificationBell popover — focus management (P11)", () => {
     await userEvent.keyboard("{Escape}");
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /notifications/i })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /^Notifications,/ })).toHaveFocus();
   });
 
   it("traps Tab within the panel", async () => {
@@ -1160,7 +1182,7 @@ describe("NotificationBell popover — focus management (P11)", () => {
   it("does not restore focus to the bell button when closing by opening a session", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     const onOpenSession = await openPanel();
-    const bell = screen.getByRole("button", { name: /notifications/i });
+    const bell = screen.getByRole("button", { name: /^Notifications,/ });
 
     await userEvent.click(screen.getByText(ROW_TEXT));
 
@@ -1172,77 +1194,119 @@ describe("NotificationBell popover — focus management (P11)", () => {
 // Issue #1399 — since #1398 the toolbar (and the bell in it) moves with the
 // iOS visual viewport when it pans with the keyboard open, with no window
 // `resize` to trigger the existing reposition.
-describe("NotificationBell visual-viewport pan (issue #1399)", () => {
-  afterEach(() => {
-    uninstallFakeVisualViewport();
-  });
-
-  it("re-anchors the open panel under the bell's moved rect", async () => {
-    const vv = installFakeVisualViewport();
-    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-    const bell = screen.getByRole("button", { name: /notifications/i });
-    let bellBottom = 40;
-    vi.spyOn(bell, "getBoundingClientRect").mockImplementation(
-      () => ({ bottom: bellBottom, left: 20 }) as DOMRect,
+// #3462 — tablet and desktop get one full-height side panel, anchored to the
+// right edge of the rail that holds the bell, in place of the popover and the
+// tablet's bottom sheet.
+describe("NotificationBell side panel (#3462)", () => {
+  function renderInRail(props: Partial<Parameters<typeof NotificationBell>[0]> = {}) {
+    const rail = document.createElement("nav");
+    rail.className = "left-rail";
+    document.body.appendChild(rail);
+    let railRight = 56;
+    vi.spyOn(rail, "getBoundingClientRect").mockImplementation(
+      () => ({ right: railRight }) as DOMRect,
     );
-    await userEvent.click(bell);
-    const panel = screen.getByRole("dialog", { name: "Notifications" });
-    expect(panel.style.top).toBe("46px");
-
-    bellBottom = 180;
-    await act(async () => {
-      vv.panTo(140);
-      await flushRaf();
-    });
-    expect(panel.style.top).toBe("186px");
-  });
-});
-
-// #3072 — the left rail's bell sits at the bottom of the screen. The panel
-// used to land at the window's top edge: the shared .pane-tab-overflow-menu
-// shell carries `top: 31px`, which won over the inline `bottom`.
-describe("NotificationBell beside the left rail (#3072)", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("opens to the right of the rail's bell, bottom-anchored, with no top left over", async () => {
-    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1280);
-    vi.spyOn(window, "innerHeight", "get").mockReturnValue(720);
     render(
       <NotificationBell
         onOpenSession={vi.fn()}
         onOpenBrowser={vi.fn()}
-        placement="beside"
         triggerClassName="left-rail-btn"
+        {...props}
       />,
+      { container: rail },
     );
-    const bell = screen.getByRole("button", { name: /notifications/i });
-    vi.spyOn(bell, "getBoundingClientRect").mockImplementation(
-      () => ({ top: 640, bottom: 674, left: 3.5, right: 43.5 }) as DOMRect,
-    );
-    await userEvent.click(bell);
-    const panel = screen.getByRole("dialog", { name: "Notifications" });
-    expect(panel.style.position).toBe("fixed");
-    expect(panel.style.left).toBe("49.5px");
-    expect(panel.style.bottom).toBe("46px");
-    // `auto`, so the stylesheet's `top: 31px` cannot pin it to the top edge.
-    expect(panel.style.top).toBe("auto");
-    expect(panel.style.right).toBe("auto");
-    expect(panel).toHaveAttribute("data-placement", "top");
+    return { rail, setRailRight: (v: number) => (railRight = v) };
+  }
+
+  afterEach(() => {
+    uninstallFakeVisualViewport();
+    resetPhoneBackStackForTests();
+    vi.restoreAllMocks();
+    document.querySelectorAll("nav.left-rail").forEach((n) => n.remove());
   });
 
-  it("keeps the phone bar's below-the-bell placement, with no bottom set", async () => {
-    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-    const bell = screen.getByRole("button", { name: /notifications/i });
-    vi.spyOn(bell, "getBoundingClientRect").mockImplementation(
-      () => ({ bottom: 40, left: 20 }) as DOMRect,
-    );
-    await userEvent.click(bell);
+  it("opens beside the rail, from its right edge, with no scrim and not modal", async () => {
+    renderInRail();
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     const panel = screen.getByRole("dialog", { name: "Notifications" });
-    expect(panel.style.top).toBe("46px");
-    expect(panel.style.bottom).toBe("auto");
-    expect(panel).not.toHaveAttribute("data-placement");
+    expect(panel).toHaveClass("notif-panel");
+    expect(panel).not.toHaveClass("notif-panel--touch");
+    expect(panel.style.left).toBe("56px");
+    expect(panel).toHaveAttribute("data-placement", "side");
+    expect(panel).not.toHaveAttribute("aria-modal");
+    expect(document.querySelector(".notif-scrim")).toBeNull();
+  });
+
+  it("follows the rail when the visual viewport moves it (#1399)", async () => {
+    const vv = installFakeVisualViewport();
+    const { setRailRight } = renderInRail();
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
+    const panel = screen.getByRole("dialog", { name: "Notifications" });
+    setRailRight(64);
+    await act(async () => {
+      vv.panTo(40);
+      await flushRaf();
+    });
+    expect(panel.style.left).toBe("64px");
+  });
+
+  it("closes on Esc, on an outside click and from its close button, returning focus to the bell", async () => {
+    renderInRail();
+    const bell = screen.getByRole("button", { name: /^Notifications,/ });
+    await userEvent.click(bell);
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(bell).toHaveFocus();
+
+    await userEvent.click(bell);
+    await userEvent.click(document.body);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await userEvent.click(bell);
+    await userEvent.click(screen.getByRole("button", { name: "Close notifications" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(bell).toHaveFocus();
+  });
+
+  describe("on a touch tablet", () => {
+    let pushState: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      resetPhoneBackStackForTests();
+      pushState = vi.spyOn(window.history, "pushState").mockImplementation(() => {});
+      vi.spyOn(window.history, "back").mockImplementation(() => {});
+    });
+
+    it("is the wider, modal variant over a scrim that closes it", async () => {
+      renderInRail({ touch: true });
+      await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
+      const panel = screen.getByRole("dialog", { name: "Notifications" });
+      expect(panel).toHaveClass("notif-panel", "notif-panel--touch");
+      expect(panel).toHaveAttribute("aria-modal", "true");
+      const scrim = document.querySelector<HTMLElement>(".notif-scrim");
+      expect(scrim).not.toBeNull();
+      expect(scrim!.style.left).toBe("56px");
+      await userEvent.click(scrim!);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("closes on the back gesture, as the sheet it replaces did", async () => {
+      renderInRail({ touch: true });
+      await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
+      expect(pushState).toHaveBeenCalledTimes(1);
+      act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
+      expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+    });
+  });
+
+  it("is 420px wide, 480px on a touch tablet, and runs the full height", () => {
+    const rule = (selector: string) => {
+      const start = terminalCss.indexOf(`${selector} {`);
+      return terminalCss.slice(start, terminalCss.indexOf("}", start));
+    };
+    expect(rule(".notif-panel")).toMatch(/width:\s*420px/);
+    expect(rule(".notif-panel")).toMatch(/top:\s*var\(--shell-top, 0px\)/);
+    expect(rule(".notif-panel")).toMatch(/bottom:\s*var\(--kb-inset, 0px\)/);
+    expect(rule(".notif-panel.notif-panel--touch")).toMatch(/width:\s*480px/);
   });
 });
 
@@ -1254,7 +1318,7 @@ describe("NotificationBell phone sheet", () => {
     render(
       <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} sheet {...props} />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     return onOpenSession;
   }
 
@@ -1273,15 +1337,6 @@ describe("NotificationBell phone sheet", () => {
     expect(dialog).toHaveClass("mobile-notif-sheet");
     expect(dialog).toHaveAttribute("aria-modal", "true");
     expect(document.querySelector(".notif-panel")).toBeNull();
-  });
-
-  it("appends sheetClassName to the sheet (the tablet width cap)", async () => {
-    events = { 1: [makeEvent({ seq: 1 })] };
-    await openPhoneSheet({ sheetClassName: "mobile-notif-sheet--tablet" });
-    expect(screen.getByRole("dialog", { name: "Notifications" })).toHaveClass(
-      "mobile-notif-sheet",
-      "mobile-notif-sheet--tablet",
-    );
   });
 
   it("keeps the desktop popover when `sheet` is not set", async () => {
@@ -1417,11 +1472,11 @@ describe("NotificationBell phone sheet", () => {
     await userEvent.click(document.querySelector(".mobile-session-backdrop") as HTMLElement);
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     await userEvent.click(screen.getByRole("button", { name: "Close notifications" }));
     expect(screen.queryByRole("dialog")).toBeNull();
 
-    await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
   });

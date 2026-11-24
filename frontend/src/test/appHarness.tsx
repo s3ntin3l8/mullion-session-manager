@@ -98,19 +98,19 @@ vi.mock("../Toolbar.js", () => ({
 vi.mock("../LeftRail.js", () => ({
   LeftRail: ({
     onToggleSidebar,
-    notificationSheet,
+    notificationTouch,
     sidebarShown,
     middle,
   }: {
     onToggleSidebar?: () => void;
-    notificationSheet?: boolean;
+    notificationTouch?: boolean;
     sidebarShown: boolean;
     middle?: React.ReactNode;
   }) => (
     <nav
       data-testid="left-rail"
       data-sidebar-shown={String(sidebarShown)}
-      data-notif-sheet={String(!!notificationSheet)}
+      data-notif-touch={String(!!notificationTouch)}
     >
       {/* Like the real rail: no sidebar button where there is no sidebar. */}
       {onToggleSidebar && <button data-testid="toggle-sidebar" onClick={onToggleSidebar} />}

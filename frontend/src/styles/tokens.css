@@ -145,6 +145,11 @@
      so a `var(--r)` here would be a cycle on an element that is both
      .cmux-root and a popover. tokens.contrast.test.ts holds the invariant. */
   --material: color-mix(in srgb, var(--term) 85%, transparent);
+  /* A sticky section header inside material (#3466): a deliberate solid band,
+     not a second --material (that would add the panel's alpha twice and show
+     as a band anyway, darker or lighter by backdrop). The --material-* text
+     roles clear AA on it too (they are checked on solid --chrome). */
+  --sticky-band: var(--chrome);
   --material-muted: #b5b5be;
   --material-dim: #b5b5bd;
   --material-accent: #34d399;
@@ -255,6 +260,11 @@
   /* Material text, darkened from the values above for 4.5:1 over material
      on pure black (see the dark block). */
   --material: color-mix(in srgb, var(--term) 85%, transparent);
+  /* A sticky section header inside material (#3466): a deliberate solid band,
+     not a second --material (that would add the panel's alpha twice and show
+     as a band anyway, darker or lighter by backdrop). The --material-* text
+     roles clear AA on it too (they are checked on solid --chrome). */
+  --sticky-band: var(--chrome);
   --material-muted: #484848;
   --material-dim: #525252;
   --material-accent: #0b6b49;

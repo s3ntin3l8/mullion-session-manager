@@ -151,6 +151,33 @@ describe("App tier wiring", () => {
     act(() => useDashboardStore.getState().setViewMode("list"));
   });
 
+  // #3463 — after a notification-bell row opened its target, the phone's back
+  // asks the bell to reopen itself; a real mode change forgets that.
+  it("registers the way back to the bell on the phone, until a mode change", () => {
+    stubWidth("phone");
+    render(<App />);
+    const activeCloses = () =>
+      vi
+        .mocked(usePhoneBackStack)
+        .mock.calls.filter(([active]) => active)
+        .map(([, close]) => close);
+    vi.mocked(usePhoneBackStack).mockClear();
+    act(() =>
+      useDashboardStore.getState().setBellReturn({ section: "sessions", filter: "question" }),
+    );
+    const closes = activeCloses();
+    expect(closes.length).toBeGreaterThan(0);
+    const before = useDashboardStore.getState().bellReopenSeq;
+    act(() => closes.at(-1)!());
+    expect(useDashboardStore.getState().bellReopenSeq).toBe(before + 1);
+
+    vi.mocked(usePhoneBackStack).mockClear();
+    act(() => useDashboardStore.getState().setViewMode("kanban"));
+    expect(useDashboardStore.getState().bellReturn).toBeNull();
+    expect(activeCloses()).toHaveLength(0);
+    act(() => useDashboardStore.getState().setViewMode("list"));
+  });
+
   it("does not register a way back to Tasks after a plain mode switch", () => {
     stubWidth("phone");
     useDashboardStore.setState({ viewMode: "kanban" });
@@ -162,16 +189,17 @@ describe("App tier wiring", () => {
     );
   });
 
-  // Notifications render as a bottom sheet on touch tablets (not the popover),
-  // but a mouse-driven tablet-width window and desktop keep the popover.
+  // The bell's side panel is the touch variant (wider, modal over a scrim) on
+  // touch tablets; a mouse-driven tablet-width window and desktop get the
+  // plain panel (#3462).
   it.each([
     ["tablet", true, "true"],
     ["tablet", false, "false"],
     ["desktop", true, "false"],
-  ] as const)("notificationSheet on %s (coarse=%s) is %s", (tier, coarse, expected) => {
+  ] as const)("notificationTouch on %s (coarse=%s) is %s", (tier, coarse, expected) => {
     stubWidth(tier, coarse);
     render(<App />);
-    expect(screen.getByTestId("left-rail")).toHaveAttribute("data-notif-sheet", expected);
+    expect(screen.getByTestId("left-rail")).toHaveAttribute("data-notif-touch", expected);
   });
 
   // The session picker lives in the phone's top bar; from 700px there is no

@@ -19,6 +19,7 @@ import { formatStatusLabel, STATUS_PRESENTATION } from "../sessionStatus.js";
 import { TextInput } from "../ui/primitives.js";
 import type { TaskNeedsYouKind } from "../github/taskMasterSummary.js";
 import { NOTIF_ROW_TEXT_MAX, TASK_KIND_LABEL } from "./feed.js";
+import type { ChipOption } from "./feed.js";
 import type {
   FeedEventItem,
   FeedGroupedLineItem,
@@ -66,7 +67,12 @@ export function SectionSwitch({
       onClick={() => onSelect(value)}
     >
       {label}
-      {count > 0 && <span className="notif-section-count">{count}</span>}
+      {count > 0 && (
+        <>
+          {" "}
+          <span className="notif-section-count">{count}</span>
+        </>
+      )}
     </button>
   );
   return (
@@ -616,5 +622,39 @@ function DevServerActions({
         Ignore port
       </button>
     </span>
+  );
+}
+
+// The status chips (#3461): single-select, the selected one pressed. A count
+// shows when there is one to show ("All" has none).
+export function StatusChips({
+  options,
+  selected,
+  onSelect,
+}: {
+  options: ChipOption[];
+  selected: string;
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <div className="notif-chips" role="group" aria-label="Filter">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          className={`notif-chip${selected === o.value ? " active" : ""}`}
+          aria-pressed={selected === o.value}
+          onClick={() => onSelect(o.value)}
+        >
+          {o.label}
+          {o.count !== null && o.count > 0 && (
+            <>
+              {" "}
+              <span className="notif-chip-count">{o.count}</span>
+            </>
+          )}
+        </button>
+      ))}
+    </div>
   );
 }
