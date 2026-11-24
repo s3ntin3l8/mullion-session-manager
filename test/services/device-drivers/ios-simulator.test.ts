@@ -342,6 +342,19 @@ describe("IosSimulatorDriver", () => {
       ).toEqual({ ok: true });
     });
 
+    it("opens an http(s) URL with simctl openurl, as one argv entry", async () => {
+      const { driver, calls } = make();
+      const url = " http://127.0.0.1:5173/a b?x=1&y=$(id)\n";
+      expect(await performDeviceAction(driver, { action: "openurl", url })).toEqual({ ok: true });
+      expect(calls).toEqual([["openurl", UDID, "http://127.0.0.1:5173/a%20b?x=1&y=$(id)"]]);
+    });
+
+    it("refuses a non-http(s) URL before any simctl call", async () => {
+      const { driver, calls } = make();
+      await expect(driver.openUrl("tel:123")).rejects.toMatchObject({ statusCode: 400 });
+      expect(calls).toEqual([]);
+    });
+
     it("refuses key as unsupported", async () => {
       const { driver, calls } = make();
       await expect(

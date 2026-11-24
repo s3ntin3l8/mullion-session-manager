@@ -130,7 +130,7 @@ export class AndroidDriver implements DeviceDriver {
   }
 
   supports(action: DeviceActionName): boolean {
-    return action !== "button";
+    return action !== "button" && action !== "openurl";
   }
 
   // --- live input -------------------------------------------------------

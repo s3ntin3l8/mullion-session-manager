@@ -126,6 +126,15 @@ lifecycle (`boot`, `bootstatus -b`, `shutdown` — `stop()` shuts the simulator
 down only if this Mullion process booted it, and never deletes or erases it),
 screenshots (`simctl io <udid> screenshot --type=png -`), logs (`simctl spawn
 <udid> log show --last 5m --style compact`), and clipboard (`pbcopy`/`pbpaste`).
+`openurl` runs `simctl openurl <udid> <url>`: `mullion device openurl <id> <url>`,
+the `use_device` MCP tool's `openurl` action, or "Open in simulator" in the Dock's
+Preview menu. Only http(s) URLs are accepted (`simctl openurl` would otherwise launch
+any registered URL scheme). The menu opens the project's dev server as
+`http://127.0.0.1:<port>` (always http: a certificate for `localhost` cannot match
+`127.0.0.1`), because the dev server is on the loopback of the host it runs on (the
+Browser pane's dev-server destination, which follows a running Dock control to
+its host); a simulator on any other host is listed disabled. It is manual: nothing opens
+on dev-server start. Android devices answer it with a 400.
 Live H.264 video and HID input come from `idb_companion` over gRPC
 (`@grpc/grpc-js`, one companion process per device), which is restarted after
 every simulator boot because its HID connection goes stale across a reboot.
@@ -753,7 +762,7 @@ all three) — and `delete_device`/`device delete`, which drops the row
 and the id that identifies its systemd scope with no undo. MCP's device
 surface is narrower than the CLI's: only `list_devices` (`device list`),
 `use_device`/`device_action` (`device screenshot`/`tap`/`swipe`/`text`/
-`key`/`button`/`logcat`/`clipboard`), `start_device` (`device start`), `stop_device`
+`key`/`button`/`logcat`/`clipboard`/`openurl`), `start_device` (`device start`), `stop_device`
 (`device stop`), and `delete_device` (`device delete`) exist as MCP tools —
 `device create`, `device pair`, `device pair-and-connect`, `device connect`,
 and `device discovered` have no MCP counterpart; only the CLI and REST
@@ -767,10 +776,11 @@ expose them.
 `POST /api/devices/pair-and-connect`, `GET /api/devices/discovered`,
 `GET/PATCH/DELETE /api/devices/:id`, `POST /api/devices/:id/start`,
 `POST /api/devices/:id/stop`, `POST /api/devices/:id/action` (body:
-`{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"button"|"logcat"|"clipboard", ...}`
+`{action: "screenshot"|"tap"|"swipe"|"text"|"key"|"button"|"logcat"|"clipboard"|"openurl", ...}`
 — `button` takes `{button: "home"|"lock"|"side"|"siri"}` on iOS and answers
 400 on Android; `clipboard` additionally carries `{op: "get"}` or
-`{op: "set", text, paste?}` — same shape the CLI/MCP surface forwards).
+`{op: "set", text, paste?}` — same shape the CLI/MCP surface forwards;
+`openurl` takes `{url}`, an http(s) URL, on iOS and answers 400 on Android).
 Every device carries a `platform` (`"android"`, the default, or `"ios"`) and a
 `udid` (an iOS Simulator's identifier, null for Android); `kind`, `avdName`,
 `serial` and `port` stay Android-shaped. `POST /api/devices` takes each

@@ -6,7 +6,7 @@ export const useDevice = {
   name: "use_device",
   description:
     "Execute a one-shot device action (screenshot, tap, swipe, text, key, button, logs, logcat, " +
-    "clipboard) against the device's live adb/scrcpy or iOS Simulator connection — works " +
+    "clipboard, openurl) against the device's live adb/scrcpy or iOS Simulator connection — works " +
     "independently of whether the device's video panel is currently open in the dashboard. " +
     "Use list_devices to find a deviceId first.",
   inputSchema: {
@@ -26,6 +26,7 @@ export const useDevice = {
           "logs",
           "logcat",
           "clipboard",
+          "openurl",
         ],
         description: "The device action to execute.",
       },
@@ -73,6 +74,12 @@ export const useDevice = {
         type: "string",
         enum: DEVICE_BUTTON_VALUES,
         description: "Hardware simulator button to press (button, iOS only).",
+      },
+      url: {
+        type: "string",
+        description:
+          "http(s) URL to open in the simulator's browser (openurl, iOS Simulator only). " +
+          "A dev server on the simulator's own Mac is http://127.0.0.1:<port>.",
       },
       lines: {
         type: "number",
