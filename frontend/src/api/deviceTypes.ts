@@ -73,6 +73,8 @@ export interface PairAndConnectBody {
   connectAddress?: string;
   pairingCode: string;
   name?: string;
+  // The agent host whose adb server pairs the phone; omitted = the primary.
+  hostId?: string;
 }
 
 // Mirrors src/routes/devices.ts's DeviceHostEntry 1:1 — one host that could

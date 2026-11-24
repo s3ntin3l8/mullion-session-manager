@@ -702,7 +702,7 @@ export interface DevicesSlice {
   createIosDevice: (udid: string, name?: string, hostId?: string) => Promise<Device>;
   // GET /api/devices/discovered (issue #1378) — not stored in the slice,
   // PairDeviceDialog keeps the scan results in its own local state.
-  listDiscovered: () => Promise<DiscoveredDevice[]>;
+  listDiscovered: (hostId?: string) => Promise<DiscoveredDevice[]>;
   // Atomic pair + connect + insert (issue #1378), the physical-device
   // counterpart to createDevice.
   pairAndConnect: (body: PairAndConnectBody) => Promise<Device>;

@@ -48,7 +48,15 @@ export const devicesApi = {
   // Issue #1378's mDNS snapshot of nearby phones in Wireless debugging mode.
   // Always a list — empty (never an error) when DEVICE_DISCOVERY_ENABLED is
   // off or nothing is in range.
-  listDiscoveredDevices: () => request<DiscoveredDevice[]>("/api/devices/discovered"),
+  // `hostId` (omitted = the primary) lists an agent host's phones instead; that
+  // can answer 503 (unreachable) or 400 (unknown host / agent too old), which
+  // surface as an ApiError.
+  listDiscoveredDevices: (hostId?: string) =>
+    request<DiscoveredDevice[]>(
+      hostId && hostId !== LOCAL_HOST_ID
+        ? `/api/devices/discovered?hostId=${encodeURIComponent(hostId)}`
+        : "/api/devices/discovered",
+    ),
 
   // Atomic `adb pair` + `adb connect` + device-row insert (issue #1378) —
   // the single call behind PairDeviceDialog's "Pair & Connect" button. The

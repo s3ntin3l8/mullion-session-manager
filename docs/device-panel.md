@@ -623,11 +623,11 @@ CLI's own explicit-id convention avoids elsewhere).
 ```bash
 mullion device list
 mullion device create <avdName> [--project <id>] [--name <label>]
-mullion device pair <pairingAddress> <code>
-mullion device pair-and-connect --discovery-id <id> --pairing-code <code> [--connect-address <addr>] [--name <label>]
-mullion device pair-and-connect --pairing-address <addr> --connect-address <addr> --pairing-code <code> [--name <label>]
+mullion device pair <pairingAddress> <code> [--host <hostId>]
+mullion device pair-and-connect --discovery-id <id> --pairing-code <code> [--connect-address <addr>] [--name <label>] [--host <hostId>]
+mullion device pair-and-connect --pairing-address <addr> --connect-address <addr> --pairing-code <code> [--name <label>] [--host <hostId>]
 mullion device connect <address> [--project <id>] [--name <label>]
-mullion device discovered
+mullion device discovered [--host <hostId>]
 mullion device start <id>
 mullion device stop <id>
 mullion device delete <id>

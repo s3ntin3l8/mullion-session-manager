@@ -1374,7 +1374,19 @@ export const OPS: Record<string, OpSpec> = {
   // effects, no scope concerns beyond the rest of the device.list family.
   "device.discovered": routeOp(
     ["full", "session"],
-    unscoped(() => ({ method: "GET", url: "/api/devices/discovered" })),
+    // `hostId` (optional) lists the nearby phones of an agent host instead of
+    // the primary's; the route answers 400/503 for an unknown/outdated/
+    // unreachable host, which injectAndShape passes through.
+    unscoped(({ body }) => {
+      const hostId = (body as { hostId?: unknown } | undefined)?.hostId;
+      return {
+        method: "GET",
+        url:
+          typeof hostId === "string" && hostId.length > 0
+            ? `/api/devices/discovered?hostId=${enc(hostId)}`
+            : "/api/devices/discovered",
+      };
+    }),
   ),
   // Keeps its historical name (and its documented meaning — "flips the row
   // to `killed` and tears down the live process/scope") even though the

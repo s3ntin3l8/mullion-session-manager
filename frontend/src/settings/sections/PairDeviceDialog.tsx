@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { ApiError } from "../../api/index.js";
-import type { DiscoveredDevice, PairAndConnectBody } from "../../api/index.js";
+import type { DeviceHostEntry, DiscoveredDevice, PairAndConnectBody } from "../../api/index.js";
+import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { useDismissExit } from "../../hooks/usePresence.js";
 import { CloseIcon, DeviceIcon } from "../../ui/icons.js";
-import { SecondaryButton } from "../../ui/primitives.js";
+import { Dropdown, SecondaryButton } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 
 // A UI-side cadence only: the backend's discovery cache is updated by mDNS
@@ -54,13 +55,21 @@ function Field({
 export function PairDeviceDialog({
   onClose,
   onPaired,
+  deviceHosts = null,
 }: {
   onClose: () => void;
   onPaired: () => void;
+  // The hosts that can run devices (DevicesSection's `GET /api/devices/hosts`
+  // read); a host picker appears when more than one can pair a phone.
+  deviceHosts?: DeviceHostEntry[] | null;
 }) {
   const listDiscovered = useDashboardStore((s) => s.listDiscovered);
   const pairAndConnect = useDashboardStore((s) => s.pairAndConnect);
 
+  const [chosenHostId, setHostId] = useState(LOCAL_HOST_ID);
+  // Set when listing an agent's phones fails (503 unreachable, 400 unknown or
+  // outdated agent) — shown instead of the "No devices found" hint.
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
   const [scanTimedOut, setScanTimedOut] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -88,11 +97,31 @@ export function PairDeviceDialog({
     return () => clearTimeout(id);
   }, []);
 
+  const pairHosts = (deviceHosts ?? []).filter(
+    (h) => h.status !== "ok" || h.deviceKinds.includes("physical"),
+  );
+  const hostOptions = pairHosts.map((h) => ({
+    value: h.hostId,
+    label:
+      h.status === "unsupported"
+        ? `${h.name} — unsupported (agent needs an update)`
+        : h.status === "unreachable"
+          ? `${h.name} — unreachable`
+          : h.name,
+    disabled: h.status !== "ok",
+  }));
+  // The chosen host, or the first one that can pair when that one can't (the
+  // primary may have no adb of its own while an agent has).
+  const hostId = hostOptions.some((o) => o.value === chosenHostId && !o.disabled)
+    ? chosenHostId
+    : (hostOptions.find((o) => !o.disabled)?.value ?? chosenHostId);
+
   usePolling(
     (isCancelled) => {
-      listDiscovered()
+      listDiscovered(hostId)
         .then((list) => {
           if (isCancelled()) return;
+          setDiscoverError(null);
           setDiscovered(list);
           const pairableIds = list
             .filter((entry) => entry.pairingAddress !== undefined)
@@ -114,13 +143,36 @@ export function PairDeviceDialog({
             setConnectAddress("");
           }
         })
-        // The endpoint itself never errors (disabled discovery is `[]`); a
-        // network blip just keeps the previous snapshot until the next tick.
-        .catch(() => {});
+        // The primary's endpoint never errors (disabled discovery is `[]`); an
+        // agent's can (503/400), and the backend's message says why. Any other
+        // failure (a network blip) keeps the previous snapshot until the next tick.
+        .catch((err: unknown) => {
+          if (isCancelled()) return;
+          if (err instanceof ApiError && (err.statusCode === 503 || err.statusCode === 400)) {
+            setDiscovered([]);
+            pairableCountRef.current = 0;
+            setDiscoverError(err.message);
+          }
+        });
     },
     DISCOVERY_POLL_MS,
-    { enabled: !submitting },
+    { enabled: !submitting, deps: [hostId] },
   );
+
+  const showHostPicker = hostOptions.length > 1;
+
+  const changeHost = (next: string) => {
+    if (next === hostId) return;
+    setHostId(next);
+    // Nothing scanned on the old host applies to the new one.
+    setDiscovered([]);
+    setDiscoverError(null);
+    pairableCountRef.current = 0;
+    setSelectedId(null);
+    setConnectAddress("");
+    setPairingAddress("");
+    setError(null);
+  };
 
   // Android only advertises the pairing service while its "Pair device with
   // pairing code" screen is open, and pair-and-connect can't pair without
@@ -160,6 +212,7 @@ export function PairDeviceDialog({
     if (!canSubmit) return;
     const trimmedName = name.trim() || undefined;
     const trimmedConnect = connectAddress.trim();
+    const hostField = hostId === LOCAL_HOST_ID ? {} : { hostId };
     const body: PairAndConnectBody =
       mode === "discovery" && selected
         ? {
@@ -171,12 +224,14 @@ export function PairDeviceDialog({
             ...(selected.connectAddress === undefined && trimmedConnect
               ? { connectAddress: trimmedConnect }
               : {}),
+            ...hostField,
           }
         : {
             pairingAddress: pairingAddress.trim(),
             connectAddress: trimmedConnect,
             pairingCode,
             name: trimmedName,
+            ...hostField,
           };
     setError(null);
     setSubmitting(true);
@@ -228,12 +283,28 @@ export function PairDeviceDialog({
         </div>
 
         <div className="create-modal-body">
+          {showHostPicker && (
+            <div className="create-modal-field">
+              <span className="create-modal-field-label">Host</span>
+              <Dropdown
+                ariaLabel="Host"
+                options={hostOptions}
+                value={hostId}
+                onChange={changeHost}
+                disabled={submitting}
+              />
+              <span className="create-modal-field-hint">
+                The machine whose adb server pairs the phone — it must be on the phone's network.
+              </span>
+            </div>
+          )}
           <div className="create-modal-field">
             <span className="create-modal-field-label">Nearby devices</span>
-            {discovered.length === 0 && !scanTimedOut && (
+            {discoverError !== null && <ErrorText>{discoverError}</ErrorText>}
+            {discovered.length === 0 && discoverError === null && !scanTimedOut && (
               <div className="settings-readonly-value">Looking for nearby devices…</div>
             )}
-            {discovered.length === 0 && scanTimedOut && (
+            {discovered.length === 0 && discoverError === null && scanTimedOut && (
               <span className="create-modal-field-hint">
                 No devices found yet — still looking. Make sure the phone is on the same network, or
                 pair manually below.
