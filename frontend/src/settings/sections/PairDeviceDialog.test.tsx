@@ -4,7 +4,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DISCOVERY_POLL_MS, DISCOVERY_TIMEOUT_MS, PairDeviceDialog } from "./PairDeviceDialog.js";
 import { api, ApiError } from "../../api/index.js";
-import type { Device, DiscoveredDevice } from "../../api/index.js";
+import type { Device, DeviceHostEntry, DiscoveredDevice } from "../../api/index.js";
+import { pickDropdownOption } from "../../test/dropdown.js";
 import type * as ApiModule from "../../api/index.js";
 import { resetStore } from "../../test/resetStore.js";
 
@@ -400,5 +401,98 @@ describe("PairDeviceDialog (issue #1379)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(container.querySelector(".create-modal-backdrop") as Element);
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+  describe("host picker (#3399)", () => {
+    const hosts: DeviceHostEntry[] = [
+      {
+        hostId: "local",
+        name: "This machine",
+        status: "ok",
+        deviceKinds: ["physical"],
+        platforms: [],
+      },
+      { hostId: "h-pi", name: "Pi", status: "ok", deviceKinds: ["physical"], platforms: [] },
+      { hostId: "h-old", name: "Old", status: "unsupported", deviceKinds: [], platforms: [] },
+    ];
+
+    it("shows no picker with a single host and lists on the primary", async () => {
+      render(<PairDeviceDialog deviceHosts={[hosts[0]]} onClose={vi.fn()} onPaired={vi.fn()} />);
+      await waitFor(() => expect(api.listDiscoveredDevices).toHaveBeenCalledWith("local"));
+      expect(screen.queryByRole("combobox", { name: "Host" })).not.toBeInTheDocument();
+    });
+
+    it("defaults to the first host that can pair when the primary can't", async () => {
+      const noAdbLocal: DeviceHostEntry[] = [{ ...hosts[0], deviceKinds: [] }, hosts[1]];
+      render(<PairDeviceDialog deviceHosts={noAdbLocal} onClose={vi.fn()} onPaired={vi.fn()} />);
+      await waitFor(() => expect(api.listDiscoveredDevices).toHaveBeenCalledWith("h-pi"));
+      expect(api.listDiscoveredDevices).not.toHaveBeenCalledWith("local");
+    });
+
+    it("keeps an explicitly chosen host when it later turns unreachable", async () => {
+      const { rerender } = render(
+        <PairDeviceDialog deviceHosts={hosts} onClose={vi.fn()} onPaired={vi.fn()} />,
+      );
+      pickDropdownOption(await screen.findByRole("combobox", { name: "Host" }), "h-pi");
+      await waitFor(() => expect(api.listDiscoveredDevices).toHaveBeenCalledWith("h-pi"));
+      vi.mocked(api.listDiscoveredDevices).mockClear();
+      rerender(
+        <PairDeviceDialog
+          deviceHosts={[hosts[0], { ...hosts[1], status: "unreachable" }]}
+          onClose={vi.fn()}
+          onPaired={vi.fn()}
+        />,
+      );
+      await waitFor(() => expect(api.listDiscoveredDevices).toHaveBeenCalledWith("h-pi"), {
+        timeout: DISCOVERY_POLL_MS * 2,
+      });
+      expect(api.listDiscoveredDevices).not.toHaveBeenCalledWith("local");
+    });
+
+    it("lists on and pairs through the chosen agent host", async () => {
+      vi.mocked(api.listDiscoveredDevices).mockImplementation(async (hostId) =>
+        hostId === "h-pi" ? [discovered({ name: "Remote Pixel" })] : [],
+      );
+      render(<PairDeviceDialog deviceHosts={hosts} onClose={vi.fn()} onPaired={vi.fn()} />);
+      pickDropdownOption(await screen.findByRole("combobox", { name: "Host" }), "h-pi");
+
+      await screen.findByRole("radio", { name: /Remote Pixel/ });
+      expect(api.listDiscoveredDevices).toHaveBeenCalledWith("h-pi");
+      typeInto("123456", "123456");
+      fireEvent.click(submitButton());
+      await waitFor(() =>
+        expect(api.pairAndConnectDevice).toHaveBeenCalledWith({
+          discoveryId: "192.168.1.23",
+          pairingCode: "123456",
+          name: undefined,
+          hostId: "h-pi",
+        }),
+      );
+    });
+
+    it("shows the backend's message when the agent can't list (503/400) and clears it on a good scan", async () => {
+      vi.mocked(api.listDiscoveredDevices).mockImplementation(async (hostId) => {
+        if (hostId === "h-pi") throw new ApiError("Host h-pi is unreachable", 503);
+        return [];
+      });
+      render(<PairDeviceDialog deviceHosts={hosts} onClose={vi.fn()} onPaired={vi.fn()} />);
+      pickDropdownOption(await screen.findByRole("combobox", { name: "Host" }), "h-pi");
+      expect(await screen.findByText("Host h-pi is unreachable")).toBeInTheDocument();
+      expect(screen.queryByText(/No devices found yet/)).not.toBeInTheDocument();
+
+      pickDropdownOption(screen.getByRole("combobox", { name: "Host" }), "local");
+      await waitFor(() =>
+        expect(screen.queryByText("Host h-pi is unreachable")).not.toBeInTheDocument(),
+      );
+    });
+
+    it("surfaces a 400 (outdated agent) the same way", async () => {
+      vi.mocked(api.listDiscoveredDevices).mockRejectedValue(
+        new ApiError("Host h-pi does not report device support", 400),
+      );
+      render(<PairDeviceDialog deviceHosts={hosts} onClose={vi.fn()} onPaired={vi.fn()} />);
+      expect(
+        await screen.findByText("Host h-pi does not report device support"),
+      ).toBeInTheDocument();
+    });
   });
 });

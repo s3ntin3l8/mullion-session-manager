@@ -513,6 +513,20 @@ describe("browser and device ops (Phase 4, #189)", () => {
       socket.destroy();
     });
 
+    it("device.discovered forwards hostId as the route's query: an unknown host is the route's 400 (#3399)", async () => {
+      app = await buildApp();
+      await app.ready();
+      const socket = await fullScopeSocket(app!);
+      socket.write(
+        `${JSON.stringify({ id: 1, op: "device.discovered", body: { hostId: "no-such host" } })}\n`,
+      );
+      const reply = await waitForReply(socket);
+      expect(reply.ok).toBe(false);
+      expect(reply.status).toBe(400);
+      expect(String(reply.error)).toContain("Unknown host no-such host");
+      socket.destroy();
+    });
+
     it("device.discovered (session scope): dispatches at session scope — read-only, no network side-effects", async () => {
       app = await buildApp();
       await app.ready();

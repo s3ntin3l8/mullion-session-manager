@@ -609,7 +609,11 @@ export function DevicesSection() {
       {deleteError && <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>}
       {toggleError && <ErrorText style={{ marginTop: 8 }}>{toggleError}</ErrorText>}
       {pairOpen && (
-        <PairDeviceDialog onClose={() => setPairOpen(false)} onPaired={() => setPairOpen(false)} />
+        <PairDeviceDialog
+          deviceHosts={deviceHosts}
+          onClose={() => setPairOpen(false)}
+          onPaired={() => setPairOpen(false)}
+        />
       )}
     </>
   );

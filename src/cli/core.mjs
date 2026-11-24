@@ -8,6 +8,7 @@
 // real process-level wiring lives in mullion.mjs.
 
 import { createDockCommands } from "./dock-commands.mjs";
+import { createDevicePairCommands } from "./device-pair-commands.mjs";
 import { createTaskCommands } from "./task-commands.mjs";
 import fs from "node:fs";
 import { buildBrowserCommands } from "./browser-commands.mjs";
@@ -1305,6 +1306,8 @@ async function runDeviceLogcat(client, args) {
   return { json: result, text: result.logcat };
 }
 
+const devicePairCommands = createDevicePairCommands({ extractFlags, requireOne, CliUsageError });
+
 const deviceCommands = {
   async list(client) {
     const result = await client.request("device.list", {});
@@ -1322,70 +1325,7 @@ const deviceCommands = {
     if (flags.name !== undefined) body.name = flags.name;
     return { json: await client.request("device.create", body) };
   },
-  // A separate verb from `create` rather than an optional flag on it:
-  // `create` does `requireOne(args, "avd name")` unconditionally (this
-  // file's own explicit-verb convention, see this const's header comment),
-  // and pairing/connecting take entirely different arguments (a pairing
-  // address + code, or a connect address) with no AVD name at all — making
-  // that conditional would fight the shape every other verb here follows.
-  async pair(client, args) {
-    const pairingAddress = requireOne(args, "pairing address (host:port)");
-    const pairingCode = args[1];
-    if (pairingCode === undefined) throw new CliUsageError("pairing code is required");
-    return { json: await client.request("device.pair", { pairingAddress, pairingCode }) };
-  },
-  // Lists nearby phones in Wireless-debugging mode (mDNS snapshot from
-  // GET /api/devices/discovered). Empty array when DEVICE_DISCOVERY_ENABLED
-  // is false or nothing is in range — both are returned as `[]`, not as an
-  // error, mirroring the REST endpoint's "empty is a valid answer" posture.
-  async discovered(client, args) {
-    if (args.length > 0) {
-      throw new CliUsageError(
-        "device discovered takes no arguments (use --json for machine-readable output)",
-      );
-    }
-    return { json: await client.request("device.discovered", {}) };
-  },
-  // Atomic pair + connect + insert — the text equivalent of the new "Pair
-  // a phone" modal (issue #1378). Two modes:
-  //
-  //   device pair-and-connect --discovery-id 192.168.1.23 --pairing-code 123456
-  //
-  // drives pair+connect from a cached mDNS entry (use `device discovered`
-  // to find one). `--connect-address` overrides the cached connect port
-  // when mDNS reached the wrong transport.
-  //
-  //   device pair-and-connect --pairing-address 192.168.1.23:41234 \
-  //     --connect-address 192.168.1.23:37251 --pairing-code 123456
-  //
-  // is the manual fallback for networks where mDNS doesn't reach — both
-  // ports must be supplied.
-  //
-  // Quoted-key form because the CLI's verb lookup is verbatim — see how
-  // sessionCommands' "spawn-child" (line 768) does the same.
-  "pair-and-connect": async (client, args) => {
-    const { flags } = extractFlags(args, {
-      "discovery-id": "string",
-      "pairing-address": "string",
-      "connect-address": "string",
-      "pairing-code": "string",
-      name: "string",
-    });
-    if (flags["pairing-code"] === undefined) throw new CliUsageError("--pairing-code is required");
-    const hasDiscovery =
-      typeof flags["discovery-id"] === "string" && flags["discovery-id"].length > 0;
-    const hasManual =
-      typeof flags["pairing-address"] === "string" && flags["pairing-address"].length > 0;
-    if (hasDiscovery === hasManual)
-      throw new CliUsageError("exactly one of --discovery-id or --pairing-address is required");
-    const body = { pairingCode: flags["pairing-code"] };
-    if (hasDiscovery) body.discoveryId = flags["discovery-id"];
-    else body.pairingAddress = flags["pairing-address"];
-    if (typeof flags["connect-address"] === "string" && flags["connect-address"].length > 0)
-      body.connectAddress = flags["connect-address"];
-    if (typeof flags.name === "string" && flags.name.length > 0) body.name = flags.name;
-    return { json: await client.request("device.pair-and-connect", body) };
-  },
+  ...devicePairCommands,
   // Registers a physical device row and connects to it — the `kind:
   // "physical"` counterpart to `create` above. Requires a prior `pair`
   // against this phone (or any address already in the host adb server's
@@ -1994,6 +1934,7 @@ Commands:
   preview create|get|delete|list
   dock start|stop|list
   device list|get|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard
+  device pair|pair-and-connect|discovered take [--host <hostId>] (an agent host instead of the primary)
   task list [--status <s>] [--project <id>]
   task get <id>
   task retry <id> [--agent <a>] [--review-agent <r>]

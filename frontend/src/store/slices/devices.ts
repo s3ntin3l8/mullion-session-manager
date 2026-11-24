@@ -62,7 +62,7 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
 
     // Passthrough, deliberately NOT stored — the scan results are only ever
     // read by PairDeviceDialog while it's open, never by the sidebar.
-    listDiscovered: () => api.listDiscoveredDevices(),
+    listDiscovered: (hostId) => api.listDiscoveredDevices(hostId),
 
     pairAndConnect: async (body) => {
       // A failed `adb connect` still comes back 201 (the row's own

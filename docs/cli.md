@@ -300,13 +300,13 @@ sessionId), not scoped to any project or session.
 - `device list`
 - `device create <avdName> [--project <id>] [--name <label>]` — spawn a new
   emulator instance.
-- `device pair <pairingAddress> <code>` — one-time `adb pair` against a phone's
+- `device pair <pairingAddress> <code> [--host <hostId>]` — one-time `adb pair` against a phone's
   Wireless debugging pairing address/code (Android 11+). Doesn't create a
   device row; the adb server remembers the pairing across Mullion restarts.
-- `device discovered` — list nearby phones in Wireless-debugging mode
+- `device discovered [--host <hostId>]` — (`--host`, here and on `pair`/`pair-and-connect`, targets an enrolled agent host's adb server instead of the primary's; an unknown/outdated agent is a 400, an unreachable one a 503) list nearby phones in Wireless-debugging mode
   (mDNS snapshot from `GET /api/devices/discovered`). Empty when
   `DEVICE_DISCOVERY_ENABLED=false` or nothing is in range.
-- `device pair-and-connect --discovery-id <id> --pairing-code <code> [--connect-address <addr>] [--name <label>]` — atomic pair+connect+insert in
+- `device pair-and-connect --discovery-id <id> --pairing-code <code> [--connect-address <addr>] [--name <label>] [--host <hostId>]` — atomic pair+connect+insert in
   one call (issue #1378). Drives the new "Pair a phone" modal's flow from the
   CLI: list with `device discovered`, pick an `id`, supply the 6-digit code
   Android shows on the Wireless-debugging screen. `--connect-address` is

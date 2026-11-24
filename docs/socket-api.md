@@ -1022,7 +1022,7 @@ connectAddress?, name?}` (use `device.discovered` first to look up an
   fallback — both ports must be supplied). Insert → pair → fire-and-forget
   connect: 201 + row on success, 409 on active-row collision, 400 + row
   rollback on pair failure; connect errors surface later via device status.
-- **`device.discovered`** — `body: {}`. Returns the current mDNS snapshot of
+- **`device.discovered`** — `body: {}`, or `{hostId}` for an agent host's snapshot (400 unknown/outdated host, 503 unreachable; `device.pair` / `device.pair-and-connect` take the same optional `hostId`). Returns the current mDNS snapshot of
   nearby phones in Wireless-debugging mode (`{id, name, host, pairingAddress?,
 connectAddress?, device?, model?, product?, discoveredAt}[]`). Empty array
   when `DEVICE_DISCOVERY_ENABLED=false` or nothing is in range.
