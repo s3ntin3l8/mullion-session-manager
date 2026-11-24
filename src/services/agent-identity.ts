@@ -68,6 +68,28 @@ async function restrictToCurrentUserWindows(file: string): Promise<void> {
 }
 
 /**
+ * Atomically write a private file (0700 parent dir, 0600 file or Windows
+ * per-user ACL, temp file + rename). Shared by agent-identity.json and the
+ * pre-call pairing request state file.
+ */
+export async function savePrivateFileAtomic(filePath: string, content: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  try {
+    fs.writeFileSync(tmp, content, { mode: 0o600 });
+    // writeFileSync's mode is subject to the umask and ignored if the temp
+    // file pre-existed; chmod makes the restriction unconditional.
+    if (process.platform !== "win32") fs.chmodSync(tmp, 0o600);
+    else await restrictToCurrentUserWindows(tmp);
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
+/**
  * Atomically replace the state file: write a 0600 temp file in the same
  * directory, then rename over the target. Throws on failure; the caller
  * decides whether that is fatal (it is not — the session still works, the
@@ -77,24 +99,10 @@ export async function saveAgentIdentity(statePath: string, identity: AgentIdenti
   if (!HOST_ID_RE.test(identity.hostId) || !CREDENTIAL_RE.test(identity.machineCredential)) {
     throw new Error("refusing to persist a malformed machine identity");
   }
-  const dir = path.dirname(statePath);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = `${statePath}.${process.pid}.tmp`;
-  try {
-    fs.writeFileSync(
-      tmp,
-      JSON.stringify({ hostId: identity.hostId, machineCredential: identity.machineCredential }),
-      { mode: 0o600 },
-    );
-    // writeFileSync's mode is subject to the umask and ignored if the temp
-    // file pre-existed; chmod makes the restriction unconditional.
-    if (process.platform !== "win32") fs.chmodSync(tmp, 0o600);
-    else await restrictToCurrentUserWindows(tmp);
-    fs.renameSync(tmp, statePath);
-  } catch (err) {
-    fs.rmSync(tmp, { force: true });
-    throw err;
-  }
+  await savePrivateFileAtomic(
+    statePath,
+    JSON.stringify({ hostId: identity.hostId, machineCredential: identity.machineCredential }),
+  );
 }
 
 /** Whether `hostId` is this agent. An agent that has not enrolled yet (a

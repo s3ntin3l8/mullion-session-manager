@@ -21,9 +21,10 @@ binary to install. The role flag changes what the process does at startup
   sessions on that host) and a token/session-gated internal API
   (`src/routes/internal.ts`) that the primary calls to control it. An agent
   refuses to boot at all unless it has a path to a shared credential —
-  either `MULLION_AGENT_TOKEN` (manual) or both `MULLION_PRIMARY_URL` and
-  `MULLION_ENROLLMENT_TOKEN` (self-registration, see below) — see
-  `src/app.ts`'s fail-closed check.
+  either `MULLION_AGENT_TOKEN` (manual), or `MULLION_PRIMARY_URL` with either
+  `MULLION_ENROLLMENT_TOKEN` (self-registration, see below) or a paired
+  `agent-identity.json` (one-time pairing code) — see `src/app.ts`'s
+  fail-closed check.
 
 The primary never parses or trusts anything about a remote host beyond that
 internal API; from the primary's point of view, a session either runs on its
@@ -33,16 +34,20 @@ talking to an agent's `/internal/*` routes over HTTP + WebSocket
 
 ## Setting up an agent host
 
-The recommended way to bring an agent online is **self-registration** — no
-manual step on the primary at all, the path a scripted/automated deploy
-(e.g. an Ansible playbook) should use. See
-[`deploy/README.md`](../deploy/README.md)'s "Automating agent deploys"
+For a **single new headless host**, the recommended path is a **one-time
+pairing code** (`POST /api/host-pairings` on the primary, redeemed during
+`deploy/install.sh --role agent` via `MULLION_AGENT_PAIRING_CODE` or
+`MULLION_AGENT_PAIRING_CODE_STDIN=1`): the code is redeemed once into
+`data/sessions/agent-identity.json` (`0600`) and never lands in `.env`, a
+process argument, or a log. For **zero-touch fleet deploys** (e.g. an Ansible
+playbook provisioning many hosts without per-host codes), **self-registration**
+with `MULLION_ENROLLMENT_TOKEN` / `MULLION_ENROLLMENT_SECRET` stays supported.
+See [`deploy/README.md`](../deploy/README.md)'s "Automating agent deploys"
 section for the full deploy-tooling contract (`install.sh --role agent`,
 the systemd unit, an example Ansible role); the protocol itself is
 documented here. **Manual registration** (a pre-provisioned, per-agent
 static token, added by hand in Settings → Hosts & SSH bridges) is also
-supported, for a one-off host or anyone who'd rather not hand a shared
-enrollment secret to automation — see below.
+supported — see below.
 
 ### Self-registration (zero manual steps)
 

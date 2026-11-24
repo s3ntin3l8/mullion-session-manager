@@ -100,6 +100,7 @@ import { taskBlockingAlertDismissRoute } from "./routes/task-blocking-alert-dism
 import { demoFixturesRoute } from "./routes/demo-fixtures.js";
 import { closePinnedConnectors } from "./services/pinned-connect.js";
 import { registerDispatchCleanup } from "./services/task-dispatch.js";
+import { identityStatePath, loadAgentIdentity } from "./services/agent-identity.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -133,14 +134,16 @@ export async function buildApp() {
   // MULLION_AGENT_TOKEN empty; what's never legitimate is neither path
   // configured at all.
   const hasManualToken = app.config.MULLION_AGENT_TOKEN.trim() !== "";
-  const hasEnrollmentPath =
-    app.config.MULLION_PRIMARY_URL.trim() !== "" &&
-    app.config.MULLION_ENROLLMENT_TOKEN.trim() !== "";
+  const hasPrimaryUrl = app.config.MULLION_PRIMARY_URL.trim() !== "";
+  const hasEnrollmentToken = app.config.MULLION_ENROLLMENT_TOKEN.trim() !== "";
+  const hasStoredIdentity =
+    hasPrimaryUrl && loadAgentIdentity(identityStatePath(app.config.SESSIONS_DIR)) !== null;
+  const hasEnrollmentPath = hasPrimaryUrl && (hasEnrollmentToken || hasStoredIdentity);
   if (app.config.MULLION_ROLE === "agent" && !hasManualToken && !hasEnrollmentPath) {
     throw new Error(
-      "MULLION_ROLE=agent requires either MULLION_AGENT_TOKEN, or both " +
-        "MULLION_PRIMARY_URL and MULLION_ENROLLMENT_TOKEN, to be set — refusing to boot " +
-        "an agent with no path to a shared secret at all (see issues #26 and #245).",
+      "MULLION_ROLE=agent requires either MULLION_AGENT_TOKEN, or MULLION_PRIMARY_URL " +
+        "with either MULLION_ENROLLMENT_TOKEN or a stored agent-identity.json, to be set — " +
+        "refusing to boot an agent with no path to a shared secret at all (see issues #26 and #245).",
     );
   }
 

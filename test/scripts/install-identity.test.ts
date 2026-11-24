@@ -274,4 +274,56 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN: ROTATED_TOKEN });
     expect(restarts()).toBe(1);
   });
+
+  it("redeems MULLION_AGENT_PAIRING_CODE_STDIN=1 into agent-identity.json with no code or enrollment token in .env or argv", async () => {
+    const pairingCode = "ab".repeat(32); // pragma: allowlist secret
+    const home = freshHome();
+    const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+    fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+    fs.writeFileSync(
+      pairScript,
+      `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = process.argv[idx + 1];
+const stdinCode = fs.readFileSync(0, "utf8").trim();
+if (process.argv.some((a) => a.includes(stdinCode))) {
+  process.stderr.write("code leaked into argv\\n");
+  process.exit(2);
+}
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-host-1", machineCredential: "cd".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+    );
+
+    const result = await run(
+      home,
+      { ...noTokenEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
+      `${pairingCode}\r\nignored second line\n`,
+    );
+
+    const env = envFile(home);
+    expect(env).toMatch(/^MULLION_PRIMARY_URL=https:\/\/primary\.example\.com$/m);
+    expect(env).toMatch(/^MULLION_ENROLLMENT_TOKEN=$/m);
+    expect(env).not.toContain(pairingCode);
+    expect(result.stderr).not.toMatch(/WARNING: this agent has no complete credential path/);
+    expect(result.stdout + result.stderr).not.toContain(pairingCode);
+    const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+    expect(commands).not.toContain(pairingCode);
+    expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
+      hostId: "paired-host-1",
+    });
+  });
+
+  it("refuses an empty stdin pairing code instead of writing a credential-less .env", async () => {
+    const home = freshHome();
+    await expect(
+      run(home, { ...noTokenEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, "\n"),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("stdin carried no pairing code") });
+    expect(fs.existsSync(path.join(home, ".env"))).toBe(false);
+  });
 });
