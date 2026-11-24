@@ -7,6 +7,7 @@ import { resolveProjectDock } from "./project-config.js";
 import { isPortInUse } from "./port-probe.js";
 import { findSessionHoldingPort } from "./dev-server-detect.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import { HostRequestError } from "./remote-host-errors.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 
 // Issue #2069 — Mullion never picks a dev-server port, so two dock sessions
@@ -135,7 +136,12 @@ export async function checkDockPortConflict(
         message: portInUseMessage(answer.port, holderSessionId),
       };
     } catch (err) {
-      app.log.warn({ err, hostId: targetHostId }, "dock port check on agent host failed");
+      // An agent that predates the route answers 404/400: expected, so quiet.
+      const expected = err instanceof HostRequestError && [400, 404].includes(err.statusCode);
+      app.log[expected ? "debug" : "warn"](
+        { err, hostId: targetHostId },
+        "dock port check on agent host failed",
+      );
       return null;
     }
   }

@@ -85,6 +85,27 @@ describe("POST /internal/dock-port-check", () => {
     expect((await check({ cwd, command: "tail -f log" })).json()).toBeNull();
   });
 
+  it("names a live agent session whose output announced the port", async () => {
+    const server = await listen();
+    servers.push(server);
+    const port = (server.address() as AddressInfo).port;
+    const cwd = checkout([{ id: "dev", title: "Dev", command: "npm run dev", port }]);
+    const app = await buildApp();
+    vi.spyOn(app.pty, "list").mockReturnValue([{ id: "42" }] as ReturnType<typeof app.pty.list>);
+    vi.spyOn(app.pty, "get").mockReturnValue({
+      isAlive: true,
+      getScrollbackTail: () => Buffer.from(`  Local: http://localhost:${port}/\n`),
+    } as unknown as ReturnType<typeof app.pty.get>);
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/dock-port-check",
+      headers,
+      payload: { cwd, command: "npm run dev" },
+    });
+    await app.close();
+    expect(res.json()).toEqual({ port, holderSessionId: 42 });
+  });
+
   it("falls back to a bare-port devServerUrl for the only control", async () => {
     const server = await listen();
     servers.push(server);

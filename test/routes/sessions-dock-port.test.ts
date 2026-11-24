@@ -35,7 +35,9 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
   return {
     ...actual,
     getRemoteHostClient: (...args: Parameters<typeof actual.getRemoteHostClient>) =>
-      args[1] === "remote-1" ? remoteDock : actual.getRemoteHostClient(...args),
+      args[1] === "remote-1" || args[1] === "mac"
+        ? remoteDock
+        : actual.getRemoteHostClient(...args),
   };
 });
 
@@ -287,6 +289,20 @@ describe("POST /api/sessions — dock port conflict", () => {
       expect(
         (await checkDockPortConflict(app, id, "npm run dev"))?.holderSessionId,
       ).toBeUndefined();
+    });
+
+    it("reads the checkout path on the TARGET host, not the project's home host", async () => {
+      const id = await remoteProject();
+      app.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify({ mac: "/mac/checkout" }) })
+        .where(eq(projects.id, id))
+        .run();
+      remoteDock.resolveDockPortCheck.mockResolvedValueOnce(null);
+      await checkDockPortConflict(app, id, "npm run dev", "mac");
+      expect(remoteDock.resolveDockPortCheck).toHaveBeenLastCalledWith(
+        expect.objectContaining({ cwd: "/mac/checkout" }),
+      );
     });
 
     it("lets the launch through when the agent finds no conflict or cannot answer", async () => {

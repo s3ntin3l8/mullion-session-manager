@@ -147,7 +147,7 @@ same message. On a remote launch target the probe runs on the agent
 and loopback; `holderSessionId` is a session the agent holds, mapped to the
 primary's row (an unknown one reads as "another process"). An agent that cannot
 answer (an older build, unreachable) never blocks the launch. An Auto-placed
-launch still skips the check.
+or `targetPlatform` launch still skips the check (the host is unknown before placement).
 
 If a session's output ends in `EADDRINUSE`, "address already in use" or
 "Port N is in use" (not Vite's "…trying another one"), its ended detail reads
