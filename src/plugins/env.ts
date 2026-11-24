@@ -1104,6 +1104,10 @@ export const envPlugin = fp(async (app) => {
     data: loadDotenvOverrides(),
   });
 
+  if (app.config.SESSIONS_DIR.trim() === "") {
+    app.config.SESSIONS_DIR = schema.properties.SESSIONS_DIR.default;
+  }
+
   if (
     app.config.MULLION_WEBHOOK_BASE_URL &&
     !app.config.MULLION_WEBHOOK_BASE_URL.startsWith("https://")

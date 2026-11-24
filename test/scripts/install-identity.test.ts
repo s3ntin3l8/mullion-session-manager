@@ -122,11 +122,13 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     mullionHome: string,
     env: Record<string, string> = ansibleEnv,
     stdin: string = "",
+    cwd?: string,
   ) {
     const full: NodeJS.ProcessEnv = { ...baseEnv, ...env };
     await assertSandboxed(full);
     const pending = execFileAsync("bash", [INSTALL_SCRIPT, "--role", "agent", mullionHome], {
       env: full,
+      cwd,
       timeout: 20_000,
     });
     pending.child.stdin?.end(stdin);
@@ -274,4 +276,227 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN: ROTATED_TOKEN });
     expect(restarts()).toBe(1);
   });
+
+  it("redeems MULLION_AGENT_PAIRING_CODE_STDIN=1 into agent-identity.json with no code or enrollment token in .env or argv", async () => {
+    const pairingCode = "ab".repeat(32); // pragma: allowlist secret
+    const home = freshHome();
+    const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+    fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+    fs.writeFileSync(
+      pairScript,
+      `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = process.argv[idx + 1];
+const stdinCode = fs.readFileSync(0, "utf8").trim();
+if (process.argv.some((a) => a.includes(stdinCode))) {
+  process.stderr.write("code leaked into argv\\n");
+  process.exit(2);
+}
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-host-1", machineCredential: "cd".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+    );
+
+    const result = await run(
+      home,
+      { ...noTokenEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
+      `${pairingCode}\r\nignored second line\n`,
+    );
+
+    const env = envFile(home);
+    expect(env).toMatch(/^MULLION_PRIMARY_URL=https:\/\/primary\.example\.com$/m);
+    expect(env).toMatch(/^MULLION_ENROLLMENT_TOKEN=$/m);
+    expect(env).not.toContain(pairingCode);
+    expect(result.stderr).not.toMatch(/WARNING: this agent has no complete credential path/);
+    expect(result.stdout + result.stderr).not.toContain(pairingCode);
+    const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+    expect(commands).not.toContain(pairingCode);
+    expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
+      hostId: "paired-host-1",
+    });
+  });
+
+  it("refuses an empty stdin pairing code instead of writing a credential-less .env", async () => {
+    const home = freshHome();
+    await expect(
+      run(home, { ...noTokenEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, "\n"),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("stdin carried no pairing code") });
+    expect(fs.existsSync(path.join(home, ".env"))).toBe(false);
+  });
+
+  it("writes the paired identity to a pre-created .env's SESSIONS_DIR and restarts an active unit", async () => {
+    const pairingCode = "cd".repeat(32); // pragma: allowlist secret
+    const home = freshHome();
+    const customSessionsDir = path.join(home, "custom-sessions");
+    const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+    fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+    fs.writeFileSync(
+      pairScript,
+      `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = process.argv[idx + 1];
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-custom-1", machineCredential: "ef".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+    );
+
+    fs.writeFileSync(
+      path.join(home, ".env"),
+      [
+        "MULLION_ROLE=agent",
+        `MULLION_HOME=${home}`,
+        `SESSIONS_DIR=${customSessionsDir}`,
+        "MULLION_PRIMARY_URL=https://primary.example.com",
+        "PROJECTS_ROOTS=/srv/projects",
+      ].join("\n") + "\n",
+      { mode: 0o600 },
+    );
+
+    // Report mullion-agent.service as active so the restart condition is exercised.
+    writeShim(
+      binDir,
+      "systemctl",
+      `#!/usr/bin/env bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "systemctl $*" >> "$DIR/commands.log"\ncase "$*" in *"is-enabled mullion.service"*|*"is-active mullion.service"*) exit 1;; *is-enabled*|*is-active*) exit 0;; *) exit 0;; esac\n`,
+    );
+
+    await run(home, { MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, `${pairingCode}\n`);
+
+    expect(fs.existsSync(identityFile(home))).toBe(false);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(customSessionsDir, "agent-identity.json"), "utf8")),
+    ).toMatchObject({ hostId: "paired-custom-1" });
+    const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+    expect(commands).toContain("systemctl --user restart mullion-agent.service");
+  });
+
+  it("resolves a relative SESSIONS_DIR in a pre-created .env against $MULLION_HOME/current, not the installer cwd", async () => {
+    const pairingCode = "ef".repeat(32); // pragma: allowlist secret
+    const home = freshHome();
+    const callerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "install-id-cwd-"));
+    try {
+      const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+      fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+      fs.writeFileSync(
+        pairScript,
+        `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = path.resolve(process.argv[idx + 1]);
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-rel-1", machineCredential: "12".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+      );
+
+      fs.writeFileSync(
+        path.join(home, ".env"),
+        [
+          "MULLION_ROLE=agent",
+          `MULLION_HOME=${home}`,
+          "SESSIONS_DIR=./rel-sessions",
+          "MULLION_PRIMARY_URL=https://primary.example.com",
+          "PROJECTS_ROOTS=/srv/projects",
+        ].join("\n") + "\n",
+        { mode: 0o600 },
+      );
+
+      const result = await run(
+        home,
+        { MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
+        `${pairingCode}\n`,
+        callerCwd,
+      );
+
+      expect(result.stderr).toContain("SESSIONS_DIR (./rel-sessions) is relative");
+      expect(fs.existsSync(path.join(callerCwd, "rel-sessions", "agent-identity.json"))).toBe(
+        false,
+      );
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(home, "current", "rel-sessions", "agent-identity.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ hostId: "paired-rel-1" });
+    } finally {
+      fs.rmSync(callerCwd, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { label: "missing", sessionsLine: null },
+    { label: "empty (SESSIONS_DIR=)", sessionsLine: "SESSIONS_DIR=" },
+    { label: "whitespace-only (SESSIONS_DIR=   )", sessionsLine: "SESSIONS_DIR=   " },
+  ])(
+    "resolves a $label SESSIONS_DIR in a pre-created .env to \\$MULLION_HOME/current/data/sessions",
+    async ({ sessionsLine }) => {
+      const pairingCode = "01".repeat(32); // pragma: allowlist secret
+      const home = freshHome();
+      const callerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "install-id-cwd-"));
+      try {
+        const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+        fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+        fs.writeFileSync(
+          pairScript,
+          `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = path.resolve(process.argv[idx + 1]);
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-default-1", machineCredential: "34".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+        );
+
+        const envLines = [
+          "MULLION_ROLE=agent",
+          `MULLION_HOME=${home}`,
+          ...(sessionsLine === null ? [] : [sessionsLine]),
+          "MULLION_PRIMARY_URL=https://primary.example.com",
+          "PROJECTS_ROOTS=/srv/projects",
+        ];
+        fs.writeFileSync(path.join(home, ".env"), envLines.join("\n") + "\n", { mode: 0o600 });
+
+        const result = await run(
+          home,
+          { MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
+          `${pairingCode}\n`,
+          callerCwd,
+        );
+
+        expect(result.stderr).toContain("SESSIONS_DIR (./data/sessions) is relative");
+        expect(fs.existsSync(identityFile(home))).toBe(false);
+        expect(fs.existsSync(path.join(callerCwd, "data", "sessions", "agent-identity.json"))).toBe(
+          false,
+        );
+        expect(
+          JSON.parse(
+            fs.readFileSync(
+              path.join(home, "current", "data", "sessions", "agent-identity.json"),
+              "utf8",
+            ),
+          ),
+        ).toMatchObject({ hostId: "paired-default-1" });
+      } finally {
+        fs.rmSync(callerCwd, { recursive: true, force: true });
+      }
+    },
+  );
 });

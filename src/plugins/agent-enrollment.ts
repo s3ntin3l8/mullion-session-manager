@@ -427,16 +427,20 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     app.log.info("[agent-enrollment] resumed from a suspend, revalidating the credential");
     if (app.agentSession) {
       void renew();
-    } else if (app.config.MULLION_PRIMARY_URL && app.config.MULLION_ENROLLMENT_TOKEN) {
-      // Only an ENROLLING agent re-registers from scratch. A manual-token-only
-      // agent has no session to establish and no bootstrap credential to
-      // present — its whole credential is the static token the refresh above
-      // already picked up, so there is nothing to register.
+    } else if (
+      app.config.MULLION_PRIMARY_URL &&
+      (app.config.MULLION_ENROLLMENT_TOKEN || identity)
+    ) {
+      // Only an ENROLLING or paired agent re-registers from scratch. A
+      // manual-token-only agent has no session to establish and no bootstrap
+      // or machine credential to present — its whole credential is the static
+      // token the refresh above already picked up, so there is nothing to
+      // register.
       void registerWithRetry();
     }
   });
 
-  if (!app.config.MULLION_PRIMARY_URL || !app.config.MULLION_ENROLLMENT_TOKEN) {
+  if (!app.config.MULLION_PRIMARY_URL || (!app.config.MULLION_ENROLLMENT_TOKEN && !identity)) {
     // Manual-token-only agent (today's flow, unchanged): it never calls out
     // to the primary, so there is no session to renew — but the resume
     // handler above still refreshes its static token.

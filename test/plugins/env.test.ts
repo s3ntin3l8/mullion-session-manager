@@ -115,6 +115,20 @@ describe("env plugin", () => {
     await app.close();
   });
 
+  it.each(["", "   "])(
+    "normalizes blank SESSIONS_DIR=%j to the schema default",
+    async (blankValue) => {
+      process.env.SESSIONS_DIR = blankValue;
+      try {
+        const app = await buildApp();
+        expect(app.config.SESSIONS_DIR).toBe("./data/sessions");
+        await app.close();
+      } finally {
+        delete process.env.SESSIONS_DIR;
+      }
+    },
+  );
+
   describe("device stream tuning", () => {
     const VARS = [
       "DEVICE_VIDEO_MAX_SIZE",
