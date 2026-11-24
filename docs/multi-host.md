@@ -1010,6 +1010,15 @@ coordinators under **Accepts children from other projects**, #2123/#2124).
 from _its_ checkout on the chosen host. So a coordinator in one project can hand
 macOS-only work in another project to the Mac, provided that project has a path there.
 
+In the sidebar (and the phone/tablet session picker) the child stays in the _target_
+project's group, at the top level: each project's tree is self-contained, so nothing nests
+across projects. A **"spawned by <coordinator> · <project>"** marker on the child's row
+links back (#3456): a click opens the coordinator as clicking its own row would, and expands
+its project if that is collapsed. An ended coordinator is still a link, dimmed with "ended";
+a killed or deleted one is plain text, "spawned by a removed session". The coordinator's own
+row carries a count-only **"+N in other projects"** badge (live children elsewhere; the
+tooltip names the projects). Same-project children keep their nesting and get no marker.
+
 **No folder-trust stop for an unattended Claude child** (#2091). Claude Code
 asks "Do you trust this folder?" the first time it opens a directory, and
 `--dangerously-skip-permissions` does not cover that question, so a fresh

@@ -2062,6 +2062,7 @@ button.discover-header:hover {
 }
 .mobile-session-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   padding: 0 4px 0 8px;
@@ -2656,4 +2657,92 @@ button.discover-header:hover {
 .mobile-notif-sheet .notif-grouped-toggle {
   min-height: 44px;
   font-size: 0.8125rem;
+}
+
+/* #3456 — the "spawned by" marker of a session spawned into this project by a
+   coordinator in another one. Its own line under the row, like the meta line,
+   indented to the same column; a link (underline on hover/focus), dimmed when
+   the coordinator has ended, plain text when it is gone. */
+.session-spawn-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+  padding-left: 22px;
+  font-size: 0.65625rem;
+  line-height: 1.3;
+  color: var(--dim);
+}
+.session-spawned-by,
+.session-other-projects {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.session-spawned-by {
+  display: flex;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--accent, var(--fg));
+  text-align: left;
+  cursor: pointer;
+}
+button.session-spawned-by:hover,
+button.session-spawned-by:focus-visible {
+  text-decoration: underline;
+}
+.session-spawned-by-part {
+  flex: none;
+  white-space: pre;
+}
+.session-spawned-by-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Dimmed by colour, not opacity: opacity on text drops it under AA (#3106,
+   #3286). The "ended" suffix carries the state in words. */
+.session-spawned-by.exited,
+button.session-spawned-by.exited {
+  color: var(--dim);
+}
+/* Phone/tablet picker: its own full-width line under the row. */
+.mobile-session-spawned-by-line {
+  order: 10;
+  flex: 0 0 100%;
+  min-width: 0;
+  padding: 0 8px 6px 41px;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: var(--dim);
+}
+.mobile-session-spawned-by {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+}
+button.mobile-session-spawned-by {
+  min-height: 24px;
+  color: var(--accent, var(--fg));
+  cursor: pointer;
+}
+.mobile-session-spawned-by.ended,
+button.mobile-session-spawned-by.ended,
+.mobile-session-spawned-by.static {
+  color: var(--dim);
 }

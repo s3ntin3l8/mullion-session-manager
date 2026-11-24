@@ -22,7 +22,7 @@ import type { FastifyInstance } from "fastify";
 import {
   findActiveDockSession,
   getProjectById,
-  listLocalProjectCwds,
+  listProjectCwdsOnHost,
   markActiveSessionExited,
 } from "../services/project-records.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -33,14 +33,20 @@ import {
   getComposeServices,
   mapServicesToProject,
   composeContextFlags,
-  pullComposeImageQuietly,
-  inspectImageId,
-  restartComposeService,
-  stopComposeService,
-  startComposeService,
-  reconstructConfigHash,
+  toDockControls,
   type ComposeService,
+  type DockerDockControl,
 } from "../services/docker-service-detect.js";
+import {
+  checkComposeUpdate,
+  runServiceLifecycleAction,
+  willRecreateOnApply as willRecreateLocally,
+  type CheckUpdateResult,
+  type ServiceLifecycleAction,
+} from "../services/docker-compose-actions.js";
+import { getRemoteHostClient } from "../services/remote-host-client.js";
+import { resolveSessionHostId } from "../services/session-host.js";
+import type { SessionLiveness } from "../services/session-process.js";
 
 // Issue #1182 — a generic keyed async mutex: calls for the SAME key run one
 // at a time, in order; calls for different keys never wait on each other.
@@ -105,26 +111,64 @@ export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Pro
   };
 }
 
-// Issue #73 — every registered local-host project's cwd, used to decide
-// which project "owns" a discovered Compose service when project
+// Issue #73 — every registered project's cwd on the project's own host, used
+// to decide which project "owns" a discovered Compose service when project
 // directories nest (see docker-service-detect.ts's mapServicesToProject
 // doc comment for why the full list is needed rather than just the one
-// project's own cwd).
-function localProjectCwds(app: FastifyInstance): string[] {
-  return listLocalProjectCwds(app.db);
+// project's own cwd). Issue #3427: per host, since an agent's checkouts are
+// not in this process's filesystem.
+function projectCwdsOnHost(app: FastifyInstance, hostId: string): string[] {
+  return listProjectCwdsOnHost(app.db, hostId);
 }
 
-// Issue #73 — this project's own discovered Compose services (never
-// called for a non-local project). Shared by the dock route in
-// projects.ts and the docker/check-update + docker/update routes here,
-// so the discovery pass, project-ownership mapping, and dedupe logic
-// all live in exactly one place.
+interface DockerDiscovery {
+  services: ComposeService[];
+  /** `docker compose` availability on the project's host when the agent reported
+   * it; undefined for a local project (toDockControls probes this host itself). */
+  composeAvailable?: boolean;
+}
+
+// Issue #73 — this project's own discovered Compose services. Shared by the
+// dock route in projects.ts and the docker routes here, so the discovery pass,
+// project-ownership mapping, and dedupe logic all live in exactly one place.
+// Issue #3427: a remote project's services come from its agent (asked for the
+// services under the project's cwd), then are mapped to the project here with
+// the same nesting rule. Throws when the agent cannot be reached.
+export async function discoverDockerForProject(
+  app: FastifyInstance,
+  project: { cwd: string; hostId: string },
+): Promise<DockerDiscovery> {
+  if (project.hostId === LOCAL_HOST_ID) {
+    const all = await getComposeServices();
+    return {
+      services: mapServicesToProject(all, project.cwd, projectCwdsOnHost(app, LOCAL_HOST_ID)),
+    };
+  }
+  const remote = await getRemoteHostClient(app, project.hostId).resolveDockerServices(project.cwd);
+  return {
+    services: mapServicesToProject(
+      remote.services,
+      project.cwd,
+      projectCwdsOnHost(app, project.hostId),
+    ),
+    composeAvailable: remote.composeAvailable,
+  };
+}
+
 export async function discoveredServicesForProject(
   app: FastifyInstance,
-  project: { cwd: string },
+  project: { cwd: string; hostId: string },
 ): Promise<ComposeService[]> {
-  const all = await getComposeServices();
-  return mapServicesToProject(all, project.cwd, localProjectCwds(app));
+  return (await discoverDockerForProject(app, project)).services;
+}
+
+/** The Docker-discovered dock controls for a project, on whichever host it lives. */
+export async function discoveredDockerControls(
+  app: FastifyInstance,
+  project: { cwd: string; hostId: string },
+): Promise<DockerDockControl[]> {
+  const { services, composeAvailable } = await discoverDockerForProject(app, project);
+  return toDockControls(services, composeAvailable);
 }
 
 export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
@@ -144,12 +188,23 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
   // one place both POST routes fall through — makes it a real kill-switch
   // for defense in depth, at the cost of no extra plumbing per route.
   async function resolveOwnedService(
-    project: { cwd: string },
+    project: { cwd: string; hostId: string },
     controlId: unknown,
   ): Promise<ComposeService | null> {
     if (typeof controlId !== "string") return null;
     if (!getStoredSettings(app.db).dock.dockerServices) return null;
-    const services = await discoveredServicesForProject(app, project);
+    let services: ComposeService[];
+    try {
+      services = await discoveredServicesForProject(app, project);
+    } catch (err) {
+      // A remote agent that cannot answer is "host unreachable" (the dock route
+      // says 503 too), not "this control no longer exists".
+      app.log.warn(
+        { hostId: project.hostId, err },
+        "host unreachable, docker discovery unavailable",
+      );
+      throw app.httpErrors.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+    }
     return services.find((s) => `docker:${s.composeProject}:${s.service}` === controlId) ?? null;
   }
 
@@ -174,6 +229,43 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
     },
   } as const;
 
+  // Issue #3427 — the synchronous per-service operations run on the project's
+  // own host: here for a local project, on the agent (POST
+  // /internal/docker-compose-action) for a remote one. A remote failure
+  // degrades like the local one ("can't check" / "didn't succeed"), never a 5xx.
+  async function checkUpdate(
+    project: { cwd: string; hostId: string },
+    service: ComposeService,
+  ): Promise<CheckUpdateResult> {
+    if (project.hostId === LOCAL_HOST_ID) return checkComposeUpdate(service);
+    try {
+      return await getRemoteHostClient(
+        app,
+        project.hostId,
+      ).runDockerComposeAction<CheckUpdateResult>(project.cwd, service, "check-update");
+    } catch (err) {
+      app.log.warn({ hostId: project.hostId, err }, "docker check-update on host failed");
+      return { updateAvailable: false, reason: "pull-failed" };
+    }
+  }
+
+  async function runLifecycle(
+    project: { cwd: string; hostId: string },
+    service: ComposeService,
+    action: ServiceLifecycleAction,
+  ): Promise<boolean> {
+    if (project.hostId === LOCAL_HOST_ID) return runServiceLifecycleAction(action, service);
+    try {
+      const answer = await getRemoteHostClient(app, project.hostId).runDockerComposeAction<{
+        success: boolean;
+      }>(project.cwd, service, action);
+      return answer.success === true;
+    } catch (err) {
+      app.log.warn({ hostId: project.hostId, action, err }, "docker service action on host failed");
+      return false;
+    }
+  }
+
   // Runs a quiet `docker compose pull` for one service and compares the
   // resulting local image id against the currently-running container's own
   // `com.docker.compose.image` label — catches both "a new image exists
@@ -191,34 +283,11 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
 
       const project = getProjectById(app.db, projectId);
       if (!project) return reply.notFound();
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return reply.badRequest("Docker service management is only available for local projects");
-      }
 
       const service = await resolveOwnedService(project, request.body.controlId);
       if (!service) return reply.notFound();
 
-      if (!service.pullable) {
-        return { updateAvailable: false, reason: "build-only" as const };
-      }
-
-      const pulled = await pullComposeImageQuietly(service);
-      if (!pulled) {
-        return { updateAvailable: false, reason: "pull-failed" as const };
-      }
-
-      const latestImageId = await inspectImageId(service.imageRef);
-      if (!latestImageId) {
-        return { updateAvailable: false, reason: "pull-failed" as const };
-      }
-
-      return {
-        updateAvailable: latestImageId !== service.imageId,
-        currentImageId: service.imageId,
-        latestImageId,
-        imageRef: service.imageRef,
-        checkedAt: new Date().toISOString(),
-      };
+      return await checkUpdate(project, service);
     },
   );
 
@@ -246,9 +315,6 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
 
       const project = getProjectById(app.db, projectId);
       if (!project) return reply.notFound();
-      if (project.hostId !== LOCAL_HOST_ID) {
-        return reply.badRequest("Docker service management is only available for local projects");
-      }
 
       const service = await resolveOwnedService(project, request.body.controlId);
       if (!service) return reply.notFound();
@@ -286,9 +352,12 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
       }
 
       const { sessionId, control, reused } = started;
-      return reply
-        .code(201)
-        .send({ sessionId, control, reused, willRecreate: await willRecreateOnApply(service) });
+      return reply.code(201).send({
+        sessionId,
+        control,
+        reused,
+        willRecreate: await willRecreateOnApply(project, service),
+      });
     },
   );
 
@@ -302,17 +371,19 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
   // proceed, just with different confirm-label wording on the frontend
   // (issue #73 follow-up plan's "surface it in the arm-confirm label rather
   // than blocking").
-  async function willRecreateOnApply(service: ComposeService): Promise<boolean | null> {
-    // Hermes review — parsePsOutput defaults a missing config-hash label to
-    // "", and an empty string trivially `!==` any real hash, so a container
-    // predating this label (or whose docker/compose version never sets it)
-    // would otherwise always report willRecreate:true even with an
-    // unchanged config. Treat "nothing recorded" the same as "couldn't
-    // recompute" — both are "can't tell," not "yes."
-    if (service.configHash === "") return null;
-    const currentHash = await reconstructConfigHash(service);
-    if (currentHash === null) return null;
-    return currentHash !== service.configHash;
+  async function willRecreateOnApply(
+    project: { cwd: string; hostId: string },
+    service: ComposeService,
+  ): Promise<boolean | null> {
+    if (project.hostId === LOCAL_HOST_ID) return willRecreateLocally(service);
+    try {
+      const answer = await getRemoteHostClient(app, project.hostId).runDockerComposeAction<{
+        willRecreate: boolean | null;
+      }>(project.cwd, service, "will-recreate");
+      return answer.willRecreate ?? null;
+    } catch {
+      return null;
+    }
   }
 
   // A stack-wide action's identity is the compose project it targets, not
@@ -383,6 +454,27 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
   // comment at its `unique-conflict` branch below.
   const withStackLock = createKeyedLock();
 
+  // Issue #3427 — a stack session of a remote project lives on the agent, whose
+  // scope this process cannot see: asking the LOCAL scope backend would answer
+  // "dead" for a live remote session and have startStackSession orphan it. The
+  // agent's own liveness answers instead; an unanswerable host is "unknown",
+  // which every caller already treats as "do not touch".
+  async function stackSessionLiveness(row: {
+    id: number;
+    projectId: number;
+    hostId: string | null;
+  }): Promise<SessionLiveness> {
+    const hostId = resolveSessionHostId(app, row);
+    if (hostId === LOCAL_HOST_ID) return app.pty.isMasterAliveState(String(row.id));
+    try {
+      const alive = await getRemoteHostClient(app, hostId).bulkIsMasterAlive([String(row.id)]);
+      const state = alive[String(row.id)];
+      return state === undefined ? "unknown" : state ? "alive" : "dead";
+    } catch {
+      return "unknown";
+    }
+  }
+
   async function findActiveStackSession(projectId: number, composeProject: string) {
     const existing = findActiveDockSession(app.db, projectId, stackSessionName(composeProject));
     if (!existing) return null;
@@ -420,7 +512,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
     // startStackSession's own mark-exited-and-recreate branch below, which
     // permanently orphans the still-running scope (session-reconciler.ts
     // never revisits a row once it leaves `status: "active"`).
-    const state = await app.pty.isMasterAliveState(String(existing.id));
+    const state = await stackSessionLiveness(existing);
     return state === "dead" ? null : existing;
   }
 
@@ -560,7 +652,7 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
       // this whole block and falls straight to the retry below, same as
       // before this issue.
       if (conflictingRow) {
-        const conflictState = await app.pty.isMasterAliveState(String(conflictingRow.id));
+        const conflictState = await stackSessionLiveness(conflictingRow);
         if (conflictState === "alive") {
           return { ok: true, sessionId: conflictingRow.id, control, reused: true };
         }
@@ -595,13 +687,13 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
   // to CACHE_TTL_MS of staleness.
   const dockerServiceActionRoutes: Array<{
     path: string;
-    run: (service: ComposeService) => Promise<boolean>;
+    action: ServiceLifecycleAction;
   }> = [
-    { path: "/api/projects/:id/docker/service/restart", run: restartComposeService },
-    { path: "/api/projects/:id/docker/service/stop", run: stopComposeService },
-    { path: "/api/projects/:id/docker/service/start", run: startComposeService },
+    { path: "/api/projects/:id/docker/service/restart", action: "restart" },
+    { path: "/api/projects/:id/docker/service/stop", action: "stop" },
+    { path: "/api/projects/:id/docker/service/start", action: "start" },
   ];
-  for (const { path, run } of dockerServiceActionRoutes) {
+  for (const { path, action } of dockerServiceActionRoutes) {
     app.post<{ Params: { id: string }; Body: DockerControlBody }>(
       path,
       { schema: dockerControlSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
@@ -611,16 +703,11 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
 
         const project = getProjectById(app.db, projectId);
         if (!project) return reply.notFound();
-        if (project.hostId !== LOCAL_HOST_ID) {
-          return reply.badRequest("Docker service management is only available for local projects");
-        }
 
         const service = await resolveOwnedService(project, request.body.controlId);
         if (!service) return reply.notFound();
 
-        const success = await run(service);
-        if (success) await getComposeServices(true);
-        return { success };
+        return { success: await runLifecycle(project, service, action) };
       },
     );
   }
@@ -709,9 +796,6 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
 
         const project = getProjectById(app.db, projectId);
         if (!project) return reply.notFound();
-        if (project.hostId !== LOCAL_HOST_ID) {
-          return reply.badRequest("Docker service management is only available for local projects");
-        }
 
         const service = await resolveOwnedService(project, request.body.controlId);
         if (!service) return reply.notFound();
@@ -741,9 +825,12 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
         // willRecreateOnApply above. What actually matters is only that
         // this resolves before the reply is sent, so the client gets a
         // value instead of a promise.
-        return reply
-          .code(201)
-          .send({ sessionId, control, reused, willRecreate: await willRecreateOnApply(service) });
+        return reply.code(201).send({
+          sessionId,
+          control,
+          reused,
+          willRecreate: await willRecreateOnApply(project, service),
+        });
       },
     );
   }

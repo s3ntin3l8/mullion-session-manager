@@ -54,6 +54,7 @@ import { registerGitRoutes } from "./internal-git.js";
 import { registerProjectFilesRoutes } from "./internal-project-files.js";
 import { registerWorktreeRoutes } from "./internal-worktrees.js";
 import { registerSessionRoutes } from "./internal-sessions.js";
+import { registerDockerRoutes } from "./internal-docker.js";
 import { INTERNAL_RATE_LIMIT } from "./internal-rate-limits.js";
 import { requireWithinRoots } from "./internal-roots.js";
 
@@ -297,6 +298,7 @@ export async function internalRoutes(app: FastifyInstance) {
   registerProjectFilesRoutes(app);
   registerWorktreeRoutes(app);
   registerSessionRoutes(app);
+  registerDockerRoutes(app);
 
   // The agent-side counterpart to POST /api/sessions/:id/uploads (issue
   // #68): writes a pasted/attached image under a session's cwd on THIS

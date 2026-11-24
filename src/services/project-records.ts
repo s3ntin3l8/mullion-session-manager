@@ -43,6 +43,17 @@ export function listLocalProjectCwds(db: Db): string[] {
     .map((row) => row.cwd);
 }
 
+/** Every registered project's cwd on `hostId` (a project's `cwd` is its path on
+ * its OWN host). The generalisation of listLocalProjectCwds (issue #3427). */
+export function listProjectCwdsOnHost(db: Db, hostId: string): string[] {
+  return db
+    .select({ cwd: projects.cwd })
+    .from(projects)
+    .where(eq(projects.hostId, hostId))
+    .all()
+    .map((row) => row.cwd);
+}
+
 /** Record the scaffold-derived slug and conventions hash on a project. */
 export function setProjectScaffoldStamp(
   db: Db,

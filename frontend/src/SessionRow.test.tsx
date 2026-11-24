@@ -81,6 +81,7 @@ vi.mock("./store/index.js", () => {
       tasks,
       openRightSidebarPr: vi.fn(),
       sessions,
+      projects: [PROJECT, makeProject({ id: 2, name: "other-proj" })],
       // Issue #1892 — HostStatusLabel subscribes (the name lookup stays on
       // getState below). A remote session with no `hosts` here throws.
       hosts,
@@ -1055,5 +1056,59 @@ describe("SessionRow promote to worktree (issue #271)", () => {
     await user.click(await screen.findByText("Create worktree"));
 
     await vi.waitFor(() => expect(onPromoted).toHaveBeenCalledWith(newSession));
+  });
+});
+
+// #3456 — the "spawned by" marker for a session spawned from another project.
+describe("SessionRow spawned-by marker", () => {
+  const child = makeSession({ id: 20, projectId: 1, command: "worker", parentSessionId: 10 });
+  const coordinator = (over: Partial<Session> = {}) =>
+    makeSession({ id: 10, projectId: 2, command: "coordinator", ...over });
+  const renderChild = (onOpenSpawnParent?: (p: Session) => void, onOpen = vi.fn()) =>
+    render(
+      <SessionRow
+        session={child}
+        project={PROJECT}
+        onOpen={onOpen}
+        onEnd={vi.fn()}
+        onOpenSpawnParent={onOpenSpawnParent}
+      />,
+    );
+
+  it("links a live coordinator and opens it without opening the child", async () => {
+    sessions = [coordinator(), child];
+    const onOpen = vi.fn();
+    const onOpenSpawnParent = vi.fn();
+    renderChild(onOpenSpawnParent, onOpen);
+    await userEvent.click(
+      screen.getByRole("button", { name: "spawned by coordinator · other-proj" }),
+    );
+    expect(onOpenSpawnParent).toHaveBeenCalledWith(expect.objectContaining({ id: 10 }));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("dims an exited coordinator's link and says it ended", () => {
+    sessions = [coordinator({ status: "exited" }), child];
+    renderChild(vi.fn());
+    const link = screen.getByRole("button", {
+      name: /spawned by coordinator · other-proj · ended/,
+    });
+    expect(link).toHaveClass("exited");
+  });
+
+  it.each([
+    ["killed", [coordinator({ status: "killed" }), child]],
+    ["missing", [child]],
+  ])("renders plain text, no link, for a %s coordinator", (_state, rows) => {
+    sessions = rows;
+    renderChild(vi.fn());
+    expect(screen.getByText("spawned by a removed session").tagName).toBe("SPAN");
+    expect(screen.queryByRole("button", { name: /spawned by/ })).toBeNull();
+  });
+
+  it("has no marker for a same-project parent", () => {
+    sessions = [coordinator({ projectId: 1 }), child];
+    renderChild(vi.fn());
+    expect(screen.queryByText(/spawned by/)).toBeNull();
   });
 });

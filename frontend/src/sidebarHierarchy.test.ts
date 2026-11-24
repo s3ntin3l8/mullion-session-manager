@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
+import {
+  buildHierarchicalRows,
+  crossProjectChildCount,
+  crossProjectParent,
+  liveChildCount,
+} from "./sidebarHierarchy.js";
+import { makeProject, makeSession } from "./test/fixtures.js";
 
 // Phase 5 (Track B, issue #195 5.5b). Fixtures are `{id, parentSessionId}`
 // only, thanks to buildHierarchicalRows' generic `Pick<>` signature — same
@@ -109,5 +115,69 @@ describe("liveChildCount", () => {
 
   it("is unaffected by an already-filtered/subset list — counts against whatever it's given", () => {
     expect(liveChildCount([], 1)).toBe(0);
+  });
+});
+
+// #3456 — the "spawned by" marker's data.
+describe("crossProjectParent", () => {
+  const projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+  const child = makeSession({ id: 20, projectId: 2, parentSessionId: 10 });
+  const parent = (over = {}) =>
+    makeSession({ id: 10, projectId: 1, command: "coordinator", ...over });
+
+  it("describes a live parent in another project", () => {
+    expect(crossProjectParent(child, [parent(), child], projects)).toEqual({
+      parentId: 10,
+      title: "coordinator",
+      projectId: 1,
+      projectName: "alpha",
+      state: "live",
+    });
+  });
+
+  it("reports an exited, a killed and a missing parent", () => {
+    expect(crossProjectParent(child, [parent({ status: "exited" }), child], projects)?.state).toBe(
+      "exited",
+    );
+    expect(crossProjectParent(child, [parent({ status: "killed" }), child], projects)?.state).toBe(
+      "killed",
+    );
+    expect(crossProjectParent(child, [child], projects)).toMatchObject({
+      parentId: 10,
+      state: "missing",
+    });
+  });
+
+  it("is null for a same-project child and for a session with no parent", () => {
+    const sibling = makeSession({ id: 21, projectId: 1, parentSessionId: 10 });
+    expect(crossProjectParent(sibling, [parent(), sibling], projects)).toBeNull();
+    const root = makeSession({ id: 22, projectId: 2, parentSessionId: null });
+    expect(crossProjectParent(root, [parent(), root], projects)).toBeNull();
+  });
+
+  it("uses the task-aware title when one is given and tolerates an unknown project", () => {
+    const ctx = new Map([[10, { taskTitle: "Ship it", number: null }]]);
+    const got = crossProjectParent(child, [parent(), child], [], ctx as never);
+    expect(got?.projectName).toBe("");
+    expect(got?.title).toBe("Ship it");
+  });
+});
+
+describe("crossProjectChildCount", () => {
+  const all = [
+    makeSession({ id: 1, projectId: 1 }),
+    makeSession({ id: 2, projectId: 2, parentSessionId: 1 }),
+    makeSession({ id: 3, projectId: 2, parentSessionId: 1, status: "exited" }),
+    makeSession({ id: 4, projectId: 1, parentSessionId: 1 }),
+    makeSession({ id: 5, projectId: 3, parentSessionId: 1 }),
+  ];
+
+  it("counts only live children in other projects", () => {
+    expect(crossProjectChildCount(all, 1)).toBe(2);
+  });
+
+  it("is zero for a parent with none, or one not in the list", () => {
+    expect(crossProjectChildCount(all, 2)).toBe(0);
+    expect(crossProjectChildCount(all, 99)).toBe(0);
   });
 });

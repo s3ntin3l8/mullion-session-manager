@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../../src/db/schema.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
@@ -97,6 +98,8 @@ let reconstructedHash: string | null = "hash-current";
 
 vi.mock("../../src/services/docker-service-detect.js", () => ({
   getComposeServices: vi.fn(async () => discoveredServices),
+  // Read by the agent's /internal/docker-services (the round-trip test below).
+  isDockerComposeAvailable: vi.fn(async () => true),
   mapServicesToProject: vi.fn((services: FixtureService[], projectCwd: string) =>
     services.filter(
       (s) => s.workingDir === projectCwd || s.workingDir.startsWith(`${projectCwd}/`),
@@ -138,6 +141,37 @@ vi.mock("../../src/services/docker-service-detect.js", () => ({
   startComposeService: vi.fn(async () => startSucceeds),
   reconstructConfigHash: vi.fn(async () => reconstructedHash),
 }));
+
+// Issue #3427 — the agent a remote project's Docker discovery and service
+// actions go to. A method this file does not script rejects (an unreachable
+// host), which every other route that touches a remote project tolerates.
+const agent = vi.hoisted(() => ({
+  scripted: {} as Record<string, (...args: unknown[]) => unknown>,
+  calls: [] as { method: string; args: unknown[] }[],
+  /** true = the real client, for the in-process agent round trip. */
+  passthrough: false,
+}));
+vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof RemoteHostClientModule>();
+  const client = new Proxy(
+    {},
+    {
+      get:
+        (_t, method: string) =>
+        async (...args: unknown[]) => {
+          agent.calls.push({ method, args });
+          const fn = agent.scripted[method];
+          if (!fn) throw new Error(`host unreachable (${method} not scripted)`);
+          return fn(...args);
+        },
+    },
+  );
+  return {
+    ...actual,
+    getRemoteHostClient: (...args: Parameters<typeof actual.getRemoteHostClient>) =>
+      agent.passthrough ? actual.getRemoteHostClient(...args) : client,
+  };
+});
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
@@ -231,28 +265,6 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       process.env.CRS_CONFIG_DIR = previousConfigDir;
       fs.rmSync(configDir, { recursive: true, force: true });
       fs.rmSync(projectCwd, { recursive: true, force: true });
-    });
-
-    it("a remote-host project never sees discovered Docker controls", async () => {
-      discoveredServices = [fixtureService()];
-      const app = await buildApp();
-
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "remote", baseUrl: "http://127.0.0.1:1", token: "t" },
-      });
-      const hostId = hostRes.json().id as string;
-      const projectId = await createProject(app, { cwd: "/remote/path", hostId });
-
-      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/dock` });
-      // Unreachable remote host -> 503, same as today's behavior; the point
-      // being asserted is that this path never even calls into docker
-      // discovery (getComposeServices' mock isn't consulted for host !==
-      // LOCAL_HOST_ID at all — see the route's early branch).
-      expect(res.statusCode).toBe(503);
-
-      await app.close();
     });
 
     it("settings.dock.dockerServices=false suppresses all discovered controls", async () => {
@@ -365,27 +377,6 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         payload: { controlId: "docker:some-other-project:web" },
       });
       expect(res.statusCode).toBe(404);
-
-      await app.close();
-    });
-
-    it("rejects a non-local project", async () => {
-      discoveredServices = [fixtureService()];
-      const app = await buildApp();
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "remote2", baseUrl: "http://127.0.0.1:1", token: "t" },
-      });
-      const hostId = hostRes.json().id as string;
-      const projectId = await createProject(app, { cwd: "/remote/path", hostId });
-
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/projects/${projectId}/docker/check-update`,
-        payload: { controlId: "docker:sanctuary:web" },
-      });
-      expect(res.statusCode).toBe(400);
 
       await app.close();
     });
@@ -1480,8 +1471,8 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
   // docker fields leak into a remote host's response) end to end, not just
   // via the unreachable-host 503 case above.
   describe("remote host round-trip", () => {
-    it("a remote host's own /internal/dock response is returned verbatim, with no docker merge applied", async () => {
-      discoveredServices = [fixtureService()];
+    it("a remote host's own /internal/dock response is merged with the services its agent discovers (#3427)", async () => {
+      agent.passthrough = true;
       const AGENT_TOKEN = "test-agent-token";
       const agentCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-docker-agent-repo-"));
       fs.mkdirSync(path.join(agentCwd, ".crs"));
@@ -1507,6 +1498,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         prevEnv[key] = process.env[key];
         process.env[key] = agentEnv[key as keyof typeof agentEnv];
       }
+      discoveredServices = [fixtureService({ workingDir: agentCwd })];
       const agentApp = await buildApp();
       for (const key of Object.keys(agentEnv)) {
         if (prevEnv[key] === undefined) delete process.env[key];
@@ -1532,10 +1524,19 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/dock` });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual([
+        expect.objectContaining({ id: "docker:sanctuary:web", source: "docker" }),
         expect.objectContaining({ id: "remote-logs", title: "Remote logs" }),
       ]);
-      expect(res.json().some((c: { id: string }) => c.id.startsWith("docker:"))).toBe(false);
 
+      // ...and an action on the discovered service goes to the agent and back.
+      const restart = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/service/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      expect(restart.json()).toEqual({ success: true });
+
+      agent.passthrough = false;
       await app.close();
       await agentApp.close();
       fs.rmSync(agentCwd, { recursive: true, force: true });
