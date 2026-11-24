@@ -50,14 +50,14 @@
      margin stays inside the 8px gap before the actions. */
   overflow: clip;
   overflow-clip-margin: 4px;
-  /* Hermes review, PR #1366, line 43 — the `overflow: hidden` here clipped
-     the rename input's 3px `box-shadow` focus ring, which extends beyond
-     the wrapper's content-box on focus. The parent `.pane-tab` is now a
-     `1fr/auto` grid (see `.pane-tab`), so the 1fr column already constrains this
-     wrapper's width — `overflow: hidden` is redundant for text-overflow
-     purposes and can be removed. The title's own `overflow: hidden;
-     text-overflow: ellipsis; min-width: 0` (see `.pane-tab-name`) still handles
-     title truncation within the wrapper. */
+  /* History, kept as a warning (PR #1366 → #3388): the old `overflow: hidden`
+     here clipped the rename input's focus ring, an `outline: 2px` with
+     `outline-offset: 1px` (modals.css), so it was dropped on the theory that
+     the `1fr` column already constrains this wrapper. It does not: the track
+     sizes this box but its children still paint past it, which is #3388. Do
+     NOT remove the clip above; `overflow-clip-margin: 4px` is what keeps the
+     ring visible. The title's own `overflow: hidden; text-overflow: ellipsis;
+     min-width: 0` (see `.pane-tab-name`) handles title truncation. */
 }
 /* Right-column cluster: close + ⋯ kebab. Auto-sized to its children so
    the grid's `auto` track keeps them anchored at the tab's right edge
@@ -128,10 +128,12 @@
      unread), not of the grid itself. Without `flex: 1` the title would
      size to its content width and short titles would leave dead space
      before the close/kebab cluster (Hermes review, PR #1366, line 90). */
-  flex: 1;
-  /* #3388 — the title keeps a few characters before the branch/badges give
-     way; `0` here let the other items take the whole row at 190-260px. */
-  min-width: 2.5rem;
+  /* #3388 — a 1.75rem floor that does not shrink (`min-width` stays 0, see
+     terminal.paneTab.test.ts), so at 190-260px the branch and badges give way
+     first and the title keeps a few characters; only if they are exhausted
+     does .pane-tab-leading's clip take the rest. */
+  flex: 1 0 1.75rem;
+  min-width: 0;
 }
 /* Branch sub-label (issue #96) — inline after the name rather than a second
    line, so the tab strip's fixed row height (.pane-tab) doesn't need to
