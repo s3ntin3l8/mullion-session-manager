@@ -53,6 +53,34 @@ const {
 
 describe("reconcileTasks — auto-approve sweep", () => {
   setupReconcilerTestLifecycle("task-reconciler-auto-approve");
+
+  // Every app in this file binds the SAME hooks.sock path (the sessions dir is
+  // per test FILE, not per test), so an app left open by a test that failed or
+  // timed out before reaching its own close() makes every LATER test fail with
+  // SocketAlreadyListeningError — one flaky timeout cascading into the whole
+  // file (seen on PR #3446: 1 timeout + 12 collateral failures). The app
+  // therefore belongs to the FILE: openTestApp() registers it and the
+  // afterEach closes it whatever the test did. Tests must not close their own.
+  let openApp: Awaited<ReturnType<typeof buildApp>> | undefined;
+
+  async function openTestApp() {
+    // One app per test: a second would orphan the first and bring back the
+    // hooks.sock collision this lifecycle exists to prevent.
+    if (openApp) throw new Error("test opened a second app without closing the first");
+    const app = await buildApp();
+    openApp = app;
+    return app;
+  }
+
+  afterEach(async () => {
+    // Vitest runs afterEach innermost-first, so the nested block's
+    // restorePassThroughMocks() has already run by now: the app closes last.
+    // That is fine — close() touches only the db, socket and pty, none of
+    // which the reconciler mocks replace.
+    await openApp?.close();
+    openApp = undefined;
+  });
+
   describe("auto-approve sweep (processAutoApprovals)", () => {
     // Every field an auto-approve candidate needs already set — mirrors
     // exactly what processReviewingTasks' own ingestion write leaves
@@ -77,7 +105,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
 
     describe("a reviewing task whose PR ended (#2103)", () => {
       it("fails a task whose PR was closed without merging, and clears its rebase bookkeeping", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId } = await createAutoApproveCandidate(app);
         app.db
           .update(tasks)
@@ -97,11 +125,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         expect(row.failureReason).toBe("PR closed without merging");
         expect(row.rebaseStartedAt).toBeNull();
         expect(row.mergeError).toBeNull();
-        await app.close();
       });
 
       it("marks a task done and merged when its PR was merged out of band", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId } = await createAutoApproveCandidate(app);
         mockGetPullRequestByNumber.mockResolvedValue(mockPr({ state: "closed", merged: true }));
         mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
@@ -112,11 +139,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         expect(row.status).toBe("done");
         expect(row.mergedAt).not.toBeNull();
         expect(row.archivedAt).not.toBeNull();
-        await app.close();
       });
 
       it("the slow sweep ends a closed PR in a project WITHOUT autoApprove", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId } = await createAutoApproveCandidate(app, { autoApprove: false });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr({ state: "closed", merged: false }));
         mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
@@ -124,11 +150,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         await reconcileTasks(app);
 
         expect((await getTask(app, taskId)).status).toBe("failed");
-        await app.close();
       });
 
       it("the slow sweep also covers a project whose autoApprove is NULL (the default)", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId, projectId } = await createAutoApproveCandidate(app, { autoApprove: false });
         app.db.update(projects).set({ autoApprove: null }).where(eq(projects.id, projectId)).run();
         mockGetPullRequestByNumber.mockResolvedValue(mockPr({ state: "closed", merged: false }));
@@ -137,11 +162,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         await reconcileTasks(app);
 
         expect((await getTask(app, taskId)).status).toBe("failed");
-        await app.close();
       });
 
       it("records the PR's own merge time, not the moment the sweep noticed", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId } = await createAutoApproveCandidate(app);
         mockGetPullRequestByNumber.mockResolvedValue(
           mockPr({ state: "closed", merged: true, mergedAt: "2026-01-02T03:04:05Z" }),
@@ -153,11 +177,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         const row = await getTask(app, taskId);
         expect(row.mergedAt?.toISOString()).toBe("2026-01-02T03:04:05.000Z");
         expect(row.archivedAt?.toISOString()).toBe("2026-01-02T03:04:05.000Z");
-        await app.close();
       });
 
       it("the slow sweep re-reads an open PR at most once per interval", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId } = await createAutoApproveCandidate(app, { autoApprove: false });
         mockGetPullRequestByNumber.mockClear();
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
@@ -172,12 +195,11 @@ describe("reconcileTasks — auto-approve sweep", () => {
         const callsForTask = mockGetPullRequestByNumber.mock.calls.length;
         expect(callsForTask).toBe(afterFirst);
         expect((await getTask(app, taskId)).status).toBe("reviewing");
-        await app.close();
       });
     });
 
     it("auto-approves once the latest verdict is clean and CI reads success", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr());
       mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
@@ -192,12 +214,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("done");
       expect(row.prUrl).toBe("https://github.com/o/r/pull/9");
-
-      await app.close();
     });
 
     it("records the transition via 'auto-approve', distinct from a human's 'approve'", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr());
       mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
@@ -214,12 +234,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         expect.objectContaining({ taskId, via: "auto-approve" }),
         "task transition",
       );
-
-      await app.close();
     });
 
     it("does not approve when the project's autoApprove is off", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app, { autoApprove: false });
       // The slow reviewing-PR-state sweep (#2103) may read the PR of any
       // reviewing task; what autoApprove-off must never do is approve it.
@@ -230,12 +248,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
 
       expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       expect((await getTask(app, taskId)).status).toBe("reviewing");
-
-      await app.close();
     });
 
     it("does not approve while Task Master is disabled", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       try {
         await createAutoApproveCandidate(app);
         await app.inject({
@@ -253,7 +269,6 @@ describe("reconcileTasks — auto-approve sweep", () => {
           url: "/api/settings",
           payload: { taskMaster: { enabled: "inherit" } },
         });
-        await app.close();
       }
     });
 
@@ -266,7 +281,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
     // status makes it a no-op immediately and these tests still isolate
     // exactly the gate they're named for.
     it("does not approve when no review round has been ingested yet", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app, {
         reviewFindingsIngestedSessionId: null,
       });
@@ -278,12 +293,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
       expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-
-      await app.close();
     });
 
     it("does not approve on a stale ingested verdict from an earlier review round", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId, projectId } = await createAutoApproveCandidate(app);
       // Simulates a fresh review round spawned after the ingested one —
       // reviewSessionId has moved on, but reviewFindingsIngestedSessionId
@@ -306,14 +319,12 @@ describe("reconcileTasks — auto-approve sweep", () => {
       expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-
-      await app.close();
     });
 
     it.each(["changes-requested", "inconclusive"])(
       "does not approve on a '%s' verdict",
       async (verdict) => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId } = await createAutoApproveCandidate(app, { lastReviewVerdict: verdict });
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
@@ -323,13 +334,11 @@ describe("reconcileTasks — auto-approve sweep", () => {
         expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
-
-        await app.close();
       },
     );
 
     it("waits (does not approve) while CI is still in progress", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr());
       mockFetchRunsForHead.mockResolvedValue([
@@ -347,12 +356,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
       expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-
-      await app.close();
     });
 
     it("waits (does not approve) while CI status is red", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr());
       mockFetchRunsForHead.mockResolvedValue(ciRun("failure"));
@@ -362,8 +369,6 @@ describe("reconcileTasks — auto-approve sweep", () => {
       expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
-
-      await app.close();
     });
 
     // #1334 — `mergeable: null` ("unknown", GitHub still computing after a
@@ -372,7 +377,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
     // common, transient window right after a push it resolves on its
     // own within a tick or two.
     it("waits (does not approve, records no error) while mergeable is unknown (null)", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app);
       mockGetPullRequestByNumber.mockResolvedValue(
         mockPr({ mergeable: null, mergeableState: "unknown" }),
@@ -385,12 +390,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.mergeError).toBeNull();
-
-      await app.close();
     });
 
     it("attempts auto-rebase when reviewing task has merge conflicts and autoApprove is enabled", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId, reviewSessionId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
@@ -422,15 +425,13 @@ describe("reconcileTasks — auto-approve sweep", () => {
         .all();
       expect(reviewSessionRow.status).toBe("killed");
       expect(row.reviewSessionId).toBeNull();
-
-      await app.close();
     });
 
     // #2369 — the auto-approve gate must see an external reviewer's run as an
     // ingested review (or it never reaches the conflict branch at all) the
     // rebase must clear the whole run handle so the next round dispatches fresh.
     it("auto-rebases a reviewing task whose approved review is an external run, and clears the run (#2369)", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
@@ -462,12 +463,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
       expect(row.reviewRunDispatchedAt).toBeNull();
       expect(row.reviewRunHeadSha).toBeNull();
       expect(row.reviewRunIngestedId).toBeNull();
-
-      await app.close();
     });
 
     it("does not spawn reviewer while auto-rebase is in flight, then spawns reviewer once conflict is resolved", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
@@ -534,9 +533,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
       await reconcileTasks(app);
       row = await getTask(app, taskId);
       expect(row.reviewSessionId).not.toBeNull();
-
-      await app.close();
-    });
+    }, 60_000); // five reconcile passes (~2-4s each on a busy host): timed out at the 20s default on PR #3446's CI
 
     describe("ending the auto-rebase review hold-back early", () => {
       // Drives tick one (dirty PR → rebase worker spawned, rebaseStartedAt
@@ -566,7 +563,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
       }
 
       it("clears rebaseStartedAt and spawns the reviewer once the rebase worker's work finished", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const taskId = await rebasedTask(app);
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () =>
@@ -580,11 +577,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         await reconcileTasks(app);
         row = await getTask(app, taskId);
         expect(row.reviewSessionId).not.toBeNull();
-        await app.close();
       });
 
       it("keeps rebaseStartedAt when workFinishedAt predates the rebase", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const taskId = await rebasedTask(app);
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () =>
@@ -596,11 +592,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         const row = await getTask(app, taskId);
         expect(row.rebaseStartedAt).not.toBeNull();
         expect(row.reviewSessionId).toBeNull();
-        await app.close();
       });
 
       it("keeps rebaseStartedAt while the PR is still dirty", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const taskId = await rebasedTask(app);
         mockGetPullRequestByNumber.mockResolvedValue(
           mockPr({ mergeable: false, mergeableState: "dirty" }),
@@ -614,11 +609,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         const row = await getTask(app, taskId);
         expect(row.rebaseStartedAt).not.toBeNull();
         expect(row.reviewSessionId).toBeNull();
-        await app.close();
       });
 
       it("keeps rebaseStartedAt and does not throw when liveStatus rejects", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const taskId = await rebasedTask(app);
         const sessionBackendModule = await import("../../src/services/session-backend.js");
         const realResolveBackend = sessionBackendModule.resolveBackend;
@@ -642,11 +636,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
           "task reconcile: host unreachable, keeping the auto-rebase review hold-back",
         );
         vi.restoreAllMocks();
-        await app.close();
       });
 
       it("keeps rebaseStartedAt while the derived status is not finished", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const taskId = await rebasedTask(app);
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () =>
@@ -661,11 +654,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         const row = await getTask(app, taskId);
         expect(row.rebaseStartedAt).not.toBeNull();
         expect(row.reviewSessionId).toBeNull();
-        await app.close();
       });
 
       it("falls back to the 30-minute window when no finish signal exists", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const taskId = await rebasedTask(app);
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () => fakeInfo({ lastTurnEndedAt: null, workFinishedAt: null }),
@@ -685,12 +677,11 @@ describe("reconcileTasks — auto-approve sweep", () => {
         await reconcileTasks(app);
         row = await getTask(app, taskId);
         expect(row.reviewSessionId).not.toBeNull();
-        await app.close();
       });
     });
 
     it("aborts auto-rebase when terminating the active review session fails", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       vi.spyOn(app.pty, "terminate").mockRejectedValueOnce(new Error("pty kill failed"));
       const warnSpy = vi.spyOn(app.log, "warn");
       const { taskId, reviewSessionId } = await createAutoApproveCandidate(app, {
@@ -719,12 +710,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         expect.objectContaining({ taskId, reviewSessionId }),
         "task auto-rebase: active review session appears stuck and could not be stopped, leaving it for a later tick",
       );
-
-      await app.close();
     });
 
     it("clears reviewSessionId when resumeTaskWorktree fails during auto-rebase of a reviewing task", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
       const { taskId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
@@ -741,8 +730,6 @@ describe("reconcileTasks — auto-approve sweep", () => {
       const row = await getTask(app, taskId);
       expect(row.reviewSessionId).toBeNull();
       expect(row.mergeError).toContain("could not recreate the worktree");
-
-      await app.close();
     });
 
     describe("retry backoff is per review round", () => {
@@ -759,7 +746,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
       }
 
       it("keeps backing off across repeated CI-pending attempts within one round", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId } = await createAutoApproveCandidate(app);
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(inProgressRun());
@@ -772,12 +759,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
         await reconcileTasks(app);
         expect(mockFetchRunsForHead.mock.calls.length).toBe(callsAfterFirst);
         expect((await getTask(app, taskId)).status).toBe("reviewing");
-
-        await app.close();
       });
 
       it("starts the next reviewing stint from zero attempts after autoReturnTask", async () => {
-        const app = await buildApp();
+        const app = await openTestApp();
         const { taskId, reviewSessionId } = await createAutoApproveCandidate(app, {
           worktreePath: "/tmp",
           agentCommand: "claude",
@@ -832,13 +817,11 @@ describe("reconcileTasks — auto-approve sweep", () => {
 
         expect(mockFetchRunsForHead.mock.calls.length).toBeGreaterThan(callsAfterFirst);
         expect((await getTask(app, taskId)).status).toBe("done");
-
-        await app.close();
       });
     });
 
     it("records mergeError when reviewing task has merge conflicts and rebaseAttempts has reached maximum", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
         agentCommand: "claude",
@@ -855,12 +838,10 @@ describe("reconcileTasks — auto-approve sweep", () => {
       const row = await getTask(app, taskId);
       expect(row.rebaseAttempts).toBe(2);
       expect(row.mergeError).toContain("needs manual resolution");
-
-      await app.close();
     });
 
     it("does not auto-rebase a reviewing task while its review is still in progress", async () => {
-      const app = await buildApp();
+      const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app, {
         branchName: "mullion/task-x",
         agentCommand: "claude",
@@ -877,8 +858,6 @@ describe("reconcileTasks — auto-approve sweep", () => {
       const row = await getTask(app, taskId);
       expect(row.status).toBe("reviewing");
       expect(row.rebaseStartedAt).toBeNull();
-
-      await app.close();
     });
 
     // #755 — a red REQUIRED check returns the task to its worker for one
