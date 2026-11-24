@@ -263,7 +263,7 @@ describe("BrowserQuickPick (#3003)", () => {
       expect(screen.getAllByRole("group").map((g) => g.getAttribute("aria-label"))).toEqual([
         "Recent",
       ]);
-      expect(item(/docs.example.com/)).toBeInTheDocument();
+      expect(item("https://docs.example.com/")).toBeInTheDocument();
       expect(requests).toEqual([]);
     });
 
@@ -388,7 +388,7 @@ describe("BrowserQuickPick (#3003)", () => {
       });
     });
 
-    async function pick(name: RegExp) {
+    async function pick(name: RegExp | string) {
       await userEvent.click(trigger());
       await waitFor(() => expect(item(name)).not.toHaveAttribute("aria-disabled"));
       await userEvent.click(item(name));
@@ -445,7 +445,7 @@ describe("BrowserQuickPick (#3003)", () => {
     it("opens a recent address in the preview", async () => {
       recordBrowserRecent("preview", "https://docs.example.com/");
       renderHost("browser", { projectId: 1 });
-      await pick(/docs.example.com/);
+      await pick("https://docs.example.com/");
       await waitFor(() =>
         expect(previewParams()).toMatchObject({
           kind: "external",
