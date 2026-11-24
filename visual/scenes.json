@@ -898,6 +898,56 @@
           "wait": 800
         }
       ]
+    },
+    {
+      "name": "settings-devices",
+      "path": "/",
+      "baseline": true,
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Settings\"]"
+        },
+        {
+          "click": ".settings-nav-item:has-text(\"Devices\")"
+        },
+        {
+          "waitFor": "[data-testid=\"devices-ios\"]"
+        },
+        {
+          "hover": "role=button[name=\"Add a simulator\"]"
+        }
+      ],
+      "settle": 500
+    },
+    {
+      "name": "settings-devices-ios-form",
+      "path": "/",
+      "baseline": true,
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Settings\"]"
+        },
+        {
+          "click": ".settings-nav-item:has-text(\"Devices\")"
+        },
+        {
+          "waitFor": "[data-testid=\"devices-ios\"]"
+        },
+        {
+          "click": "role=button[name=\"Add a simulator\"]"
+        },
+        {
+          "waitFor": "input[placeholder=\"iPhone 16\"]"
+        },
+        {
+          "hover": "input[placeholder=\"iPhone 16\"]"
+        }
+      ],
+      "settle": 500
     }
   ],
   "viewports": {

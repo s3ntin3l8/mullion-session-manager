@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { insertDemoTasks, TASK_STATUSES } from "../services/demo-fixtures.js";
+import {
+  DEMO_SIMULATORS,
+  insertDemoDevices,
+  insertDemoTasks,
+  TASK_STATUSES,
+} from "../services/demo-fixtures.js";
 import { getProjectRow } from "../services/session-host.js";
 
 // Demo-only fixture routes. The demo instance (scripts/demo/) needs tasks in
@@ -150,4 +155,31 @@ export async function demoFixturesRoute(app: FastifyInstance): Promise<void> {
       return reply.code(201).send({ tasks: created });
     },
   );
+
+  // Settings → Devices rows (an Android emulator, a physical phone, an iOS
+  // Simulator). Fixed: the body names nothing, so a request cannot choose
+  // columns. The simulator row's UDID is one of DEMO_SIMULATORS.
+  app.post("/api/demo/fixtures/devices", async (_request, reply) => {
+    const createdAt = new Date("2026-09-20T09:00:00Z");
+    const [sim] = DEMO_SIMULATORS;
+    const created = insertDemoDevices(app, [
+      {
+        name: "Pixel 8 emulator",
+        platform: "android",
+        kind: "emulator",
+        avdName: "Pixel_8_API_35",
+        port: 5554,
+        createdAt,
+      },
+      {
+        name: "Pixel 7 (desk)",
+        platform: "android",
+        kind: "physical",
+        serial: "192.168.1.42:37215",
+        createdAt,
+      },
+      { name: sim.name, platform: "ios", kind: "emulator", udid: sim.udid, createdAt },
+    ]);
+    return reply.code(201).send({ devices: created });
+  });
 }

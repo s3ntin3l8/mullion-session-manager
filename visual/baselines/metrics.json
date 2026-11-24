@@ -712,5 +712,74 @@
       }
     ],
     "console": []
+  },
+  "settings-devices.desktop.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 14
+      }
+    ],
+    "console": []
+  },
+  "settings-devices.desktop.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 14
+      }
+    ],
+    "console": []
+  },
+  "settings-devices-ios-form.desktop.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 1
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 14
+      }
+    ],
+    "console": []
+  },
+  "settings-devices-ios-form.desktop.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 14
+      }
+    ],
+    "console": []
   }
 }

@@ -143,4 +143,35 @@ describe("demo fixture routes", () => {
     expect(dropped.json().tasks[0].sessionId).toBeNull();
     await app.close();
   });
+
+  it("seed devices and report both platforms and the simulators without a toolchain", async () => {
+    process.env.MULLION_DEMO = "true";
+    const app = await buildApp();
+    const seeded = await app.inject({ method: "POST", url: "/api/demo/fixtures/devices" });
+    expect(seeded.statusCode).toBe(201);
+
+    const list = (await app.inject({ method: "GET", url: "/api/devices" })).json();
+    expect(list.map((d: { platform: string; kind: string }) => `${d.platform}/${d.kind}`)).toEqual([
+      "android/emulator",
+      "android/physical",
+      "ios/emulator",
+    ]);
+
+    const [local] = (await app.inject({ method: "GET", url: "/api/devices/hosts" })).json();
+    expect(local.platforms).toEqual(["android", "ios"]);
+    expect(local.deviceKinds).toEqual(["physical", "emulator"]);
+
+    const sims = (await app.inject({ method: "GET", url: "/api/simulators" })).json();
+    expect(sims.map((x: { udid: string }) => x.udid)).toContain(list[2].udid);
+    const catalog = (await app.inject({ method: "GET", url: "/api/simulators/catalog" })).json();
+    expect(catalog.runtimes.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
+  it("device fixtures do not exist without MULLION_DEMO", async () => {
+    const app = await buildApp();
+    const res = await app.inject({ method: "POST", url: "/api/demo/fixtures/devices" });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
 });

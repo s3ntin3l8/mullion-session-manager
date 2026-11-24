@@ -40,6 +40,8 @@ export function physicalDeviceUnavailableMessage(app: FastifyInstance): string {
  * `DEVICE_IDB_COMPANION_PATH` is an executable file.
  */
 export async function iosSimulatorAvailable(app: FastifyInstance): Promise<boolean> {
+  // The demo instance has no Xcode; it reports iOS so its fixtures can be seen.
+  if (app.config.MULLION_DEMO) return true;
   if (!isDeviceKindSupported("ios-simulator")) return false;
   if (!app.config.DEVICE_IOS_ENABLED) return false;
   if (!(await getCachedCapabilities(app)).includes("xcode")) return false;
