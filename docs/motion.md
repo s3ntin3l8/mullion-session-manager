@@ -105,7 +105,8 @@ There are two shapes:
   its `open` state (a menu, a popover): render while `present`, put `state`
   on its root as `data-presence`.
 - `<Presence when={open}>` (`ui/Presence.tsx`) around an overlay its parent
-  mounts: every `Modal` and the command palette. However the parent closes
+  mounts: every `Modal`, the command palette and `PairDeviceDialog` (which
+  builds the `create-modal-*` markup itself). However the parent closes
   it (a submit that succeeded, a palette command that ran, the global
   Escape, or the overlay's own Escape, backdrop and close button, which now
   call `onClose` at once), the overlay stays mounted for its exit and then
@@ -115,7 +116,7 @@ There are two shapes:
   while leaving, Presence renders the children it last had while open. A
   reopen during the exit mounts a fresh overlay.
 
-  `Modal` and the palette read the leaving state from context
+  `Modal`, the palette and `PairDeviceDialog` read the leaving state from context
   (`useParentPresence`) and hand Presence their root to wait on. Nothing
   waits on the exit but the picture: the state change, the action behind it
   and the focus move all happen at the close. The focus trap lets go at once
