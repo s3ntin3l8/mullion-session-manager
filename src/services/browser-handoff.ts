@@ -31,7 +31,7 @@ import {
 import { bindingBrowserTarget } from "./browser-binding-target.js";
 import { resolveExecutionContext } from "./execution-context.js";
 import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
-import { CHECKOUT_BRANCH, getPreviewBySlug } from "./preview-registry.js";
+import { CHECKOUT_BRANCH, getPreviewBySlug, isPortPreviewBranch } from "./preview-registry.js";
 import { listSessionBrowserBindings } from "./session-browsers.js";
 
 type SessionRow = typeof sessions.$inferSelect;
@@ -297,7 +297,9 @@ export async function previewForAddress(
       return {
         kind: "project",
         previewSlug: row.slug,
-        label: row.branch,
+        label: isPortPreviewBranch(row.branch)
+          ? row.branch.replace("port:", "localhost:")
+          : row.branch,
         path: pathBelow(up.url, page),
       };
     }

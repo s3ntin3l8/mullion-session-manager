@@ -276,6 +276,7 @@ describe("docker-service-detect", () => {
           configFiles: [resolvableComposeFile],
           envFile: null,
           configHash: "hash-sanctuary-web",
+          publishedPorts: [],
         },
       ]);
     });
