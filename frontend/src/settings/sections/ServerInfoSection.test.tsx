@@ -158,4 +158,23 @@ describe("Settings -> Server", () => {
     const key = await screen.findByText("Android devices");
     expect(key.nextElementSibling).toHaveTextContent("On, with network discovery");
   });
+
+  it("keeps the plain flag on an older server that omits deviceKinds, and says plain Off with no iOS", async () => {
+    setup();
+    const spy = vi.spyOn(api, "getServerInfo");
+    spy.mockResolvedValue({
+      ...info,
+      features: { browser: true, devices: true, deviceDiscovery: false },
+    } as ServerInfo);
+    const first = render(<ServerInfoSection />);
+    expect((await screen.findByText("Android devices")).nextElementSibling).toHaveTextContent("On");
+    first.unmount();
+    spy.mockResolvedValue({
+      ...info,
+      features: { browser: true, devices: true, deviceDiscovery: false, deviceKinds: [] },
+    } as ServerInfo);
+    render(<ServerInfoSection />);
+    const key = await screen.findByText("Android devices");
+    expect(key.nextElementSibling).toHaveTextContent(/^Off$/);
+  });
 });

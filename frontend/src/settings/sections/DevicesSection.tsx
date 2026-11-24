@@ -537,7 +537,9 @@ export function DevicesSection() {
       )}
       {/* An iOS-only host (no Android kind, #3436) has no discovery socket, so
           the row would be inert. An older server omits deviceKinds: keep it. */}
-      {(serverInfo?.features.deviceDiscovery || !noAndroidKind) && <DeviceDiscoverySetting />}
+      {serverInfo && (serverInfo.features.deviceDiscovery || !noAndroidKind) && (
+        <DeviceDiscoverySetting />
+      )}
       {!loaded && <div className="settings-readonly-value">Loading…</div>}
       {loaded && loadError && devices.length === 0 && (
         <ErrorText style={{ marginTop: 10 }}>Couldn't load devices.</ErrorText>
