@@ -261,6 +261,17 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
   });
 });
 
+// The light map above inherits the dark block, so a material value the light
+// block forgot would be tested with the dark hex. Each theme defines its own.
+describe("material text tokens", () => {
+  it.each([".cmux-root", ".cmux-root.light"])("are all defined in %s itself", (selector) => {
+    const own = block(selector);
+    for (const name of MATERIAL_TEXT) {
+      expect(own.has(`--material-${name.slice(2)}`), `--material-${name.slice(2)}`).toBe(true);
+    }
+  });
+});
+
 // The tokens above only help if material actually uses them.
 const motionSources = import.meta.glob("./motion.css", {
   eager: true,
