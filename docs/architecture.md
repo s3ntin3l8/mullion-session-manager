@@ -677,7 +677,11 @@ Layout mode (`settings.layoutMode`) can force a tier.
 A coarse pointer changes target sizes (44px), adds the terminal key bar, turns
 popovers into sheets and drops hover-only controls at any width; it does not
 change the layout. It also turns the bottom Dock off (`lib/dockAvailability.ts`;
-see [`dock.md`](dock.md)).
+see [`dock.md`](dock.md)). Every control in the browser toolbars (agent browser
+and iframe preview: back/forward/reload, Go, quick pick, keyboard, the URL
+dropdown, the mode-switch segments and the address field) gets the 44px floor
+there too, and the toolbar wraps rather than squeezing the address
+(`tablet.css`, #3443).
 
 **Two modes.** `viewMode` in the store (`"list"` is Workspace, `"kanban"` is
 Tasks; `data-mode` on `.app`, remembered per device) switches between the

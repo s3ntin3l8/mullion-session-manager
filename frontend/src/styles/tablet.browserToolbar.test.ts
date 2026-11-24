@@ -40,5 +40,6 @@ describe("browser toolbar touch floor (#3443)", () => {
     expect(ruleFor(".browser-panel-toolbar")).toMatch(/flex-wrap:\s*wrap/);
     const at = coarse.indexOf(".browser-panel-toolbar .browser-panel-address,");
     expect(coarse.slice(at, coarse.indexOf("}", at))).toMatch(/min-width:/);
+    expect(ruleFor(".browser-panel-toolbar .browser-panel-address")).toMatch(/min-height:\s*44px/);
   });
 });

@@ -276,6 +276,10 @@
   .browser-panel-toolbar .browser-panel-url {
     min-width: 8rem;
   }
+  /* The address field is a tap target too (22px tall otherwise). */
+  .browser-panel-toolbar .browser-panel-address {
+    min-height: 44px;
+  }
   /* The card itself is a drag-and-drop reorder handle (out of scope on
      touch — see the plan's "Explicitly out of scope"), not a tap target;
      this only guards against its own padding/border squeezing the nested
