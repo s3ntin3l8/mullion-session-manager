@@ -136,7 +136,7 @@ notify-worthy event, including exits and finished turns. Split them:
 ## The two sections and their counts
 
 - **Sessions**: needs-you count = sessions with at least one open decision
-  (permission, plan, question, elicitation, review gate, promote, stop failure,
+  (permission, plan, question, elicitation, review gate, promote, stop failure, a non-zero exit,
   review verdict on a manual PR, red PR on a manual session). One row per
   decision, grouped under the session's header as today; identical rows fold.
   This is `collectNeedsYouIds` narrowed to decision kinds.
@@ -152,7 +152,7 @@ notify-worthy event, including exits and finished turns. Split them:
 A third element sits at the bottom of the Sessions section: a collapsed
 "Earlier, no decision needed" group with one line per session ("`<session>`
 finished, exited"), not counted anywhere, expandable. It holds the informative
-kinds that are worth a glance but are not decisions (`agentIdle`, exit). The
+kinds that are worth a glance but are not decisions (`agentIdle`, an exit with code zero or none). The
 desktop and phone sounds and OS notifications (`desktopNotify.ts`) are out of
 scope and unchanged.
 
