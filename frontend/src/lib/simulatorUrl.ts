@@ -1,3 +1,4 @@
+import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import type { Device } from "../api/index.js";
 
 /** The URL to hand a simulator's browser for a project's dev server, or null
@@ -29,4 +30,73 @@ export function simulatorOpenUrl(
   u.hostname = "127.0.0.1";
   u.port = port;
   return u.toString();
+}
+
+/** How a simulator reaches a Preview-menu entry (#3491). */
+export type SimulatorRoute =
+  /** Open this URL as is (the dev server on the simulator's own loopback). */
+  | { kind: "direct"; url: string }
+  /** Open the entry's Mullion preview URL (`preview-<slug>.<base host>`). */
+  | { kind: "preview" }
+  /** Cannot be opened; `reason` says why (shown on the disabled row). */
+  | { kind: "unavailable"; reason: string };
+
+/** What the menu knows about the preview proxy (from `GET /api/server-info`). */
+export interface PreviewAvailability {
+  previewsEnabled: boolean;
+  previewBaseHost: string;
+}
+
+const PREVIEWS_OFF =
+  "Previews are not enabled on this server (PREVIEW_BASE_HOST), so there is no preview URL to open";
+
+/** A base host that only ever resolves to the primary's own loopback, which a
+ * simulator on another host (an agent Mac) cannot reach. */
+function isLoopbackHost(host: string): boolean {
+  const name = host.trim().toLowerCase().replace(/:\d+$/, "");
+  return (
+    name === "localhost" ||
+    name.endsWith(".localhost") ||
+    name === "[::1]" ||
+    /^127(\.\d{1,3}){3}$/.test(name)
+  );
+}
+
+/** Whether a preview URL can work for a simulator on `deviceHostId`, or the
+ * reason it cannot. */
+function previewRoute(deviceHostId: string, previews: PreviewAvailability | null): SimulatorRoute {
+  if (!previews?.previewsEnabled || !previews.previewBaseHost.trim()) {
+    return { kind: "unavailable", reason: PREVIEWS_OFF };
+  }
+  if (deviceHostId !== LOCAL_HOST_ID && isLoopbackHost(previews.previewBaseHost)) {
+    return {
+      kind: "unavailable",
+      reason: `The preview host (${previews.previewBaseHost}) is a loopback name, which a simulator on another host cannot reach`,
+    };
+  }
+  return { kind: "preview" };
+}
+
+/** The project's dev server: a simulator on the dev server's own host opens
+ * its loopback URL directly (no proxy, no auth); one on any other host goes
+ * through the Mullion preview, which proxies to the dev server's host. */
+export function simulatorDevServerRoute(
+  address: string,
+  device: Pick<Device, "hostId">,
+  devServerHostId: string,
+  previews: PreviewAvailability | null,
+): SimulatorRoute {
+  const url = simulatorOpenUrl(address, device, devServerHostId);
+  if (url) return { kind: "direct", url };
+  return previewRoute(device.hostId, previews);
+}
+
+/** A named preview target: always through its Mullion preview, whatever host
+ * the simulator is on (the target's own address is resolved by the proxy,
+ * with the target's connection origin). */
+export function simulatorTargetRoute(
+  device: Pick<Device, "hostId">,
+  previews: PreviewAvailability | null,
+): SimulatorRoute {
+  return previewRoute(device.hostId, previews);
 }

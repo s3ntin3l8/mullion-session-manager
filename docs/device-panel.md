@@ -129,12 +129,48 @@ screenshots (`simctl io <udid> screenshot --type=png -`), logs (`simctl spawn
 `openurl` runs `simctl openurl <udid> <url>`: `mullion device openurl <id> <url>`,
 the `use_device` MCP tool's `openurl` action, or "Open in simulator" in the Dock's
 Preview menu. Only http(s) URLs are accepted (`simctl openurl` would otherwise launch
-any registered URL scheme). The menu opens the project's dev server as
-`http://127.0.0.1:<port>` (always http: a certificate for `localhost` cannot match
-`127.0.0.1`), because the dev server is on the loopback of the host it runs on (the
-Browser pane's dev-server destination, which follows a running Dock control to
-its host); a simulator on any other host is listed disabled. It is manual: nothing opens
-on dev-server start. Android devices answer it with a 400.
+any registered URL scheme). It is manual: nothing opens on dev-server start. Android
+devices answer it with a 400.
+
+**What the Preview menu opens (#3429, #3491).** One set of rows per running iOS
+Simulator (`frontend/src/lib/simulatorUrl.ts` picks the route):
+
+- **The dev server, simulator on the same host.** `http://127.0.0.1:<port>`, straight
+  to the dev server's loopback, with no proxy and no auth (always http: a certificate
+  for `localhost` cannot match `127.0.0.1`). "The same host" is the host the dev
+  server runs on: the Browser pane's dev-server destination, which follows a running
+  Dock control to its host.
+- **The dev server, simulator on another host** ("… (via preview)"). The project's
+  Mullion preview, `<dashboard scheme>//preview-<slug>.<PREVIEW_BASE_HOST>/`, which
+  proxies to the dev server on whichever host it runs.
+- **Each named preview target** ("Open <name> in simulator"). The target's preview
+  (`POST /api/previews` with `kind: "target"`), on any host, so the proxy applies the
+  target's connection origin exactly as for the Browser pane.
+
+A preview row is listed **disabled, with the reason as its tooltip**, when previews are
+not enabled (`PREVIEW_BASE_HOST` unset: there is no preview URL to hand over), or when
+`PREVIEW_BASE_HOST` is a loopback name (`localhost`, `*.localhost`, `127.x`, `[::1]`)
+and the simulator is on an agent host, which cannot resolve it to the primary. Beyond
+that, `preview-<slug>.<PREVIEW_BASE_HOST>` must resolve from the simulator's Mac and,
+over https, present a certificate the simulator trusts, the same as for a browser on
+that Mac.
+
+**Preview auth inside the simulator's Safari.** The simulator's Safari has no
+dashboard session, so with `PREVIEW_AUTH_REQUIRED=true` a bare preview URL would only
+get the proxy's 401 page. The menu therefore mints the same 60-second bootstrap token
+the Browser pane's iframe uses (`POST /api/previews/:slug/token`, at click time) and
+appends it as `?__mullion_preview=<token>`. On that first top-level load the preview
+proxy trades the token for its host-only preview cookie (302 + `Set-Cookie`, the token
+stripped from the redirect), and every later request in that Safari tab rides the
+cookie (`src/plugins/preview-proxy.ts`'s `evaluatePreviewAuth`, covered by
+`test/plugins/preview-proxy.test.ts`). As a top-level navigation the preview is the
+first party, so the cookie is stored whether it is the `Secure; SameSite=None;
+Partitioned` variant (https) or `SameSite=Lax` (http). The token is single-preview and
+expires after 60 seconds, so a URL left in the simulator's history is useless to replay;
+once the cookie lapses (a 24-hour lifetime, slid forward while the preview is in use) Safari shows the 401 page again and
+re-opening from the menu mints a fresh token. With preview auth off no token is minted
+and the URL is the bare preview URL. This was established from the proxy's code and
+tests, not observed on a live simulator.
 Live H.264 video and HID input come from `idb_companion` over gRPC
 (`@grpc/grpc-js`, one companion process per device), which is restarted after
 every simulator boot because its HID connection goes stale across a reboot.
