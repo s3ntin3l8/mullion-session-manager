@@ -548,6 +548,22 @@ describe("PaneTab", () => {
       expect(screen.getByText("main")).toBeInTheDocument();
     });
 
+    it("carries the full label as a title, so an ellipsized branch stays readable (#3388)", () => {
+      gitStatuses = {
+        [session.projectId]: {
+          branch: "main",
+          hash: "abc1234",
+          ahead: 0,
+          behind: 0,
+          files: [{ path: "a.ts", status: "M" }],
+          isClean: false,
+          hasConflicts: false,
+        },
+      };
+      render(<PaneTab {...makeProps()} />);
+      expect(screen.getByText("main *")).toHaveAttribute("title", "main *");
+    });
+
     it("appends a dirty marker when the project's git status is unclean", () => {
       gitStatuses = {
         [session.projectId]: {

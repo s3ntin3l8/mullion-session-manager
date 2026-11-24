@@ -248,11 +248,36 @@
     min-height: 44px;
     padding: 0 12px;
   }
-  /* The agent browser's keyboard button (#3030) exists only on a coarse
-     pointer and is the only way to type into the page there, so it gets
-     the touch floor rather than the toolbar's 22px icon size. */
-  .browser-panel-toolbar .browser-pane-keyboard-toggle {
+  /* The browser toolbars (BrowserPane's agent browser, BrowserPanel's iframe
+     preview) size every control at 22px for a mouse. On touch each control
+     gets the 44px floor (#3443): the icon buttons (back, forward, reload,
+     quick pick, keyboard #3030, handoff), Go, the saved-URL dropdown trigger
+     and the mode switch's segments. The toolbar already wraps in the narrow
+     Browser views; the address field keeps its flex:1 and a min-width so it
+     wraps to its own row rather than collapsing. */
+  .browser-panel-toolbar .browser-panel-reload {
     min-width: 44px;
+    min-height: 44px;
+  }
+  .browser-panel-toolbar .browser-panel-go,
+  .browser-panel-toolbar .browser-panel-dropdown-btn,
+  .browser-panel-toolbar .browser-panel-follow,
+  .browser-panel-toolbar .browser-mode-switch-seg {
+    min-height: 44px;
+  }
+  .browser-panel-toolbar .browser-panel-go,
+  .browser-panel-toolbar .browser-panel-follow {
+    min-width: 44px;
+  }
+  .browser-panel-toolbar {
+    flex-wrap: wrap;
+  }
+  .browser-panel-toolbar .browser-panel-address,
+  .browser-panel-toolbar .browser-panel-url {
+    min-width: 8rem;
+  }
+  /* The address field is a tap target too (22px tall otherwise). */
+  .browser-panel-toolbar .browser-panel-address {
     min-height: 44px;
   }
   /* The card itself is a drag-and-drop reorder handle (out of scope on

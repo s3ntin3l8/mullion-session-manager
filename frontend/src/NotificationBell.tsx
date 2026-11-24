@@ -13,7 +13,7 @@ import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { usePresence } from "./hooks/usePresence.js";
 import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
-import { needsYouTasks, taskNeedsYouKind } from "./github/taskMasterSummary.js";
+import { needsYouTasks } from "./github/taskMasterSummary.js";
 import { useOpenTask } from "./hooks/useOpenTask.js";
 import {
   buildFeedItems,
@@ -175,7 +175,9 @@ export function NotificationBell({
   // The Tasks section: every task that needs a human, from the same store
   // `tasks` the rail's badge reads.
   const taskEntries = useMemo(
-    () => needsYouTasks(tasks).map((e) => ({ ...e, kind: taskNeedsYouKind(e.task) ?? "failed" })),
+    // Each entry carries its reason and kind from the one definition
+    // (taskNeedsYou), so they cannot drift.
+    () => needsYouTasks(tasks),
     [tasks],
   );
   const tasksCount = taskEntries.length;

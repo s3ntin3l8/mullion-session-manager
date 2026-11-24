@@ -338,3 +338,69 @@ export async function openRunningDestinationPreview(
   }
   return { ok: true, slug: getOrCreatePortPreview(app, project.id, port, sessionId).slug, label };
 }
+
+/**
+ * #3467 — removes port previews whose service is gone, so a slug never keeps
+ * proxying whatever later listens on the port. A Dock-bound row goes when its
+ * session is no longer active (killed, exited or deleted); a session-less row
+ * (a Compose service, or a Dock session whose row was deleted: SET NULL) goes
+ * when this host's discovery no longer lists its port for the project. Run on
+ * the reconcile timer; a pruned slug answers 404, which the Browser pane shows
+ * as unavailable, and the next pick of a running service mints it again.
+ * Checkout and branch previews are never touched. Returns the pruned slugs.
+ */
+export async function prunePortPreviews(app: FastifyInstance): Promise<string[]> {
+  const readRows = () =>
+    app.db
+      .select({
+        slug: previews.slug,
+        branch: previews.branch,
+        projectId: previews.projectId,
+        port: previews.upstreamPort,
+        sessionId: previews.sessionId,
+      })
+      .from(previews)
+      .where(eq(previews.kind, "project"))
+      .all()
+      .filter((r) => isPortPreviewBranch(r.branch) && r.projectId !== null);
+
+  // Discovery first (the only await), for the projects holding a session-less
+  // row. A project whose host is not local, or with Docker discovery switched
+  // off, is skipped: "discovery is disabled" is not "the port is gone", so
+  // those rows stay until discovery can answer.
+  const listedByProject = new Map<number, Set<number>>();
+  if (getStoredSettings(app.db).dock.dockerServices) {
+    const projectIds = new Set(
+      readRows()
+        .filter((r) => r.sessionId === null)
+        .map((r) => r.projectId!),
+    );
+    for (const projectId of projectIds) {
+      const project = getProjectById(app, projectId);
+      // Port previews are only ever minted for local projects.
+      if (!project || project.hostId !== LOCAL_HOST_ID) continue;
+      const found = await runningComposeServices(app, project);
+      listedByProject.set(projectId, new Set(found.map((svc) => svc.port)));
+    }
+  }
+
+  // Everything below is synchronous, on rows read AFTER the await: a preview
+  // re-picked onto a fresh session during it must not be judged on its old
+  // binding.
+  const gone: string[] = [];
+  for (const row of readRows()) {
+    if (row.sessionId !== null) {
+      const [bound] = app.db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, row.sessionId))
+        .all();
+      if (!bound || bound.status !== "active") gone.push(row.slug);
+      continue;
+    }
+    const listed = listedByProject.get(row.projectId!);
+    if (listed && (row.port === null || !listed.has(row.port))) gone.push(row.slug);
+  }
+  if (gone.length > 0) app.db.delete(previews).where(inArray(previews.slug, gone)).run();
+  return gone;
+}

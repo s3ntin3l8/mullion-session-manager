@@ -4,6 +4,7 @@ import {
   needsYouReason,
   needsYouTasks,
   taskBucket,
+  taskNeedsYou,
   taskNeedsYouKind,
 } from "./taskMasterSummary.js";
 
@@ -104,8 +105,41 @@ describe("taskNeedsYouKind (#3459)", () => {
     expect(taskNeedsYouKind(t({ status: "done", mergeError: "conflict" }))).toBe("failed");
     expect(taskNeedsYouKind(t({ status: "done", releaseError: "denied" }))).toBe("failed");
     expect(taskNeedsYouKind(t({ status: "in_progress" }))).toBeNull();
+    // The branches the kind used to re-derive on its own, and got wrong: a
+    // worker that never started, and a parked red check under an approval.
+    expect(
+      taskNeedsYouKind(t({ status: "in_progress", needsHumanReason: "worker-not-started" })),
+    ).toBe("stopped");
+    expect(
+      taskNeedsYouKind(
+        t({
+          status: "reviewing",
+          approvalState: "awaiting-human",
+          needsHumanReason: "ci-still-red",
+          autoReturnCapAnnouncedAt: "2026-01-01T00:00:00Z",
+        }),
+      ),
+    ).toBe("stopped");
     expect(
       taskNeedsYouKind(t({ status: "failed", archivedAt: "2026-01-01T00:00:00Z" })),
     ).toBeNull();
+  });
+});
+
+describe("taskNeedsYou (#3459)", () => {
+  it("is the one source of a task's reason and kind: null exactly when needsYouReason is", () => {
+    const tasks = [
+      t({ status: "failed", failureReason: "boom" }),
+      t({ status: "reviewing", approvalState: "awaiting-human" }),
+      t({ status: "done", mergeError: "x" }),
+      t({ status: "in_progress" }),
+      t({ status: "ready" }),
+    ];
+    for (const task of tasks) {
+      const needs = taskNeedsYou(task);
+      expect(needs?.reason ?? null).toBe(needsYouReason(task));
+      expect(needs?.kind ?? null).toBe(taskNeedsYouKind(task));
+    }
+    expect(needsYouTasks(tasks).map((e) => e.kind)).toEqual(["failed", "review", "failed"]);
   });
 });
