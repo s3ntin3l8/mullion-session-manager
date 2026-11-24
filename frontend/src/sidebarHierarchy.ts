@@ -1,4 +1,6 @@
-import type { Session } from "./api/index.js";
+import type { Project, Session } from "./api/index.js";
+import { sessionDisplayTitle } from "./lib/sessionDisplay.js";
+import type { SessionTitleContexts } from "./lib/sessionDisplay.js";
 
 // Pure hierarchy logic for Sidebar.tsx's ProjectSection (Phase 5, Track B,
 // issue #195 5.5b) — split into its own module purely so Sidebar.tsx can
@@ -73,4 +75,73 @@ export function liveChildCount<T extends Pick<Session, "parentSessionId" | "stat
   parentId: number,
 ): number {
   return sessions.filter((s) => s.parentSessionId === parentId && s.status === "active").length;
+}
+
+// #3456 — a child spawned into another project than its coordinator's stays
+// in its own project's tree (no cross-project nesting), so nothing in the
+// tree says who spawned it. This derives the "spawned by" marker's data.
+// `live` / `exited` parents can be opened; `killed` (hidden from every view,
+// see isListedSession) and `missing` (not in the store) cannot.
+export type SpawnParentState = "live" | "exited" | "killed" | "missing";
+
+export interface CrossProjectParent {
+  parentId: number;
+  title: string;
+  projectId: number | null;
+  projectName: string;
+  state: SpawnParentState;
+}
+
+// Null unless the session has a parent that is in the store with a DIFFERENT
+// project (a same-project child keeps nesting and gets no marker), or whose
+// row is gone while it still names one (`missing`). `titleContexts` gives the
+// parent the same task-aware title the sidebar shows (sessionDisplayTitle).
+export function crossProjectParent(
+  session: Pick<Session, "parentSessionId" | "projectId">,
+  allSessions: Session[],
+  projects: Pick<Project, "id" | "name">[],
+  titleContexts?: SessionTitleContexts,
+): CrossProjectParent | null {
+  if (session.parentSessionId === null) return null;
+  const parent = allSessions.find((s) => s.id === session.parentSessionId);
+  if (!parent) {
+    return {
+      parentId: session.parentSessionId,
+      title: "",
+      projectId: null,
+      projectName: "",
+      state: "missing",
+    };
+  }
+  if (parent.projectId === session.projectId) return null;
+  const state: SpawnParentState =
+    parent.status === "killed" ? "killed" : parent.status === "exited" ? "exited" : "live";
+  return {
+    parentId: parent.id,
+    title: sessionDisplayTitle(parent, titleContexts?.get(parent.id)),
+    projectId: parent.projectId,
+    projectName: projects.find((p) => p.id === parent.projectId)?.name ?? "",
+    state,
+  };
+}
+
+// The parent's side of the marker: the LIVE children it has in other projects
+// (the same full-store basis as liveChildCount, so the number agrees with the
+// end-session confirmation). Empty when the parent is not in the store.
+export function crossProjectChildren<
+  T extends Pick<Session, "id" | "parentSessionId" | "status" | "projectId">,
+>(allSessions: T[], parentId: number): T[] {
+  const parent = allSessions.find((s) => s.id === parentId);
+  if (!parent) return [];
+  return allSessions.filter(
+    (s) =>
+      s.parentSessionId === parentId && s.status === "active" && s.projectId !== parent.projectId,
+  );
+}
+
+export function crossProjectChildCount(
+  allSessions: Pick<Session, "id" | "parentSessionId" | "status" | "projectId">[],
+  parentId: number,
+): number {
+  return crossProjectChildren(allSessions, parentId).length;
 }

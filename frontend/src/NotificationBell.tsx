@@ -466,10 +466,11 @@ export function NotificationBell({
     const withDecision = new Set(
       allItems.filter((i) => i.type === "event").map((i) => i.sessionId),
     );
+    const byId = new Map(sessions.map((s) => [s.id, s]));
     const ids: number[] = [];
     for (const item of allItems) {
       if (item.type !== "grouped" || withDecision.has(item.sessionId)) continue;
-      const session = sessions.find((s) => s.id === item.sessionId);
+      const session = byId.get(item.sessionId);
       if (!item.read || session?.attention) ids.push(item.sessionId);
     }
     return ids;

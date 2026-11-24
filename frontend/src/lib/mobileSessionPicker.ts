@@ -3,6 +3,8 @@ import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
 import { isListedSession, sessionDisplayTitle } from "./sessionDisplay.js";
 import type { SessionTitleContexts } from "./sessionDisplay.js";
 import { buildSessionWorkspaceIndex } from "../panelUtils.js";
+import { crossProjectParent } from "../sidebarHierarchy.js";
+import type { CrossProjectParent } from "../sidebarHierarchy.js";
 
 // Issue #1882 — the workspace a session's panel lives in.
 //
@@ -48,6 +50,10 @@ export interface PickerRow {
   // Text the switcher's search box matches (title, raw command, project name)
   // — the same fields sessionMatchesSearch uses for the sidebar filter.
   searchFields: string[];
+  // #3456 — the coordinator in ANOTHER project that spawned this session (the
+  // sidebar's "spawned by" marker), or null for every other row. Optional so
+  // a pane row needs no value.
+  spawnedBy?: CrossProjectParent | null;
 }
 
 export interface PickerSection {
@@ -193,6 +199,7 @@ export function buildPickerSections(input: PickerInput): PickerSection[] {
       title,
       projectName: project?.name ?? null,
       searchFields,
+      spawnedBy: crossProjectParent(session, input.sessions, input.projects, input.titleContexts),
       unreadCount: sessionUnreadCount(session.id, events, seen, input.dismissedEventKeys, isMuted),
       needsYou: sessionNeedsYou(session, events, seen, input.dismissedEventKeys, isMuted),
       // Where this session lives (issue #1882). A session OPEN in the live
