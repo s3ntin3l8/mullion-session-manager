@@ -11,7 +11,17 @@ const css = files["./tablet.css"]!;
 // #3443: jsdom has no layout, so pin the contract. Every control in the
 // browser toolbars gets the 44px touch floor under a coarse pointer.
 describe("browser toolbar touch floor (#3443)", () => {
-  const coarse = css.slice(css.indexOf("@media (pointer: coarse)"));
+  // Only the coarse block itself, to its closing brace: a fine-pointer rule
+  // added later with one of these selectors must not satisfy the pins.
+  const coarse = (() => {
+    const open = css.indexOf("{", css.indexOf("@media (pointer: coarse)"));
+    let depth = 0;
+    for (let i = open; i < css.length; i++) {
+      if (css[i] === "{") depth++;
+      else if (css[i] === "}" && --depth === 0) return css.slice(open, i + 1);
+    }
+    throw new Error("unclosed (pointer: coarse) block");
+  })();
 
   // The declaration body of the rule whose selector list is exactly `selector`.
   function ruleFor(selector: string): string {

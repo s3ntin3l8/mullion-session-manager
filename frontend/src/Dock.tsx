@@ -376,10 +376,16 @@ export function Dock({
       keyboardStep: DIVIDER_KEYBOARD_STEP_PX,
     });
 
+  // The height handle's `aria-valuemax`/`aria-valuenow` are derived from
+  // `getDockMaxHeight()` at render, which reads 0 until `dockRef` attaches.
+  // Flipping this once, in the layout effect below, re-renders after the refs
+  // exist, so the bounds are right before the first paint (#3451 review).
+  const [, setBoundsMeasured] = useState(false);
   useLayoutEffect(() => {
     const max = getDockMaxHeight();
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setHeight((h) => (h > max ? max : h));
+    setBoundsMeasured(true);
   }, []);
 
   // ---- Split-width measurement (unified-rail dock rework) ----

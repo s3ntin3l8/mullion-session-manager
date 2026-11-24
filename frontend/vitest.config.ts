@@ -63,7 +63,8 @@ export default defineConfig({
     // right-sidebar/DockSidebarView.test.tsx; motion.css and index.css: the
     // shared press, overlay and material rules, styles/motion.test.ts;
     // launcher-projects.css: the Add project form keeps its content height,
-    // launchers/LauncherProjects.test.tsx).
+    // launchers/LauncherProjects.test.tsx; tablet.css: the browser toolbars'
+    // coarse touch floor, styles/tablet.browserToolbar.test.ts).
     css: {
       include: [
         /styles\/tokens\.css/,
