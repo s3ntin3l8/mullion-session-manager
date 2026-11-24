@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { Presence } from "../../ui/Presence.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DISCOVERY_POLL_MS, DISCOVERY_TIMEOUT_MS, PairDeviceDialog } from "./PairDeviceDialog.js";
 import { api, ApiError } from "../../api/index.js";
@@ -493,6 +495,85 @@ describe("PairDeviceDialog (issue #1379)", () => {
       expect(
         await screen.findByText("Host h-pi does not report device support"),
       ).toBeInTheDocument();
+    });
+  });
+  // #3453 — mounted through <Presence> as DevicesSection does.
+  describe("exit through Presence (#3453)", () => {
+    function Harness({ onPaired }: { onPaired: () => void }) {
+      const [open, setOpen] = useState(true);
+      return (
+        <Presence when={open}>
+          <PairDeviceDialog
+            onClose={() => setOpen(false)}
+            onPaired={() => {
+              onPaired();
+              setOpen(false);
+            }}
+          />
+        </Presence>
+      );
+    }
+    const pairIt = async (onPaired: () => void) => {
+      vi.mocked(api.listDiscoveredDevices).mockResolvedValue([discovered()]);
+      render(<Harness onPaired={onPaired} />);
+      await screen.findByRole("radio", { name: /Pixel 7/ });
+      typeInto("123456", "123456");
+      fireEvent.click(submitButton());
+    };
+
+    it("plays the exit after a successful pairing, then unmounts; onPaired runs at once", async () => {
+      const { installExitAnimations } = await import("../../test/exitAnimations.js");
+      const exits = installExitAnimations();
+      try {
+        const onPaired = vi.fn();
+        await pairIt(onPaired);
+        const dialog = await screen.findByRole("dialog", { name: "Pair a phone or tablet" });
+        const backdrop = dialog.closest(".create-modal-backdrop") as HTMLElement;
+        await waitFor(() => expect(backdrop).toHaveAttribute("data-presence", "leaving"));
+        expect(onPaired).toHaveBeenCalledTimes(1);
+        expect(backdrop).toHaveAttribute("inert");
+        await exits.finishExits();
+        expect(backdrop).not.toBeInTheDocument();
+      } finally {
+        exits.restore();
+      }
+    });
+
+    it("its own dismiss controls call onClose directly and Presence plays the exit", async () => {
+      const { installExitAnimations } = await import("../../test/exitAnimations.js");
+      const exits = installExitAnimations();
+      try {
+        render(<Harness onPaired={vi.fn()} />);
+        const backdrop = (await screen.findByRole("dialog")).closest(
+          ".create-modal-backdrop",
+        ) as HTMLElement;
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        expect(backdrop).toHaveAttribute("data-presence", "leaving");
+        await exits.finishExits();
+        expect(backdrop).not.toBeInTheDocument();
+      } finally {
+        exits.restore();
+      }
+    });
+
+    it("closes at once under reduced motion", async () => {
+      const { installExitAnimations } = await import("../../test/exitAnimations.js");
+      const exits = installExitAnimations();
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: query === "(prefers-reduced-motion: reduce)",
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+      }));
+      try {
+        await pairIt(vi.fn());
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      } finally {
+        vi.unstubAllGlobals();
+        exits.restore();
+      }
     });
   });
 });

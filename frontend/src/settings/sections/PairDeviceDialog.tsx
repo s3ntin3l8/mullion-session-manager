@@ -5,7 +5,7 @@ import { ApiError } from "../../api/index.js";
 import type { DeviceHostEntry, DiscoveredDevice, PairAndConnectBody } from "../../api/index.js";
 import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
 import { usePolling } from "../../hooks/usePolling.js";
-import { useDismissExit } from "../../hooks/usePresence.js";
+import { useBlurWhenLeaving, useDismissExit, useParentPresence } from "../../hooks/usePresence.js";
 import { CloseIcon, DeviceIcon } from "../../ui/icons.js";
 import { Dropdown, SecondaryButton } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
@@ -254,16 +254,26 @@ export function PairDeviceDialog({
     if (e.key === "Enter") submit();
   };
 
-  // #3015 — its own dismiss controls play the exit before `onClose`, as
-  // ui/Modal's do (this dialog builds the create-modal markup itself).
+  // #3453 — mounted inside a `<Presence>` the parent decides, as ui/Modal's
+  // DialogModal does: a successful pairing (`onPaired`) closes it at once and
+  // the Presence plays the one exit, during which the dialog is `inert`.
+  // Bare (no Presence), its own dismiss controls play the exit (#3015) before
+  // `onClose`. This dialog builds the create-modal markup itself and has no
+  // focus trap to deactivate.
   const backdropRef = useRef<HTMLDivElement>(null);
-  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
+  const parent = useParentPresence(backdropRef);
+  const parentLeaving = parent?.leaving ?? false;
+  const { state: ownPresence, dismiss: dismissWithExit } = useDismissExit(onClose, backdropRef);
+  const presence = parentLeaving ? "leaving" : ownPresence;
+  const dismiss = parent ? onClose : dismissWithExit;
+  useBlurWhenLeaving(parentLeaving, backdropRef);
 
   return (
     <div
       ref={backdropRef}
       className="create-modal-backdrop motion-scrim"
       data-presence={presence}
+      inert={parentLeaving || undefined}
       onClick={dismiss}
     >
       <div
