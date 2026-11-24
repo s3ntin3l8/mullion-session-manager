@@ -924,8 +924,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string }; Body: { address?: string } }>(
     "/api/devices/:id",
     async (request, reply) => {
-      if (!physicalDeviceEnabled(app)) {
-        return reply.badRequest(physicalDeviceUnavailableMessage(app));
+      if (!app.devicePanelEnabled) {
+        return reply.badRequest(app.devicePanelUnavailableMessage);
       }
       const id = Number(request.params.id);
       if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
@@ -935,6 +935,11 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
         return reply.badRequest("only a physical device's address can be edited");
       }
       const host = getDeviceHost(app, row.hostId);
+      // Only THIS host's own Android config gates a local row; an agent
+      // enforces its own (#3436).
+      if (host.isLocal && !physicalDeviceEnabled(app)) {
+        return reply.badRequest(physicalDeviceUnavailableMessage(app));
+      }
       const { address } = request.body ?? {};
       if (!isValidDeviceAddress(address)) {
         return reply.badRequest("address must be host:port (e.g. 192.168.1.23:37251)");

@@ -207,8 +207,7 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS,
     app,
   );
-  // Discovery finds Android phones, so it follows Android being configured too (#3436).
-  app.decorate("bootDeviceDiscoveryEnabled", discoveryEnabled && androidConfigured);
+  app.decorate("bootDeviceDiscoveryEnabled", discoveryEnabled);
   const discovery = new DeviceDiscoveryService({
     // Gated on the platform too: the mDNS scanner finds PHYSICAL phones, so it
     // runs wherever the panel does at all (macOS included, #1854); a platform

@@ -341,6 +341,10 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           expect(res.statusCode).toBe(200);
           expect(res.json().features.devices).toBe(true);
           expect(res.json().features.deviceKinds).toEqual([]);
+          // No discovery socket on this host, but "running" still reports the booted
+          // setting, so Settings never shows a restart hint that cannot clear.
+          expect(res.json().features.deviceDiscovery).toBe(false);
+          expect(res.json().running.deviceDiscoveryEnabled).toBe(true);
           // A physical create is refused up front: 400, and no row is left behind.
           const create = await app.inject({
             method: "POST",
