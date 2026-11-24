@@ -30,7 +30,27 @@ function sim(over: Partial<Device>): Device {
   };
 }
 
-async function openMenu(devices: Device[], stubApi = true) {
+function destinations(hostId: string) {
+  return {
+    destinations: [
+      {
+        key: "dev-server",
+        group: "saved" as const,
+        kind: "dev-server" as const,
+        label: "Dev server",
+        detail: "3005",
+        address: "http://localhost:3005/",
+        hostId,
+        previewSlug: null,
+        targetId: null,
+      },
+    ],
+    runningNote: null,
+  };
+}
+
+async function openMenu(devices: Device[], stubApi = true, devServerHost = "local") {
+  vi.spyOn(api, "getBrowserDestinations").mockResolvedValue(destinations(devServerHost));
   if (stubApi) vi.spyOn(api, "openUrlOnDevice").mockResolvedValue({ ok: true });
   resetStore({
     projects: [makeProject({ id: 1, hostId: "local", devServerUrl: "3005" })],
@@ -43,6 +63,9 @@ async function openMenu(devices: Device[], stubApi = true) {
   const user = userEvent.setup();
   render(<ProjectPreviewMenu projectId={1} onOpenDefault={vi.fn()} onManage={vi.fn()} />);
   await waitFor(() => expect(useDashboardStore.getState().projectPreviewConfigs[1]).toBeTruthy());
+  if (devices.some((d) => d.platform === "ios" && d.status === "active" && d.live)) {
+    await waitFor(() => expect(api.getBrowserDestinations).toHaveBeenCalled());
+  }
   await user.click(screen.getByRole("button", { name: "Preview" }));
   return user;
 }
@@ -61,8 +84,24 @@ describe("Preview menu: Open in simulator", () => {
     const item = screen.getByRole("menuitem", {
       name: "Open in simulator — iPhone 16 (on another host)",
     });
+    expect(item).toHaveAttribute("aria-disabled", "true");
     await user.click(item);
     expect(api.openUrlOnDevice).not.toHaveBeenCalled();
+  });
+
+  it("follows the dev server's own host, not the project's", async () => {
+    // The project is on "local" but its dock control runs on mac-1.
+    const user = await openMenu(
+      [sim({ hostId: "mac-1" }), sim({ id: 8, name: "Local sim" })],
+      true,
+      "mac-1",
+    );
+    expect(screen.getByRole("menuitem", { name: /Local sim .*another host/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Open in simulator — iPhone 16" }));
+    expect(api.openUrlOnDevice).toHaveBeenCalledWith(7, "http://127.0.0.1:3005/");
   });
 
   it("offers nothing for Android devices, stopped simulators or none at all", async () => {

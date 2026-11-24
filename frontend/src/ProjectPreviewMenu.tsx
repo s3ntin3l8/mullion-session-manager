@@ -40,19 +40,51 @@ function usePreviewConfig(projectId: number) {
   };
 }
 
+/** Where the project's dev server runs and its address from there, from the
+ * same browser-destinations answer the Browser pane uses (it resolves the host
+ * from the running Dock control, which is not always the project's own host).
+ * Fetched only when a running iOS Simulator exists, and again if the saved dev
+ * server changes. */
+function useDevServerDestination(
+  projectId: number,
+  devices: Device[],
+  devServerUrl: string | null | undefined,
+): { address: string; hostId: string } | null {
+  const hasSimulator = devices.some((d) => d.platform === "ios" && d.status === "active" && d.live);
+  const [found, setFound] = useState<{ key: string; address: string; hostId: string } | null>(null);
+  const key = `${projectId}:${devServerUrl ?? ""}`;
+  useEffect(() => {
+    if (!hasSimulator || !devServerUrl) return;
+    let cancelled = false;
+    void api
+      .getBrowserDestinations(projectId)
+      .then((res) => {
+        if (cancelled) return;
+        const d = res.destinations.find((x) => x.kind === "dev-server");
+        setFound(d?.address ? { key, address: d.address, hostId: d.hostId } : null);
+      })
+      .catch(() => {
+        if (!cancelled) setFound(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, devServerUrl, hasSimulator, key]);
+  return found && found.key === key ? found : null;
+}
+
 /** One "Open in simulator" row per running iOS Simulator, for the project's
  * dev server. Manual only; a simulator that cannot reach the URL is listed
  * disabled with the reason, not hidden. */
 function simulatorItems(
-  devServerUrl: string | undefined,
-  projectHostId: string | undefined,
+  devServer: { address: string; hostId: string } | null,
   devices: Device[],
 ): KebabMenuItem[] {
-  if (!devServerUrl || !projectHostId) return [];
+  if (!devServer) return [];
   return devices
     .filter((d) => d.platform === "ios" && d.status === "active" && d.live)
     .map((d) => {
-      const url = simulatorOpenUrl(devServerUrl, d, projectHostId);
+      const url = simulatorOpenUrl(devServer.address, d, devServer.hostId);
       const name = d.name ?? `Simulator ${d.id}`;
       return {
         key: `simulator-${d.id}`,
@@ -137,12 +169,10 @@ export function ProjectPreviewMenu({
 }) {
   const { config, error, retry } = usePreviewConfig(projectId);
   const devices = useDashboardStore((s) => s.devices);
-  const projectHostId = useDashboardStore(
-    (s) => s.projects.find((p) => p.id === projectId)?.hostId,
-  );
+  const devServer = useDevServerDestination(projectId, devices, config?.devServerUrl);
   const items = [
     ...choices(projectId, config, onOpenDefault),
-    ...simulatorItems(config?.devServerUrl ?? undefined, projectHostId, devices),
+    ...simulatorItems(devServer, devices),
   ];
   if (!config)
     items.push({

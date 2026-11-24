@@ -338,6 +338,8 @@ sessionId), not scoped to any project or session.
 - `device clipboard set <id> <text...> [--paste]` — sets the device clipboard
   via the scrcpy control channel; `--paste` also simulates a paste after
   setting it.
+- `device openurl <id> <url>` — iOS Simulator only: opens an http(s) URL in the
+  simulator's browser (`xcrun simctl openurl`). Answers 400 on Android.
 
 `x`/`y` are in the device's native **screen pixels** — the same space as a
 `screenshot`, and independent of the (downscaled) live-panel stream. Every verb
