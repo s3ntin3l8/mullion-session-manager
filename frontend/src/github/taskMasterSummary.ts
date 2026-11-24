@@ -35,48 +35,56 @@ export function taskBucket(t: Task): TaskBucket | null {
   return needsYouReason(t) ? "attention" : null;
 }
 
-/** Why a task needs a human, or null when it does not. */
-export function needsYouReason(t: Task): string | null {
+/** What kind of needs-you a task is, for the bell's Tasks section (#3459):
+ * "failed" (the task, its merge or its release failed), "review" (a review
+ * approved it and it waits on your approval), or "stopped" (the review loop, a
+ * parked CI check, a merge or a worker that never started holds it for a
+ * human). */
+export type TaskNeedsYouKind = "failed" | "review" | "stopped";
+
+/** Why a task needs a human and what kind of needs-you that is, or null when
+ * it does not: the one definition, so the reason and its kind cannot drift. */
+export function taskNeedsYou(t: Task): { reason: string; kind: TaskNeedsYouKind } | null {
   if (t.archivedAt) return null;
   if (t.status === "in_progress" && t.needsHumanReason === "worker-not-started") {
-    return needsHumanText(t.needsHumanReason);
+    return { reason: needsHumanText(t.needsHumanReason), kind: "stopped" };
   }
-  if (t.status === "failed") return t.failureReason ?? "failed";
+  if (t.status === "failed") return { reason: t.failureReason ?? "failed", kind: "failed" };
   // A parked red CI check names itself even while an approval is held (that is when
   // it happens), so it comes before the approval line.
   if (isCiHoldReason(t.needsHumanReason) && t.autoReturnCapAnnouncedAt) {
-    return needsHumanText(t.needsHumanReason, t.ciHoldNote);
+    return { reason: needsHumanText(t.needsHumanReason, t.ciHoldNote), kind: "stopped" };
   }
   if (t.approvalState === "awaiting-human") {
-    return approvalStateText(t.approvalState, t.autoReturnRounds);
+    return { reason: approvalStateText(t.approvalState, t.autoReturnRounds), kind: "review" };
   }
-  if (isMergeNeedsHumanReason(t.needsHumanReason)) return needsHumanText(t.needsHumanReason);
-  if (t.autoReturnCapped) return needsHumanText(t.needsHumanReason, t.ciHoldNote);
-  if (t.mergeError) return `merge failed: ${t.mergeError}`;
-  if (t.releaseError) return `release failed: ${t.releaseError}`;
+  if (isMergeNeedsHumanReason(t.needsHumanReason)) {
+    return { reason: needsHumanText(t.needsHumanReason), kind: "stopped" };
+  }
+  if (t.autoReturnCapped) {
+    return { reason: needsHumanText(t.needsHumanReason, t.ciHoldNote), kind: "stopped" };
+  }
+  if (t.mergeError) return { reason: `merge failed: ${t.mergeError}`, kind: "failed" };
+  if (t.releaseError) return { reason: `release failed: ${t.releaseError}`, kind: "failed" };
   return null;
 }
 
-export function needsYouTasks(tasks: Task[]): Array<{ task: Task; reason: string }> {
-  const out: Array<{ task: Task; reason: string }> = [];
-  for (const task of tasks) {
-    const reason = needsYouReason(task);
-    if (reason) out.push({ task, reason });
-  }
-  return out;
+/** Why a task needs a human, or null when it does not. */
+export function needsYouReason(t: Task): string | null {
+  return taskNeedsYou(t)?.reason ?? null;
 }
 
-/** What kind of needs-you a task is, for the bell's Tasks section (#3459):
- * "failed" (the task, its merge or its release failed), "review" (a review
- * approved it and it waits on your approval), or "stopped" (the review loop or
- * a merge holds it for a human). Mirrors needsYouReason's branches, in its
- * order; null exactly when needsYouReason is null. */
-export type TaskNeedsYouKind = "failed" | "review" | "stopped";
-
 export function taskNeedsYouKind(t: Task): TaskNeedsYouKind | null {
-  if (needsYouReason(t) === null) return null;
-  if (t.status === "failed") return "failed";
-  if (t.approvalState === "awaiting-human") return "review";
-  if (isMergeNeedsHumanReason(t.needsHumanReason) || t.autoReturnCapped) return "stopped";
-  return "failed"; // a merge or release error
+  return taskNeedsYou(t)?.kind ?? null;
+}
+
+export function needsYouTasks(
+  tasks: Task[],
+): Array<{ task: Task; reason: string; kind: TaskNeedsYouKind }> {
+  const out: Array<{ task: Task; reason: string; kind: TaskNeedsYouKind }> = [];
+  for (const task of tasks) {
+    const needs = taskNeedsYou(task);
+    if (needs) out.push({ task, ...needs });
+  }
+  return out;
 }

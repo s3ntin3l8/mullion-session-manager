@@ -34,7 +34,7 @@ import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { panelPosition, railPanelPosition } from "./lib/notifPanelPosition.js";
 import type { NotifPanelPosition } from "./lib/notifPanelPosition.js";
 import { TextInput } from "./ui/primitives.js";
-import { needsYouTasks, taskNeedsYouKind } from "./github/taskMasterSummary.js";
+import { needsYouTasks } from "./github/taskMasterSummary.js";
 import type { TaskNeedsYouKind } from "./github/taskMasterSummary.js";
 import { useOpenTask } from "./hooks/useOpenTask.js";
 
@@ -730,13 +730,13 @@ export function NotificationBell({
     taskEntries.length === 0 ? (
       <div className="notif-empty">No task needs you</div>
     ) : (
-      taskEntries.map(({ task, reason }) => (
+      taskEntries.map(({ task, reason, kind }) => (
         <TaskRow
           key={task.id}
           title={task.title}
           project={task.projectName}
           reason={reason}
-          kind={taskNeedsYouKind(task) ?? "failed"}
+          kind={kind}
           onOpen={() => openTaskFromRow(task.id)}
         />
       ))
