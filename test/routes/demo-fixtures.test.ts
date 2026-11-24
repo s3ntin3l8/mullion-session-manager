@@ -160,9 +160,11 @@ describe("demo fixture routes", () => {
     expect(local.deviceKinds).toEqual(["physical", "emulator"]);
 
     const sims = (await app.inject({ method: "GET", url: "/api/simulators" })).json();
-    expect(sims.map((x: { udid: string }) => x.udid)).toContain(
-      list.find((d: { platform: string }) => d.platform === "ios").udid,
-    );
+    const iosUdids = list
+      .filter((d: { platform: string }) => d.platform === "ios")
+      .map((d: { udid: string }) => d.udid);
+    expect(iosUdids).toHaveLength(1);
+    expect(sims.map((x: { udid: string }) => x.udid)).toContain(iosUdids[0]);
     const catalog = (await app.inject({ method: "GET", url: "/api/simulators/catalog" })).json();
     expect(catalog.runtimes.length).toBeGreaterThan(0);
     const created = await app.inject({

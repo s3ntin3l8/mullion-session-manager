@@ -927,7 +927,6 @@
     {
       "name": "settings-devices-ios-form",
       "path": "/",
-      "baseline": true,
       "tags": ["presentation", "audit"],
       "viewports": ["desktop"],
       "steps": [
