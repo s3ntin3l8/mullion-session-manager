@@ -130,4 +130,51 @@ describe("Settings -> Server", () => {
     expect(screen.getByText("Log level")).toBeInTheDocument();
     expect(screen.queryByText(/\/health/)).toBeNull();
   });
+
+  it("does not claim Android on an iOS-only host (#3472)", async () => {
+    setup();
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...info,
+      features: {
+        browser: true,
+        devices: true,
+        deviceDiscovery: false,
+        deviceKinds: [],
+        devicePlatforms: ["ios"],
+      },
+    } as ServerInfo);
+    render(<ServerInfoSection />);
+    const key = await screen.findByText("Android devices");
+    expect(key.nextElementSibling).toHaveTextContent("Off (iOS only)");
+  });
+
+  it("still reports Android on with discovery when a kind exists", async () => {
+    setup();
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...info,
+      features: { browser: true, devices: true, deviceDiscovery: true, deviceKinds: ["physical"] },
+    } as ServerInfo);
+    render(<ServerInfoSection />);
+    const key = await screen.findByText("Android devices");
+    expect(key.nextElementSibling).toHaveTextContent("On, with network discovery");
+  });
+
+  it("keeps the plain flag on an older server that omits deviceKinds, and says plain Off with no iOS", async () => {
+    setup();
+    const spy = vi.spyOn(api, "getServerInfo");
+    spy.mockResolvedValue({
+      ...info,
+      features: { browser: true, devices: true, deviceDiscovery: false },
+    } as ServerInfo);
+    const first = render(<ServerInfoSection />);
+    expect((await screen.findByText("Android devices")).nextElementSibling).toHaveTextContent("On");
+    first.unmount();
+    spy.mockResolvedValue({
+      ...info,
+      features: { browser: true, devices: true, deviceDiscovery: false, deviceKinds: [] },
+    } as ServerInfo);
+    render(<ServerInfoSection />);
+    const key = await screen.findByText("Android devices");
+    expect(key.nextElementSibling).toHaveTextContent(/^Off$/);
+  });
 });

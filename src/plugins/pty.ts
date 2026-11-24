@@ -23,6 +23,7 @@ import {
 } from "../services/ssh-agent-socket.js";
 import { recordSessionsDir } from "../services/sessions-dir-history.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
+import { prunePortPreviews } from "../services/browser-destinations.js";
 import { adoptActiveTaskSessions } from "../services/session-adopt.js";
 import { adoptSurvivingHookTokens } from "../services/hook-token-adopt.js";
 import { detectCodexRateLimits } from "../services/codex-rate-limit.js";
@@ -800,6 +801,12 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
         reconcileExitedSessions(app)
           .catch((err) => {
             app.log.error({ err }, "session reconciliation failed");
+          })
+          // #3467 — after the exit reconcile, so a Dock session that just
+          // ended takes its port preview with it on the same tick.
+          .then(() => prunePortPreviews(app))
+          .catch((err) => {
+            app.log.error({ err }, "port preview prune failed");
           })
           .finally(() => {
             sessionReconcileRunning = false;

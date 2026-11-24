@@ -126,9 +126,9 @@ starts on the project's own placement again.
 - A simulator or emulator on that host reaches the dev server at the host's own
   localhost (`http://127.0.0.1:<port>` in the simulator's Safari); nothing links
   the two yet.
-- Not yet on a remote host: the port-conflict probe below, dev-server port
-  detection and Docker discovery (set `devServerUrl` to a bare port by hand), and
-  branch previews (`409 remote_unsupported`).
+- Not yet on a remote host: dev-server port detection and Docker discovery (set
+  `devServerUrl` to a bare port by hand), and branch previews
+  (`409 remote_unsupported`).
 
 ### Port conflicts
 
@@ -142,7 +142,12 @@ and nothing is spawned. `holderSessionId` is a live Mullion session whose
 output announced that port; absent means another process holds it. The Dock
 shows "Port 5173 is in use by session 12" on the row, with **Open holder** and
 **Stop holder and start** when a session holds it; the CLI and MCP print the
-same message. Local projects only.
+same message. On a remote launch target the probe runs on the agent
+(`POST /internal/dock-port-check`, read-only), against the agent's own checkout
+and loopback; `holderSessionId` is a session the agent holds, mapped to the
+primary's row (an unknown one reads as "another process"). An agent that cannot
+answer (an older build, unreachable) never blocks the launch. An Auto-placed
+or `targetPlatform` launch still skips the check (the host is unknown before placement).
 
 If a session's output ends in `EADDRINUSE`, "address already in use" or
 "Port N is in use" (not Vite's "…trying another one"), its ended detail reads
@@ -606,7 +611,7 @@ out the dock's own width — that's what this design replaces.
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Toggle a monitor on/off**                 | Click the monitor's own trailing "on"/"off" tag                                                                                        |
 | **Select a monitor / activate its project** | Click the monitor's row body — starts it too if it was off                                                                             |
-| **Resize the Dock height**                  | Drag the top border handle (`ns-resize` cursor)                                                                                        |
+| **Resize the Dock height**                  | Drag the top border handle (`ns-resize` cursor), or focus it (Tab) and use ↑/↓ (16px), Home (min), End (max)                           |
 | **Collapse/expand the Dock**                | Click the chevron button (collapsed header shows live monitor count)                                                                   |
 | **Collapse/expand a project's section**     | Click the chevron on that project's own rail header                                                                                    |
 | **Pin a project into the dock**             | Use the "+ Add project" dropdown in the Dock header                                                                                    |
@@ -652,7 +657,9 @@ window splitters (`role="separator"`, `tabIndex=0`, a visible
 a drag clamps to, and `aria-valuenow`/`aria-valuemin`/`aria-valuemax` track
 the real value and bounds. A key press persists exactly as a finished drag
 does. (The former between-columns divider no longer exists since the
-unified-rail rework; the dock-height handle is still mouse-only.) Only one row can be pinned at a time, in at most
+unified-rail rework. The dock-height handle on the top border is a keyboard
+splitter too: ↑ grows, ↓ shrinks, Home/End jump to min/max, persisted to
+`crs.dockHeight` like a drag.) Only one row can be pinned at a time, in at most
 one project — pinning a different row (in the same or a different project)
 replaces the previous pin, and selecting the currently-pinned row as the
 new primary selection simply clears the pin (no automatic swap promoting
