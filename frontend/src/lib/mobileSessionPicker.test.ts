@@ -375,3 +375,26 @@ describe("buildPickerSections — session titles (#3285)", () => {
     expect(section.rows[1].searchFields).toContain("claude 2");
   });
 });
+
+describe("buildPickerSections spawnedBy (#3456)", () => {
+  it("is set for a child spawned from another project and null otherwise", () => {
+    const sections = buildPickerSections(
+      input({
+        sessions: [
+          makeSession({ id: 1, projectId: 1, command: "coordinator" }),
+          makeSession({ id: 2, projectId: 2, command: "worker", parentSessionId: 1 }),
+          makeSession({ id: 3, projectId: 1, command: "sibling", parentSessionId: 1 }),
+        ],
+      }),
+    );
+    const rows = new Map(sections.flatMap((s) => s.rows).map((r) => [r.session?.id, r]));
+    expect(rows.get(2)?.spawnedBy).toMatchObject({
+      parentId: 1,
+      title: "coordinator",
+      projectName: "runway",
+      state: "live",
+    });
+    expect(rows.get(1)?.spawnedBy).toBeNull();
+    expect(rows.get(3)?.spawnedBy).toBeNull();
+  });
+});

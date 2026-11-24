@@ -11,6 +11,7 @@ import {
 // The workspace a row's session lives in — owned by the picker, which is what
 // decides it, and rendered here (issue #1882).
 import type { PickerWorkspace } from "./lib/mobileSessionPicker.js";
+import type { CrossProjectParent } from "./sidebarHierarchy.js";
 import { SearchInput, TextInput } from "./ui/primitives.js";
 
 // An OPEN pane — what the trigger's `n/N` counter and swipe cycle through.
@@ -40,6 +41,8 @@ export interface MobileSessionRow {
   // no project heading (issue #2996). Null for a pane or a project-less row.
   projectName: string | null;
   searchFields: string[];
+  // #3456 — the other-project coordinator that spawned this session, or null.
+  spawnedBy?: CrossProjectParent | null;
 }
 
 export interface MobileSessionSection {
@@ -64,6 +67,7 @@ export function MobileSessionSwitcher({
   activeId,
   onSelect,
   onSelectRow,
+  onSelectSpawnParent,
   onClose,
   onNewSession,
   renderActiveActions,
@@ -86,6 +90,8 @@ export function MobileSessionSwitcher({
   activeId: string | null;
   onSelect: (id: string) => void;
   onSelectRow: (row: MobileSessionRow) => void;
+  // Tapping a live or exited "spawned by" marker opens that parent session.
+  onSelectSpawnParent?: (sessionId: number) => void;
   onClose: (id: string) => void;
   onNewSession: () => void;
   // The active row's ⋮ menu (PaneActionsMenu) — rendered by App, which owns
@@ -364,6 +370,43 @@ export function MobileSessionSwitcher({
                             <span className="mobile-session-unread">{row.unreadCount}</span>
                           )}
                         </button>
+                      )}
+                      {row.spawnedBy && (
+                        <div className="mobile-session-spawned-by-line">
+                          {onSelectSpawnParent &&
+                          (row.spawnedBy.state === "live" || row.spawnedBy.state === "exited") ? (
+                            <button
+                              type="button"
+                              className={`mobile-session-spawned-by link${
+                                row.spawnedBy.state === "exited" ? " ended" : ""
+                              }`}
+                              onClick={() => {
+                                closeSheet();
+                                onSelectSpawnParent(row.spawnedBy!.parentId);
+                              }}
+                            >
+                              spawned by {row.spawnedBy.title}
+                              {row.spawnedBy.projectName ? ` · ${row.spawnedBy.projectName}` : ""}
+                              {row.spawnedBy.state === "exited" ? " · ended" : ""}
+                            </button>
+                          ) : (
+                            // No handler (or a removed parent): not a link. A
+                            // live/exited parent keeps the button's full text.
+                            <span
+                              className={`mobile-session-spawned-by static${
+                                row.spawnedBy.state === "exited" ? " ended" : ""
+                              }`}
+                            >
+                              {row.spawnedBy.state === "live" || row.spawnedBy.state === "exited"
+                                ? `spawned by ${row.spawnedBy.title}${
+                                    row.spawnedBy.projectName
+                                      ? ` · ${row.spawnedBy.projectName}`
+                                      : ""
+                                  }${row.spawnedBy.state === "exited" ? " · ended" : ""}`
+                                : "spawned by a removed session"}
+                            </span>
+                          )}
+                        </div>
                       )}
                       {showWorkspaceChip &&
                         !pinned &&
