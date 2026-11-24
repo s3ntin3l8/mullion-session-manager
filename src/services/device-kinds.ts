@@ -19,6 +19,19 @@ export function localDeviceKinds(app: FastifyInstance): DeviceKind[] {
   return app.deviceKinds.filter((kind) => kind !== "emulator" || app.deviceEmulatorEnabled);
 }
 
+/** Whether this host can add/start a physical (adb) device: the panel is on AND
+ * Android is configured (an empty DEVICE_ADB_PATH is an iOS-only host, #3436). */
+export function physicalDeviceEnabled(app: FastifyInstance): boolean {
+  return app.devicePanelEnabled && app.deviceKinds.includes("physical");
+}
+
+/** Why {@link physicalDeviceEnabled} is false. */
+export function physicalDeviceUnavailableMessage(app: FastifyInstance): string {
+  return app.devicePanelEnabled
+    ? "Android devices are not configured (set DEVICE_ADB_PATH)."
+    : app.devicePanelUnavailableMessage;
+}
+
 /**
  * Whether this host can run an iOS Simulator device right now (#1943). All four
  * must hold: the platform supports `ios-simulator` (macOS), the operator turned

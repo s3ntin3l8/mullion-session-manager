@@ -163,7 +163,12 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
       if (result.ok) app.log.info({ port }, "adb server started");
       else {
         app.log.warn(
-          { err: result.error, port, adbPath: app.config.DEVICE_ADB_PATH, stderr: result.stderr },
+          {
+            err: result.error,
+            port,
+            adbPath: app.config.DEVICE_ADB_PATH.trim(),
+            stderr: result.stderr,
+          },
           "adb start-server failed — devices cannot connect until an adb server runs on this port",
         );
       }

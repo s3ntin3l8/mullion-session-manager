@@ -13,6 +13,8 @@ import { isValidDeviceAddress, isValidPairingCode } from "../services/device-add
 import {
   iosSimulatorAvailable,
   localDeviceKinds,
+  physicalDeviceEnabled,
+  physicalDeviceUnavailableMessage,
   localDevicePlatforms,
 } from "../services/device-kinds.js";
 import {
@@ -139,11 +141,13 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
           return reply.badRequest("iOS Simulator is not available on this host");
         }
         if (!spec.udid) return reply.badRequest("udid is required for an ios device");
-      } else if (spec.kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+      } else if (
+        spec.kind === "emulator" ? !app.deviceEmulatorEnabled : !physicalDeviceEnabled(app)
+      ) {
         return reply.badRequest(
           spec.kind === "emulator"
             ? app.deviceEmulatorUnavailableMessage
-            : app.devicePanelUnavailableMessage,
+            : physicalDeviceUnavailableMessage(app),
         );
       }
       if (

@@ -117,6 +117,9 @@ const PRESERVED_VARS = new Set([
 for (const key of Object.keys(schema.properties)) {
   if (!PRESERVED_VARS.has(key)) delete process.env[key];
 }
+// An empty DEVICE_ADB_PATH means "Android not configured" (#3436); suites that
+// enable the device panel expect the Android kinds, and spawn is always mocked.
+process.env.DEVICE_ADB_PATH = "/usr/bin/adb";
 // ...and the per-session injections that are NOT schema keys (the hook
 // socket/token, MULLION_SESSION_ID, MULLION_WORKTREES_IN_DOT_WT, ...). A suite
 // run from inside a Mullion-hosted session inherits all of them, and a test

@@ -341,6 +341,16 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           expect(res.statusCode).toBe(200);
           expect(res.json().features.devices).toBe(true);
           expect(res.json().features.deviceKinds).toEqual([]);
+          // A physical create is refused up front: 400, and no row is left behind.
+          const create = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "192.168.1.23:37251" },
+          });
+          expect(create.statusCode).toBe(400);
+          expect(create.json().message).toMatch(/Android devices are not configured/);
+          const list = await app.inject({ method: "GET", url: "/api/devices" });
+          expect(list.json().devices ?? list.json()).toHaveLength(0);
         } finally {
           await app.close();
         }

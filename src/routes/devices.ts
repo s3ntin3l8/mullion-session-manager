@@ -26,6 +26,8 @@ import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.
 import {
   iosSimulatorAvailable,
   localDeviceKinds,
+  physicalDeviceEnabled,
+  physicalDeviceUnavailableMessage,
   localDevicePlatforms,
 } from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
@@ -370,11 +372,11 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     // on an agent host is gated on what THAT host reports it can run (#3200),
     // before a row exists for something it cannot.
     if (host.isLocal) {
-      if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+      if (kind === "emulator" ? !app.deviceEmulatorEnabled : !physicalDeviceEnabled(app)) {
         return reply.badRequest(
           kind === "emulator"
             ? app.deviceEmulatorUnavailableMessage
-            : app.devicePanelUnavailableMessage,
+            : physicalDeviceUnavailableMessage(app),
         );
       }
     } else {
