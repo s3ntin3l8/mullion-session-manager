@@ -113,9 +113,11 @@ What a pick opens depends on the mode:
   port, which opens the project's own preview. Such a port preview is never
   a branch preview. It goes away with its service (#3467): a Dock-bound one
   when its session is no longer active, a Compose one once discovery no longer
-  lists the port. The sweep runs on the reconcile timer; until then the slug
-  answers `503` rather than dialing the port, and afterwards `404`, which the
-  pane shows as unavailable. Picking the running service again mints it anew.
+  lists the port (skipped while **Docker Compose services** discovery is off).
+  The sweep runs on the reconcile timer. Until it does, a Dock-bound slug whose
+  session ended answers `503` rather than dialing the port; a Compose one keeps
+  serving the port until the sweep. A pruned slug answers `404`, which the pane
+  shows as unavailable. Picking the running service again mints it anew.
   Checkout and branch previews are not pruned. Without the proxy, a running service and the dev server
   open at their own address (direct embed), and named targets and branch
   previews, which need the proxy, are disabled with that reason.

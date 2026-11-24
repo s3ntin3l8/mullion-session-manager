@@ -350,46 +350,56 @@ export async function openRunningDestinationPreview(
  * Checkout and branch previews are never touched. Returns the pruned slugs.
  */
 export async function prunePortPreviews(app: FastifyInstance): Promise<string[]> {
-  const rows = app.db
-    .select({
-      slug: previews.slug,
-      branch: previews.branch,
-      projectId: previews.projectId,
-      port: previews.upstreamPort,
-      sessionId: previews.sessionId,
-    })
-    .from(previews)
-    .where(eq(previews.kind, "project"))
-    .all()
-    .filter((r) => isPortPreviewBranch(r.branch) && r.projectId !== null);
-  if (rows.length === 0) return [];
+  const readRows = () =>
+    app.db
+      .select({
+        slug: previews.slug,
+        branch: previews.branch,
+        projectId: previews.projectId,
+        port: previews.upstreamPort,
+        sessionId: previews.sessionId,
+      })
+      .from(previews)
+      .where(eq(previews.kind, "project"))
+      .all()
+      .filter((r) => isPortPreviewBranch(r.branch) && r.projectId !== null);
 
+  // Discovery first (the only await), for the projects holding a session-less
+  // row. A project whose host is not local, or with Docker discovery switched
+  // off, is skipped: "discovery is disabled" is not "the port is gone", so
+  // those rows stay until discovery can answer.
+  const listedByProject = new Map<number, Set<number>>();
+  if (getStoredSettings(app.db).dock.dockerServices) {
+    const projectIds = new Set(
+      readRows()
+        .filter((r) => r.sessionId === null)
+        .map((r) => r.projectId!),
+    );
+    for (const projectId of projectIds) {
+      const project = getProjectById(app, projectId);
+      // Port previews are only ever minted for local projects.
+      if (!project || project.hostId !== LOCAL_HOST_ID) continue;
+      const found = await runningComposeServices(app, project);
+      listedByProject.set(projectId, new Set(found.map((svc) => svc.port)));
+    }
+  }
+
+  // Everything below is synchronous, on rows read AFTER the await: a preview
+  // re-picked onto a fresh session during it must not be judged on its old
+  // binding.
   const gone: string[] = [];
-  const sessionless = new Map<number, typeof rows>();
-  for (const row of rows) {
-    if (row.sessionId === null) {
-      const group = sessionless.get(row.projectId!) ?? [];
-      group.push(row);
-      sessionless.set(row.projectId!, group);
+  for (const row of readRows()) {
+    if (row.sessionId !== null) {
+      const [bound] = app.db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, row.sessionId))
+        .all();
+      if (!bound || bound.status !== "active") gone.push(row.slug);
       continue;
     }
-    const [bound] = app.db
-      .select({ status: sessions.status })
-      .from(sessions)
-      .where(eq(sessions.id, row.sessionId))
-      .all();
-    if (!bound || bound.status !== "active") gone.push(row.slug);
-  }
-  for (const [projectId, group] of sessionless) {
-    const project = getProjectById(app, projectId);
-    // Port previews are only ever minted for local projects.
-    if (project && project.hostId !== LOCAL_HOST_ID) continue;
-    const listed = new Set(
-      project ? (await runningComposeServices(app, project)).map((svc) => svc.port) : [],
-    );
-    for (const row of group) {
-      if (row.port === null || !listed.has(row.port)) gone.push(row.slug);
-    }
+    const listed = listedByProject.get(row.projectId!);
+    if (listed && (row.port === null || !listed.has(row.port))) gone.push(row.slug);
   }
   if (gone.length > 0) app.db.delete(previews).where(inArray(previews.slug, gone)).run();
   return gone;

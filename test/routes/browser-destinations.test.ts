@@ -467,13 +467,41 @@ describe("browser destinations (#3003)", () => {
     );
 
     it("keeps a live Dock port preview and a Compose one while discovery lists the port", async () => {
-      const dockSlug = await open(`dock:${devId}`);
-      // The dev server names 5173, so that pick is the checkout preview; use
-      // the compose one for the session-less row.
+      // A port other than the dev server's 5173, which would open the
+      // checkout preview instead of a port preview.
+      const liveId = await startDockSession(
+        app,
+        projectId,
+        "docs",
+        "  ➜  Local:   http://localhost:6007/\n",
+      );
+      const dockSlug = await open(`dock:${liveId}`);
+      expect(app.db.select().from(previews).where(eq(previews.slug, dockSlug)).get()).toMatchObject(
+        { branch: "port:6007", sessionId: liveId },
+      );
       const composeSlug = await open("compose:shop:web:8080");
-      await prunePortPreviews(app);
+      expect(await prunePortPreviews(app)).toEqual([]);
       expect(exists(composeSlug)).toBe(true);
       expect(exists(dockSlug)).toBe(true);
+    });
+
+    it("keeps Compose port previews while Docker discovery is off", async () => {
+      const slug = await open("compose:shop:web:8080");
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { dock: { dockerServices: false } },
+      });
+      try {
+        expect(await prunePortPreviews(app)).toEqual([]);
+        expect(exists(slug)).toBe(true);
+      } finally {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { dock: { dockerServices: true } },
+        });
+      }
     });
 
     it("removes a Compose port preview once discovery no longer reports the port", async () => {
