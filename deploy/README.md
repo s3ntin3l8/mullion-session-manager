@@ -1152,7 +1152,10 @@ step by pre-creating it):
 `src/app.ts` refuses to boot an agent with neither a manual token, nor
 `MULLION_PRIMARY_URL` with either `MULLION_ENROLLMENT_TOKEN` or a paired
 `$SESSIONS_DIR/agent-identity.json` — an incomplete `.env` fails loudly on first
-start, not silently.
+start, not silently. If you template `.env` yourself instead of letting
+`install.sh` generate it, also set `SESSIONS_DIR` to an absolute path outside
+`current` (e.g. `~/opt/mullion/data/sessions`, which `install.sh` writes) so
+`agent-identity.json` survives release upgrades.
 
 **Example Ansible role** (recommended for a single new host: one-time pairing
 code via stdin — no bootstrap secret in `.env`; for a zero-touch fleet, swap
@@ -1277,7 +1280,9 @@ The revoked-agent recipe as Ansible tasks (the example task above, run after
     path: "{{ item }}"
     state: absent
   loop:
-    - "{{ mullion_sessions_dir }}/agent-identity.json"
+    # install.sh writes SESSIONS_DIR={{ mullion_home }}/data/sessions;
+    # substitute your configured absolute SESSIONS_DIR if different.
+    - "{{ mullion_home }}/data/sessions/agent-identity.json"
     - "{{ mullion_home }}/.env"
 # Then run the "Install as a self-registering agent" task above with the NEW token in
 # MULLION_AGENT_ENROLLMENT_TOKEN. It writes a fresh .env and restarts the
