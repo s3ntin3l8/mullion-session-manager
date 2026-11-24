@@ -2699,8 +2699,11 @@ button.session-spawned-by:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.session-spawned-by.exited {
-  opacity: 0.7;
+/* Dimmed by colour, not opacity: opacity on text drops it under AA (#3106,
+   #3286). The "ended" suffix carries the state in words. */
+.session-spawned-by.exited,
+button.session-spawned-by.exited {
+  color: var(--dim);
 }
 /* Phone/tablet picker: its own full-width line under the row. */
 .mobile-session-spawned-by-line {
@@ -2730,6 +2733,7 @@ button.mobile-session-spawned-by {
   color: var(--accent, var(--fg));
   cursor: pointer;
 }
-.mobile-session-spawned-by.exited {
-  opacity: 0.7;
+.mobile-session-spawned-by.exited,
+button.mobile-session-spawned-by.exited {
+  color: var(--dim);
 }

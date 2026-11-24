@@ -373,7 +373,8 @@ export function MobileSessionSwitcher({
                       )}
                       {row.spawnedBy && (
                         <div className="mobile-session-spawned-by-line">
-                          {row.spawnedBy.state === "live" || row.spawnedBy.state === "exited" ? (
+                          {onSelectSpawnParent &&
+                          (row.spawnedBy.state === "live" || row.spawnedBy.state === "exited") ? (
                             <button
                               type="button"
                               className={`mobile-session-spawned-by link${
@@ -381,7 +382,7 @@ export function MobileSessionSwitcher({
                               }`}
                               onClick={() => {
                                 closeSheet();
-                                onSelectSpawnParent?.(row.spawnedBy!.parentId);
+                                onSelectSpawnParent(row.spawnedBy!.parentId);
                               }}
                             >
                               spawned by {row.spawnedBy.title}
@@ -389,8 +390,16 @@ export function MobileSessionSwitcher({
                               {row.spawnedBy.state === "exited" ? " · ended" : ""}
                             </button>
                           ) : (
-                            <span className="mobile-session-spawned-by removed">
-                              spawned by a removed session
+                            <span
+                              className={`mobile-session-spawned-by${
+                                row.spawnedBy.state === "live" || row.spawnedBy.state === "exited"
+                                  ? " exited"
+                                  : " removed"
+                              }`}
+                            >
+                              {row.spawnedBy.state === "live" || row.spawnedBy.state === "exited"
+                                ? `spawned by ${row.spawnedBy.title}`
+                                : "spawned by a removed session"}
                             </span>
                           )}
                         </div>

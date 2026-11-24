@@ -514,6 +514,13 @@ describe("MobileSessionSwitcher spawned-by line (#3456)", () => {
     ).toHaveClass("exited");
   });
 
+  it("renders plain text, not a dead button, when no handler is given", async () => {
+    renderSwitcher({ sections: sectionsWith("live") });
+    await userEvent.click(trigger());
+    expect(screen.getByText("spawned by coordinator").tagName).toBe("SPAN");
+    expect(screen.queryByRole("button", { name: /spawned by/ })).toBeNull();
+  });
+
   it("renders plain text for a removed parent", async () => {
     renderSwitcher({ sections: sectionsWith("killed") });
     await userEvent.click(trigger());

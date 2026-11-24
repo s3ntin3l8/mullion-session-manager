@@ -542,6 +542,7 @@ export function SessionRow({
   return (
     <>
       <div
+        data-session-id={session.id}
         className={`session-item ${statusClass}${statusEstimated ? " status-estimated" : ""}${
           isActiveSession ? " active" : ""
         }`}

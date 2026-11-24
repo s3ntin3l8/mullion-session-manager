@@ -473,6 +473,13 @@ export function Sidebar({
         }
       }
       onOpenSession(parent);
+      // Bring the row into view once the expand has rendered. Best effort: a
+      // virtualized tree only has the row in the DOM once it is in range.
+      requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLElement>(`.session-item[data-session-id="${parent.id}"]`)
+          ?.scrollIntoView?.({ block: "nearest" });
+      });
     },
     [visibleProjects, baseSessionsByProject, filterActive, onOpenSession],
   );
