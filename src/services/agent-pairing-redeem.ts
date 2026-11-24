@@ -7,6 +7,8 @@ import { identityStatePath, saveAgentIdentity, savePrivateFileAtomic } from "./a
 
 const PAIRING_REQUEST_FILE = "pairing-request.json";
 const DEFAULT_PAIR_TIMEOUT_MS = 15_000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HEX_DIGITS = "0123456789abcdef";
 
 export interface RedeemPairingCodeOptions {
   primaryUrl: string;
@@ -43,17 +45,30 @@ function normalizePrimaryUrl(raw: string): string {
   return trimmed;
 }
 
+function sanitizeUuid(value: unknown): string | null {
+  if (typeof value !== "string" || !UUID_RE.test(value)) return null;
+  // Reconstruct from the constant hex alphabet so only canonical UUID characters
+  // can cross from the local state file into the outbound /api/internal/pair body.
+  let out = "";
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i]!;
+    if (ch === "-") {
+      out += "-";
+      continue;
+    }
+    const idx = HEX_DIGITS.indexOf(ch.toLowerCase());
+    if (idx === -1) return null;
+    out += HEX_DIGITS[idx]!;
+  }
+  return out;
+}
+
 function loadExistingRequestId(requestPath: string, codeHash: string): string | null {
   try {
     const raw = fs.readFileSync(requestPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<PersistedPairingRequest>;
-    if (
-      parsed.codeHash === codeHash &&
-      typeof parsed.requestId === "string" &&
-      parsed.requestId.length >= 8 &&
-      parsed.requestId.length <= 128
-    ) {
-      return parsed.requestId;
+    if (parsed.codeHash === codeHash) {
+      return sanitizeUuid(parsed.requestId);
     }
   } catch {
     // Missing or unreadable request file: generate a fresh requestId.

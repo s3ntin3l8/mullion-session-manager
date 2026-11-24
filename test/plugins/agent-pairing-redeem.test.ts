@@ -223,6 +223,46 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
     expect(primary.db.select().from(hosts).all()).toHaveLength(hostsBefore + 1);
   });
 
+  it("ignores non-UUID requestId values in pairing-request.json and generates a fresh UUID", async () => {
+    newSessionsDir();
+    const code = await issueCode("malformed-request-id");
+    const crypto = await import("node:crypto");
+    const codeHash = crypto.createHash("sha256").update(code).digest("hex");
+    const requestPath = path.join(sessionsDir, "pairing-request.json");
+    fs.writeFileSync(
+      requestPath,
+      JSON.stringify({ codeHash, requestId: "arbitrary-file-payload-not-a-uuid" }),
+      { mode: 0o600 },
+    );
+
+    let sentRequestId: unknown;
+    vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
+      const target = new URL(String(url));
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+      if (target.pathname === "/api/internal/pair") {
+        sentRequestId = body.requestId;
+      }
+      const res = await primary.inject({
+        method: (init?.method ?? "GET") as "GET" | "POST",
+        url: target.pathname,
+        payload: init?.body ? body : undefined,
+      });
+      return new Response(res.body, {
+        status: res.statusCode,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    await redeemPairingCode({
+      primaryUrl: "http://primary.invalid",
+      code,
+      sessionsDir,
+    });
+
+    expect(sentRequestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(sentRequestId).not.toBe("arbitrary-file-payload-not-a-uuid");
+  });
+
   it("overwrites an existing identity file when re-pairing", async () => {
     newSessionsDir();
     await saveAgentIdentity(statePath, {
