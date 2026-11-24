@@ -75,6 +75,9 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // THIS, so the panel is off in one place and the reason for it is said in
   // one place.
   const panelEnabled = app.config.DEVICE_ENABLED && panelSupported;
+  // An empty DEVICE_ADB_PATH means Android is not configured (an iOS-only Mac
+  // host, #3436): no adb server is started and the Android kinds are not offered.
+  const androidConfigured = app.config.DEVICE_ADB_PATH.trim() !== "";
   // Why the panel is unavailable, when it is. The platform reason DOMINATES:
   // telling a macOS operator to set DEVICE_ENABLED=true would send them off
   // to change a .env and restart for nothing.
@@ -83,7 +86,9 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     : `The device panel is not supported on ${platform}.`;
   const emulatorUnavailableMessage = !emulatorSupported
     ? unsupportedKindMessage("emulator", platform)
-    : panelUnavailableMessage;
+    : panelEnabled && !androidConfigured
+      ? "Android devices are not configured (set DEVICE_ADB_PATH)."
+      : panelUnavailableMessage;
   if (!panelSupported) {
     app.log.info({ platform }, "[device] the device panel is not supported on this platform");
   } else if (!emulatorSupported) {
@@ -96,13 +101,18 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   app.decorate("devicePanelSupported", panelSupported);
   app.decorate("devicePanelUnavailableMessage", panelUnavailableMessage);
   app.decorate("deviceEmulatorSupported", emulatorSupported);
-  app.decorate("deviceEmulatorEnabled", app.config.DEVICE_ENABLED && emulatorSupported);
+  app.decorate(
+    "deviceEmulatorEnabled",
+    app.config.DEVICE_ENABLED && emulatorSupported && androidConfigured,
+  );
   app.decorate("deviceEmulatorUnavailableMessage", emulatorUnavailableMessage);
   // The Android device KINDS only: "ios-simulator" is a capability, not a kind,
   // and is reported through the platforms list instead.
   app.decorate(
     "deviceKinds",
-    [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator"),
+    androidConfigured
+      ? [...capabilities].filter((c): c is DeviceKind => c === "physical" || c === "emulator")
+      : [],
   );
 
   // Issue #1770 — resolved ONCE, here: the dir the sockets live in and the
@@ -125,7 +135,7 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // OFF on a platform it was already off by default on. Linux is unchanged.
     enabled: app.config.DEVICE_ENABLED && panelSupported,
     capabilities,
-    adbPath: app.config.DEVICE_ADB_PATH,
+    adbPath: app.config.DEVICE_ADB_PATH.trim(),
     adbServerPort: app.config.DEVICE_ADB_SERVER_PORT,
     emulatorPath: app.config.DEVICE_EMULATOR_PATH,
     scrcpyServerPath: app.config.DEVICE_SCRCPY_SERVER_PATH,

@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import type * as ChildProcess from "node:child_process";
+import { spawn as spawnChildProcess } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -63,6 +64,9 @@ async function withPlatform<T>(platform: NodeJS.Platform, body: () => Promise<T>
 describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
   beforeEach(() => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
+    // An empty DEVICE_ADB_PATH means "Android not configured" (#3436); the
+    // Android-kind tests below need a configured one (a fake — spawn is mocked).
+    process.env.DEVICE_ADB_PATH = "/usr/bin/adb";
   });
 
   afterEach(() => {
@@ -70,6 +74,8 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
     delete process.env.DEVICE_ENABLED;
+    delete process.env.DEVICE_ADB_PATH;
+    delete process.env.DEVICE_IOS_ENABLED;
   });
 
   describe("device capabilities per platform", () => {
@@ -307,6 +313,34 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           const info = await app.inject({ method: "GET", url: "/api/server-info" });
           expect(info.json().features.devices).toBe(true);
           expect(app.deviceDiscovery).toBeDefined();
+        } finally {
+          await app.close();
+        }
+      });
+    });
+  });
+
+  describe("on an iOS-only host (empty DEVICE_ADB_PATH, #3436)", () => {
+    it("boots, starts no adb server, offers no Android kinds and still lists ios", async () => {
+      await withPlatform("darwin", async () => {
+        process.env.DEVICE_ENABLED = "true";
+        process.env.DEVICE_IOS_ENABLED = "true";
+        process.env.DEVICE_ADB_PATH = "";
+        vi.mocked(spawnChildProcess).mockClear();
+        const app = await buildTestApp();
+        try {
+          await app.ready();
+          expect(app.devicePanelEnabled).toBe(true);
+          expect(app.deviceKinds).toEqual([]);
+          expect(app.deviceEmulatorEnabled).toBe(false);
+          expect(app.deviceEmulatorUnavailableMessage).toMatch(/not configured.*DEVICE_ADB_PATH/);
+          expect(
+            vi.mocked(spawnChildProcess).mock.calls.some((c) => c[1]?.[0] === "start-server"),
+          ).toBe(false);
+          const res = await app.inject({ method: "GET", url: "/api/server-info" });
+          expect(res.statusCode).toBe(200);
+          expect(res.json().features.devices).toBe(true);
+          expect(res.json().features.deviceKinds).toEqual([]);
         } finally {
           await app.close();
         }
