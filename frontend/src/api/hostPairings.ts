@@ -25,10 +25,10 @@ export interface HostPairingSummary {
 }
 
 export const hostPairingsApi = {
-  createHostPairing: (label?: string) =>
+  createHostPairing: (opts: { label?: string; hostId?: string } = {}) =>
     request<HostPairingCreated>("/api/host-pairings", {
       method: "POST",
-      body: JSON.stringify(label ? { label } : {}),
+      body: JSON.stringify(opts),
     }),
 
   listHostPairings: () => request<HostPairingSummary[]>("/api/host-pairings"),

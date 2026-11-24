@@ -3,7 +3,7 @@ import type { HostEditableRole, PlacementCapability } from "../../../../src/shar
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
 import { hasRemoteHosts } from "../../lib/hostBadge.js";
-import type { Host, HostUpdateStatus } from "../../api/index.js";
+import type { Host, HostPairingCreated, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { AgentInstallInstructions } from "../../AgentInstallInstructions.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
@@ -241,6 +241,7 @@ export function HostsSection() {
     liveIdentity: boolean;
   } | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
+  const [pairingCreated, setPairingCreated] = useState<HostPairingCreated | null>(null);
   const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingState>>({});
   // A host that 409s on delete (still owns projects) — offers a cascade
@@ -530,6 +531,16 @@ export function HostsSection() {
     rotateHostToken(host.id).catch((err: unknown) =>
       setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
     );
+  };
+
+  const handleRePair = (host: Host) => {
+    setRotateError(null);
+    api
+      .createHostPairing({ hostId: host.id })
+      .then((created) => setPairingCreated(created))
+      .catch((err: unknown) =>
+        setRotateError(err instanceof Error ? err.message : "Could not create a pairing link."),
+      );
   };
 
   const handleAcknowledgeReplacement = (host: Host) => {
@@ -907,6 +918,23 @@ export function HostsSection() {
                                   ]
                                 : []),
                             ]),
+                        // Issue #3438 — re-pair any remote host that has (or had)
+                        // a machine identity row, including revoked hosts.
+                        ...(!host.isLocal &&
+                        host.id !== LOCAL_HOST_ID &&
+                        (host.hasMachineIdentity || host.machineIdentityRevoked)
+                          ? [
+                              {
+                                key: "re-pair",
+                                label: "Re-pair",
+                                armLabel:
+                                  "Click again to re-pair (disconnects running agent immediately)",
+                                icon: <HostsIcon size={14} style={{ color: "var(--muted)" }} />,
+                                confirm: true,
+                                onClick: () => handleRePair(host),
+                              },
+                            ]
+                          : []),
                         // Issue #2568 — only a host that holds a machine identity
                         // has one to revoke.
                         ...(host.hasMachineIdentity
@@ -1107,7 +1135,7 @@ export function HostsSection() {
       </div>
 
       <div style={{ marginTop: 28 }}>
-        <PairDesktopSection />
+        <PairDesktopSection created={pairingCreated} onCreatedChange={setPairingCreated} />
       </div>
 
       <div style={{ marginTop: 28 }}>

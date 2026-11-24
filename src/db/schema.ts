@@ -138,6 +138,10 @@ export const hostPairings = sqliteTable("host_pairings", {
   expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
   // Free-form operator label ("Mac mini"), informational.
   label: text("label"),
+  // Issue #3438 — when set, redeeming this code re-pairs the existing host
+  // instead of creating a new row. Nullable; not a foreign key for the same
+  // reason as `redeemedHostId`.
+  targetHostId: text("target_host_id"),
   redeemedAt: integer("redeemed_at", { mode: "timestamp" }),
   redeemedHostId: text("redeemed_host_id"),
   // sha256 of the Helper's per-attempt request id. Lets a retried redeem whose

@@ -438,6 +438,199 @@ describe("host pairing (issue #2449)", () => {
         .statusCode,
     ).toBe(400);
   });
+
+  it("rejects host-bound pairing codes for local (400) and unknown (404) hosts", async () => {
+    const localRes = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      payload: { hostId: "local" },
+    });
+    expect(localRes.statusCode).toBe(400);
+
+    const unknownRes = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      payload: { hostId: "00000000-0000-4000-8000-000000000000" },
+    });
+    expect(unknownRes.statusCode).toBe(404);
+  });
+
+  it("re-pairs a host with a live identity in place and rejects the displaced credential immediately", async () => {
+    const firstPairing = await create({ label: "Studio Mac" });
+    const firstRedeem = await redeem(firstPairing.code, {
+      requestId: "req-initial-1",
+      platform: "darwin",
+    });
+    expect(firstRedeem.statusCode).toBe(200);
+    const firstBody = firstRedeem.json();
+
+    const repairCode = await create({ hostId: firstBody.host_id });
+    const pendingList = (await app.inject({ method: "GET", url: "/api/host-pairings" })).json();
+    expect(pendingList.find((p: { id: string }) => p.id === repairCode.id)).toMatchObject({
+      state: "pending",
+      host_id: firstBody.host_id,
+    });
+
+    const repairRedeem = await redeem(repairCode.code, {
+      requestId: "req-repair-1",
+      platform: "darwin",
+    });
+    expect(repairRedeem.statusCode).toBe(200);
+    const repairBody = repairRedeem.json();
+    expect(repairBody.host_id).toBe(firstBody.host_id);
+    expect(repairBody.session_id).not.toBe(firstBody.session_id);
+    expect(repairBody.machine_credential).not.toBe(firstBody.machine_credential);
+    expect(pairedRows()).toHaveLength(1);
+    expect(listHosts(app).find((h) => h.id === firstBody.host_id)?.name).toBe("Studio Mac");
+
+    // Displaced credential has no 24h grace slot and is rejected immediately.
+    const oldRenew = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        hostId: firstBody.host_id,
+        machineCredential: firstBody.machine_credential,
+        hostname: "mac-mini",
+      },
+    });
+    expect(oldRenew.statusCode).toBe(401);
+
+    // Same-requestId retry within the window converges via reissuePairedIdentity.
+    const retryRes = await redeem(repairCode.code, { requestId: "req-repair-1" });
+    expect(retryRes.statusCode).toBe(200);
+    expect(retryRes.json().host_id).toBe(firstBody.host_id);
+    const retryCred = retryRes.json().machine_credential;
+
+    // New credential renews normally.
+    const newRenew = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        hostId: firstBody.host_id,
+        machineCredential: retryCred,
+        hostname: "mac-mini",
+      },
+    });
+    expect(newRenew.statusCode).toBe(200);
+    expect(newRenew.json().host_id).toBe(firstBody.host_id);
+  });
+
+  it("re-pairs a revoked host and allows it to renew afterwards", async () => {
+    const firstPairing = await create({ label: "Revoked Mac" });
+    const firstBody = (await redeem(firstPairing.code, { requestId: "req-rev-1" })).json();
+
+    const revokeRes = await app.inject({
+      method: "POST",
+      url: `/api/hosts/${firstBody.host_id}/revoke`,
+    });
+    expect(revokeRes.statusCode).toBe(204);
+
+    // Issuing a host-bound code is allowed for a revoked host.
+    const repairCode = await create({ hostId: firstBody.host_id });
+    const repairRes = await redeem(repairCode.code, { requestId: "req-rev-2" });
+    expect(repairRes.statusCode).toBe(200);
+    const repairBody = repairRes.json();
+    expect(repairBody.host_id).toBe(firstBody.host_id);
+    expect(pairedRows()).toHaveLength(1);
+    expect(listHosts(app).find((h) => h.id === firstBody.host_id)).toMatchObject({
+      hasLiveMachineIdentity: true,
+      machineIdentityRevoked: false,
+    });
+
+    const renewRes = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        hostId: firstBody.host_id,
+        machineCredential: repairBody.machine_credential,
+        hostname: "mac-mini",
+      },
+    });
+    expect(renewRes.statusCode).toBe(200);
+  });
+
+  it("rejects replayed, expired and cancelled host-bound codes with 401 and allows one concurrent winner", async () => {
+    const initial = await create({ label: "Target" });
+    const hostId = (await redeem(initial.code, { requestId: "req-init-1" })).json().host_id;
+
+    // Concurrent redemption yields exactly one winner.
+    const concurrent = await create({ hostId });
+    const row = app.db.select().from(hostPairings).where(eq(hostPairings.id, concurrent.id)).get()!;
+    const input = { requestId: "req-conc-1", hostname: "mac-mini" };
+    const first = consumeHostPairing(app, row, "hash-a", input);
+    const second = consumeHostPairing(app, row, "hash-b", input);
+    expect(first?.hostId).toBe(hostId);
+    expect(second).toBeNull();
+
+    // Replay with a different requestId returns 401.
+    const replay = await redeem(concurrent.code, { requestId: "req-different" });
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json().message).toBe("invalid pairing code");
+
+    // Cancelled host-bound code returns the same 401.
+    const cancelled = await create({ hostId });
+    expect(revokeHostPairing(app, cancelled.id)).toBe(true);
+    const cancelledRes = await redeem(cancelled.code, { requestId: "req-cancel-1" });
+    expect(cancelledRes.statusCode).toBe(401);
+    expect(cancelledRes.json().message).toBe("invalid pairing code");
+
+    // Expired host-bound code returns the same 401.
+    const expired = await create({ hostId });
+    app.db
+      .update(hostPairings)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(eq(hostPairings.id, expired.id))
+      .run();
+    const expiredRes = await redeem(expired.code, { requestId: "req-exp-1" });
+    expect(expiredRes.statusCode).toBe(401);
+    expect(expiredRes.json().message).toBe("invalid pairing code");
+  });
+
+  it("invalidates pending host-bound codes when the target host is revoked and leaves deleted-target codes unredeemed", async () => {
+    const initial = await create({ label: "Revoke Target" });
+    const hostId = (await redeem(initial.code, { requestId: "req-rev-inv-0" })).json().host_id;
+
+    // Issue a host-bound code BEFORE revoking the host.
+    const preRevokeCode = await create({ hostId });
+
+    const revokeRes = await app.inject({
+      method: "POST",
+      url: `/api/hosts/${hostId}/revoke`,
+    });
+    expect(revokeRes.statusCode).toBe(204);
+
+    // The pre-revoke code must be invalidated and cannot re-arm the revoked host.
+    const preRevokeRedeem = await redeem(preRevokeCode.code, { requestId: "req-rev-inv-1" });
+    expect(preRevokeRedeem.statusCode).toBe(401);
+    expect(preRevokeRedeem.json().message).toBe("invalid pairing code");
+
+    const hostsAfterRevoke = (await app.inject({ method: "GET", url: "/api/hosts" })).json();
+    expect(hostsAfterRevoke.find((h: { id: string }) => h.id === hostId)).toMatchObject({
+      machineIdentityRevoked: true,
+      hasLiveMachineIdentity: false,
+    });
+
+    // A fresh host-bound code issued AFTER the revoke can re-arm the host.
+    const postRevokeCode = await create({ hostId });
+    const postRevokeRedeem = await redeem(postRevokeCode.code, { requestId: "req-rev-inv-2" });
+    expect(postRevokeRedeem.statusCode).toBe(200);
+    expect(postRevokeRedeem.json().host_id).toBe(hostId);
+
+    // If the target host is deleted before redeem, redeem returns 401 without claiming the row.
+    const beforeDeleteCode = await create({ hostId });
+    const deleteRes = await app.inject({
+      method: "DELETE",
+      url: `/api/hosts/${hostId}?cascade=true`,
+    });
+    expect(deleteRes.statusCode).toBe(204);
+
+    const afterDeleteRedeem = await redeem(beforeDeleteCode.code, { requestId: "req-del-1" });
+    expect(afterDeleteRedeem.statusCode).toBe(401);
+    const pairings = (await app.inject({ method: "GET", url: "/api/host-pairings" })).json();
+    expect(pairings.find((p: { id: string }) => p.id === beforeDeleteCode.id)?.state).toBe(
+      "pending",
+    );
+  });
 });
 
 describe("pairing link public URL (issue #2597)", () => {
