@@ -413,8 +413,14 @@ fs.writeFileSync(
         { mode: 0o600 },
       );
 
-      await run(home, { MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, `${pairingCode}\n`, callerCwd);
+      const result = await run(
+        home,
+        { MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
+        `${pairingCode}\n`,
+        callerCwd,
+      );
 
+      expect(result.stderr).toContain("SESSIONS_DIR (./rel-sessions) is relative");
       expect(fs.existsSync(path.join(callerCwd, "rel-sessions", "agent-identity.json"))).toBe(
         false,
       );
@@ -431,16 +437,22 @@ fs.writeFileSync(
     }
   });
 
-  it("resolves a missing SESSIONS_DIR in a pre-created .env to $MULLION_HOME/current/data/sessions", async () => {
-    const pairingCode = "01".repeat(32); // pragma: allowlist secret
-    const home = freshHome();
-    const callerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "install-id-cwd-"));
-    try {
-      const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
-      fs.mkdirSync(path.dirname(pairScript), { recursive: true });
-      fs.writeFileSync(
-        pairScript,
-        `const fs = require("fs");
+  it.each([
+    { label: "missing", sessionsLine: null },
+    { label: "empty (SESSIONS_DIR=)", sessionsLine: "SESSIONS_DIR=" },
+    { label: "whitespace-only (SESSIONS_DIR=   )", sessionsLine: "SESSIONS_DIR=   " },
+  ])(
+    "resolves a $label SESSIONS_DIR in a pre-created .env to \\$MULLION_HOME/current/data/sessions",
+    async ({ sessionsLine }) => {
+      const pairingCode = "01".repeat(32); // pragma: allowlist secret
+      const home = freshHome();
+      const callerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "install-id-cwd-"));
+      try {
+        const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+        fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+        fs.writeFileSync(
+          pairScript,
+          `const fs = require("fs");
 const path = require("path");
 const idx = process.argv.indexOf("--sessions-dir");
 const sessionsDir = path.resolve(process.argv[idx + 1]);
@@ -451,35 +463,40 @@ fs.writeFileSync(
   { mode: 0o600 },
 );
 `,
-      );
+        );
 
-      fs.writeFileSync(
-        path.join(home, ".env"),
-        [
+        const envLines = [
           "MULLION_ROLE=agent",
           `MULLION_HOME=${home}`,
+          ...(sessionsLine === null ? [] : [sessionsLine]),
           "MULLION_PRIMARY_URL=https://primary.example.com",
           "PROJECTS_ROOTS=/srv/projects",
-        ].join("\n") + "\n",
-        { mode: 0o600 },
-      );
+        ];
+        fs.writeFileSync(path.join(home, ".env"), envLines.join("\n") + "\n", { mode: 0o600 });
 
-      await run(home, { MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, `${pairingCode}\n`, callerCwd);
+        const result = await run(
+          home,
+          { MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
+          `${pairingCode}\n`,
+          callerCwd,
+        );
 
-      expect(fs.existsSync(identityFile(home))).toBe(false);
-      expect(fs.existsSync(path.join(callerCwd, "data", "sessions", "agent-identity.json"))).toBe(
-        false,
-      );
-      expect(
-        JSON.parse(
-          fs.readFileSync(
-            path.join(home, "current", "data", "sessions", "agent-identity.json"),
-            "utf8",
+        expect(result.stderr).toContain("SESSIONS_DIR (./data/sessions) is relative");
+        expect(fs.existsSync(identityFile(home))).toBe(false);
+        expect(fs.existsSync(path.join(callerCwd, "data", "sessions", "agent-identity.json"))).toBe(
+          false,
+        );
+        expect(
+          JSON.parse(
+            fs.readFileSync(
+              path.join(home, "current", "data", "sessions", "agent-identity.json"),
+              "utf8",
+            ),
           ),
-        ),
-      ).toMatchObject({ hostId: "paired-default-1" });
-    } finally {
-      fs.rmSync(callerCwd, { recursive: true, force: true });
-    }
-  });
+        ).toMatchObject({ hostId: "paired-default-1" });
+      } finally {
+        fs.rmSync(callerCwd, { recursive: true, force: true });
+      }
+    },
+  );
 });

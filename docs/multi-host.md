@@ -38,7 +38,7 @@ For a **single new headless host**, the recommended path is a **one-time
 pairing code** (`POST /api/host-pairings` on the primary, redeemed during
 `deploy/install.sh --role agent` via `MULLION_AGENT_PAIRING_CODE` or
 `MULLION_AGENT_PAIRING_CODE_STDIN=1`): the code is redeemed once into
-`data/sessions/agent-identity.json` (`0600`) and never lands in `.env`, a
+`$SESSIONS_DIR/agent-identity.json` (`0600`) and never lands in `.env`, a
 process argument, or a log. For **zero-touch fleet deploys** (e.g. an Ansible
 playbook provisioning many hosts without per-host codes), **self-registration**
 with `MULLION_ENROLLMENT_TOKEN` / `MULLION_ENROLLMENT_SECRET` stays supported.

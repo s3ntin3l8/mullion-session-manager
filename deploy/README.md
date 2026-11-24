@@ -1151,7 +1151,7 @@ step by pre-creating it):
 
 `src/app.ts` refuses to boot an agent with neither a manual token, nor
 `MULLION_PRIMARY_URL` with either `MULLION_ENROLLMENT_TOKEN` or a paired
-`data/sessions/agent-identity.json` — an incomplete `.env` fails loudly on first
+`$SESSIONS_DIR/agent-identity.json` — an incomplete `.env` fails loudly on first
 start, not silently.
 
 **Example Ansible role** (recommended for a single new host: one-time pairing
@@ -1237,12 +1237,12 @@ code via stdin — no bootstrap secret in `.env`; for a zero-touch fleet, swap
 The role above is safe to run on every converge. What a rerun does and does
 not touch:
 
-| Thing                                         | On a rerun / upgrade                                                                                                                                                                                                                                                                                         |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `.env`                                        | Never rewritten. Only `HOST`/`PORT` (when `MULLION_AGENT_HOST`/`PORT` are passed) and an _empty_ `MULLION_AGENT_TOKEN` are filled in; its mode is tightened to `600`. Changed `MULLION_AGENT_*` role variables are ignored once it exists.                                                                   |
-| `$SESSIONS_DIR/agent-identity.json`           | Written only when `MULLION_AGENT_PAIRING_CODE` / `MULLION_AGENT_PAIRING_CODE_STDIN=1` is supplied (overwriting any existing identity); never read or touched otherwise. The enrolled host id and machine credential survive reruns, release upgrades and daemon restarts, so the primary keeps one host row. |
-| Release, `current` symlink, unit/plist/task   | Replaced/refreshed (this is the upgrade).                                                                                                                                                                                                                                                                    |
-| Secrets in process arguments and install logs | None: every credential travels in the environment or the `.env` (mode `600`), never in a command line, and `install.sh` does not print them. Keep `no_log: true` on the task.                                                                                                                                |
+| Thing                                         | On a rerun / upgrade                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.env`                                        | Never rewritten. Only `HOST`/`PORT` (when `MULLION_AGENT_HOST`/`PORT` are passed) and an _empty_ `MULLION_AGENT_TOKEN` are filled in; its mode is tightened to `600`. Changed `MULLION_AGENT_*` role variables are ignored once it exists.                                                                                                                                                                                                                                                                                                                |
+| `$SESSIONS_DIR/agent-identity.json`           | Written only when `MULLION_AGENT_PAIRING_CODE` / `MULLION_AGENT_PAIRING_CODE_STDIN=1` is supplied (overwriting any existing identity); never read or touched otherwise. When `SESSIONS_DIR` is an absolute path outside `current` (such as `{{ mullion_home }}/data/sessions`, which `install.sh`'s generated `.env` uses), the enrolled host id and machine credential survive reruns, release upgrades and daemon restarts, so the primary keeps one host row; a relative `SESSIONS_DIR` lives inside the release directory and is orphaned on upgrade. |
+| Release, `current` symlink, unit/plist/task   | Replaced/refreshed (this is the upgrade).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Secrets in process arguments and install logs | None: every credential travels in the environment or the `.env` (mode `600`), never in a command line, and `install.sh` does not print them. Keep `no_log: true` on the task.                                                                                                                                                                                                                                                                                                                                                                             |
 
 Once an agent has enrolled it authenticates with its **machine credential**,
 which it rotates on every renewal; the `MULLION_ENROLLMENT_TOKEN` in `.env` is
@@ -1277,7 +1277,7 @@ The revoked-agent recipe as Ansible tasks (the example task above, run after
     path: "{{ item }}"
     state: absent
   loop:
-    - "{{ mullion_home }}/data/sessions/agent-identity.json"
+    - "{{ mullion_sessions_dir }}/agent-identity.json"
     - "{{ mullion_home }}/.env"
 # Then run the "Install as a self-registering agent" task above with the NEW token in
 # MULLION_AGENT_ENROLLMENT_TOKEN. It writes a fresh .env and restarts the

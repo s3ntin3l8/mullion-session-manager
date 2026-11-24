@@ -520,6 +520,12 @@ if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
     exit 1
   fi
   echo "==> Redeeming pairing code with primary"
+  case "$PAIR_SESSIONS_DIR" in
+    /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
+    *)
+      echo "WARNING: SESSIONS_DIR ($PAIR_SESSIONS_DIR) is relative, so the paired agent-identity.json will be written inside $MULLION_HOME/current and orphaned on the next release upgrade. Set SESSIONS_DIR to an absolute path outside the release directory (for example $MULLION_HOME/data/sessions) in $MULLION_HOME/.env." >&2
+      ;;
+  esac
   PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$PAIR_SESSIONS_DIR")
   if [ -n "${MULLION_AGENT_NAME:-}" ]; then
     PAIR_ARGS+=(--name "$MULLION_AGENT_NAME")
