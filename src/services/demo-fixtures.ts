@@ -79,15 +79,9 @@ export const DEMO_SIMULATOR_CATALOG: SimulatorCatalog = {
 /** Inserts demo device rows (an emulator, a phone, a simulator) in one transaction. */
 export function insertDemoDevices(
   app: FastifyInstance,
-  valuesFor: Array<Record<string, unknown>>,
+  valuesFor: Array<typeof devices.$inferInsert>,
 ): Array<typeof devices.$inferSelect> {
   return app.db.transaction((tx) =>
-    valuesFor.map((values) =>
-      tx
-        .insert(devices)
-        .values(values as typeof devices.$inferInsert)
-        .returning()
-        .get(),
-    ),
+    valuesFor.map((values) => tx.insert(devices).values(values).returning().get()),
   );
 }

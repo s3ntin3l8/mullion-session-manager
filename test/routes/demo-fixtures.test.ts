@@ -165,6 +165,16 @@ describe("demo fixture routes", () => {
     expect(sims.map((x: { udid: string }) => x.udid)).toContain(list[2].udid);
     const catalog = (await app.inject({ method: "GET", url: "/api/simulators/catalog" })).json();
     expect(catalog.runtimes.length).toBeGreaterThan(0);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/simulators",
+      payload: {
+        name: "x",
+        deviceTypeId: catalog.deviceTypes[0].id,
+        runtimeId: catalog.runtimes[0].id,
+      },
+    });
+    expect(created.statusCode).toBe(400);
     await app.close();
   });
 
