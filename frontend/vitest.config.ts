@@ -78,6 +78,7 @@ export default defineConfig({
         /styles\/motion\.css/,
         /styles\/index\.css/,
         /styles\/terminal\.css/,
+        /styles\/tablet\.css/,
       ],
     },
     maxWorkers,
