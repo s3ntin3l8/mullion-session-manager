@@ -16,12 +16,26 @@ interface LaunchParams extends Record<string, unknown> {
   command: string;
   name?: string;
   dockControlId?: string;
+  target?: { hostId?: string };
 }
 const launch = vi.hoisted(() => ({
   calls: [] as Record<string, unknown>[],
   live: "idle",
   fail: false,
 }));
+const remote = vi.hoisted(() => ({ resolveDock: vi.fn(), unreachable: false }));
+vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getRemoteHostClient: () => ({
+      resolveDock: async (cwd: string) => {
+        if (remote.unreachable) throw new Error("ECONNREFUSED");
+        return remote.resolveDock(cwd);
+      },
+    }),
+  };
+});
 vi.mock("../../src/services/session-live-info.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -49,6 +63,8 @@ vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
           kind: "dock",
           name: params.name ?? null,
           dockControlId: params.dockControlId,
+          // The real record stores the host the session was placed on.
+          hostId: params.target?.hostId ?? null,
         })
         .returning()
         .get();
@@ -443,6 +459,165 @@ describe("docks.* ops (#2494)", () => {
       });
       expect(frames[0]).toMatchObject({ ok: true, status: 201 });
       expect(launch.calls.at(-1)).toMatchObject({ cwd: path.join(fs.realpathSync(cwdA), "web") });
+    });
+  });
+
+  describe("a start on a chosen host (#3425)", () => {
+    const MAC_CWD = "/Users/dev/app";
+    async function setupMac() {
+      const base = await setup();
+      base.app.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify({ mac: MAC_CWD }) })
+        .where(eq(projects.id, base.projectA))
+        .run();
+      remote.unreachable = false;
+      remote.resolveDock
+        .mockReset()
+        .mockResolvedValue([
+          { id: "dev-server", title: "Dev server", command: "npm run dev", cwd: "web" },
+        ]);
+      return base;
+    }
+
+    it("reads the control from the checkout on that host and targets it", async () => {
+      const { app, agentSession } = await setupMac();
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: "dev-server", hostId: "mac" },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(remote.resolveDock).toHaveBeenCalledWith(MAC_CWD);
+      // The command is the Mac checkout's own, not the project host's.
+      expect(launch.calls[0]).toMatchObject({
+        command: "npm run dev",
+        kind: "dock",
+        dockControlId: "dev-server",
+        target: { hostId: "mac" },
+      });
+    });
+
+    it("pins to the project's own host when it is named explicitly", async () => {
+      const { app, agentSession } = await setupMac();
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: "logs", hostId: "local" },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(remote.resolveDock).not.toHaveBeenCalled();
+      expect(launch.calls[0]).toMatchObject({ target: { hostId: "local" } });
+    });
+
+    it("sends no target when no host is named", async () => {
+      const { app, agentSession } = await setupMac();
+      const { conn } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "logs" } });
+      expect(launch.calls[0]?.target).toBeUndefined();
+    });
+
+    it("refuses a host the project has no checkout on, without launching", async () => {
+      const { app, agentSession } = await setupMac();
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: "dev-server", hostId: "elsewhere" },
+      });
+      expect(frames[0]).toMatchObject({ ok: false, status: 409 });
+      expect(JSON.stringify(frames[0])).toContain("no checkout on host elsewhere");
+      expect(launch.calls).toHaveLength(0);
+    });
+
+    it("answers 503 when the chosen host cannot be reached", async () => {
+      const { app, agentSession } = await setupMac();
+      remote.unreachable = true;
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: "dev-server", hostId: "mac" },
+      });
+      expect(frames[0]).toMatchObject({ ok: false, status: 503 });
+      expect(launch.calls).toHaveLength(0);
+    });
+
+    it("a worktree path is checked against the checkout on that host", async () => {
+      const { app, agentSession } = await setupMac();
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: "dev-server", hostId: "mac", worktreePath: "." },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls[0]).toMatchObject({ cwd: MAC_CWD, target: { hostId: "mac" } });
+
+      await dispatch(app, conn, {
+        id: 2,
+        op: "docks.switch",
+        body: { dockControlId: "dev-server", hostId: "elsewhere", worktreePath: "." },
+      });
+      expect(frames[1]).toMatchObject({ ok: false, status: 409 });
+    });
+
+    it("stops a control that exists only in the checkout on the host it runs on", async () => {
+      const { app, agentSession } = await setupMac();
+      remote.resolveDock.mockResolvedValue([
+        { id: "mac-only", title: "Mac dev", command: "npm run dev" },
+      ]);
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.start",
+        body: { dockControlId: "mac-only", hostId: "mac" },
+      });
+      const sessionId = (frames[0].result as { sessionId: number }).sessionId;
+      // The project host's dock.json has no "mac-only": stop must still find it.
+      await dispatch(app, conn, { id: 2, op: "docks.stop", body: { dockControlId: "mac-only" } });
+      expect(frames[1]).toMatchObject({ ok: true, result: { sessionId } });
+      expect(app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get()?.status).toBe(
+        "killed",
+      );
+    });
+
+    it("switches a stopped control that exists only on the chosen host's checkout", async () => {
+      const { app, agentSession } = await setupMac();
+      remote.resolveDock.mockResolvedValue([
+        { id: "mac-only", title: "Mac dev", command: "npm run dev" },
+      ]);
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, {
+        id: 1,
+        op: "docks.switch",
+        body: { dockControlId: "mac-only", branch: "b", hostId: "mac" },
+      });
+      expect(frames[0]).toMatchObject({ ok: true, status: 201 });
+      expect(launch.calls).toHaveLength(1);
+      expect(launch.calls[0]).toMatchObject({
+        command: "npm run dev",
+        target: { hostId: "mac" },
+        worktree: { branch: "b" },
+      });
+    });
+
+    it("switch carries the host too, and stops nothing when the host is refused", async () => {
+      const { app, agentSession } = await setupMac();
+      const { conn, frames } = makeConnectionState("session", agentSession);
+      await dispatch(app, conn, { id: 1, op: "docks.start", body: { dockControlId: "logs" } });
+      const running = (frames[0].result as { sessionId: number }).sessionId;
+      await dispatch(app, conn, {
+        id: 2,
+        op: "docks.switch",
+        body: { dockControlId: "logs", branch: "b", hostId: "elsewhere" },
+      });
+      expect(frames[1]).toMatchObject({ ok: false, status: 409 });
+      expect(app.db.select().from(sessions).where(eq(sessions.id, running)).get()?.status).toBe(
+        "active",
+      );
     });
   });
 });

@@ -49,6 +49,7 @@ import {
   resolveProjectDock,
   type DiscoveredCandidate,
 } from "../services/project-config.js";
+import { resolveDevServerHostId } from "../services/dev-server-host.js";
 import { getStoredSettings } from "../services/settings.js";
 import { resolveProjectRoots } from "../services/project-roots.js";
 import {
@@ -1917,7 +1918,10 @@ export async function projectsRoute(app: FastifyInstance) {
         return { online: false };
       }
 
-      if (project.hostId !== LOCAL_HOST_ID) {
+      // The dev server runs where its preview control does, which a start can
+      // place on another host than the project's own (#3425).
+      const devServerHostId = await resolveDevServerHostId(app, project);
+      if (devServerHostId !== LOCAL_HOST_ID) {
         // Only the port (+ scheme) is resolved and forwarded — never the
         // full URL or host — so a remote-hosted project can't turn this
         // route into a TCP-connect probe of arbitrary hosts reachable from
@@ -1926,7 +1930,7 @@ export async function projectsRoute(app: FastifyInstance) {
         const target = parseDevServerTarget(project.devServerUrl);
         if (!target) return { online: false };
         try {
-          return await getRemoteHostClient(app, project.hostId).getDevServerStatus(
+          return await getRemoteHostClient(app, devServerHostId).getDevServerStatus(
             target.port,
             target.scheme,
           );
@@ -1944,7 +1948,7 @@ export async function projectsRoute(app: FastifyInstance) {
             err instanceof HostRequestError
               ? "agent rejected dev-server-status request, reporting offline"
               : "host unreachable, reporting dev-server-status offline";
-          app.log.warn({ hostId: project.hostId, projectId, err }, message);
+          app.log.warn({ hostId: devServerHostId, projectId, err }, message);
           return { online: false };
         }
       }
@@ -1980,7 +1984,8 @@ export function pingDevServer(urlStr: string, timeoutMs = 1000): Promise<boolean
     try {
       const url = new URL(urlStr);
       const port = url.port ? parseInt(url.port, 10) : url.protocol === "https:" ? 443 : 80;
-      const host = url.hostname || "localhost";
+      // A URL keeps the brackets of an IPv6 literal; net.connect wants it bare.
+      const host = url.hostname.replace(/^\[|\]$/g, "") || "localhost";
       const socket = net.connect({ host, port, timeout: timeoutMs }, () => {
         // For HTTP URLs, send a HEAD request to verify the server is
         // responding to HTTP, not just accepting TCP connections.

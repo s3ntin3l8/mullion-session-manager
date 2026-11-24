@@ -275,12 +275,14 @@ servers, log tails — distinct from one-shot launchers).
 
 - `dock list [<projectId>]` — the project's dock controls and the session
   running each. Session scope: your own project (omit the id).
-- `dock start [<projectId>] <dockControlId> [--branch <name>]` — starts the
+- `dock start [<projectId>] <dockControlId> [--branch <name>] [--host <hostId>]` — starts the
   control (`docks.start`); a lone id is your own project's control. `--branch`
-  runs it in a preview worktree of that branch. A Docker-discovered control
-  needs full scope.
+  runs it in a preview worktree of that branch. `--host` runs it on that host
+  (the project needs a checkout there; see [Running a control on another
+  host](dock.md#running-a-control-on-another-host)). A Docker-discovered
+  control needs full scope.
 - `dock logs [<projectId>] <dockControlId>` — the running control's screen as text.
-- `dock switch [<projectId>] <dockControlId> <branch>` / `--worktree <path>` (the project checkout, a directory inside it, or a git worktree; a relative path is anchored at the checkout) —
+- `dock switch [<projectId>] <dockControlId> <branch>` / `--worktree <path>` (the project checkout, a directory inside it, or a git worktree; a relative path is anchored at the checkout), optionally with `--host <hostId>` —
   restart the control on a branch (preview worktree) or an existing worktree.
 - `dock config get [<projectId>]` — the raw `.crs/dock.json` (`{controls, invalid, reason}`).
 - `dock config set [<projectId>] --upsert '<json>' | --remove <id> | --controls '<json>'` —

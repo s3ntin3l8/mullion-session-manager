@@ -278,7 +278,7 @@ iframe) aren't supported.
 
 You can start, stop and inspect **your own project's** dock controls (the
 dev server among them) from a session: `mullion dock list`,
-`mullion dock start <controlId> [--branch <name>]`,
+`mullion dock start <controlId> [--branch <name>] [--host <hostId>]`,
 `mullion dock stop <controlId> --control`, or the MCP tools
 `list_dock_controls` / `start_dock_session` / `stop_dock_session`. The
 project is always taken from your session, never from the request; another
@@ -309,7 +309,9 @@ Read a running control's output with `mullion dock logs <controlId>` /
 and move it to another branch with `mullion dock switch <controlId> <branch>`
 (or `--worktree <path>`: the project checkout, a directory inside it, or one of its git worktrees; a relative path is anchored at the project checkout; a control that is not running is started there) /
 `switch_dock_branch`. A switch validates the target first, then stops and
-restarts the control; `list` shows where it runs now.
+restarts the control; `list` shows where it runs now. `--host` (MCP `host`) on
+`start`/`switch` runs the control on another host the project has a checkout on,
+such as a Mac agent; it is refused with 409 when there is none.
 
 Other useful surfaces at session scope:
 

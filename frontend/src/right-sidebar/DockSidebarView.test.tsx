@@ -9,8 +9,10 @@ import { useDashboardStore } from "../store/index.js";
 import { ApiError } from "../api/index.js";
 import type { GitBranchesResult, Session } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
-import { makeProject, makeSession } from "../test/fixtures.js";
+import { makeHost, makeProject, makeSession } from "../test/fixtures.js";
+import * as dd from "../test/dropdown.js";
 import { mockFetch } from "../test/mockFetch.js";
+import { SERVER_INFO_FIXTURE } from "../test/serverInfoFixture.js";
 import { resetStore } from "../test/resetStore.js";
 import companionCss from "../styles/companion-views.css?raw";
 
@@ -67,6 +69,7 @@ const WEB = {
 // null: the dock GET fails (500).
 let controls: unknown[] | null;
 let checkUpdate: unknown;
+let serverPreviewsEnabled: boolean;
 const calls: string[] = [];
 
 function dockSession(id: number, name: string | null, command: string): Session {
@@ -91,6 +94,7 @@ describe("DockSidebarView (#3012)", () => {
     localStorage.clear();
     calls.length = 0;
     controls = [DEV, API, WEB];
+    serverPreviewsEnabled = true;
     checkUpdate = {
       updateAvailable: true,
       currentImageId: "sha256:aaa",
@@ -104,6 +108,8 @@ describe("DockSidebarView (#3012)", () => {
       return jsonResponse(name.startsWith("stack") ? 201 : 200, body);
     };
     const { fetchMock } = mockFetch({
+      "GET /api/server-info": () =>
+        jsonResponse(200, { ...SERVER_INFO_FIXTURE, previewsEnabled: serverPreviewsEnabled }),
       "GET /api/projects/:id/dock": () =>
         controls === null ? jsonResponse(500, {}) : jsonResponse(200, controls),
       // The bottom Dock's own GitHub row, for the tests that mount it too.
@@ -183,6 +189,153 @@ describe("DockSidebarView (#3012)", () => {
       "npm run dev",
       expect.objectContaining({ kind: "dock" }),
     );
+  });
+
+  describe("running a control on another host (#3425)", () => {
+    const MAC = makeHost({ id: "mac", name: "Mac mini", health: "online" });
+    const spanning = makeProject({
+      id: 1,
+      name: "aurora-web",
+      cwd: "/home/x/aurora",
+      hostCwds: { mac: "/Users/x/aurora" },
+    });
+
+    it("offers no host choice for a project that lives on one host", async () => {
+      renderView();
+      await screen.findByRole("region", { name: "Commands" });
+      expect(screen.queryByRole("combobox", { name: "Run dock controls on host" })).toBeNull();
+    });
+
+    it("follows a control already running on another host, so Restart keeps it there", async () => {
+      const running = {
+        ...dockSession(7, null, "npm run dev"),
+        hostId: "mac",
+        resolvedHostId: "mac",
+      } as Session;
+      resetStore({ projects: [spanning], sessions: [running], hosts: [MAC] });
+      useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+      renderView();
+      await userEvent.click(await screen.findByRole("button", { name: /^dev, running/ }));
+      const picker = screen.getByRole("combobox", { name: "Run dock controls on host" });
+      // Not "this server": it is running on the Mac.
+      expect(dd.dropdownValue(picker)).toBe("mac");
+      const group = screen.getByRole("group", { name: "dev actions" });
+      await userEvent.click(within(group).getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(createSession).toHaveBeenCalled());
+      expect(createSession.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ kind: "dock", targetHostId: "mac" }),
+      );
+
+      // An explicit choice of the project's own host wins over where it runs now.
+      createSession.mockClear();
+      dd.pickDropdownOption(
+        screen.getByRole("combobox", { name: "Run dock controls on host" }),
+        "__own__",
+      );
+      await userEvent.click(within(group).getByRole("button", { name: "Restart" }));
+      await waitFor(() => expect(createSession).toHaveBeenCalled());
+      expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+    });
+
+    it("restarts each control on the host its own session runs on", async () => {
+      const LOGS = { id: "logs", title: "logs", command: "tail -f log" };
+      controls = [DEV, LOGS];
+      const onMac = {
+        ...dockSession(7, null, "npm run dev"),
+        hostId: "mac",
+        resolvedHostId: "mac",
+      } as Session;
+      const atHome = {
+        ...dockSession(9, null, "tail -f log"),
+        hostId: "local",
+        resolvedHostId: "local",
+      } as Session;
+      resetStore({ projects: [spanning], sessions: [onMac, atHome], hosts: [MAC] });
+      useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+      renderView();
+
+      // The group's default is where the newest other-host control runs.
+      await userEvent.click(await screen.findByRole("button", { name: /^logs, running/ }));
+      expect(
+        dd.dropdownValue(screen.getByRole("combobox", { name: "Run dock controls on host" })),
+      ).toBe("mac");
+      // ...but Restart on `logs` leaves it at home.
+      await userEvent.click(
+        within(screen.getByRole("group", { name: "logs actions" })).getByRole("button", {
+          name: "Restart",
+        }),
+      );
+      await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+      expect(createSession.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ dockControlId: "logs" }),
+      );
+      expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+
+      // And Restart on `dev` keeps it on the Mac.
+      createSession.mockClear();
+      await userEvent.click(screen.getByRole("button", { name: /^dev, running/ }));
+      await userEvent.click(
+        within(screen.getByRole("group", { name: "dev actions" })).getByRole("button", {
+          name: "Restart",
+        }),
+      );
+      await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+      expect(createSession.mock.calls[0][2]).toEqual(
+        expect.objectContaining({ dockControlId: "dev", targetHostId: "mac" }),
+      );
+    });
+
+    it("starts on the project's own placement until a host is picked, then on that host", async () => {
+      resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
+      useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+      renderView();
+      await userEvent.click(await screen.findByRole("button", { name: /^dev, stopped/ }));
+      const group = screen.getByRole("group", { name: "dev actions" });
+
+      await userEvent.click(within(group).getByRole("button", { name: "Start" }));
+      expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+
+      const picker = screen.getByRole("combobox", { name: "Run dock controls on host" });
+      expect(dd.dropdownOptions(picker).map((o) => o.label)).toEqual(["this server", "Mac mini"]);
+      dd.pickDropdownOption(picker, "mac");
+      await userEvent.click(within(group).getByRole("button", { name: "Start" }));
+      expect(createSession.mock.calls[1]).toEqual([
+        1,
+        "npm run dev",
+        expect.objectContaining({ kind: "dock", targetHostId: "mac" }),
+      ]);
+
+      // Previews are on here, so there is nothing to warn about.
+      expect(screen.queryByRole("note")).toBeNull();
+
+      // Back to the project's own host: nothing is sent again.
+      dd.pickDropdownOption(
+        screen.getByRole("combobox", { name: "Run dock controls on host" }),
+        "__own__",
+      );
+      await userEvent.click(within(group).getByRole("button", { name: "Start" }));
+      expect(createSession.mock.calls[2][2]).not.toHaveProperty("targetHostId");
+    });
+  });
+
+  it("warns when another host is chosen and previews are off", async () => {
+    serverPreviewsEnabled = false;
+    resetStore({
+      projects: [makeProject({ id: 1, name: "aurora-web", hostCwds: { mac: "/Users/x/aurora" } })],
+      sessions: [],
+      hosts: [makeHost({ id: "mac", name: "Mac mini", health: "online" })],
+    });
+    useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+    renderView();
+    const picker = await screen.findByRole("combobox", { name: "Run dock controls on host" });
+    expect(screen.queryByRole("note")).toBeNull();
+    dd.pickDropdownOption(picker, "mac");
+    expect(await screen.findByRole("note")).toHaveTextContent(/PREVIEW_BASE_HOST/);
+    dd.pickDropdownOption(
+      screen.getByRole("combobox", { name: "Run dock controls on host" }),
+      "__own__",
+    );
+    await waitFor(() => expect(screen.queryByRole("note")).toBeNull());
   });
 
   it("stops a running command only on the second tap, and restarts it", async () => {

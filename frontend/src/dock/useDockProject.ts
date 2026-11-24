@@ -26,6 +26,11 @@ import type { DockerStackGroup } from "./dockHelpers.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
+import {
+  buildHostTargetOptions,
+  AUTO_VALUE,
+  OWN_HOST_VALUE,
+} from "../command-palette/hostTarget.js";
 import { DOCKER_POLL_INTERVAL_MS, useSharedDockControls } from "./dockProjectShared.js";
 import {
   isBottomDockMounted,
@@ -115,6 +120,14 @@ export interface DockStackActions {
 
 export type DockSurface = "bottom-dock" | "sidebar-view";
 
+/** The "Run on" choice for a project that reaches more than one host. */
+export interface DockHostPicker {
+  projectId: number;
+  value: string;
+  options: { value: string; label: string; disabled: boolean }[];
+  onChange: (value: string) => void;
+}
+
 export function useDockProject(
   projectId: number,
   {
@@ -141,6 +154,7 @@ export function useDockProject(
     settings,
     dockConfigRefreshTrigger,
     dockControlWorktrees,
+    hosts,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
@@ -151,6 +165,7 @@ export function useDockProject(
       settings: s.settings,
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
       dockControlWorktrees: s.dockControlWorktrees?.[String(projectId)],
+      hosts: s.hosts,
     })),
   );
   // U8 — Settings -> Session management's "Confirm before kill" toggle.
@@ -251,6 +266,39 @@ export function useDockProject(
   const dockSessions = sessions.filter(
     (s) => s.kind === "dock" && s.projectId === projectId && s.status === "active",
   );
+  // #3425 — where a Start runs. Per launch and per mount: nothing is stored.
+  // Until the user picks, it follows where the project's dock already runs
+  // (a control running on the Mac is not offered "this server" by default, and
+  // Restart brings it back where it was), else the project's own placement.
+  const [hostChoice, setHostChoice] = useState<string | null>(null);
+  // Own host first, then each host the project has a checkout on. Auto is not
+  // offered: a dock control is somewhere on purpose.
+  const hostOptions = project
+    ? buildHostTargetOptions(project, hosts).filter((o) => o.value !== AUTO_VALUE)
+    : [];
+  const runningElsewhere =
+    project && hostOptions.length > 1
+      ? [...dockSessions]
+          .sort((a, b) => b.id - a.id)
+          .map((s) => s.resolvedHostId)
+          .find((h) => h && h !== project.hostId && hostOptions.some((o) => o.value === h))
+      : undefined;
+  const effectiveHostChoice = hostChoice ?? runningElsewhere ?? OWN_HOST_VALUE;
+  const targetHostId =
+    project &&
+    effectiveHostChoice !== OWN_HOST_VALUE &&
+    hostOptions.some((o) => o.value === effectiveHostChoice)
+      ? effectiveHostChoice
+      : undefined;
+  const hostPicker: DockHostPicker | null =
+    project && hostOptions.length > 1
+      ? {
+          projectId,
+          value: targetHostId ?? OWN_HOST_VALUE,
+          options: hostOptions,
+          onChange: setHostChoice,
+        }
+      : null;
 
   const gitRefs: GitBranchesResult | undefined = gitBranchesByProject[projectId];
   const worktrees = gitRefs?.worktrees ?? [];
@@ -559,6 +607,19 @@ export function useDockProject(
       controlCwd: control.cwd,
     });
 
+    // Where this row launches. Start (nothing running) uses the group's choice.
+    // Restart keeps the control on the host its OWN session runs on unless the
+    // user picked a host: with `dev` on the Mac and `logs` at home, Restart on
+    // `logs` must not move it to the Mac. (#3425)
+    const rowHostId =
+      running &&
+      project &&
+      running.resolvedHostId !== project.hostId &&
+      hostOptions.some((o) => o.value === running.resolvedHostId)
+        ? running.resolvedHostId
+        : undefined;
+    const launchHostId = hostChoice !== null ? targetHostId : running ? rowHostId : targetHostId;
+
     const dockIdentity = dockerSessionIdentity(control);
     const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
     const launchForValue = (value: string) => {
@@ -570,6 +631,7 @@ export function useDockProject(
           dockControlId: control.id,
           worktree: { branch: branchName },
           worktreeRefresh: effectiveWorktreeRefresh,
+          ...(launchHostId !== undefined ? { targetHostId: launchHostId } : {}),
           ...identityOpts,
           ...(control.env ? { env: control.env } : {}),
         });
@@ -578,6 +640,7 @@ export function useDockProject(
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         kind: "dock",
         dockControlId: control.id,
+        ...(launchHostId !== undefined ? { targetHostId: launchHostId } : {}),
         ...identityOpts,
         ...(control.env ? { env: control.env } : {}),
       });
@@ -738,6 +801,7 @@ export function useDockProject(
 
   return {
     project,
+    hostPicker,
     configuredControls,
     ungroupedDockerControls,
     standaloneOrphanControls,

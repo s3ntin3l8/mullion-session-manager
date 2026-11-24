@@ -64,7 +64,7 @@ export async function dockControlsRoute(app: FastifyInstance) {
 
   app.post<{
     Params: { id: number; controlId: string };
-    Body: { branch?: string; worktreePath?: string };
+    Body: { branch?: string; worktreePath?: string; hostId?: string };
   }>(
     "/api/projects/:id/dock/controls/:controlId/start",
     {
@@ -76,6 +76,7 @@ export async function dockControlsRoute(app: FastifyInstance) {
           properties: {
             branch: { type: "string", minLength: 1 },
             worktreePath: { type: "string", minLength: 1 },
+            hostId: { type: "string", minLength: 1, maxLength: 128 },
           },
         },
       },
@@ -97,7 +98,7 @@ export async function dockControlsRoute(app: FastifyInstance) {
 
   app.post<{
     Params: { id: number; controlId: string };
-    Body: { branch?: string; worktreePath?: string };
+    Body: { branch?: string; worktreePath?: string; hostId?: string };
   }>(
     "/api/projects/:id/dock/controls/:controlId/switch",
     {
@@ -109,6 +110,7 @@ export async function dockControlsRoute(app: FastifyInstance) {
           properties: {
             branch: { type: "string", minLength: 1 },
             worktreePath: { type: "string", minLength: 1 },
+            hostId: { type: "string", minLength: 1, maxLength: 128 },
           },
         },
       },

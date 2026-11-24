@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { projects, projectPreviewTargets } from "../db/schema.js";
 import { resolveExecutionContext } from "./execution-context.js";
 import { getPreviewBySlug } from "./preview-registry.js";
+import { resolveDevServerHostId } from "./dev-server-host.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 
 // The two things a resolved preview can point at (see resolvePreviewTarget
@@ -117,8 +118,9 @@ export async function resolvePreviewTarget(
   // means that host. A bound session that can't be resolved is unavailable,
   // not a reason to fall back to the project's host (issue #2247); only a
   // preview with no session at all is project-default, i.e. explicitly
-  // project-scoped.
-  let hostId = project.hostId;
+  // project-scoped, and then the dev server runs where its preview control does
+  // (a dock control can be started on another host, #3425).
+  let hostId: string;
   if (preview.sessionId !== null) {
     const ctx = await resolveExecutionContext(
       app,
@@ -136,6 +138,8 @@ export async function resolvePreviewTarget(
   } else if (preview.upstreamPort !== null) {
     // A branch preview's port only means something on its session's host.
     return { ok: false, status: 503 };
+  } else {
+    hostId = await resolveDevServerHostId(app, project);
   }
   // Issues #2016/#2018 — a branch preview targets the port its own dock
   // session was told to bind, never the project's devServerUrl (which serves

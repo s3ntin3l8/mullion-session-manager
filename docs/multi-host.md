@@ -2443,6 +2443,18 @@ restored backup, a duplicated state dir). Give each machine its own enrollment.
 
 A session's browser (pane and agent automation) runs on the session's own host and is keyed by its checkout, so two sessions on different hosts or worktrees never share cookies, navigation or downloads, and `localhost` means that host's loopback. A host whose Mullion lacks the `browser-targets` operation is refused with an update hint rather than served a project-wide browser. Details: [browser-automation.md](browser-automation.md#execution-targets).
 
+## Dev servers on an agent host
+
+A dock control runs on the host it is started on, so a project's dev server can
+run on a Mac agent while the project stays on the primary: choose the host when
+you start the control (the Dock's **Run on** dropdown, `mullion dock start --host`,
+MCP `host`). The project needs a checkout there (`hostCwds`), and the Browser pane
+reaches the server through the preview proxy, so `PREVIEW_BASE_HOST` must be set.
+The agent dials the dev server on its own loopback, `127.0.0.1` then `::1`. A
+simulator on that host reaches the same server at the host's localhost. Details
+and what is not yet supported remotely:
+[dock.md](dock.md#running-a-control-on-another-host).
+
 ## Current limitations
 
 - Self-registration has no admin-approval queue — any holder of

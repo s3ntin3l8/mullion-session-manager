@@ -11,6 +11,7 @@ import { DockGithubRow } from "./DockGithubRow.js";
 import { DockMonitor } from "./DockMonitor.js";
 import { DockLogPane } from "./DockLogPane.js";
 import { DockStackHeader } from "./DockStackHeader.js";
+import { DockHostPicker } from "./DockHostPicker.js";
 import { useDockProject } from "./useDockProject.js";
 
 // How long `pendingSelectKeyRef` exempts a just-requested row from the
@@ -119,6 +120,7 @@ export function DockProjectGroup({
   // comment).
   const {
     project,
+    hostPicker,
     configuredControls,
     ungroupedDockerControls,
     standaloneOrphanControls,
@@ -441,6 +443,7 @@ export function DockProjectGroup({
             onOpen={() => onOpenGitHub(projectId)}
           />
         )}
+        {hostPicker && <DockHostPicker picker={hostPicker} />}
         <ProjectPreviewMenu
           projectId={projectId}
           onOpenDefault={() => onOpenBrowser(projectId)}

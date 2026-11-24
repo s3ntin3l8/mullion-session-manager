@@ -23,17 +23,26 @@ export function createDockCommands({ CliUsageError, requireOne }) {
       // Split flags from positionals once: `--branch <name>` is not a project or control id.
       const args = [];
       let branch;
+      let host;
       for (let i = 0; i < rawArgs.length; i++) {
-        if (rawArgs[i] !== "--branch") {
+        if (rawArgs[i] !== "--branch" && rawArgs[i] !== "--host") {
           args.push(rawArgs[i]);
           continue;
         }
+        const flag = rawArgs[i];
         const value = rawArgs[++i];
         if (value === undefined || value.startsWith("--")) {
-          throw new CliUsageError("--branch needs a branch name");
+          throw new CliUsageError(
+            `${flag} needs ${flag === "--host" ? "a host id" : "a branch name"}`,
+          );
         }
-        if (branch !== undefined) throw new CliUsageError("--branch given more than once");
-        branch = value;
+        if (flag === "--branch") {
+          if (branch !== undefined) throw new CliUsageError("--branch given more than once");
+          branch = value;
+        } else {
+          if (host !== undefined) throw new CliUsageError("--host given more than once");
+          host = value;
+        }
       }
       const hasProject = args[1] !== undefined;
       const projectId = hasProject ? args[0] : undefined;
@@ -44,10 +53,18 @@ export function createDockCommands({ CliUsageError, requireOne }) {
           ...(projectId !== undefined ? { projectId } : {}),
           dockControlId: dockId,
           ...(branch !== undefined ? { branch } : {}),
+          ...(host !== undefined ? { hostId: host } : {}),
         });
         return { json: result };
       } catch (err) {
-        if (err?.status !== 404 || projectId === undefined || branch !== undefined) throw err;
+        if (
+          err?.status !== 404 ||
+          projectId === undefined ||
+          branch !== undefined ||
+          host !== undefined
+        ) {
+          throw err;
+        }
       }
       const controls = await client.request("projects.dock", { projectId });
       const control = controls.find((c) => c.id === dockId);
@@ -79,8 +96,21 @@ export function createDockCommands({ CliUsageError, requireOne }) {
         }),
       };
     },
-    // `switch [<projectId>] <controlId> <branch>` or `... --worktree <path>`.
-    async switch(client, args) {
+    // `switch [<projectId>] <controlId> <branch>` or `... --worktree <path>`, either with `--host <id>`.
+    async switch(client, rawArgs) {
+      const hostAt = rawArgs.indexOf("--host");
+      if (hostAt !== -1 && rawArgs.indexOf("--host", hostAt + 1) !== -1) {
+        throw new CliUsageError("--host given more than once");
+      }
+      if (
+        hostAt !== -1 &&
+        (rawArgs[hostAt + 1] === undefined || rawArgs[hostAt + 1].startsWith("--"))
+      ) {
+        throw new CliUsageError("--host needs a host id");
+      }
+      const host = hostAt === -1 ? undefined : rawArgs[hostAt + 1];
+      const args =
+        hostAt === -1 ? rawArgs : rawArgs.filter((_, i) => i !== hostAt && i !== hostAt + 1);
       const wt = args.indexOf("--worktree");
       const rest = wt === -1 ? [...args] : args.filter((_, i) => i !== wt && i !== wt + 1);
       const target = wt === -1 ? rest.pop() : args[wt + 1];
@@ -94,6 +124,7 @@ export function createDockCommands({ CliUsageError, requireOne }) {
           ...(rest.length > 1 ? { projectId: rest[0] } : {}),
           dockControlId: rest[rest.length - 1],
           ...(wt === -1 ? { branch: target } : { worktreePath: target }),
+          ...(host !== undefined ? { hostId: host } : {}),
         }),
       };
     },
