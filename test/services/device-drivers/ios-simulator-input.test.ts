@@ -554,7 +554,7 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     await driver.stop();
   });
 
-  it("does not delay final touchUp or tap after a 60-event touchMove burst", async () => {
+  it("coalesces a 60-event touchMove burst before final touchUp and tap", async () => {
     const c = fakeCompanion();
     const driver = new IosSimulatorDriver({
       id: "1",
@@ -595,6 +595,13 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
     await Promise.all([...moves, touchUpPromise]);
 
     expect(c.hidStreams[0]!.written.length).toBeLessThan(10);
+    expect(
+      c.hidStreams[0]!.written.filter(
+        (w) => w.press?.direction === "DOWN" && w.press.action?.touch,
+      ).at(-1),
+    ).toEqual({
+      press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "DOWN" },
+    });
     expect(c.hidStreams[0]!.written.at(-1)).toEqual({
       press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "UP" },
     });
@@ -668,10 +675,18 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
       for (let step = 0; step < 100 && !settled; step++) {
         await vi.advanceTimersByTimeAsync(5);
       }
+      expect(settled).toBe(true);
       await allDone;
 
       // 60 uncoalesced writes would yield 62 events; coalescing keeps it to a couple of writes.
       expect(c.hidStreams[0]!.written.length).toBeLessThan(10);
+      expect(
+        c.hidStreams[0]!.written.filter(
+          (w) => w.press?.direction === "DOWN" && w.press.action?.touch,
+        ).at(-1),
+      ).toEqual({
+        press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "DOWN" },
+      });
       expect(c.hidStreams[0]!.written.at(-1)).toEqual({
         press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "UP" },
       });
