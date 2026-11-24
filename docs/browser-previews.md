@@ -90,7 +90,9 @@ and a sheet with 48px rows on a touch screen. Three groups, in this order:
 1. **Running now**: the project's Dock commands whose output printed a dev
    server banner (the same detection as below, so it reads the port the
    server printed), and the Docker Compose services that publish a port, one
-   row per published TCP port, labelled with their stack. Both are detected on
+   row per published TCP port, labelled with their stack. Every published
+   port is listed, so a database's port shows too; picking one shows whatever it
+   answers. Both are detected on
    this server only: for a project on another host the group says so instead.
    A Dock session serving a branch preview is listed as that branch preview.
    Compose services follow **Settings → Dock → "Docker Compose services"**.
@@ -115,7 +117,10 @@ What a pick opens depends on the mode:
 - **Agent's browser** loads the entry's own address, which the server-side
   browser reaches from its own host. It never loads a proxy address (the
   preview token stays out of it, as for ⇄). A `localhost` entry on another
-  host than the session's browser is disabled with that reason. Picking is an
+  host than the session's browser is disabled with that reason; where the
+  session's browser runs comes from the server
+  (`GET …/browser-destinations?sessionId=`), resolved as ⇄ resolves it (its
+  browser binding first). Picking is an
   explicit open: it attaches, and so launches, the session's browser.
 
 The list is `GET /api/projects/:id/browser-destinations`

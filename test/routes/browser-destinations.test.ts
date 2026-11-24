@@ -344,6 +344,78 @@ describe("browser destinations (#3003)", () => {
     expect(open.statusCode).toBe(404);
   });
 
+  it("says where a session's browser runs, for the agent's browser", async () => {
+    const res = await app.inject({
+      url: `/api/projects/${projectId}/browser-destinations?sessionId=${storybookId}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().agentBrowser).toEqual({ hostId: "local", reason: null });
+    // Without the query there is nothing to say.
+    const plain = await app.inject({ url: `/api/projects/${projectId}/browser-destinations` });
+    expect(plain.json().agentBrowser).toBeNull();
+    expect(
+      (
+        await app.inject({
+          url: `/api/projects/${projectId}/browser-destinations?sessionId=nope`,
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await app.inject({
+          url: `/api/projects/${projectId}/browser-destinations?sessionId=987654`,
+        })
+      ).statusCode,
+    ).toBe(404);
+  });
+
+  it("never hands a port preview back as a branch preview", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId, branch: "port:6006" },
+    });
+    expect(res.statusCode).toBeGreaterThanOrEqual(400);
+    expect(res.json().slug).toBeUndefined();
+  });
+
+  it("opens a port preview, not the project's own, while the dev server is served elsewhere", async () => {
+    app.db.insert(hosts).values({ id: "box-b", name: "box-b" }).run();
+    const elsewhere = app.db
+      .insert(sessions)
+      .values({ projectId, command: "npm run dev", hostId: "box-b" })
+      .returning()
+      .get();
+    const checkout = app.db
+      .select()
+      .from(previews)
+      .where(eq(previews.projectId, projectId))
+      .all()
+      .find((p) => p.branch === "")!;
+    app.db
+      .update(previews)
+      .set({ sessionId: elsewhere.id })
+      .where(eq(previews.slug, checkout.slug))
+      .run();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/browser-destinations/preview`,
+        payload: { key: `dock:${devId}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().slug).not.toBe(checkout.slug);
+      const row = app.db.select().from(previews).where(eq(previews.slug, res.json().slug)).get()!;
+      expect(row).toMatchObject({ branch: "port:5173", upstreamPort: 5173 });
+    } finally {
+      app.db
+        .update(previews)
+        .set({ sessionId: null })
+        .where(eq(previews.slug, checkout.slug))
+        .run();
+    }
+  });
+
   it("answers 400 for a bad id and 404 for an unknown project", async () => {
     expect((await app.inject({ url: "/api/projects/x/browser-destinations" })).statusCode).toBe(
       400,

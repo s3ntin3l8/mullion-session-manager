@@ -3,6 +3,7 @@ import {
   listBrowserDestinations,
   openRunningDestinationPreview,
 } from "../services/browser-destinations.js";
+import { sessionBrowserHost } from "../services/browser-handoff.js";
 
 // #3003 — the Browser pane's quick pick (docs/browser-previews.md, "Quick
 // pick"). The list is read-only; opening a running service in the preview
@@ -27,7 +28,7 @@ function parseProjectId(raw: string): number | null {
 }
 
 export async function browserDestinationsRoute(app: FastifyInstance) {
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { sessionId?: string } }>(
     "/api/projects/:id/browser-destinations",
     // Shells out to `docker` for a local project, like the Dock route, and
     // shares its sizing: the 10s discovery cache keeps the real cost flat.
@@ -37,7 +38,22 @@ export async function browserDestinationsRoute(app: FastifyInstance) {
       if (projectId === null) return reply.badRequest("Invalid project id");
       const result = await listBrowserDestinations(app, projectId);
       if (!result) return reply.notFound("Project not found");
-      return result;
+      // `?sessionId=`: where that session's browser runs, resolved as ⇄
+      // resolves it, so the pane knows which `localhost` entries it can load.
+      let agentBrowser: { hostId: string | null; reason: string | null } | null = null;
+      const rawSession = request.query.sessionId;
+      if (rawSession !== undefined) {
+        const sessionId = Number(rawSession);
+        if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+        const host = await sessionBrowserHost(app, sessionId);
+        if (!host || host.projectId !== projectId) {
+          return reply.notFound("Session not found in this project");
+        }
+        agentBrowser = host.result.ok
+          ? { hostId: host.result.hostId, reason: null }
+          : { hostId: null, reason: host.result.reason };
+      }
+      return { ...result, agentBrowser };
     },
   );
 

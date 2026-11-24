@@ -26,6 +26,10 @@ export type QuickPickEntry =
 export interface QuickPickContext {
   /** PREVIEW_BASE_HOST is set: previews go through the proxy. */
   previewsEnabled: boolean;
+  /** The host the session's browser runs on, as the server resolves it (only
+   * asked for with `sessionId`); null when unknown, with `agentHostReason`. */
+  agentHostId: string | null;
+  agentHostReason: string | null;
 }
 
 type Loaded =
@@ -59,12 +63,15 @@ function destinationRows(list: BrowserDestination[], group: "running" | "saved")
 
 export function BrowserQuickPick({
   projectId,
+  sessionId = null,
   mode,
   refusal,
   onPick,
 }: {
   /** The project whose destinations to list; null lists recent addresses only. */
   projectId: number | null;
+  /** Agent's browser: the session whose browser loads the pick. */
+  sessionId?: number | null;
   mode: BrowserMode;
   /** Why an entry cannot open in this mode, or null when it can. */
   refusal: (entry: QuickPickEntry, context: QuickPickContext) => string | null;
@@ -78,6 +85,15 @@ export function BrowserQuickPick({
   // that decides what an entry opens (the proxied address, decision 2).
   const [context, setContext] = useState<QuickPickContext | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // A list built for one project, mode or session never stays open for
+  // another: its rows would open the old project's previews in the new one.
+  const scope = `${projectId ?? ""}|${mode}|${sessionId ?? ""}`;
+  const [seenScope, setSeenScope] = useState(scope);
+  if (scope !== seenScope) {
+    setSeenScope(scope);
+    setOpen(false);
+  }
 
   // Read fresh on every open: a running service comes and goes. The open
   // handler resets what the list shows; this effect only fetches.
@@ -94,34 +110,45 @@ export function BrowserQuickPick({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    api
-      .getServerInfo()
-      .then((info) => {
-        if (!cancelled) setContext({ previewsEnabled: Boolean(info.previewsEnabled) });
-      })
-      .catch(() => {
-        // Unknown counts as no proxy: an entry then opens its own address.
-        if (!cancelled) setContext({ previewsEnabled: false });
-      });
-    if (projectId != null) {
-      browserApi
-        .getBrowserDestinations(projectId)
-        .then((result) => {
-          if (!cancelled) setLoaded({ status: "ready", ...result });
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setLoaded({
-              status: "error",
-              message: describeError(err, "Could not load this project's services"),
-            });
-          }
+    const info = api.getServerInfo().then(
+      (i) => Boolean(i.previewsEnabled),
+      // Unknown counts as no proxy: an entry then opens its own address.
+      () => false,
+    );
+    const list =
+      projectId == null
+        ? Promise.resolve(null)
+        : browserApi.getBrowserDestinations(projectId, sessionId ?? undefined).then(
+            (result) => result,
+            (err: unknown) => {
+              if (!cancelled) {
+                setLoaded({
+                  status: "error",
+                  message: describeError(err, "Could not load this project's services"),
+                });
+              }
+              return null;
+            },
+          );
+    void Promise.all([info, list]).then(([previewsEnabled, result]) => {
+      if (cancelled) return;
+      if (result) {
+        setLoaded({
+          status: "ready",
+          destinations: result.destinations,
+          runningNote: result.runningNote,
         });
-    }
+      }
+      setContext({
+        previewsEnabled,
+        agentHostId: result?.agentBrowser?.hostId ?? null,
+        agentHostReason: result?.agentBrowser?.reason ?? null,
+      });
+    });
     return () => {
       cancelled = true;
     };
-  }, [open, projectId]);
+  }, [open, projectId, sessionId]);
 
   // The popover closes on a click outside it or Escape; the sheet has its own.
   useEffect(() => {

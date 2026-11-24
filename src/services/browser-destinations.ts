@@ -14,6 +14,7 @@ import {
   isPortPreviewBranch,
   readProjectPreviewTargets,
 } from "./preview-registry.js";
+import { resolvePreviewTarget } from "./preview-upstream.js";
 import { resolveSessionHostId } from "./session-host.js";
 import { getStoredSettings } from "./settings.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../shared/constants.js";
@@ -306,12 +307,23 @@ export async function openRunningDestinationPreview(
   }
   if (port === null) return gone;
 
+  // The port the dev server names opens the project's own preview, but only
+  // while that preview is served from this host: a checkout preview bound to
+  // a session elsewhere (#3425) would show another machine's port.
   const devServer = project.devServerUrl ? addressOf(project.devServerUrl) : null;
   if (devServer) {
     const url = new URL(devServer);
     const local = ["localhost", "127.0.0.1", "[::1]", "0.0.0.0"].includes(url.hostname);
     if (local && Number(url.port || (url.protocol === "https:" ? 443 : 80)) === port) {
-      return { ok: true, slug: getOrCreateProjectPreview(app, project.id).slug, label };
+      const checkout = getOrCreateProjectPreview(app, project.id);
+      const resolved = await resolvePreviewTarget(app, checkout.slug);
+      if (
+        resolved.ok &&
+        resolved.target.kind === "project" &&
+        resolved.target.hostId === LOCAL_HOST_ID
+      ) {
+        return { ok: true, slug: checkout.slug, label };
+      }
     }
   }
   return { ok: true, slug: getOrCreatePortPreview(app, project.id, port, sessionId).slug, label };

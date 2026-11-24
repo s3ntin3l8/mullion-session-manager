@@ -21,4 +21,7 @@ export interface BrowserDestinations {
   destinations: BrowserDestination[];
   /** Why the running group is empty or incomplete, or null. */
   runningNote: string | null;
+  /** With `?sessionId=`: the host that session's browser runs on, or why it
+   * cannot be told; null without the query. */
+  agentBrowser?: { hostId: string | null; reason: string | null } | null;
 }

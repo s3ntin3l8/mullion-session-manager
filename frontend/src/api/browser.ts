@@ -63,8 +63,11 @@ export const browserApi = {
     }),
   // #3003 — the Browser pane's quick pick: what the project runs now and
   // what it has saved. Read-only.
-  getBrowserDestinations: (projectId: number) =>
-    request<BrowserDestinations>(`/api/projects/${projectId}/browser-destinations`),
+  // With `sessionId`, also where that session's browser runs.
+  getBrowserDestinations: (projectId: number, sessionId?: number) =>
+    request<BrowserDestinations>(
+      `/api/projects/${projectId}/browser-destinations${sessionId != null ? `?sessionId=${sessionId}` : ""}`,
+    ),
 
   // #3003 — the preview serving a running entry's port (created on first
   // use). The server finds the port from the entry's key; 409 without

@@ -138,18 +138,26 @@ describe("BrowserQuickPick (#3003)", () => {
   let previewsEnabled: boolean;
   let requests: string[];
   let runningNote: string | null;
+  let agentHost: string | null;
 
   beforeEach(() => {
     coarse = false;
     previewsEnabled = true;
     requests = [];
     runningNote = null;
+    agentHost = "local";
     agentProps = null;
     localStorage.clear();
     const { fetchMock } = mockFetch({
-      "GET /api/projects/:id/browser-destinations": ({ url }) => {
+      "GET /api/projects/:id/browser-destinations": ({ url, query }) => {
         requests.push(`GET ${url}`);
-        return jsonResponse(200, { destinations: DESTINATIONS, runningNote });
+        return jsonResponse(200, {
+          destinations: DESTINATIONS,
+          runningNote,
+          agentBrowser: query.has("sessionId")
+            ? { hostId: agentHost, reason: agentHost ? null : "The host is unreachable" }
+            : null,
+        });
       },
       "POST /api/projects/:id/browser-destinations/preview": ({ url, init }) => {
         requests.push(`POST ${url} ${String(init?.body)}`);
@@ -222,7 +230,7 @@ describe("BrowserQuickPick (#3003)", () => {
       await userEvent.click(item(/storybook/));
       expect(onPick).toHaveBeenCalledWith(
         expect.objectContaining({ source: "destination" }) as QuickPickEntry,
-        { previewsEnabled: true },
+        { previewsEnabled: true, agentHostId: null, agentHostReason: null },
       );
       expect(screen.queryByRole("menu")).toBeNull();
     });
@@ -281,6 +289,19 @@ describe("BrowserQuickPick (#3003)", () => {
       expect(screen.queryByRole("menu")).toBeNull();
       await userEvent.click(trigger());
       await userEvent.click(document.body);
+      expect(screen.queryByRole("menu")).toBeNull();
+    });
+
+    it("closes when the pane moves to another project or mode", async () => {
+      const props = { refusal: () => null, onPick: vi.fn() };
+      const { rerender } = render(<BrowserQuickPick projectId={1} mode="preview" {...props} />);
+      await userEvent.click(trigger());
+      await waitFor(() => expect(item(/storybook/)).toBeInTheDocument());
+      rerender(<BrowserQuickPick projectId={2} mode="preview" {...props} />);
+      expect(screen.queryByRole("menu")).toBeNull();
+      await userEvent.click(trigger());
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      rerender(<BrowserQuickPick projectId={2} mode="agent" {...props} />);
       expect(screen.queryByRole("menu")).toBeNull();
     });
 
@@ -441,13 +462,34 @@ describe("BrowserQuickPick (#3003)", () => {
       expect(requests.some((r) => r.startsWith("POST"))).toBe(false);
     });
 
-    it("refuses, in the agent's browser, a localhost entry on another host than the session's", async () => {
-      useDashboardStore.setState({ sessions: [session(5, { hostId: "box-a" })] });
+    it("refuses, in the agent's browser, a localhost entry on another host than the session's browser", async () => {
+      // The server says where the browser runs (its binding first), whatever
+      // host the session row names.
+      agentHost = "box-a";
+      useDashboardStore.setState({ sessions: [session(5, { hostId: null })] });
       renderHost("browserPane", { sessionId: 5 });
       await waitFor(() => expect(screen.getByTestId("agent-5")).toBeInTheDocument());
       await userEvent.click(trigger());
       await waitFor(() => expect(item(/storybook/)).toHaveAttribute("aria-disabled", "true"));
       expect(item(/storybook/)).toHaveTextContent("another host");
+      expect(requests).toContain("GET /api/projects/1/browser-destinations?sessionId=5");
+    });
+
+    it("loads a localhost entry when the session's browser runs on its host, wherever the session runs", async () => {
+      agentHost = "local";
+      useDashboardStore.setState({ sessions: [session(5, { hostId: "box-a" })] });
+      renderHost("browserPane", { sessionId: 5 });
+      await waitFor(() => expect(screen.getByTestId("agent-5")).toBeInTheDocument());
+      await pick(/storybook/);
+      await waitFor(() => expect(agentProps?.navigateTo?.url).toBe("http://localhost:6006/"));
+    });
+
+    it("refuses localhost entries with the server's reason when it cannot tell the browser's host", async () => {
+      agentHost = null;
+      renderHost("browserPane", { sessionId: 5 });
+      await waitFor(() => expect(screen.getByTestId("agent-5")).toBeInTheDocument());
+      await userEvent.click(trigger());
+      await waitFor(() => expect(item(/storybook/)).toHaveTextContent("The host is unreachable"));
     });
 
     it("refuses a proxy address in the agent's browser", async () => {

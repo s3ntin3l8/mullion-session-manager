@@ -307,22 +307,21 @@ export function BrowserShell({
   // else at its own address; Agent's browser loads its own address, which the
   // server-side browser reaches from its host, and never a proxy address
   // (#3373 keeps the preview token out of it).
-  const projectHostId = useDashboardStore(
-    (s) => s.projects.find((p) => p.id === previewProjectId)?.hostId ?? null,
-  );
-  const agentHostId = agentSession ? (agentSession.hostId ?? projectHostId) : null;
   const quickPickRefusal = (entry: QuickPickEntry, ctx: QuickPickContext): string | null => {
     if (mode === "agent") {
       if (agentSession == null) return agentDisabledReason ?? "No session in this project";
       const url = entry.source === "recent" ? entry.url : entry.destination.address;
       if (url == null || !isHttpAddress(url)) return "No address the agent's browser can open";
       if (isPreviewProxyAddress(url)) return HANDOFF_PROXY_ADDRESS;
-      if (
-        entry.source === "destination" &&
-        isLoopbackAddress(url) &&
-        entry.destination.hostId !== agentHostId
-      ) {
-        return "Runs on another host than this session's browser";
+      // Where the session's browser runs comes from the server, resolved as
+      // ⇄ resolves it (its binding first), not guessed from the session.
+      if (entry.source === "destination" && isLoopbackAddress(url)) {
+        if (ctx.agentHostId == null) {
+          return ctx.agentHostReason ?? "Cannot tell where this session's browser runs";
+        }
+        if (entry.destination.hostId !== ctx.agentHostId) {
+          return "Runs on another host than this session's browser";
+        }
       }
       return null;
     }
@@ -404,6 +403,7 @@ export function BrowserShell({
   const quickPick = (
     <BrowserQuickPick
       projectId={previewProjectId ?? null}
+      sessionId={mode === "agent" ? (agentSession?.id ?? null) : null}
       mode={mode}
       refusal={quickPickRefusal}
       onPick={(entry, ctx) => void pickDestination(entry, ctx)}

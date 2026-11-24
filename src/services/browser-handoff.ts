@@ -144,6 +144,26 @@ function addressFrom(
   return { ok: true, url: url.href };
 }
 
+/**
+ * #3003 — the host a session's browser runs on (where `localhost` means
+ * something to it), as ⇄ resolves it; for the quick pick, which sends an
+ * entry's own address to the agent's browser. Null for an unknown session.
+ */
+export async function sessionBrowserHost(
+  app: FastifyInstance,
+  sessionId: number,
+): Promise<{
+  projectId: number;
+  result: { ok: true; hostId: string } | { ok: false; reason: string };
+} | null> {
+  const loaded = loadSessionAndProject(app, sessionId);
+  if (!loaded) return null;
+  return {
+    projectId: loaded.project.id,
+    result: await sessionBrowserHostId(app, loaded.session, loaded.project),
+  };
+}
+
 function loadSessionAndProject(
   app: FastifyInstance,
   sessionId: number,
