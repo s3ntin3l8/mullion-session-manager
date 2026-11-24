@@ -17,6 +17,7 @@ import {
 } from "../shared/pairing-link.js";
 import { getHostRow, LOCAL_HOST_ID, type HostRegistration } from "../services/host-registry.js";
 import { onHostCredentialsChanged } from "./hosts.js";
+import { refreshHostProtocolSoon } from "../services/host-agents.js";
 import { closeAgentChannel } from "./agent-channel.js";
 import { AgentChannelCloseCode } from "../shared/agent-channel.js";
 
@@ -203,6 +204,7 @@ export async function hostPairingRoute(app: FastifyInstance) {
       // immediately rather than waiting for the periodic credential recheck.
       closeAgentChannel(app, result.hostId, AgentChannelCloseCode.Expired);
       onHostCredentialsChanged(app, result.hostId);
+      refreshHostProtocolSoon(app, result.hostId);
       return respond(result);
     },
   );

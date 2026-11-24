@@ -1067,26 +1067,26 @@ export function revokeMachineIdentity(
   peer: string | null = null,
 ): boolean {
   const now = new Date();
-  const updated = app.db
-    .update(hosts)
-    .set({
-      machineCredentialEnc: null,
-      machineCredentialPrevEnc: null,
-      machineCredentialRotatedAt: null,
-      machineCredentialExpiresAt: null,
-      machineCredentialRevokedAt: now,
-      sessionIdEnc: null,
-      sessionSecretEnc: null,
-      sessionExpiresAt: null,
-    })
-    .where(and(eq(hosts.id, hostId), ne(hosts.id, LOCAL_HOST_ID)))
-    .returning()
-    .all();
-  if (updated.length > 0) {
+  const revoked = app.db.transaction((tx) => {
+    const updated = tx
+      .update(hosts)
+      .set({
+        machineCredentialEnc: null,
+        machineCredentialPrevEnc: null,
+        machineCredentialRotatedAt: null,
+        machineCredentialExpiresAt: null,
+        machineCredentialRevokedAt: now,
+        sessionIdEnc: null,
+        sessionSecretEnc: null,
+        sessionExpiresAt: null,
+      })
+      .where(and(eq(hosts.id, hostId), ne(hosts.id, LOCAL_HOST_ID)))
+      .returning()
+      .all();
+    if (updated.length === 0) return false;
     // Invalidate any pending host-bound re-pair codes issued before this
     // revoke so a pre-existing bearer code cannot re-arm a revoked host.
-    app.db
-      .update(hostPairings)
+    tx.update(hostPairings)
       .set({ revokedAt: now, codeHash: null })
       .where(
         and(
@@ -1096,10 +1096,11 @@ export function revokeMachineIdentity(
         ),
       )
       .run();
-    recordHostIdentityEvent(app, hostId, "revoked", peer);
     return true;
-  }
-  return false;
+  });
+  if (!revoked) return false;
+  recordHostIdentityEvent(app, hostId, "revoked", peer);
+  return true;
 }
 
 const IDENTITY_REPLACEMENT_WINDOW_MS = 30 * 86_400_000;
