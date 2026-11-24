@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { CLIPBOARD_MAX_BYTES } from "../device-defaults.js";
 import { pngDimensions } from "../screenshot-image.js";
 import { AnnexBPacketizer, GOP_BUFFER_MAX_BYTES, GopBuffer } from "./annexb.js";
+import { isOpenableUrl } from "./actions.js";
 import type {
   IdbGrpcClient,
   IdbHidEvent,
@@ -589,11 +590,22 @@ export class IosSimulatorDriver implements DeviceDriver {
     },
   };
 
+  /** `simctl openurl` hands the URL to the simulator's own handler (Safari for
+   * http(s)); the argument is passed as one argv entry, never through a shell. */
+  async openUrl(url: string): Promise<void> {
+    if (!isOpenableUrl(url)) {
+      throw new DeviceActionError(400, "openurl takes an http(s) URL");
+    }
+    // The normalised href, so whitespace the URL parser strips never reaches simctl.
+    await this.simctl(["openurl", this.udid, new URL(url).href]);
+  }
+
   supports(action: DeviceActionName): boolean {
     return (
       action === "screenshot" ||
       action === "logcat" ||
       action === "clipboard" ||
+      action === "openurl" ||
       action === "tap" ||
       action === "swipe" ||
       action === "text" ||

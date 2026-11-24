@@ -85,6 +85,14 @@ export const devicesApi = {
       body: JSON.stringify({ action: "screenshot" }),
     }),
 
+  // iOS Simulator only: opens an http(s) URL in the simulator's browser
+  // (`simctl openurl`). Manual, never fired on dev-server start.
+  openUrlOnDevice: (id: number, url: string) =>
+    request<{ ok: true }>(`/api/devices/${id}/action`, {
+      method: "POST",
+      body: JSON.stringify({ action: "openurl", url }),
+    }),
+
   // Irreversible: tears the device down and removes its row. Distinct from
   // stopDevice by intent, not by effect — a stopped device is still listed,
   // a deleted one is gone from every surface. Named for DELETE on purpose:

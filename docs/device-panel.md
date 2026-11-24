@@ -126,6 +126,13 @@ lifecycle (`boot`, `bootstatus -b`, `shutdown` — `stop()` shuts the simulator
 down only if this Mullion process booted it, and never deletes or erases it),
 screenshots (`simctl io <udid> screenshot --type=png -`), logs (`simctl spawn
 <udid> log show --last 5m --style compact`), and clipboard (`pbcopy`/`pbpaste`).
+`openurl` runs `simctl openurl <udid> <url>`: `mullion device openurl <id> <url>`,
+the `use_device` MCP tool's `openurl` action, or "Open in simulator" in the Dock's
+Preview menu. Only http(s) URLs are accepted (`simctl openurl` would otherwise launch
+any registered URL scheme). The menu opens the project's dev server as
+`http://127.0.0.1:<port>`, because the dev server is on the loopback of the project's
+own host; a simulator on another host is listed disabled. It is manual: nothing opens
+on dev-server start. Android devices answer it with a 400.
 Live H.264 video and HID input come from `idb_companion` over gRPC
 (`@grpc/grpc-js`, one companion process per device), which is restarted after
 every simulator boot because its HID connection goes stale across a reboot.

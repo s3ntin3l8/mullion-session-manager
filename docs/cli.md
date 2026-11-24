@@ -77,7 +77,7 @@ mullion task unarchive <id>
 mullion task push
 mullion dock start|stop|list
 mullion device list|create|pair|discovered|pair-and-connect|connect|start|
-               stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
+               stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard|openurl
 mullion bundle status|resync|remove
 mullion events tail [--children]
 mullion history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]

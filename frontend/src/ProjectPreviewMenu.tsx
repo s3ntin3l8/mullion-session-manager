@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/index.js";
-import type { ProjectPreviewConfig } from "./api/index.js";
+import type { Device, ProjectPreviewConfig } from "./api/index.js";
+import { simulatorOpenUrl } from "./lib/simulatorUrl.js";
 import { useDashboardStore } from "./store/index.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
 import type { KebabMenuItem } from "./ui/KebabMenu.js";
@@ -37,6 +38,43 @@ function usePreviewConfig(projectId: number) {
       void refresh(projectId).catch(() => setError(true));
     },
   };
+}
+
+/** One "Open in simulator" row per running iOS Simulator, for the project's
+ * dev server. Manual only; a simulator that cannot reach the URL is listed
+ * disabled with the reason, not hidden. */
+function simulatorItems(
+  devServerUrl: string | undefined,
+  projectHostId: string | undefined,
+  devices: Device[],
+): KebabMenuItem[] {
+  if (!devServerUrl || !projectHostId) return [];
+  return devices
+    .filter((d) => d.platform === "ios" && d.status === "active" && d.live)
+    .map((d) => {
+      const url = simulatorOpenUrl(devServerUrl, d, projectHostId);
+      const name = d.name ?? `Simulator ${d.id}`;
+      return {
+        key: `simulator-${d.id}`,
+        label: url
+          ? `Open in simulator — ${name}`
+          : `Open in simulator — ${name} (on another host)`,
+        disabled: url === null,
+        onClick: () => {
+          if (!url) return;
+          void api
+            .openUrlOnDevice(d.id, url)
+            .catch((err: unknown) =>
+              useDashboardStore
+                .getState()
+                .reportError(
+                  "Could not open in simulator",
+                  err instanceof Error ? err.message : String(err),
+                ),
+            );
+        },
+      };
+    });
 }
 
 function choices(
@@ -98,7 +136,14 @@ export function ProjectPreviewMenu({
   onManage: () => void;
 }) {
   const { config, error, retry } = usePreviewConfig(projectId);
-  const items = choices(projectId, config, onOpenDefault);
+  const devices = useDashboardStore((s) => s.devices);
+  const projectHostId = useDashboardStore(
+    (s) => s.projects.find((p) => p.id === projectId)?.hostId,
+  );
+  const items = [
+    ...choices(projectId, config, onOpenDefault),
+    ...simulatorItems(config?.devServerUrl ?? undefined, projectHostId, devices),
+  ];
   if (!config)
     items.push({
       key: "loading",
