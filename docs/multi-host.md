@@ -156,7 +156,10 @@ in `machine_credential`.
   logs the rejection and stops. To bring a revoked host back onto the **same**
   host row, use Settings → Hosts → row menu → _Re-pair_ (or `POST
 /api/host-pairings` with `{"hostId": "<id>"}`) and run the agent-side redeem
-  with the code; redeeming a host-bound code issues a fresh session and machine
+  with the code (through `deploy/install.sh` that means
+  `MULLION_AGENT_PAIRING_CODE_STDIN=1` **and `MULLION_AGENT_PAIRING_FORCE=1`** —
+  a host that still holds an identity ignores a supplied pairing code, issue
+  #3498); redeeming a host-bound code issues a fresh session and machine
   credential in place and rejects any displaced credential immediately (no
   grace period). Alternatively, to re-enroll an agent that uses the fleet
   secret as a **new** host, stop it, delete `agent-identity.json`, and restart

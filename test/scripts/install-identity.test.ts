@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -499,4 +500,251 @@ fs.writeFileSync(
       }
     },
   );
+
+  // Issue #3498 — a rerun of install.sh must not redeem a pairing code for a
+  // host that is already paired: the code is one-time, so redeeming it again
+  // fails the play (HTTP 401 on a spent code) or replaces the agent's
+  // identity with a new host row.
+  const PAIR_CODE = "5a".repeat(32); // pragma: allowlist secret
+  const PAIRED_IDENTITY = JSON.stringify({
+    hostId: "already-paired-host",
+    machineCredential: "ef".repeat(32), // pragma: allowlist secret
+  });
+
+  // A fake primary: it records every /api/internal/pair request and hands
+  // out a machine identity. A code it already handed out is spent and
+  // answered with HTTP 401, exactly like the real primary.
+  async function startFakePrimary() {
+    const pairRequests: string[] = [];
+    const spent = new Set<string>();
+    const server = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        if (req.method !== "POST" || req.url !== "/api/internal/pair") {
+          res.writeHead(404).end();
+          return;
+        }
+        const code = String((JSON.parse(body) as { code?: string }).code ?? "");
+        pairRequests.push(code);
+        if (spent.has(code)) {
+          res.writeHead(401, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: "invalid pairing code" }));
+          return;
+        }
+        spent.add(code);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ host_id: "paired-host-1", machine_credential: "cd".repeat(32) }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    return {
+      url: `http://127.0.0.1:${port}`,
+      pairRequests,
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  // A stand-in for the release's dist/agent-pair.js: it redeems the code
+  // against the fake primary over HTTP, like the real helper does, and writes
+  // the identity the primary returned. The code is read from stdin and never
+  // passed as a process argument.
+  function writeRedeemHelper(home: string) {
+    const helper = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(
+      helper,
+      `const fs = require("fs");
+const path = require("path");
+const arg = (name) => {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : "";
+};
+(async () => {
+  const primaryUrl = arg("--primary-url").replace(/[/]+$/, "");
+  const sessionsDir = path.resolve(arg("--sessions-dir"));
+  const code = fs.readFileSync(0, "utf8").split("\\n")[0].trim();
+  const res = await fetch(primaryUrl + "/api/internal/pair", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ code, requestId: "fixture-request-id", hostname: "fixture", platform: "linux" }),
+  });
+  if (!res.ok) {
+    process.stderr.write("pairing failed with HTTP " + res.status + "\\n");
+    process.exit(1);
+  }
+  const json = await res.json();
+  fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(
+    path.join(sessionsDir, "agent-identity.json"),
+    JSON.stringify({ hostId: json.host_id, machineCredential: json.machine_credential }),
+    { mode: 0o600 },
+  );
+  process.stdout.write("Paired host " + json.host_id + "\\n");
+})();
+`,
+    );
+  }
+
+  // An install root that is already paired: an .env with an absolute
+  // SESSIONS_DIR and a valid agent-identity.json in it.
+  function pairedHome(): string {
+    const home = freshHome();
+    fs.mkdirSync(path.join(home, "data", "sessions"), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      path.join(home, ".env"),
+      [
+        "MULLION_ROLE=agent",
+        `MULLION_HOME=${home}`,
+        `SESSIONS_DIR=${path.join(home, "data", "sessions")}`,
+        "MULLION_PRIMARY_URL=https://primary.example.com",
+        "PROJECTS_ROOTS=/srv/projects",
+      ].join("\n") + "\n",
+      { mode: 0o600 },
+    );
+    fs.writeFileSync(identityFile(home), PAIRED_IDENTITY, { mode: 0o600 });
+    return home;
+  }
+
+  const pairingRun = (primaryUrl: string, extra: Record<string, string> = {}) => ({
+    MULLION_AGENT_PRIMARY_URL: primaryUrl,
+    MULLION_AGENT_PAIRING_CODE_STDIN: "1",
+    ...extra,
+  });
+
+  it("ignores a supplied pairing code when the host is already paired", async () => {
+    const home = pairedHome();
+    writeRedeemHelper(home);
+    const file = identityFile(home);
+    // Pin the mtime in the past so any rewrite, even a byte-identical one,
+    // is detectable.
+    const past = new Date("2024-01-01T00:00:00Z");
+    fs.utimesSync(file, past, past);
+    // Report mullion-agent.service as active: an ignored code must not
+    // restart the unit either.
+    writeShim(
+      binDir,
+      "systemctl",
+      `#!/usr/bin/env bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "systemctl $*" >> "$DIR/commands.log"\ncase "$*" in *"is-enabled mullion.service"*|*"is-active mullion.service"*) exit 1;; *is-enabled*|*is-active*) exit 0;; *) exit 0;; esac\n`,
+    );
+
+    const primary = await startFakePrimary();
+    try {
+      const result = await run(home, pairingRun(primary.url), `${PAIR_CODE}\n`);
+
+      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+      expect(result.stdout).toMatch(/already paired/i);
+      expect(result.stdout).toMatch(/ignored/i);
+      // The redeem was never attempted.
+      expect(primary.pairRequests).toHaveLength(0);
+      // The identity is untouched — byte- and mtime-identical.
+      expect(fs.readFileSync(file, "utf8")).toBe(PAIRED_IDENTITY);
+      expect(fs.statSync(file).mtimeMs).toBe(past.getTime());
+      // And the running unit was not restarted because of the code.
+      const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+      expect(commands).not.toContain("restart mullion-agent.service");
+    } finally {
+      await primary.close();
+    }
+  });
+
+  it("redeems the code anyway with MULLION_AGENT_PAIRING_FORCE=1 and restarts an active unit", async () => {
+    const home = pairedHome();
+    writeRedeemHelper(home);
+    // Report mullion-agent.service as active so the restart condition is exercised.
+    writeShim(
+      binDir,
+      "systemctl",
+      `#!/usr/bin/env bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "systemctl $*" >> "$DIR/commands.log"\ncase "$*" in *"is-enabled mullion.service"*|*"is-active mullion.service"*) exit 1;; *is-enabled*|*is-active*) exit 0;; *) exit 0;; esac\n`,
+    );
+
+    const primary = await startFakePrimary();
+    try {
+      const result = await run(
+        home,
+        pairingRun(primary.url, { MULLION_AGENT_PAIRING_FORCE: "1" }),
+        `${PAIR_CODE}\n`,
+      );
+
+      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+      expect(result.stdout).toContain("Redeeming pairing code with primary");
+      expect(primary.pairRequests).toHaveLength(1);
+      expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
+        hostId: "paired-host-1",
+      });
+      const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+      expect(commands).toContain("systemctl --user restart mullion-agent.service");
+    } finally {
+      await primary.close();
+    }
+  });
+
+  it("redeems a pairing code when the host has no identity yet", async () => {
+    const home = freshHome();
+    writeRedeemHelper(home);
+
+    const primary = await startFakePrimary();
+    try {
+      const result = await run(home, pairingRun(primary.url), `${PAIR_CODE}\n`);
+
+      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+      expect(result.stdout).toContain("Redeeming pairing code with primary");
+      expect(primary.pairRequests).toHaveLength(1);
+      expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
+        hostId: "paired-host-1",
+      });
+    } finally {
+      await primary.close();
+    }
+  });
+
+  it("treats a malformed identity file as no identity and redeems the code", async () => {
+    const home = pairedHome();
+    writeRedeemHelper(home);
+    fs.writeFileSync(identityFile(home), "{ this is not the identity json");
+
+    const primary = await startFakePrimary();
+    try {
+      const result = await run(home, pairingRun(primary.url), `${PAIR_CODE}\n`);
+
+      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+      expect(result.stdout).toContain("Redeeming pairing code with primary");
+      expect(primary.pairRequests).toHaveLength(1);
+      expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
+        hostId: "paired-host-1",
+      });
+    } finally {
+      await primary.close();
+    }
+  });
+
+  it("exits 0 on a second run with the now-spent code and an existing identity", async () => {
+    const home = freshHome();
+    writeRedeemHelper(home);
+
+    const primary = await startFakePrimary();
+    try {
+      const first = await run(home, pairingRun(primary.url), `${PAIR_CODE}\n`);
+      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+      expect(first.stdout).toContain("Redeeming pairing code with primary");
+      expect(primary.pairRequests).toHaveLength(1);
+      const file = identityFile(home);
+      const before = fs.readFileSync(file, "utf8");
+
+      // The code is spent now — the fake primary would answer 401 if this
+      // rerun tried to redeem it again.
+      const second = await run(home, pairingRun(primary.url), `${PAIR_CODE}\n`);
+
+      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+      expect(second.stdout).toMatch(/already paired/i);
+      expect(primary.pairRequests).toHaveLength(1);
+      expect(fs.readFileSync(file, "utf8")).toBe(before);
+    } finally {
+      await primary.close();
+    }
+  });
 });
