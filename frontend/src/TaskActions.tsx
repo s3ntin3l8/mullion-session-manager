@@ -16,6 +16,7 @@ import { taskReReviewEligible } from "./github/prNextStep.js";
 import { parseWorkflowChange } from "./workflowChange.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { ArchiveTaskAction } from "./ArchiveTaskAction.js";
+import { useTaskActions } from "./useTaskActions.js";
 
 // What each review action does, said once for the buttons' tooltips and the
 // confirm step's hint — the three of them are easy to confuse.
@@ -71,20 +72,16 @@ export function TaskActions({
 }) {
   const {
     taskMasterEnabled,
-    claimTask,
-    approveTask,
     rejectTask,
-    retryTask,
     startFreshTask,
     giveUpTask,
-    reReviewTask,
     updateTask,
     refreshTasks,
     approveProposal,
     dismissProposal,
     tasks,
   } = useDashboardStore();
-  const [submitting, setSubmitting] = useState(false);
+  const [ownSubmitting, setSubmitting] = useState(false);
   // Which free-text-reason-then-confirm flow is open, if any — reject and
   // give-up share the same input/confirm/cancel shape, so one bit of state
   // (not two independent booleans) tracks which action a confirm click
@@ -92,10 +89,14 @@ export function TaskActions({
   const [pendingAction, setPendingAction] = useState<"reject" | "give-up" | null>(null);
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
-  // #1020 — non-null while a tracking-epic warning is awaiting confirmation;
-  // mirrors DeleteTaskAction's own needsForce shape (the existing two-stage
-  // confirmation pattern this UI already uses for #1014 Abandon).
-  const [trackingEpicWarning, setTrackingEpicWarning] = useState<string | null>(null);
+  // Claim, Retry, Approve and Re-review: the same handlers the GitHub
+  // sidebar's row actions use (#2461). Their errors land in this block's one
+  // error line. #1020's tracking-epic warning lives there too; it mirrors
+  // DeleteTaskAction's own needsForce shape (the two-stage confirmation
+  // pattern this UI already uses for #1014 Abandon).
+  const actions = useTaskActions(task, { onError: setError });
+  const { trackingEpicWarning, setTrackingEpicWarning } = actions;
+  const submitting = ownSubmitting || actions.submitting;
 
   const disabledHint = !taskMasterEnabled
     ? "Task Master is disabled — enable it to use this action."
@@ -232,17 +233,7 @@ export function TaskActions({
         <button
           className="notif-gate-btn notif-gate-approve"
           disabled={submitting || !taskMasterEnabled}
-          onClick={async () => {
-            setSubmitting(true);
-            setError(null);
-            try {
-              await claimTask(task.id);
-            } catch (err) {
-              setError(err instanceof ApiError ? err.message : "Failed to claim task");
-            } finally {
-              setSubmitting(false);
-            }
-          }}
+          onClick={() => void actions.claim()}
         >
           Claim
         </button>
@@ -278,17 +269,7 @@ export function TaskActions({
         <button
           className="notif-gate-btn notif-gate-approve"
           disabled={submitting || !taskMasterEnabled}
-          onClick={async () => {
-            setSubmitting(true);
-            setError(null);
-            try {
-              await retryTask(task.id);
-            } catch (err) {
-              setError(err instanceof Error ? err.message : "Failed to retry task");
-            } finally {
-              setSubmitting(false);
-            }
-          }}
+          onClick={() => void actions.retry()}
         >
           Retry
         </button>
@@ -413,54 +394,16 @@ export function TaskActions({
       <TrackingEpicApprovalConfirm
         message={trackingEpicWarning}
         submitting={submitting}
-        onConfirm={async () => {
-          setSubmitting(true);
-          setError(null);
-          try {
-            await approveTask(task.id, { force: true });
-            setTrackingEpicWarning(null);
-          } catch (err) {
-            if (
-              err instanceof ApiError &&
-              err.statusCode === 409 &&
-              err.code === "tracking-epic-with-open-sub-issues"
-            ) {
-              setTrackingEpicWarning(err.message);
-            } else {
-              setError(err instanceof ApiError ? err.message : "Failed to approve task");
-            }
-          } finally {
-            setSubmitting(false);
-          }
-        }}
+        onConfirm={() => void actions.approve(true)}
         onCancel={() => setTrackingEpicWarning(null)}
       />
     );
   }
 
-  const approve = async () => {
-    setSubmitting(true);
-    setError(null);
-    try {
-      await approveTask(task.id);
-    } catch (err) {
-      // #1020 — branch on the 409's machine-readable `code` (per
-      // api/client.ts's guidance), not the message text. Only the
-      // tracking-epic warning surfaces the advisory confirmation; any
-      // other 409 falls through to the generic error path.
-      if (
-        err instanceof ApiError &&
-        err.statusCode === 409 &&
-        err.code === "tracking-epic-with-open-sub-issues"
-      ) {
-        setTrackingEpicWarning(err.message);
-      } else {
-        setError(err instanceof ApiError ? err.message : "Failed to approve task");
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  // #1020 — the hook branches on the 409's machine-readable `code` (per
+  // api/client.ts's guidance), not the message text: only the tracking-epic
+  // warning surfaces the advisory confirmation; any other 409 is an error.
+  const approve = () => actions.approve();
 
   return (
     <div className="task-detail-actions">
@@ -504,17 +447,7 @@ export function TaskActions({
               className="notif-gate-btn"
               disabled={submitting}
               title={REVIEW_HINT}
-              onClick={async () => {
-                setSubmitting(true);
-                setError(null);
-                try {
-                  await reReviewTask(task.id);
-                } catch (err) {
-                  setError(err instanceof ApiError ? err.message : "Failed to re-review task");
-                } finally {
-                  setSubmitting(false);
-                }
-              }}
+              onClick={() => void actions.reReview()}
             >
               Re-review
             </button>

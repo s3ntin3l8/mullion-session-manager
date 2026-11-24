@@ -44,6 +44,9 @@ export interface IssueListResult {
   truncated?: boolean;
   /** Every label seen on the returned page, for the filter chips. */
   labels: IssueLabel[];
+  /** How many open issues match, when the query asked for a full scan
+   *  (`countMatches`). A lower bound when `truncated` is set. */
+  total?: number;
 }
 
 export interface IssueComment {
@@ -86,6 +89,11 @@ export interface IssueListQuery {
   /** Case-insensitive substring match on the title, searched across the repo's open issues. */
   q?: string;
   page?: number;
+  /** A filter GitHub can't apply (the Task Master origin, #2461): issues it
+   *  rejects are skipped, scanning later pages for the requested page. */
+  match?: (issue: IssueListItem) => boolean;
+  /** Scan every page (up to the cap) so `total` counts all matches. */
+  countMatches?: boolean;
 }
 
 interface RawLabel {
@@ -251,25 +259,35 @@ export async function listIssues(
   let hasMore: boolean;
   let truncated = false;
 
-  if (!needle) {
+  const match = query.match;
+  const keep = (i: IssueListItem) =>
+    (!needle || i.title.toLowerCase().includes(needle)) && (!match || match(i));
+  let total: number | undefined;
+
+  if (!needle && !match) {
     const raw = await fetchRawPage(page);
     items = labelSource = toIssues(raw);
     // A full raw page (PRs included) may have another page behind it.
     hasMore = raw.length >= PAGE_SIZE;
   } else {
-    // GitHub can't filter by title substring on the list endpoint, so scan raw
-    // pages from the start (labels/assignee/sort already applied) until the
-    // matches cover the requested page plus one more, the repo is exhausted,
-    // or the scan cap is hit.
+    // GitHub can't filter by title substring (or by Task Master origin) on the
+    // list endpoint, so scan raw pages from the start (labels/assignee/sort
+    // already applied) until the matches cover the requested page plus one
+    // more — or, when counting, every page — the repo is exhausted, or the
+    // scan cap is hit.
     const matches: IssueListItem[] = [];
     const scanned: IssueListItem[] = [];
     const wanted = page * PAGE_SIZE + 1;
     let exhausted = false;
-    for (let n = 1; n <= MAX_SEARCH_PAGES && matches.length < wanted; n++) {
+    for (
+      let n = 1;
+      n <= MAX_SEARCH_PAGES && (query.countMatches || matches.length < wanted);
+      n++
+    ) {
       const raw = await fetchRawPage(n);
       const issues = toIssues(raw);
       scanned.push(...issues);
-      matches.push(...issues.filter((i) => i.title.toLowerCase().includes(needle)));
+      matches.push(...issues.filter(keep));
       if (raw.length < PAGE_SIZE) {
         exhausted = true;
         break;
@@ -280,15 +298,25 @@ export async function listIssues(
     hasMore = matches.length > page * PAGE_SIZE;
     // Out of scan budget with more raw pages unread: older matches may be missing.
     truncated = !hasMore && !exhausted;
+    if (query.countMatches) {
+      total = matches.length;
+      // Counting reads past the page, so more pages can still be unread.
+      truncated = !exhausted;
+    }
 
     // `123` / `#123` is an issue number: look it up directly (page 1 only) so
     // it is found even when it is not among the scanned pages.
-    const numberMatch = page === 1 ? /^#?(\d+)$/.exec(needle) : null;
+    const numberMatch = needle && page === 1 ? /^#?(\d+)$/.exec(needle) : null;
     const byNumber = numberMatch
       ? await findOpenIssue(token, repoPath, Number(numberMatch[1]))
       : null;
-    if (byNumber && !items.some((i) => i.number === byNumber.number))
-      items.unshift(toItem(byNumber));
+    const byNumberItem = byNumber ? toItem(byNumber) : null;
+    if (
+      byNumberItem &&
+      (!match || match(byNumberItem)) &&
+      !items.some((i) => i.number === byNumberItem.number)
+    )
+      items.unshift(byNumberItem);
   }
 
   const seen = new Map<string, IssueLabel>();
@@ -302,6 +330,7 @@ export async function listIssues(
     hasMore,
     ...(truncated ? { truncated } : {}),
     labels: [...seen.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    ...(total !== undefined ? { total } : {}),
   };
 }
 

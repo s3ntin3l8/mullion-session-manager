@@ -19,6 +19,7 @@ import {
   fetchRunJobs,
   fetchStatus,
   issueFilterKey,
+  issueQueryUi,
   issueKey,
   issuesKey,
   prDetailKey,
@@ -186,7 +187,10 @@ export function useIssues(
   debouncedQuery: string,
   enabled: boolean,
 ): IssuesResult {
-  const ui = useDashboardStore((s) => s.githubIssueUiByProject[projectId]) ?? DEFAULT_ISSUE_UI;
+  const storedUi =
+    useDashboardStore((s) => s.githubIssueUiByProject[projectId]) ?? DEFAULT_ISSUE_UI;
+  const taskMasterEnabled = useDashboardStore((s) => s.taskMasterEnabled);
+  const ui = useMemo(() => issueQueryUi(storedUi, taskMasterEnabled), [storedUi, taskMasterEnabled]);
   const cache = useDashboardStore((s) => s.githubCache);
   const githubFetch = useDashboardStore((s) => s.githubFetch);
   const trigger = useProjectTrigger(projectId);

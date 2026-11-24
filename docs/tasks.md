@@ -746,6 +746,12 @@ on the board). Clicking a row opens that task's **detail inside the sidebar**,
 status first, and the board rings the same task's card: the selection is
 shared state (`selectedTaskId`), not something each surface keeps for itself.
 
+The view has a rail button only while Task Master is on. With it off, a stored
+or requested Tasks list opens the default view instead (`guardTasksView`, once
+settings and server-info have loaded, so a cold start keeps the stored view); a
+task's own detail still opens there, since Reject and Give up stay usable with
+Task Master off.
+
 The detail reads, top to bottom:
 
 1. **Status**: the status badge, how long the task has been there, what waits

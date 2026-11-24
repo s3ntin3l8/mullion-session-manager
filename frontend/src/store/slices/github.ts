@@ -15,6 +15,7 @@ import {
   fetchPrs,
   fetchStatus,
   issueFilterKey,
+  issueQueryUi,
   issuesKey,
   prDetailKey,
   prsKey,
@@ -119,7 +120,10 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
       // the token can't list them.
       const status = githubCache[statusKey(projectId)]?.data as { issuesHidden?: boolean } | null;
       if (!status?.issuesHidden) {
-        const ui = githubIssueUiByProject[projectId] ?? DEFAULT_ISSUE_UI;
+        const ui = issueQueryUi(
+          githubIssueUiByProject[projectId] ?? DEFAULT_ISSUE_UI,
+          get().taskMasterEnabled,
+        );
         const filterKey = issueFilterKey(ui, ui.query.trim());
         void githubFetch(issuesKey(projectId, filterKey, 1), () =>
           fetchIssuesPage(projectId, ui, ui.query.trim(), 1),

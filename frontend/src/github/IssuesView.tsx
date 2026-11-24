@@ -47,6 +47,7 @@ import { goSidebarBack } from "../sidebarBack.js";
 import { CommentCard } from "./CommentCard.js";
 import { OriginFilter } from "../ui/sidebar/OriginFilter.js";
 import { TaskActions } from "../TaskActions.js";
+import { TaskRowActions } from "./TaskRowActions.js";
 import { hasStripActions } from "../taskStatusModel.js";
 import { issueOrigin, matchesOrigin, originClass, type OriginFilterValue } from "./rowOrigin.js";
 
@@ -177,7 +178,9 @@ export function IssuesSection({
   useEffect(() => {
     onTaskMasterRef.current = onTaskMaster;
   });
-  const { labels: selected, unassigned, sort, query, knownLabels } = ui;
+  // `ui.origin` is already "all" while Task Master is off (`issueQueryUi`):
+  // the control is gone then, so the pick must not keep filtering.
+  const { labels: selected, unassigned, sort, query, knownLabels, origin: originFilter } = ui;
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -210,17 +213,17 @@ export function IssuesSection({
   const setUnassigned = (v: boolean) => setFilter({ unassigned: v });
   const setSort = (v: GitHubIssueSort) => setFilter({ sort: v });
   const setQuery = (v: string) => setFilter({ query: v });
+  const setOriginFilter = (v: OriginFilterValue) => setFilter({ origin: v });
   const toggleLabel = (name: string) =>
     setFilter({
       labels: selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name],
     });
 
   const links = useMullionLinks(projectId, { issues: data?.issues });
-  const [originPick, setOriginFilter] = useState<OriginFilterValue>("all");
-  // The same flag the PR section uses. The control is gone while Task Master is
-  // off, so the pick must not keep filtering.
   const tmOn = useDashboardStore((s) => s.taskMasterEnabled);
-  const originFilter = tmOn ? originPick : "all";
+  // The server applies the origin filter across pages (#2461); this pass
+  // keeps a row that changed hands since the fetch (an issue just queued)
+  // from showing under the wrong pick until the next refresh.
   const visibleIssues = (data?.issues ?? []).filter((issue) =>
     matchesOrigin(originFilter, issueOrigin(issue, links.byIssue.get(issue.number))),
   );
@@ -258,22 +261,15 @@ export function IssuesSection({
     }
   };
 
-  const claimTask = useDashboardStore((s) => s.claimTask);
-  const claimTaskFor = async (taskId: number) => {
-    setActionError(null);
-    try {
-      await claimTask(taskId);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Could not claim the task");
-    }
-  };
-
   const filtered = selected.length > 0 || unassigned || debouncedQuery !== "";
+  // With an origin pick the count is the server's count of matches across
+  // every page, not the repo's open-issue total.
+  const count = originFilter === "all" ? openIssues : (data?.total ?? visibleIssues.length);
 
   return (
     <SidebarSection
       title="Issues"
-      count={openIssues}
+      count={count}
       persistKey="github-issues"
       actions={
         tmOn ? (
@@ -384,10 +380,7 @@ export function IssuesSection({
               onOpen={() => onOpenIssue(issue.number)}
               onStart={() => startIssueSession(issue)}
               onQueue={() => queueIssue(issue)}
-              onClaim={() => {
-                const taskId = links.byIssue.get(issue.number)?.task?.id;
-                if (taskId != null) void claimTaskFor(taskId);
-              }}
+              onActionError={setActionError}
             />
           ))}
           {data?.truncated && data.issues.length > 0 && !loading && (
@@ -419,7 +412,7 @@ function IssueRow({
   onOpen,
   onStart,
   onQueue,
-  onClaim,
+  onActionError,
 }: {
   issue: GitHubIssueListItem;
   link: MullionLinkEntry | undefined;
@@ -428,7 +421,7 @@ function IssueRow({
   onOpen: () => void;
   onStart: () => void;
   onQueue: () => void;
-  onClaim: () => void;
+  onActionError: (message: string | null) => void;
 }) {
   const openTask = useOpenTask();
   const done = issue.taskStatus === "done";
@@ -495,14 +488,14 @@ function IssueRow({
               <BoltIcon size={14} />
             </IconButton>
           )}
-          {action.kind === "task" ? (
+          {/* #2461 — a task's issue: the task panel's per-status actions,
+              compact (Claim, Retry, Approve / Re-review, the task's own
+              session), and the task itself. A hand-started session on it stays
+              one tap away as its pill. */}
+          {task ? (
             <>
-              {canQueue && (action.status === "ready" || action.status === "backlog") && (
-                <IconButton label="Claim task" onClick={onClaim}>
-                  <PlayTriangleIcon size={14} />
-                </IconButton>
-              )}
-              <IconButton label="Open task" onClick={() => openTask(action.taskId)}>
+              <TaskRowActions taskId={task.id} onError={onActionError} />
+              <IconButton label="Open task" onClick={() => openTask(task.id)}>
                 <BotIcon size={14} />
               </IconButton>
             </>

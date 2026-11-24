@@ -1,5 +1,12 @@
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";
@@ -17,6 +24,7 @@ import { goSidebarBack } from "../sidebarBack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { DashboardState, SidebarBack } from "../store/types.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "../store/constants.js";
+import { taskMasterKnownOff } from "../store/helpers.js";
 import { RightRail } from "./RightRail.js";
 import { RightSidebarPanel } from "./RightSidebarPanel.js";
 import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
@@ -142,6 +150,16 @@ export function RightSidebar({
 }: RightSidebarProps) {
   const viewId = useDashboardStore((s) => s.rightSidebarView);
   const open = useDashboardStore((s) => s.rightSidebarOpen);
+  // #2461 — a stored Tasks list once Task Master is known to be off (a
+  // persisted view, or Back from a task's detail): its rail button is gone,
+  // so move to the default view. A layout effect, so the "off" note never
+  // paints. A task's own detail stays (`guardTasksView`).
+  const staleTasksList = useDashboardStore(
+    (s) => s.rightSidebarView === "tasks" && s.selectedTaskId === null && taskMasterKnownOff(s),
+  );
+  useLayoutEffect(() => {
+    if (staleTasksList) useDashboardStore.getState().settleRightSidebarView();
+  }, [staleTasksList]);
   const storedWidth = useDashboardStore((s) => s.rightSidebarWidth);
   const setStoredWidth = useDashboardStore((s) => s.setRightSidebarWidth);
   const close = useDashboardStore((s) => s.closeRightSidebar);

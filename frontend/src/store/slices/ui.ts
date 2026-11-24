@@ -32,6 +32,7 @@ import {
   readStoredViewMode,
   readThemeHint,
   resolveTheme,
+  guardTasksView,
 } from "../helpers.js";
 import type { DashboardState, UiSlice } from "../types.js";
 import {
@@ -449,7 +450,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set({ sidebarWidth: value });
     },
 
-    toggleRightSidebarView: (view) => {
+    toggleRightSidebarView: (requested) => {
+      const view = guardTasksView(requested, get());
       const { rightSidebarOpen, rightSidebarView } = get();
       if (rightSidebarOpen && rightSidebarView === view) {
         get().closeRightSidebar();
@@ -465,9 +467,19 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       });
     },
 
+    settleRightSidebarView: () => {
+      const s = get();
+      if (s.selectedTaskId !== null) return;
+      const view = guardTasksView(s.rightSidebarView, s);
+      if (view === s.rightSidebarView) return;
+      writeString(STORAGE_KEYS.rightSidebarView, view);
+      set({ rightSidebarView: view, sidebarHistory: [], ...sidebarEntryReset(s, view) });
+    },
+
     // Opens (never toggles closed) the drawer on `view` — for callers that
     // want a view shown, e.g. the palette's "Edit project files".
-    openRightSidebarView: (view, projectId) => {
+    openRightSidebarView: (requested, projectId) => {
+      const view = guardTasksView(requested, get());
       writeString(STORAGE_KEYS.rightSidebarView, view);
       writeBool(STORAGE_KEYS.rightSidebarOpen, true);
       set((s) => ({

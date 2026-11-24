@@ -1210,6 +1210,14 @@ button.sb-chip--label[aria-pressed="true"] {
 .sb-row--attn:not(.sb-row--sel) {
   background: color-mix(in srgb, var(--r) 7%, transparent);
 }
+/* #2461 — hovered or selected, it keeps the tint over the row's own state
+   colour. The rule above ties `.sb-row:hover` on specificity and comes later,
+   so without this a hover changed nothing on these rows, and a selected one
+   lost its tint. */
+.sb-row--attn:hover,
+.sb-row--attn.sb-row--sel {
+  background: color-mix(in srgb, var(--r) 12%, var(--surface-hover));
+}
 .sb-row--attn:not(.sb-row--sel)::before {
   background: var(--status-danger-fg);
 }

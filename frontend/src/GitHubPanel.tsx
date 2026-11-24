@@ -552,7 +552,7 @@ export function GitHubPanel({
       {prs.length > 0 && (
         <SidebarSection
           title="Pull requests"
-          count={prs.length}
+          count={visiblePrs.length}
           persistKey="github-prs"
           actions={
             taskMasterEnabled ? (

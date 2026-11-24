@@ -315,6 +315,79 @@ describe("projects route", () => {
           expect(none.truncated).toBe(true);
           fs.rmSync(projectCwd, { recursive: true, force: true });
         });
+
+        // #2461 — the All / Task Master / Manual filter runs on the server, so
+        // a task's issue on a later page is found and the count covers every page.
+        it("filters by Task Master origin across pages and counts every match", async () => {
+          mockPages({
+            1: page(1, 50, (n) => `issue ${n}`),
+            2: page(51, 50, (n) => `issue ${n}`),
+            3: page(101, 10, (n) => `issue ${n}`),
+          });
+          const app = await buildTestApp();
+          const { projectCwd, id } = await connectedProject(app);
+          const { tasks } = await import("../../src/db/schema.js");
+          for (const issueNumber of [3, 77, 105]) {
+            app.db
+              .insert(tasks)
+              .values({ projectId: id, title: `t${issueNumber}`, issueNumber, status: "ready" })
+              .run();
+          }
+          // A task with no issue never counts as one.
+          app.db.insert(tasks).values({ projectId: id, title: "local", status: "backlog" }).run();
+          const get = (qs: string) =>
+            app.inject({ method: "GET", url: `/api/projects/${id}/github/issues?${qs}` });
+
+          const tm = (await get("origin=tm")).json();
+          expect(tm.issues.map((i: { number: number }) => i.number)).toEqual([3, 77, 105]);
+          expect(tm.total).toBe(3);
+          expect(tm.hasMore).toBe(false);
+          expect(tm.truncated).toBeUndefined();
+          expect(tm.issues[0].taskStatus).toBe("ready");
+
+          const manual = (await get("origin=manual")).json();
+          expect(manual.total).toBe(107);
+          expect(manual.issues).toHaveLength(50);
+          expect(manual.hasMore).toBe(true);
+          expect(manual.issues.some((i: { number: number }) => i.number === 3)).toBe(false);
+          const manual3 = (await get("origin=manual&page=3")).json();
+          expect(manual3.issues).toHaveLength(7);
+          expect(manual3.hasMore).toBe(false);
+
+          // Combined with a title search, both have to match.
+          const both = (await get("origin=tm&q=issue 7")).json();
+          expect(both.issues.map((i: { number: number }) => i.number)).toEqual([77]);
+          expect(both.total).toBe(1);
+
+          // "all" is the unfiltered, single-page path: no count, one fetch.
+          fetchMock.mockClear();
+          const all = (await get("origin=all")).json();
+          expect(all.total).toBeUndefined();
+          expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("/issues?"))).toHaveLength(
+            1,
+          );
+
+          expect((await get("origin=bots")).statusCode).toBe(400);
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
+
+        it("flags a counted origin scan that hit the page cap as truncated", async () => {
+          const all: Record<number, unknown[]> = {};
+          for (let p = 1; p <= 20; p++) all[p] = page((p - 1) * 50 + 1, 50, (n) => `i ${n}`);
+          mockPages(all);
+          const app = await buildTestApp();
+          const { projectCwd, id } = await connectedProject(app);
+          const res = (
+            await app.inject({
+              method: "GET",
+              url: `/api/projects/${id}/github/issues?origin=manual`,
+            })
+          ).json();
+          expect(res.total).toBe(1000);
+          expect(res.truncated).toBe(true);
+          expect(res.hasMore).toBe(true);
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
       });
 
       it("lists filtered issues (PRs dropped) with labels and forwards the filters", async () => {

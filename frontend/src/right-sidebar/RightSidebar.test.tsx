@@ -20,6 +20,7 @@ import { makeTask } from "../test/fixtures.js";
 import { EMPTY_FOLD_HALVES } from "../lib/foldHalves.js";
 import type { FoldHalvesState } from "../lib/foldHalves.js";
 import { pickDropdownOption } from "../test/dropdown.js";
+import { FALLBACK_TASK_MASTER_ENV } from "../store/constants.js";
 
 const PROJECT = { id: 1, name: "demo", cwd: "/x/demo", hostId: "local" } as Project;
 
@@ -1029,5 +1030,72 @@ describe("RightSidebar on the phone", () => {
     expect(state.rightSidebarOpen).toBe(true);
     expect(state.selectedTaskId).toBe(7);
     expect(screen.getByTestId("task-detail-view")).toBeInTheDocument();
+  });
+});
+
+// #2461 — a stored Tasks view with Task Master off has no rail button to
+// highlight: once that is KNOWN (settings and server-info loaded), the list
+// falls back to the default view; a task's own detail stays.
+describe("RightSidebar Tasks view with Task Master off", () => {
+  const known = { settingsLoaded: true, taskMasterEnv: FALLBACK_TASK_MASTER_ENV };
+  afterEach(() =>
+    useDashboardStore.setState({
+      selectedTaskId: null,
+      taskMasterEnabled: false,
+      settingsLoaded: false,
+      taskMasterEnv: null,
+    }),
+  );
+
+  it("falls back to the default view, persisted, keeping the drawer open", () => {
+    useDashboardStore.setState({
+      ...known,
+      rightSidebarView: "tasks",
+      rightSidebarOpen: true,
+      taskMasterEnabled: false,
+      selectedTaskId: null,
+    });
+    renderSidebar();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    expect(localStorage.getItem("crs.rightSidebarView")).toBe("git");
+    expect(screen.queryByText(/Task Master is off/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Git" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("keeps the stored view before Task Master's state has loaded (a cold start)", () => {
+    useDashboardStore.setState({
+      settingsLoaded: false,
+      taskMasterEnv: null,
+      rightSidebarView: "tasks",
+      rightSidebarOpen: true,
+      taskMasterEnabled: false,
+    });
+    renderSidebar();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("tasks");
+  });
+
+  it("keeps the view while Task Master is on", () => {
+    useDashboardStore.setState({
+      ...known,
+      rightSidebarView: "tasks",
+      rightSidebarOpen: true,
+      taskMasterEnabled: true,
+    });
+    renderSidebar();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("tasks");
+  });
+
+  it("keeps a task's detail open, and falls back once it is left for the list", () => {
+    useDashboardStore.setState({
+      ...known,
+      tasks: [makeTask({ id: 5, projectId: 1, status: "reviewing" })],
+      taskMasterEnabled: false,
+    });
+    act(() => useDashboardStore.getState().openRightSidebarTask(5));
+    renderSidebar();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("tasks");
+    act(() => useDashboardStore.getState().selectTask(null));
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
   });
 });

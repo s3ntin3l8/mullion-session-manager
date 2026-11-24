@@ -1,6 +1,7 @@
 import type { NotificationEvent, Theme as ThemePreference } from "../api/index.js";
 import { STORAGE_KEYS, readJSON, readNumber, readString } from "../lib/persistedState.js";
 import {
+  DEFAULT_RIGHT_SIDEBAR_VIEW,
   EVENTS_PER_SESSION_CAP,
   RIGHT_SIDEBAR_DEFAULT_WIDTH,
   RIGHT_SIDEBAR_MAX_WIDTH,
@@ -9,6 +10,34 @@ import {
   SIDEBAR_MAX_WIDTH,
 } from "./constants.js";
 import type { Theme, ViewMode } from "./types.js";
+
+/**
+ * Task Master is OFF, and known to be (#2461): settings and server-info have
+ * both loaded. `taskMasterEnabled` starts false and stays so until they do, so
+ * a check on it alone would treat every cold start as "off" and throw away a
+ * persisted Tasks view for a user who has Task Master on.
+ */
+export function taskMasterKnownOff(s: {
+  settingsLoaded: boolean;
+  taskMasterEnv: unknown;
+  taskMasterEnabled: boolean;
+}): boolean {
+  return s.settingsLoaded && s.taskMasterEnv !== null && !s.taskMasterEnabled;
+}
+
+/**
+ * The Tasks view has no rail button while Task Master is off, so opening it
+ * would leave a drawer with nothing highlighted and only an "off" note in it:
+ * a request for its list opens the default view instead. A task's own detail
+ * still opens there (`openRightSidebarTask`) — Reject and Give up stay usable
+ * while Task Master is off, by design (TaskActions.tsx).
+ */
+export function guardTasksView<V extends string>(
+  view: V,
+  s: Parameters<typeof taskMasterKnownOff>[0],
+): V | typeof DEFAULT_RIGHT_SIDEBAR_VIEW {
+  return view === "tasks" && taskMasterKnownOff(s) ? DEFAULT_RIGHT_SIDEBAR_VIEW : view;
+}
 
 export function readStoredSidebarWidth(): number {
   const parsed = readNumber(STORAGE_KEYS.sidebarWidth, SIDEBAR_MIN_WIDTH);
