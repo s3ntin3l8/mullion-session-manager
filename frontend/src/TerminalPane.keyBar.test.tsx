@@ -29,6 +29,7 @@ import {
 import { screen, waitFor } from "@testing-library/react";
 import { act } from "react";
 import { registerTerminalInput } from "./terminalInputRegistry.js";
+import { TerminalPane } from "./TerminalPane.js";
 import userEvent from "@testing-library/user-event";
 import {
   renderPane,
@@ -137,12 +138,13 @@ describe("TerminalPane key-bar handle: arrows, sticky Ctrl, paste, copy view", (
     expect(term.focus).not.toHaveBeenCalled();
   });
 
-  // #3019 — closing clears `open` and keeps the snapshot, so the sheet stays
-  // mounted (and keeps its text) while it leaves on the spring. Frames are
-  // held, so the exit is caught mid-way.
-  it("closing the copy view flips it closed and lets it leave, instead of unmounting it", async () => {
+  // #3019 — the copy sheet moves on BottomSheet's spring. jsdom has no
+  // layout, so the sheet gets a 400px travel, and frames are held until
+  // `flush()` runs them, so an exit can be caught mid-way.
+  function holdFrames() {
     const held = new Map<number, FrameRequestCallback>();
     let next = 1;
+    let now = 0;
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
       held.set(next, cb);
       return next++;
@@ -150,21 +152,35 @@ describe("TerminalPane key-bar handle: arrows, sticky Ctrl, paste, copy view", (
     vi.stubGlobal("cancelAnimationFrame", (id: number) => void held.delete(id));
     vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(800);
     vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockReturnValue(400);
+    return {
+      // Runs frames until the spring is at rest (the sheet has arrived).
+      flush() {
+        for (let i = 0; i < 1000 && held.size > 0; i++) {
+          now += 16;
+          const callbacks = [...held.values()];
+          held.clear();
+          act(() => {
+            for (const cb of callbacks) cb(now);
+          });
+        }
+      },
+      restore() {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      },
+    };
+  }
+
+  // Closing clears `open` and keeps the snapshot, so the sheet stays mounted
+  // (and keeps its text) while it leaves on the spring.
+  it("closing the copy view flips it closed and lets it leave, instead of unmounting it", async () => {
+    const frames = holdFrames();
     try {
       stubFakeWebSocket(true);
       renderPane();
       const { handle } = handleAndTerm();
       act(() => handle.openCopyMode());
-      // Let it arrive, so the close has somewhere to travel from.
-      let now = 0;
-      for (let i = 0; i < 1000 && held.size > 0; i++) {
-        now += 16;
-        const callbacks = [...held.values()];
-        held.clear();
-        act(() => {
-          for (const cb of callbacks) cb(now);
-        });
-      }
+      frames.flush();
       const text = (screen.getByRole("textbox", { name: "Terminal text" }) as HTMLTextAreaElement)
         .value;
       await userEvent.setup().click(screen.getByRole("button", { name: "Done" }));
@@ -173,8 +189,25 @@ describe("TerminalPane key-bar handle: arrows, sticky Ctrl, paste, copy view", (
       expect(leaving).not.toBeNull();
       expect(leaving?.querySelector(".copy-mode-text")).toHaveValue(text);
     } finally {
-      vi.unstubAllGlobals();
-      vi.restoreAllMocks();
+      frames.restore();
+    }
+  });
+
+  // A switch to another session drops the snapshot at once (no exit with the
+  // old session's buffer in it): the sheet is gone from the DOM, not leaving.
+  it("switching the pane to another session drops the copy view at once", () => {
+    const frames = holdFrames();
+    try {
+      stubFakeWebSocket(true);
+      const { rerender } = renderPane();
+      const { handle } = handleAndTerm();
+      act(() => handle.openCopyMode());
+      frames.flush();
+      expect(document.querySelector(".copy-mode-sheet")).not.toBeNull();
+      rerender(<TerminalPane params={{ sessionId: 2 }} />);
+      expect(document.querySelector(".copy-mode-sheet")).toBeNull();
+    } finally {
+      frames.restore();
     }
   });
 
