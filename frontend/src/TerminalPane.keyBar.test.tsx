@@ -137,6 +137,47 @@ describe("TerminalPane key-bar handle: arrows, sticky Ctrl, paste, copy view", (
     expect(term.focus).not.toHaveBeenCalled();
   });
 
+  // #3019 — closing clears `open` and keeps the snapshot, so the sheet stays
+  // mounted (and keeps its text) while it leaves on the spring. Frames are
+  // held, so the exit is caught mid-way.
+  it("closing the copy view flips it closed and lets it leave, instead of unmounting it", async () => {
+    const held = new Map<number, FrameRequestCallback>();
+    let next = 1;
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      held.set(next, cb);
+      return next++;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => void held.delete(id));
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, "offsetTop", "get").mockReturnValue(400);
+    try {
+      stubFakeWebSocket(true);
+      renderPane();
+      const { handle } = handleAndTerm();
+      act(() => handle.openCopyMode());
+      // Let it arrive, so the close has somewhere to travel from.
+      let now = 0;
+      for (let i = 0; i < 1000 && held.size > 0; i++) {
+        now += 16;
+        const callbacks = [...held.values()];
+        held.clear();
+        act(() => {
+          for (const cb of callbacks) cb(now);
+        });
+      }
+      const text = (screen.getByRole("textbox", { name: "Terminal text" }) as HTMLTextAreaElement)
+        .value;
+      await userEvent.setup().click(screen.getByRole("button", { name: "Done" }));
+      expect(screen.queryByRole("dialog", { name: "Copy terminal text" })).toBeNull();
+      const leaving = document.querySelector(".copy-mode-sheet");
+      expect(leaving).not.toBeNull();
+      expect(leaving?.querySelector(".copy-mode-text")).toHaveValue(text);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("the copy view closes when the pane is unmounted/switched away", () => {
     stubFakeWebSocket(true);
     const { unmount } = renderPane();
