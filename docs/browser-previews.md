@@ -111,7 +111,12 @@ What a pick opens depends on the mode:
   key; the server looks the port up again in its own discovery and never
   takes a port from the request), unless the dev server already names that
   port, which opens the project's own preview. Such a port preview is never
-  a branch preview. Without the proxy, a running service and the dev server
+  a branch preview. It goes away with its service (#3467): a Dock-bound one
+  when its session is no longer active, a Compose one once discovery no longer
+  lists the port. The sweep runs on the reconcile timer; until then the slug
+  answers `503` rather than dialing the port, and afterwards `404`, which the
+  pane shows as unavailable. Picking the running service again mints it anew.
+  Checkout and branch previews are not pruned. Without the proxy, a running service and the dev server
   open at their own address (direct embed), and named targets and branch
   previews, which need the proxy, are disabled with that reason.
 - **Agent's browser** loads the entry's own address, which the server-side

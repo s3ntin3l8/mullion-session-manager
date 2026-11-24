@@ -70,6 +70,7 @@ const { hosts, previews, projects, sessions } = await import("../../src/db/schem
 const { bindBranchPreview, upsertBranchPreview } =
   await import("../../src/services/preview-registry.js");
 const { resolvePreviewTarget } = await import("../../src/services/preview-upstream.js");
+const { prunePortPreviews } = await import("../../src/services/browser-destinations.js");
 
 const tmpDb = path.join(os.tmpdir(), `browser-destinations-test-${process.pid}.db`);
 
@@ -423,6 +424,71 @@ describe("browser destinations (#3003)", () => {
     expect(
       (await app.inject({ url: "/api/projects/987654/browser-destinations" })).statusCode,
     ).toBe(404);
+  });
+
+  describe("pruning port previews (#3467)", () => {
+    const open = async (key: string) => {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/browser-destinations/preview`,
+        payload: { key },
+      });
+      expect(res.statusCode).toBe(200);
+      return res.json().slug as string;
+    };
+    const exists = (slug: string) =>
+      app.db.select().from(previews).where(eq(previews.slug, slug)).all().length > 0;
+
+    it(
+      "answers 503, then 404 once pruned, for a Dock port preview whose session was killed",
+      { timeout: 30_000 },
+      async () => {
+        const slug = await open(`dock:${storybookId}`);
+        const checkout = app.db
+          .select()
+          .from(previews)
+          .where(eq(previews.projectId, projectId))
+          .all()
+          .filter((p) => p.branch === "" || p.branch === "feat/cart")
+          .map((p) => p.slug);
+        expect(
+          (await app.inject({ method: "DELETE", url: `/api/sessions/${storybookId}` })).statusCode,
+        ).toBeLessThan(300);
+        // Before the sweep the slug must not dial the port.
+        expect(await resolvePreviewTarget(app, slug)).toEqual({ ok: false, status: 503 });
+        expect(await prunePortPreviews(app)).toContain(slug);
+        expect(exists(slug)).toBe(false);
+        expect(await resolvePreviewTarget(app, slug)).toEqual({ ok: false, status: 404 });
+        // Checkout and branch previews, and the still-running Dock session's
+        // port preview, are untouched.
+        for (const kept of checkout) expect(exists(kept)).toBe(true);
+        expect(exists(branchSlug)).toBe(true);
+      },
+    );
+
+    it("keeps a live Dock port preview and a Compose one while discovery lists the port", async () => {
+      const dockSlug = await open(`dock:${devId}`);
+      // The dev server names 5173, so that pick is the checkout preview; use
+      // the compose one for the session-less row.
+      const composeSlug = await open("compose:shop:web:8080");
+      await prunePortPreviews(app);
+      expect(exists(composeSlug)).toBe(true);
+      expect(exists(dockSlug)).toBe(true);
+    });
+
+    it("removes a Compose port preview once discovery no longer reports the port", async () => {
+      const slug = await open("compose:shop:web:8080");
+      composeServices = [];
+      // The real reconcile timer, armed at its 1 s floor, does the sweep.
+      app.reconfigureReconciler(1);
+      try {
+        await vi.waitFor(() => expect(exists(slug)).toBe(false), { timeout: 8000 });
+        expect(await resolvePreviewTarget(app, slug)).toEqual({ ok: false, status: 404 });
+      } finally {
+        app.reconfigureReconciler(30);
+        composeServices = [composeService(cwd)];
+      }
+    });
   });
 
   it("refuses to open a running service without the preview proxy", async () => {

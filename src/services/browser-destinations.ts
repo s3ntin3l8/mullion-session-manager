@@ -338,3 +338,59 @@ export async function openRunningDestinationPreview(
   }
   return { ok: true, slug: getOrCreatePortPreview(app, project.id, port, sessionId).slug, label };
 }
+
+/**
+ * #3467 — removes port previews whose service is gone, so a slug never keeps
+ * proxying whatever later listens on the port. A Dock-bound row goes when its
+ * session is no longer active (killed, exited or deleted); a session-less row
+ * (a Compose service, or a Dock session whose row was deleted: SET NULL) goes
+ * when this host's discovery no longer lists its port for the project. Run on
+ * the reconcile timer; a pruned slug answers 404, which the Browser pane shows
+ * as unavailable, and the next pick of a running service mints it again.
+ * Checkout and branch previews are never touched. Returns the pruned slugs.
+ */
+export async function prunePortPreviews(app: FastifyInstance): Promise<string[]> {
+  const rows = app.db
+    .select({
+      slug: previews.slug,
+      branch: previews.branch,
+      projectId: previews.projectId,
+      port: previews.upstreamPort,
+      sessionId: previews.sessionId,
+    })
+    .from(previews)
+    .where(eq(previews.kind, "project"))
+    .all()
+    .filter((r) => isPortPreviewBranch(r.branch) && r.projectId !== null);
+  if (rows.length === 0) return [];
+
+  const gone: string[] = [];
+  const sessionless = new Map<number, typeof rows>();
+  for (const row of rows) {
+    if (row.sessionId === null) {
+      const group = sessionless.get(row.projectId!) ?? [];
+      group.push(row);
+      sessionless.set(row.projectId!, group);
+      continue;
+    }
+    const [bound] = app.db
+      .select({ status: sessions.status })
+      .from(sessions)
+      .where(eq(sessions.id, row.sessionId))
+      .all();
+    if (!bound || bound.status !== "active") gone.push(row.slug);
+  }
+  for (const [projectId, group] of sessionless) {
+    const project = getProjectById(app, projectId);
+    // Port previews are only ever minted for local projects.
+    if (project && project.hostId !== LOCAL_HOST_ID) continue;
+    const listed = new Set(
+      project ? (await runningComposeServices(app, project)).map((svc) => svc.port) : [],
+    );
+    for (const row of group) {
+      if (row.port === null || !listed.has(row.port)) gone.push(row.slug);
+    }
+  }
+  if (gone.length > 0) app.db.delete(previews).where(inArray(previews.slug, gone)).run();
+  return gone;
+}
