@@ -134,13 +134,35 @@
   --seg: color-mix(in srgb, var(--fg) 11%, transparent);
   /* Material (docs/motion.md): the translucent layer sheets and popovers sit
      on, its light edge, and the tint a pressed control shows. Based on
-     --term, not --chrome. Over the worst backdrop (pure white under this
-     theme) 94% of --term is still no lighter than solid --chrome, so every
-     text colour that clears AA on --chrome clears it on material too.
-     --chrome itself has no such headroom (--r and --accent-solid barely
-     clear 4.5:1 on it), so no visible translucency of --chrome keeps AA.
-     tokens.contrast.test.ts holds the invariant. */
-  --material: color-mix(in srgb, var(--term) 94%, transparent);
+     --term, not --chrome. #3038: 85%, so about 15% of what is behind shows
+     through the blur. Over the worst backdrop (pure white under this theme)
+     that is lighter than --chrome, and --r, --accent-solid and the danger
+     tone drop below 4.5:1 on it (--p and --b only just clear). So inside material the text roles
+     are remapped (styles/motion.css) to the --material-* values below: the
+     same hues, lifted just far enough to clear 4.5:1 over material on pure
+     white and on pure black (--dim and --muted also on a --seg hover tint).
+     Literal hex on purpose: motion.css sets e.g. `--r: var(--material-r)`,
+     so a `var(--r)` here would be a cycle on an element that is both
+     .cmux-root and a popover. tokens.contrast.test.ts holds the invariant. */
+  --material: color-mix(in srgb, var(--term) 85%, transparent);
+  --material-muted: #b5b5be;
+  --material-dim: #b5b5bd;
+  --material-accent: #34d399;
+  --material-accent-solid: #32ad84;
+  --material-ring: #12b981;
+  --material-r: #ea797b;
+  --material-g: #5ec27a;
+  --material-b: #5c9bf5;
+  --material-c: #43c1c1;
+  --material-y: #d7b06a;
+  --material-p: #b986dc;
+  --material-o: #e0965a;
+  --material-status-success-fg: #5ec27a;
+  --material-status-danger-fg: #ea797b;
+  --material-status-warn-fg: #d7b06a;
+  --material-status-info-fg: #5c9bf5;
+  --material-status-merged-fg: #b986dc;
+  --material-status-neutral-fg: #b5b5be;
   --material-edge: color-mix(in srgb, #ffffff 9%, transparent);
   --press-tint: color-mix(in srgb, var(--fg) 8%, transparent);
 }
@@ -228,7 +250,27 @@
   --track: color-mix(in srgb, var(--fg) 5%, transparent);
   --field: #ffffff;
   --seg: color-mix(in srgb, var(--fg) 9%, transparent);
-  --material: color-mix(in srgb, var(--term) 94%, transparent);
+  /* Material text, darkened from the values above for 4.5:1 over material
+     on pure black (see the dark block). */
+  --material: color-mix(in srgb, var(--term) 85%, transparent);
+  --material-muted: #484848;
+  --material-dim: #525252;
+  --material-accent: #0b6b49;
+  --material-accent-solid: #0b6b49;
+  --material-ring: #0b6b49;
+  --material-r: #b61e28;
+  --material-g: #166c2f;
+  --material-b: #085abb;
+  --material-c: #0c667f;
+  --material-y: #7f5500;
+  --material-p: #6d43bb;
+  --material-o: #9a4311;
+  --material-status-success-fg: #166c2f;
+  --material-status-danger-fg: #b51e28;
+  --material-status-warn-fg: #7f5500;
+  --material-status-info-fg: #075abb;
+  --material-status-merged-fg: #6e44bd;
+  --material-status-neutral-fg: #484848;
   /* On a light surface the edge of light is white, stronger than dark's. */
   --material-edge: color-mix(in srgb, #ffffff 70%, transparent);
   --press-tint: color-mix(in srgb, var(--fg) 7%, transparent);

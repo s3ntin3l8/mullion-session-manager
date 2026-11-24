@@ -68,12 +68,21 @@ The rules below are applied once, in `frontend/src/styles/motion.css`
 - **Material.** Sheets and popovers sit on `--material` with
   `--material-blur` and a `--material-edge`; under
   `prefers-reduced-transparency: reduce` they are solid `--chrome`.
-  `--material` is `--term` at 94%, not a translucent `--chrome`: over the worst
-  backdrop (white under the dark theme, black under the light one) it is
-  still no closer to the text than solid `--chrome`, so every text colour that
-  clears AA on `--chrome` clears it on material. `--chrome` has no headroom
-  for that (`--r` and `--accent-solid` barely clear 4.5:1 on it).
-  `tokens.contrast.test.ts` holds the invariant.
+  `--material` is `--term` at 85%, so about 15% of what is behind shows
+  through the blur (#3038; the motion study shows about 26%). That is too much
+  for some text colours over the worst backdrop (a white page under the dark
+  theme, a black terminal under the light one): `--r`, `--accent-solid` and
+  most of the light theme's hues fall below 4.5:1. So inside
+  `.mobile-session-sheet` and `.pane-tab-overflow-menu` every text role
+  (`--muted`, `--dim`, `--accent`, `--accent-solid`, `--ring`, the hues `--r`
+  to `--o` and the `--status-*-fg` tones) is remapped to its `--material-*`
+  value in `tokens.css`: the same hue, lifted (dark theme) or darkened (light
+  theme) just far enough to clear 4.5:1 over material on pure white and on
+  pure black, and on solid `--chrome` for reduced transparency. `--fg` needs no
+  material value. `tokens.contrast.test.ts` holds every pair and checks that
+  `styles/motion.css` remaps each token; a new text role used on material
+  needs a `--material-*` value and a line in both. To change the alpha, rerun
+  the contrast test: it reads the percentage from `--material`.
 - **Layout changes.** A right-sidebar view arriving or replacing another
   fades and settles in (`.motion-arrive`); the mode switch fades the board in,
   and the grid and the Dock back in. Nothing that holds a terminal changes

@@ -263,6 +263,38 @@
   -webkit-backdrop-filter: var(--material-blur);
   backdrop-filter: var(--material-blur);
 }
+/* Text on material (#3038). About 15% of the backdrop shows through, which
+   is too much for some text colours over a white preview (dark theme) or a
+   black terminal (light theme), so inside a sheet or popover every text role
+   takes its --material-* value from tokens.css: the same hue, lifted until it
+   clears 4.5:1 over material on either. Two classes, so the rule beats
+   `.cmux-root.light` on a popover that is its own theme root. A sheet is a
+   child of its theme root, where the --status-*-fg tokens were already
+   resolved from --g/--r/..., so those are remapped by name as well.
+   Kept under reduced transparency: the lifted values clear AA on solid
+   --chrome too. */
+.cmux-root .mobile-session-sheet,
+.cmux-root .pane-tab-overflow-menu,
+.cmux-root.pane-tab-overflow-menu {
+  --muted: var(--material-muted);
+  --dim: var(--material-dim);
+  --accent: var(--material-accent);
+  --accent-solid: var(--material-accent-solid);
+  --ring: var(--material-ring);
+  --r: var(--material-r);
+  --g: var(--material-g);
+  --b: var(--material-b);
+  --c: var(--material-c);
+  --y: var(--material-y);
+  --p: var(--material-p);
+  --o: var(--material-o);
+  --status-success-fg: var(--material-status-success-fg);
+  --status-danger-fg: var(--material-status-danger-fg);
+  --status-warn-fg: var(--material-status-warn-fg);
+  --status-info-fg: var(--material-status-info-fg);
+  --status-merged-fg: var(--material-status-merged-fg);
+  --status-neutral-fg: var(--material-status-neutral-fg);
+}
 /* The notification feed's sticky group header matches its panel (#1229), so
    it moves to material with it instead of showing as a solid band. */
 .notif-panel .notif-group-header {
