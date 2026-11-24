@@ -122,11 +122,13 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     mullionHome: string,
     env: Record<string, string> = ansibleEnv,
     stdin: string = "",
+    cwd?: string,
   ) {
     const full: NodeJS.ProcessEnv = { ...baseEnv, ...env };
     await assertSandboxed(full);
     const pending = execFileAsync("bash", [INSTALL_SCRIPT, "--role", "agent", mullionHome], {
       env: full,
+      cwd,
       timeout: 20_000,
     });
     pending.child.stdin?.end(stdin);
@@ -375,5 +377,109 @@ fs.writeFileSync(
     ).toMatchObject({ hostId: "paired-custom-1" });
     const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
     expect(commands).toContain("systemctl --user restart mullion-agent.service");
+  });
+
+  it("resolves a relative SESSIONS_DIR in a pre-created .env against $MULLION_HOME/current, not the installer cwd", async () => {
+    const pairingCode = "ef".repeat(32); // pragma: allowlist secret
+    const home = freshHome();
+    const callerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "install-id-cwd-"));
+    try {
+      const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+      fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+      fs.writeFileSync(
+        pairScript,
+        `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = path.resolve(process.argv[idx + 1]);
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-rel-1", machineCredential: "12".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+      );
+
+      fs.writeFileSync(
+        path.join(home, ".env"),
+        [
+          "MULLION_ROLE=agent",
+          `MULLION_HOME=${home}`,
+          "SESSIONS_DIR=./rel-sessions",
+          "MULLION_PRIMARY_URL=https://primary.example.com",
+          "PROJECTS_ROOTS=/srv/projects",
+        ].join("\n") + "\n",
+        { mode: 0o600 },
+      );
+
+      await run(home, { MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, `${pairingCode}\n`, callerCwd);
+
+      expect(fs.existsSync(path.join(callerCwd, "rel-sessions", "agent-identity.json"))).toBe(
+        false,
+      );
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(home, "current", "rel-sessions", "agent-identity.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ hostId: "paired-rel-1" });
+    } finally {
+      fs.rmSync(callerCwd, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a missing SESSIONS_DIR in a pre-created .env to $MULLION_HOME/current/data/sessions", async () => {
+    const pairingCode = "01".repeat(32); // pragma: allowlist secret
+    const home = freshHome();
+    const callerCwd = fs.mkdtempSync(path.join(os.tmpdir(), "install-id-cwd-"));
+    try {
+      const pairScript = path.join(home, "releases", "9.9.9", "dist", "agent-pair.js");
+      fs.mkdirSync(path.dirname(pairScript), { recursive: true });
+      fs.writeFileSync(
+        pairScript,
+        `const fs = require("fs");
+const path = require("path");
+const idx = process.argv.indexOf("--sessions-dir");
+const sessionsDir = path.resolve(process.argv[idx + 1]);
+fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+fs.writeFileSync(
+  path.join(sessionsDir, "agent-identity.json"),
+  JSON.stringify({ hostId: "paired-default-1", machineCredential: "34".repeat(32) }),
+  { mode: 0o600 },
+);
+`,
+      );
+
+      fs.writeFileSync(
+        path.join(home, ".env"),
+        [
+          "MULLION_ROLE=agent",
+          `MULLION_HOME=${home}`,
+          "MULLION_PRIMARY_URL=https://primary.example.com",
+          "PROJECTS_ROOTS=/srv/projects",
+        ].join("\n") + "\n",
+        { mode: 0o600 },
+      );
+
+      await run(home, { MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, `${pairingCode}\n`, callerCwd);
+
+      expect(fs.existsSync(identityFile(home))).toBe(false);
+      expect(fs.existsSync(path.join(callerCwd, "data", "sessions", "agent-identity.json"))).toBe(
+        false,
+      );
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(home, "current", "data", "sessions", "agent-identity.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ hostId: "paired-default-1" });
+    } finally {
+      fs.rmSync(callerCwd, { recursive: true, force: true });
+    }
   });
 });

@@ -494,8 +494,12 @@ set_env_value() {
 
 PAIR_SESSIONS_DIR=""
 if [ "$ROLE" = "agent" ]; then
-  PAIR_SESSIONS_DIR="$(env_value SESSIONS_DIR)"
-  if is_blank "$PAIR_SESSIONS_DIR"; then
+  if [ -f "$MULLION_HOME/.env" ]; then
+    PAIR_SESSIONS_DIR="$(env_value SESSIONS_DIR)"
+    if is_blank "$PAIR_SESSIONS_DIR"; then
+      PAIR_SESSIONS_DIR="./data/sessions"
+    fi
+  else
     PAIR_SESSIONS_DIR="$MULLION_HOME/data/sessions"
   fi
 fi
@@ -523,7 +527,7 @@ if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
   if [ -n "${MULLION_AGENT_ADVERTISE_URL:-}" ]; then
     PAIR_ARGS+=(--advertise-url "$MULLION_AGENT_ADVERTISE_URL")
   fi
-  printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}"
+  printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | ( cd "$MULLION_HOME/current" && "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}" )
   PAIRED_THIS_RUN=true
   unset MULLION_AGENT_PAIRING_CODE
 fi
