@@ -222,7 +222,7 @@ async function kindRefusal(host: DeviceHost, kind: DeviceKind): Promise<string |
   const kinds = support.deviceKinds;
   if (kinds.includes(kind)) return null;
   return kinds.length === 0
-    ? `Host ${host.hostId} cannot run devices right now: its device panel is off (DEVICE_ENABLED=true) or its platform supports none.`
+    ? `Host ${host.hostId} cannot run devices right now: its device panel is off (DEVICE_ENABLED=true), Android is not configured (DEVICE_ADB_PATH is empty) or its platform supports none.`
     : `Host ${host.hostId} cannot run ${kind} devices (it supports: ${kinds.join(", ")}).`;
 }
 
@@ -497,8 +497,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       const hostId = resolvePlacementHostId(app, requestedHostId, undefined);
       if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
       const host = getDeviceHost(app, hostId);
-      if (host.isLocal && !app.devicePanelEnabled) {
-        return reply.badRequest(app.devicePanelUnavailableMessage);
+      if (host.isLocal && !physicalDeviceEnabled(app)) {
+        return reply.badRequest(physicalDeviceUnavailableMessage(app));
       }
       if (!isValidDeviceAddress(pairingAddress)) {
         return reply.badRequest("pairingAddress must be host:port (e.g. 192.168.1.23:41234)");
@@ -553,8 +553,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     const hostId = resolvePlacementHostId(app, requestedHostId, undefined);
     if (hostId === null) return reply.badRequest(`Unknown host ${requestedHostId}`);
     const host = getDeviceHost(app, hostId);
-    if (host.isLocal && !app.devicePanelEnabled) {
-      return reply.badRequest(app.devicePanelUnavailableMessage);
+    if (host.isLocal && !physicalDeviceEnabled(app)) {
+      return reply.badRequest(physicalDeviceUnavailableMessage(app));
     }
 
     if (!isValidPairingCode(pairingCode)) {

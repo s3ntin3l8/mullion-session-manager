@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { access, constants as fsConstants, stat } from "node:fs/promises";
 import type { DeviceKind, DevicePlatform } from "./device-drivers/types.js";
-import { isDeviceKindSupported } from "./device-manager.js";
+import { ANDROID_NOT_CONFIGURED_MESSAGE, isDeviceKindSupported } from "./device-manager.js";
 import { getCachedCapabilities } from "./host-capabilities.js";
 
 /** The two kinds a device can be — an emulator or a physical device. The
@@ -28,7 +28,7 @@ export function physicalDeviceEnabled(app: FastifyInstance): boolean {
 /** Why {@link physicalDeviceEnabled} is false. */
 export function physicalDeviceUnavailableMessage(app: FastifyInstance): string {
   return app.devicePanelEnabled
-    ? "Android devices are not configured (set DEVICE_ADB_PATH)."
+    ? ANDROID_NOT_CONFIGURED_MESSAGE
     : app.devicePanelUnavailableMessage;
 }
 

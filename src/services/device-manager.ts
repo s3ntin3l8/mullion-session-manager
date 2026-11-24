@@ -135,6 +135,10 @@ export function unsupportedKindMessage(
     : `Physical devices are not supported on ${platform}.`;
 }
 
+/** The one wording for "Android is not configured" (an empty DEVICE_ADB_PATH). */
+export const ANDROID_NOT_CONFIGURED_MESSAGE =
+  "Android devices are not configured (set DEVICE_ADB_PATH).";
+
 /** Whether the device panel does ANYTHING on `platform`. */
 export function isDevicePanelSupported(platform: NodeJS.Platform = process.platform): boolean {
   return deviceCapabilities(platform).size > 0;
@@ -1176,7 +1180,7 @@ export class DeviceManager {
       throw new Error("device panel is disabled (set DEVICE_ENABLED=true)");
     }
     if (kind !== "ios-simulator" && !this.opts.adbPath) {
-      throw new Error("Android devices are not configured (set DEVICE_ADB_PATH)");
+      throw new Error(ANDROID_NOT_CONFIGURED_MESSAGE);
     }
   }
 

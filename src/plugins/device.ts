@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import {
+  ANDROID_NOT_CONFIGURED_MESSAGE,
   DeviceManager,
   deviceCapabilities,
   unsupportedKindMessage,
@@ -87,7 +88,7 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   const emulatorUnavailableMessage = !emulatorSupported
     ? unsupportedKindMessage("emulator", platform)
     : panelEnabled && !androidConfigured
-      ? "Android devices are not configured (set DEVICE_ADB_PATH)."
+      ? ANDROID_NOT_CONFIGURED_MESSAGE
       : panelUnavailableMessage;
   if (!panelSupported) {
     app.log.info({ platform }, "[device] the device panel is not supported on this platform");
@@ -211,8 +212,8 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     // Gated on the platform too: the mDNS scanner finds PHYSICAL phones, so it
     // runs wherever the panel does at all (macOS included, #1854); a platform
     // whose panel is off must not bind a multicast socket or emit 5353
-    // queries.
-    enabled: app.config.DEVICE_ENABLED && discoveryEnabled && panelSupported,
+    // queries. An iOS-only host (no adb, #3436) cannot add or pair a phone either.
+    enabled: app.config.DEVICE_ENABLED && discoveryEnabled && panelSupported && androidConfigured,
   });
   discovery.start();
   app.decorate("deviceDiscovery", discovery);

@@ -349,6 +349,24 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           });
           expect(create.statusCode).toBe(400);
           expect(create.json().message).toMatch(/Android devices are not configured/);
+          const emu = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "emulator", avdName: "dev35" },
+          });
+          expect(emu.statusCode).toBe(400);
+          expect(emu.json().message).toMatch(/Android devices are not configured/);
+          const pair = await app.inject({
+            method: "POST",
+            url: "/api/devices/pair-and-connect",
+            payload: {
+              pairingAddress: "192.168.1.23:41234",
+              pairingCode: "123456",
+              connectAddress: "192.168.1.23:37251",
+            },
+          });
+          expect(pair.statusCode).toBe(400);
+          expect(pair.json().message).toMatch(/Android devices are not configured/);
           const list = await app.inject({ method: "GET", url: "/api/devices" });
           expect(list.json().devices ?? list.json()).toHaveLength(0);
         } finally {
