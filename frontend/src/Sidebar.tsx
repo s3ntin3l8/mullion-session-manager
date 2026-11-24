@@ -492,7 +492,14 @@ export function Sidebar({
         }
       }
       onOpenSession(parent);
-      setScrollRequest((r) => ({ sessionId: parent.id, nonce: (r?.nonce ?? 0) + 1 }));
+      // Only for a row the tree will list (its project shown, the parent
+      // matching any filter, its project expanded above): a request for a
+      // row that never enters the model would linger and scroll the tree on
+      // some later, unrelated re-flatten. Retired once served.
+      const listed =
+        project !== undefined &&
+        (filteredSessionsByProject.get(project.id) ?? []).some((s) => s.id === parent.id);
+      if (listed) setScrollRequest((r) => ({ sessionId: parent.id, nonce: (r?.nonce ?? 0) + 1 }));
       // Bring the row into view once the expand has rendered. The virtualized
       // tree scrolls to it on `scrollRequest` instead, row mounted or not.
       requestAnimationFrame(() => {
@@ -502,7 +509,17 @@ export function Sidebar({
           ?.scrollIntoView?.({ block: "nearest" });
       });
     },
-    [visibleProjects, baseSessionsByProject, filterActive, onOpenSession],
+    [
+      visibleProjects,
+      baseSessionsByProject,
+      filteredSessionsByProject,
+      filterActive,
+      onOpenSession,
+    ],
+  );
+  const scrollServed = useCallback(
+    (nonce: number) => setScrollRequest((r) => (r?.nonce === nonce ? null : r)),
+    [],
   );
 
   // U3's flattened tree: projects → sessions, respecting collapse state and
@@ -744,6 +761,7 @@ export function Sidebar({
                 onOpenSession={onOpenSession}
                 onOpenSpawnParent={openSpawnParent}
                 scrollRequest={scrollRequest}
+                onScrollServed={scrollServed}
                 onOpenSessionAsFloat={onOpenSessionAsFloat}
                 onSessionEnded={onSessionEnded}
                 onOpenProjectLauncher={onOpenProjectLauncher}
@@ -1238,6 +1256,7 @@ function VirtualizedProjectTree({
   onOpenSession,
   onOpenSpawnParent,
   scrollRequest = null,
+  onScrollServed,
   onOpenSessionAsFloat,
   onSessionEnded,
   onOpenProjectLauncher,
@@ -1248,6 +1267,8 @@ function VirtualizedProjectTree({
   rows: SidebarFlatRow[];
   /** Scroll this session's row into range (the spawned-by marker, #3456). */
   scrollRequest?: { sessionId: number; nonce: number } | null;
+  /** The request was served: Sidebar drops it, so a remount can't replay it. */
+  onScrollServed?: (nonce: number) => void;
   hosts: Host[];
   spansHostsByProject: ReadonlyMap<number, boolean>;
   openSessionIds: ReadonlySet<number> | null;
@@ -1292,14 +1313,13 @@ function VirtualizedProjectTree({
   // #3062 — a request is served once its row is in the model: the expand
   // that puts it there re-flattens `rows` a render later, so an unserved
   // request waits for that rather than giving up.
-  const servedScroll = useRef(0);
   useEffect(() => {
-    if (!scrollRequest || servedScroll.current === scrollRequest.nonce) return;
+    if (!scrollRequest) return;
     const index = rows.findIndex((row) => row.key === `s-${scrollRequest.sessionId}`);
     if (index < 0) return;
-    servedScroll.current = scrollRequest.nonce;
     rowVirtualizer.scrollToIndex(index, { align: "auto" });
-  }, [scrollRequest, rows, rowVirtualizer]);
+    onScrollServed?.(scrollRequest.nonce);
+  }, [scrollRequest, rows, rowVirtualizer, onScrollServed]);
 
   return (
     // `getTotalSize()` does NOT include `scrollMargin` in its return value

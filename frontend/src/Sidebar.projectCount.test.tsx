@@ -338,6 +338,10 @@ describe("Sidebar virtualization on project count (#3062)", () => {
   it("does not swap paths when Other projects opens or the filter is typed in", async () => {
     // 5 tiled + 30 others: over the project threshold whatever is open.
     projects = manyProjects(35);
+    sessions = [
+      makeSession({ id: projects[0].id * 10, projectId: projects[0].id, command: "match-me" }),
+      makeSession({ id: projects[0].id * 10 + 1, projectId: projects[0].id, command: "other" }),
+    ];
     const user = userEvent.setup();
     const { container } = renderSidebar({
       workspaceProjectIds: projects.slice(0, 5).map((p) => p.id),
@@ -345,9 +349,12 @@ describe("Sidebar virtualization on project count (#3062)", () => {
     expect(virtualized(container)).toBe(true);
     await user.click(screen.getByRole("button", { name: /Other projects/ }));
     expect(virtualized(container)).toBe(true);
-    await user.type(screen.getByLabelText("Filter sessions"), "zzz");
-    // The filter hides Other projects; the strategy holds.
-    expect(screen.getByText("No sessions match")).toBeInTheDocument();
+    // A filter that still matches a row: the list renders, on the same path.
+    const row = screen.getByText("match-me").closest(".session-item");
+    await user.type(screen.getByLabelText("Filter sessions"), "match-me");
+    expect(screen.queryByText("other")).toBeNull();
+    expect(screen.getByText("match-me").closest(".session-item")).toBe(row);
+    expect(virtualized(container)).toBe(true);
   });
 
   it("keyboard: the collapse toggle keeps focus and flips; Enter on a row opens it", async () => {

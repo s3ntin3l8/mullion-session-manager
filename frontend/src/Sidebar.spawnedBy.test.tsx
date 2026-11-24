@@ -344,11 +344,12 @@ describe.each([
 // the virtualizer to scroll there, so the row mounts instead of the scroll
 // being skipped.
 describe("Sidebar spawned-by marker, coordinator outside the virtualized window (#3062)", () => {
-  it("scrolls the virtualizer to the coordinator's row and mounts it", async () => {
+  let scrollTo: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
     stubVirtualizerLayout();
     // jsdom does no scrolling: let the scroll container take the offset the
     // virtualizer asks for and announce it, as a browser would.
-    const scrollTo = vi.fn(function (this: HTMLElement, opts?: ScrollToOptions) {
+    scrollTo = vi.fn(function (this: HTMLElement, opts?: ScrollToOptions) {
       Object.defineProperty(this, "scrollTop", { configurable: true, value: opts?.top ?? 0 });
       this.dispatchEvent(new Event("scroll"));
     });
@@ -366,17 +367,22 @@ describe("Sidebar spawned-by marker, coordinator outside the virtualized window 
     projects = Array.from({ length: 60 }, (_, i) =>
       makeProject({ id: base * 100 + i, name: `p-${i}` }),
     );
-    const workerProject = projects[0];
-    const coordProject = projects[59];
     sessions = [
-      makeSession({ id: base * 1000, projectId: coordProject.id, command: "coordinator agent" }),
+      makeSession({ id: base * 1000, projectId: projects[59].id, command: "coordinator agent" }),
       makeSession({
         id: base * 1000 + 1,
-        projectId: workerProject.id,
+        projectId: projects[0].id,
         command: "spawned worker",
         parentSessionId: base * 1000,
       }),
     ];
+  });
+  afterEach(() => {
+    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+    delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+  });
+
+  it("scrolls the virtualizer to the coordinator's row and mounts it", async () => {
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
     const { container } = renderSidebar({ onOpenSession });
@@ -386,7 +392,19 @@ describe("Sidebar spawned-by marker, coordinator outside the virtualized window 
     expect(onOpenSession).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(coordinatorTitle()).toBeDefined());
     expect(scrollTo).toHaveBeenCalled();
-    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
-    delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+  });
+
+  it("asks for no scroll when the filter hides the coordinator's row", async () => {
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ onOpenSession });
+    await user.type(screen.getByLabelText("Filter sessions"), "spawned");
+    scrollTo.mockClear();
+    await user.click(screen.getByRole("button", { name: /spawned by coordinator agent/ }));
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+    // Nothing pending either: clearing the filter re-flattens without a scroll.
+    await user.clear(screen.getByLabelText("Filter sessions"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(scrollTo).not.toHaveBeenCalled();
   });
 });
