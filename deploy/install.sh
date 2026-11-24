@@ -257,8 +257,14 @@ if [ "${MULLION_AGENT_PAIRING_CODE_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; t
     echo "MULLION_AGENT_PAIRING_CODE_STDIN=1 was set but stdin carried no pairing code on its first line." >&2
     exit 1
   fi
+  # Issue #3499 — the code reaches the redeem step through the pipe it already
+  # uses, so it must NOT be exported: an exported variable sits in the redeem
+  # child's environment (and in every other command's environment) until the
+  # `unset` far below, which is exactly what the docs promise it does not do.
+  # `unset` first: a caller may have exported MULLION_AGENT_PAIRING_CODE
+  # itself, and a re-assignment would keep that export attribute.
+  unset MULLION_AGENT_PAIRING_CODE
   MULLION_AGENT_PAIRING_CODE="$stdin_code"
-  export MULLION_AGENT_PAIRING_CODE
   unset stdin_code
 fi
 
