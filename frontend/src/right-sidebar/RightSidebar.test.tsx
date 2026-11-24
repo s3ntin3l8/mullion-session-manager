@@ -14,9 +14,9 @@ import { resetPhoneBackStackForTests } from "../hooks/usePhoneBackStack.js";
 import { useDashboardStore } from "../store/index.js";
 import type { LayoutTier } from "../lib/layoutTier.js";
 import type { GitStatus, Project } from "../api/index.js";
-import type { GitHubPrPhase } from "../api/types.js";
+import type { PrPhase } from "../api/types.js";
 import { BottomSheet } from "../ui/BottomSheet.js";
-import { makeTask } from "../test/fixtures.js";
+import { makeTask, makePr } from "../test/fixtures.js";
 import { EMPTY_FOLD_HALVES } from "../lib/foldHalves.js";
 import type { FoldHalvesState } from "../lib/foldHalves.js";
 import { pickDropdownOption } from "../test/dropdown.js";
@@ -225,19 +225,20 @@ describe("RightSidebar", () => {
     expect(btn.title).toContain("conflicts");
   });
 
-  const prWith = (number: number, prPhase: GitHubPrPhase) => ({
-    number,
-    title: `PR ${number}`,
-    htmlUrl: "",
-    author: "a",
-    headSha: "s",
-    headBranch: `b${number}`,
-    baseBranch: "main",
-    ciStatus: null,
-    actionsRuns: [],
-    prPhase,
-  });
-  const withPrs = (...phases: GitHubPrPhase[]) => ({
+  const prWith = (number: number, prPhase: PrPhase) =>
+    makePr({
+      number,
+      title: `PR ${number}`,
+      htmlUrl: "",
+      author: "a",
+      headSha: "s",
+      headBranch: `b${number}`,
+      baseBranch: "main",
+      ciStatus: null,
+      actionsRuns: [],
+      prPhase,
+    });
+  const withPrs = (...phases: PrPhase[]) => ({
     prs: phases.map((p, i) => prWith(i + 1, p)),
     prSummary: { total: phases.length, pass: 0, fail: 0, pending: 0, unknown: 0 },
   });

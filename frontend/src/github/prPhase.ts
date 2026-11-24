@@ -3,7 +3,7 @@ import type {
   GitHubCiStatus,
   GitHubJob,
   GitHubOtherCheck,
-  GitHubPrPhase,
+  PrPhase,
   RelayReviewState,
   ReviewSummary,
 } from "../api/types.js";
@@ -16,7 +16,7 @@ import { legacyPillClass, statusTone, type Tone } from "../lib/statusTone.js";
 import type { TriadItem } from "../ui/sidebar/StatusTriad.js";
 import { checkDotClass } from "./checkDot.js";
 
-export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
+export const PHASE_LABEL: Record<PrPhase, string> = {
   draft: "Draft",
   conflicts: "Conflicts",
   ci_failing: "CI failing",
@@ -37,7 +37,7 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
  * `behind` is one click from mergeable. The list verifies `behind` against
  * ancestry (the compare), so it is safe to count.
  */
-export const ATTENTION_ORDER: GitHubPrPhase[] = [
+export const ATTENTION_ORDER: PrPhase[] = [
   "ci_failing",
   "changes_requested",
   "conflicts",
@@ -45,13 +45,13 @@ export const ATTENTION_ORDER: GitHubPrPhase[] = [
   "behind",
 ];
 
-export function phaseTone(phase: GitHubPrPhase): "bad" | "warn" | "good" | "dim" {
+export function phaseTone(phase: PrPhase): "bad" | "warn" | "good" | "dim" {
   return legacyPillClass(statusTone({ phase }));
 }
 
 /** Needs-attention PRs first (in ATTENTION_ORDER), then most recently updated. */
 export function sortPrsByAttention<
-  T extends { prPhase?: GitHubPrPhase; updatedAt?: string | null; number: number },
+  T extends { prPhase?: PrPhase; updatedAt?: string | null; number: number },
 >(prs: readonly T[]): T[] {
   const rank = (p: T) => {
     const i = p.prPhase ? ATTENTION_ORDER.indexOf(p.prPhase) : -1;
@@ -70,7 +70,7 @@ export function sortPrsByAttention<
 
 /** The short glyph + words a compact surface (session row) shows for a PR. */
 export function phaseChip(
-  phase: GitHubPrPhase | undefined,
+  phase: PrPhase | undefined,
   unresolvedThreads: number | null | undefined,
 ): { glyph: string; text: string } | null {
   const threads = unresolvedThreads && unresolvedThreads > 0 ? ` 💬${unresolvedThreads}` : "";
@@ -95,11 +95,11 @@ export function phaseChip(
 }
 
 /** Open PRs that want the user, by phase — what the right-rail badge counts. */
-export function attentionSummary(prs: readonly { prPhase?: GitHubPrPhase }[]): {
+export function attentionSummary(prs: readonly { prPhase?: PrPhase }[]): {
   total: number;
-  byPhase: Partial<Record<GitHubPrPhase, number>>;
+  byPhase: Partial<Record<PrPhase, number>>;
 } {
-  const byPhase: Partial<Record<GitHubPrPhase, number>> = {};
+  const byPhase: Partial<Record<PrPhase, number>> = {};
   let total = 0;
   for (const pr of prs) {
     if (pr.prPhase && ATTENTION_ORDER.includes(pr.prPhase)) {
@@ -123,7 +123,7 @@ export interface PrStatusInput {
   /** List only: the poller fetched this PR's head runs (possibly none). */
   ciFetched?: boolean;
   otherChecks?: GitHubOtherCheck[];
-  prPhase?: GitHubPrPhase;
+  prPhase?: PrPhase;
   isDraft?: boolean;
   state?: "OPEN" | "CLOSED" | "MERGED";
   /** Detail only: commits the base has that the head lacks. */
@@ -440,7 +440,7 @@ function mergeStatusBase(input: PrStatusInput): DimStatus {
   if (input.state === "CLOSED") {
     return { tone: "neutral", glyph: "○", text: "Closed", label: "Closed", short: "Closed" };
   }
-  const phase: GitHubPrPhase = input.prPhase ?? "unknown";
+  const phase: PrPhase = input.prPhase ?? "unknown";
   const tone = statusTone({ phase });
   if (phase === "ready_to_merge") {
     return {

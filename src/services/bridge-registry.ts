@@ -17,7 +17,7 @@ import { timingSafeTokenMatch } from "./crypto-utils.js";
 
 type BridgeRow = typeof bridges.$inferSelect;
 
-export interface BridgeSummary {
+export interface BridgeRecord {
   id: string;
   name: string | null;
   platform: string | null;
@@ -34,7 +34,7 @@ export interface BridgeSummary {
   priority: number;
 }
 
-function toSummary(row: BridgeRow): BridgeSummary {
+function toSummary(row: BridgeRow): BridgeRecord {
   return {
     id: row.id,
     name: row.name,
@@ -46,7 +46,7 @@ function toSummary(row: BridgeRow): BridgeSummary {
   };
 }
 
-export function listBridges(app: FastifyInstance): BridgeSummary[] {
+export function listBridges(app: FastifyInstance): BridgeRecord[] {
   return app.db.select().from(bridges).orderBy(bridges.priority).all().map(toSummary);
 }
 

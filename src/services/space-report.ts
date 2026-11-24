@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DIR_ENTRY_CONCURRENCY, diskBytes, limited, mapLimit } from "./temp-storage.js";
+import type { SpaceEntry } from "../shared/types.js";
+export type { SpaceEntry } from "../shared/types.js";
 
 // A read-only answer to "where is my disk space going?": the biggest entries
 // under the user's home directory, a few levels deep. Nothing here deletes
@@ -21,19 +23,6 @@ const CHILDREN_KEPT = 8;
 // way temp-storage's WALK_ENTRY_CAP bounds its walks: a home directory full of
 // `node_modules` can otherwise mean minutes of disk churn per run.
 const ENTRY_CAP = 3_000_000;
-
-export interface SpaceEntry {
-  path: string;
-  /** Allocated bytes, matching what deleting would free (hard links count per name). */
-  bytes: number;
-  isDirectory: boolean;
-  /** What cleanup source owns this path, when one does (e.g. "uv"). */
-  coveredBy?: string;
-  /** Why nothing in Mullion cleans this; set only when `coveredBy` is not. */
-  notCovered?: string;
-  /** The biggest entries inside it; absent at the deepest level and for files. */
-  children?: SpaceEntry[];
-}
 
 export interface SpaceReport {
   available: boolean;

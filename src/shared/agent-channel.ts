@@ -13,6 +13,7 @@ import {
   type AgentProtocolInfo,
 } from "./agent-protocol.js";
 import type { MuxConnection } from "../services/ssh-agent-mux.js";
+export type { HostChannelStatus } from "./types.js";
 
 export const AGENT_CHANNEL_PATH = "/ws/agent-channel";
 
@@ -236,18 +237,6 @@ export function backoffDelayMs(attempt: number, random: () => number = Math.rand
     AGENT_CHANNEL_BACKOFF.minMs * 2 ** Math.min(attempt, 16),
   );
   return Math.round(base * (0.8 + 0.4 * random()));
-}
-
-/** What `GET /api/hosts` reports, separate from pairing/credential state. */
-export interface HostChannelStatus {
-  /** An authenticated channel is open right now. */
-  ready: boolean;
-  /** Whether the host is bound to the outbound channel transport. */
-  bound: boolean;
-  /** Human-readable status description. */
-  status: "connected" | "bound to the outbound channel, not connected" | "not connected";
-  connectedAt: string | null;
-  carriedOperations: string[];
 }
 
 /** A live, authenticated outbound channel from one execution agent.

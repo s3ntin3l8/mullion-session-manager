@@ -6,7 +6,7 @@ import { isStartable } from "../dockerServiceStatus.js";
 import { dockRowKey, imagePillLabel } from "../dock/dockHelpers.js";
 import { DockHostPicker } from "../dock/DockHostPicker.js";
 import { useDockProject } from "../dock/useDockProject.js";
-import type { DockControlView, DockStackActions } from "../dock/useDockProject.js";
+import type { DockControlCardView, DockStackActions } from "../dock/useDockProject.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "../dock/useArmedKill.js";
 import { BottomSheet } from "../ui/BottomSheet.js";
 import { CustomSelect } from "../ui/CustomSelect.js";
@@ -56,14 +56,14 @@ function rowKind(control: DockControl): RowKind {
   return "command";
 }
 
-function rowDetail(view: DockControlView): string {
+function rowDetail(view: DockControlCardView): string {
   if (view.held) return "recreating…";
   if (view.dockerStatus) return view.dockerStatus.label;
   if (rowKind(view.control) === "log") return view.running ? "running" : "ended";
   return view.running ? "running" : "stopped";
 }
 
-function dotColor(view: DockControlView): string {
+function dotColor(view: DockControlCardView): string {
   if (view.held) return "var(--dim)";
   if (view.dockerStatus) return `var(${view.dockerStatus.colorToken})`;
   return view.running ? "var(--g)" : "var(--dim)";
@@ -74,7 +74,7 @@ function DockRow({
   selected,
   onSelect,
 }: {
-  view: DockControlView;
+  view: DockControlCardView;
   selected: boolean;
   onSelect: () => void;
 }) {
@@ -118,7 +118,7 @@ function DockRow({
 // branch. A service: restart, stop or start, check for update, and "Stop log" while
 // its log stream runs. A log-only row
 // (a stack action's run, an orphaned stream): stop the stream.
-function DockActions({ view }: { view: DockControlView }) {
+function DockActions({ view }: { view: DockControlCardView }) {
   const { control } = view;
   const kind = rowKind(control);
   const { armedIds, arm, disarm } = useArmedKill(KILL_ARM_DISARM_MS);

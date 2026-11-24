@@ -45,6 +45,23 @@ import { Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { expandHome } from "./project-config.js";
 import { PathEscapeError, realpathExistingPrefix, resolveWithin } from "./safe-path.js";
+import type {
+  ProjectDirEntry,
+  ProjectFileStat,
+  ProjectDirListing,
+  ProjectFileContent,
+  ProjectFileWriteResult,
+  ProjectSearchListing,
+} from "../shared/types.js";
+export type {
+  ProjectDirEntry,
+  ProjectFileStat,
+  ProjectDirListing,
+  ProjectFileContent,
+  ProjectFileWriteResult,
+  ProjectSearchResult,
+  ProjectSearchListing,
+} from "../shared/types.js";
 
 export const MAX_PROJECT_FILE_BYTES = 1024 * 1024;
 export const MAX_DIR_ENTRIES = 2000;
@@ -94,37 +111,6 @@ export class ProjectFileError extends Error {
     this.name = "ProjectFileError";
     this.httpStatus = HTTP_STATUS[code];
   }
-}
-
-export interface ProjectDirEntry {
-  name: string;
-  kind: "file" | "dir" | "symlink";
-  size: number;
-  /** Symlinks only: what the link resolves to. "outside" covers both a
-   * target beyond the project root and a dangling link — neither is
-   * openable. */
-  targetKind?: "file" | "dir" | "outside";
-}
-
-export interface ProjectDirListing {
-  path: string;
-  entries: ProjectDirEntry[];
-  truncated: boolean;
-}
-
-export interface ProjectFileContent {
-  path: string;
-  content: string;
-  size: number;
-  mtimeMs: number;
-  /** Project-relative path the requested path resolves to, set only when
-   * the requested path is (or passes through) a symlink. */
-  symlinkTarget?: string;
-}
-
-export interface ProjectFileWriteResult {
-  size: number;
-  mtimeMs: number;
 }
 
 interface Resolved {
@@ -310,12 +296,6 @@ export function readProjectFile(root: string, relPath: string): ProjectFileConte
   } finally {
     closeSync(fd);
   }
-}
-
-export interface ProjectFileStat {
-  path: string;
-  size: number;
-  mtimeMs: number;
 }
 
 /** Size and mtime of a regular file, without reading it — what an open editor
@@ -550,16 +530,6 @@ const MAX_SEARCH_RESULTS = 50;
 // dependencies, and this product's own worktree checkouts (a project's
 // .mullion-worktrees/ would otherwise duplicate every file N times).
 const SEARCH_SKIP_DIRS = new Set([".git", "node_modules", ".mullion-worktrees"]);
-
-export interface ProjectSearchResult {
-  path: string;
-}
-
-export interface ProjectSearchListing {
-  results: ProjectSearchResult[];
-  /** The walk hit MAX_SEARCH_VISITED, so a match may exist that wasn't seen. */
-  truncated: boolean;
-}
 
 const BOUNDARY = new Set(["/", ".", "-", "_", " "]);
 

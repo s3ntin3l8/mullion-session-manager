@@ -1,4 +1,6 @@
 import Bonjour from "bonjour-service";
+import type { DiscoveredDevice } from "../shared/types.js";
+export type { DiscoveredDevice } from "../shared/types.js";
 
 // bonjour-service exports its `Bonjour` symbol both as a class (default
 // export, `new`-able) and a namespace (re-exports of Service/Browser/etc.).
@@ -29,40 +31,6 @@ import Bonjour from "bonjour-service";
 // (segmented LAN, mDNS-reflector not configured, etc.) the existing manual
 // address+code entry path stays fully functional; nothing here is in the
 // critical path of actually pairing a device.
-
-/** A device the scanner has seen advertising mDNS. Stable `id` is the SRV
- * target hostname (e.g. `Android.local`) — shared by the phone's pairing
- * and connect records, and stable across A-record resolution. */
-export interface DiscoveredDevice {
-  /** Stable per-device id (the SRV hostname, falling back to the dial host
-   * only when the SRV target is empty) — used by the REST layer to
-   * round-trip a selection from the modal back to `pair-and-connect`
-   * without re-scanning. Not necessarily an IP. */
-  id: string;
-  /** Display name from the pairing TXT record (e.g. "Pixel 7"). Falls back
-   * to the connect TXT name if the pairing record hasn't been seen yet. */
-  name: string;
-  /** The address `adb pair`/`adb connect` should dial — IPv4 when the A
-   * record has resolved, else the hostname (adb resolves it via nss-mdns
-   * if available). IPv4 preferred for now; bonjour-service will surface
-   * AAAA records too but Android's adb-over-TCP only listens on IPv4. */
-  host: string;
-  /** `host:port` for the pairing listener, if seen. Until it's seen the UI
-   * can't offer "Pair" against this entry yet — manual fallback remains. */
-  pairingAddress?: string;
-  /** `host:port` for the connect listener, if seen. Same UX caveat. */
-  connectAddress?: string;
-  /** Android device-serial from TXT, used as a fingerprint to match against
-   * existing physical `devices` rows when prompting reconnect (issue #1380).
-   * Best-effort — older Android versions omit it. */
-  device?: string;
-  /** `model` from TXT (e.g. "Pixel 7"). Optional, for UI labelling. */
-  model?: string;
-  /** `product` from TXT (e.g. "panther"). Optional, for UI labelling. */
-  product?: string;
-  /** ISO timestamp of the most recent `up` event for either service. */
-  discoveredAt: string;
-}
 
 /** Reason a service entry was evicted from the cache. Surfaced in
  * `onChange` callbacks so tests can assert on the lifecycle without

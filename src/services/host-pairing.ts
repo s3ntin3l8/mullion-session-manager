@@ -29,9 +29,9 @@ import {
 // nothing else to do with each other (issue #2414). Re-exported here, so
 // every existing importer keeps its path.
 import { HOST_PAIRING_RETRY_WINDOW_MS, HOST_PAIRING_TTL_MS } from "./host-pairing-policy.js";
+import type { HostPairingState } from "../shared/types.js";
+export type { HostPairingState } from "../shared/types.js";
 export { HOST_PAIRING_RETRY_WINDOW_MS, HOST_PAIRING_TTL_MS };
-
-export type PairingState = "pending" | "paired" | "expired" | "revoked";
 
 export interface IssuedHostPairing {
   id: string;
@@ -39,10 +39,10 @@ export interface IssuedHostPairing {
   expiresAt: Date;
 }
 
-export interface HostPairingSummary {
+export interface HostPairingRecord {
   id: string;
   label: string | null;
-  state: PairingState;
+  state: HostPairingState;
   expiresAt: Date;
   createdAt: Date;
   hostId: string | null;
@@ -104,13 +104,13 @@ export function issueHostPairingCode(
   return { id, code, expiresAt };
 }
 
-function stateOf(row: PairingRow): PairingState {
+function stateOf(row: PairingRow): HostPairingState {
   if (row.redeemedAt) return "paired";
   if (row.revokedAt) return "revoked";
   return row.expiresAt.getTime() <= Date.now() ? "expired" : "pending";
 }
 
-export function listHostPairings(app: FastifyInstance): HostPairingSummary[] {
+export function listHostPairings(app: FastifyInstance): HostPairingRecord[] {
   cleanupHostPairings(app);
   return app.db
     .select()

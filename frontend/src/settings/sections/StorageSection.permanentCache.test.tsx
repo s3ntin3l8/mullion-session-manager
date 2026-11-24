@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { api, type CacheStorageStatus } from "../../api/index.js";
+import type { CacheDirStatus } from "../../../../src/shared/types.js";
 import { StorageSection } from "./StorageSection.js";
 import { useDashboardStore } from "../../store/index.js";
 import { DEFAULT_SETTINGS } from "../../api/settings.js";
@@ -71,8 +72,8 @@ function setup(caches: CacheStorageStatus) {
   );
 }
 
-const pip = { id: "pip", label: "pip", bytes: GIB, exists: true };
-const trash = {
+const pip: CacheDirStatus = { id: "pip", label: "pip", bytes: GIB, exists: true, permanent: false };
+const trash: CacheDirStatus = {
   id: "trash",
   label: "Trash",
   bytes: GIB,

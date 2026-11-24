@@ -20,6 +20,7 @@ import {
 import { StorageSection } from "./StorageSection.js";
 import { useDashboardStore } from "../../store/index.js";
 import { DEFAULT_SETTINGS } from "../../api/settings.js";
+import { makeDevWorktreeCandidate } from "../../test/fixtures.js";
 
 const GIB = 1024 ** 3;
 const stats: SystemStats = {
@@ -483,7 +484,7 @@ describe("Settings -> Storage", () => {
         caches: {
           available: true,
           root: "/home/me/.cache",
-          caches: [{ id: "pip", label: "pip", bytes: GIB, exists: true }],
+          caches: [{ id: "pip", label: "pip", bytes: GIB, exists: true, permanent: false }],
         },
       });
       useDashboardStore.setState({
@@ -775,19 +776,14 @@ describe("Settings -> Storage", () => {
       available: true,
       totalBytes: 3 * GIB,
       candidates: [
-        {
-          projectId: 1,
-          projectName: "mullion",
+        makeDevWorktreeCandidate({
           path: "/p/.wt/fix-a",
           slug: "fix-a",
           branch: "fix-a",
-          kind: "wt",
           reason: "gone",
           bytes: GIB,
-        },
-        {
-          projectId: 1,
-          projectName: "mullion",
+        }),
+        makeDevWorktreeCandidate({
           path: "/p/.claude/worktrees/agent-1",
           slug: "agent-1",
           branch: "agent-1",
@@ -795,17 +791,15 @@ describe("Settings -> Storage", () => {
           reason: "merged",
           detail: "#12",
           bytes: GIB,
-        },
-        {
+        }),
+        makeDevWorktreeCandidate({
           projectId: 2,
           projectName: "other",
           path: "/o/.wt/loose",
           slug: "loose",
-          branch: null,
-          kind: "wt",
           reason: "detached-merged",
           bytes: GIB,
-        },
+        }),
       ],
     };
 
@@ -829,16 +823,11 @@ describe("Settings -> Storage", () => {
           available: true,
           totalBytes: 0,
           candidates: [
-            {
-              projectId: 1,
-              projectName: "mullion",
+            makeDevWorktreeCandidate({
               path: "/p/.wt/feat",
               slug: "feat",
-              branch: null,
-              kind: "wt",
-              reason: "orphaned",
               bytes: 2 * GIB,
-            },
+            }),
           ],
         },
       });
@@ -865,16 +854,11 @@ describe("Settings -> Storage", () => {
         available: true,
         totalBytes: 0,
         candidates: [
-          {
-            projectId: 1,
-            projectName: "mullion",
+          makeDevWorktreeCandidate({
             path: "/p/.wt/stray",
             slug: "stray",
-            branch: null,
-            kind: "wt",
-            reason: "orphaned",
             bytes: 1024,
-          },
+          }),
         ],
       };
       setup({ worktrees });
@@ -901,16 +885,11 @@ describe("Settings -> Storage", () => {
           available: true,
           totalBytes: 0,
           candidates: [
-            {
-              projectId: 1,
-              projectName: "mullion",
+            makeDevWorktreeCandidate({
               path: "/p/.wt/stray",
               slug: "stray",
-              branch: null,
-              kind: "wt",
-              reason: "orphaned",
               bytes: 1024,
-            },
+            }),
           ],
         },
       });
@@ -935,16 +914,11 @@ describe("Settings -> Storage", () => {
           available: true,
           totalBytes: 0,
           candidates: [
-            {
-              projectId: 1,
-              projectName: "mullion",
+            makeDevWorktreeCandidate({
               path: "/p/.wt/stray",
               slug: "stray",
-              branch: null,
-              kind: "wt",
-              reason: "orphaned",
               bytes: 1024,
-            },
+            }),
           ],
         },
       });
@@ -987,16 +961,11 @@ describe("Settings -> Storage", () => {
         available: true,
         totalBytes: 0,
         candidates: [
-          {
-            projectId: 1,
-            projectName: "mullion",
+          makeDevWorktreeCandidate({
             path: "/p/.wt/stray",
             slug: "stray",
-            branch: null,
-            kind: "wt",
-            reason: "orphaned",
             bytes: 1024,
-          },
+          }),
         ],
       };
       setup({ worktrees });
@@ -1207,9 +1176,15 @@ describe("Settings -> Storage", () => {
       available: true,
       root: "/home/me/.cache",
       caches: [
-        { id: "ms-playwright", label: "Playwright browsers", bytes: 2 * GIB, exists: true },
-        { id: "pip", label: "pip", bytes: GIB, exists: true },
-        { id: "go-build", label: "Go build cache", bytes: 0, exists: false },
+        {
+          id: "ms-playwright",
+          label: "Playwright browsers",
+          bytes: 2 * GIB,
+          exists: true,
+          permanent: false,
+        },
+        { id: "pip", label: "pip", bytes: GIB, exists: true, permanent: false },
+        { id: "go-build", label: "Go build cache", bytes: 0, exists: false, permanent: false },
       ],
     };
 

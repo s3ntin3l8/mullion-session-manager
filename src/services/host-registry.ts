@@ -17,6 +17,8 @@ import { HOST_PAIRING_RETRY_WINDOW_MS } from "./host-pairing-policy.js";
 // backend importer of this module keeps working unchanged. Runtime VALUE,
 // not type-only, so this is a plain import.
 import { LOCAL_HOST_ID, type HostIdentityEventKind, type HostRole } from "../shared/constants.js";
+import type { HostRecentIdentityReplacement } from "../shared/types.js";
+export type { HostRecentIdentityReplacement } from "../shared/types.js";
 
 export { LOCAL_HOST_ID };
 
@@ -1113,12 +1115,6 @@ export interface HostIdentityEventSummary {
   at: string;
   peer: string | null;
   acknowledgedAt: string | null;
-}
-
-export interface HostRecentIdentityReplacement {
-  id: number;
-  at: string;
-  peer: string | null;
 }
 
 /**

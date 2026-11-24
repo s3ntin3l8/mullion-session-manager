@@ -5,6 +5,7 @@ import { api, type DockerStorageStatus } from "../../api/index.js";
 import { StorageSection } from "./StorageSection.js";
 import { useDashboardStore } from "../../store/index.js";
 import { DEFAULT_SETTINGS } from "../../api/settings.js";
+import type { OptInId } from "../../../../src/shared/constants.js";
 
 const GIB = 1024 ** 3;
 
@@ -25,7 +26,7 @@ function ready<T>(data: T) {
   return { state: "ready" as const, measuredAt: new Date().toISOString(), durationMs: 1, ...data };
 }
 
-function setup(optIns: string[] = []) {
+function setup(optIns: OptInId[] = []) {
   useDashboardStore.setState({
     settings: { ...DEFAULT_SETTINGS, diskCleanup: { cacheDirs: [], optIns } },
     settingsLoaded: true,

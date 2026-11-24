@@ -6,6 +6,8 @@
 // authenticates as the connected user to read private repos too).
 
 import { githubApiFetch } from "./github-fetch.js";
+import type { UpdateCheckResult } from "../shared/types.js";
+export type { UpdateCheckResult } from "../shared/types.js";
 
 // A release check is a background/settings-page concern, not something a
 // user is staring at waiting for — cache generously (unlike github.ts's
@@ -22,38 +24,6 @@ export class UpdateCheckError extends Error {
     super(message);
     this.name = "UpdateCheckError";
   }
-}
-
-export interface UpdateCheckResult {
-  currentVersion: string;
-  // null when the latest release's tag couldn't be parsed as a version —
-  // still a successful check (updateAvailable is conservatively false), not
-  // an error.
-  latestVersion: string | null;
-  updateAvailable: boolean;
-  releaseUrl: string | null;
-  // browser_download_url of the release's .tgz asset, or null if the
-  // release has no such asset yet (e.g. CI's build-tarball job hasn't
-  // finished, or an older release predates this feature).
-  assetUrl: string | null;
-  // browser_download_url of the release's sha256sum-format checksum file
-  // (see release-please.yml's build-tarball job) — self-update.sh verifies
-  // the downloaded tarball against this before extracting it (Hermes
-  // review, PR #54: "no integrity verification of the downloaded tarball").
-  // null under the same conditions as assetUrl.
-  checksumUrl: string | null;
-  // Whether this install is even capable of applying an update — i.e.
-  // MULLION_HOME is configured (a versioned-release layout, not a dev
-  // checkout). Threaded in by the caller rather than read from process.env
-  // here, so this stays a pure, easily-testable function like
-  // github.ts's getRepoStatus.
-  applyAvailable: boolean;
-  // Epoch ms of when GitHub was actually last queried for this result — set
-  // once when the result is fetched and preserved verbatim across cache hits
-  // (see checkForUpdate), so the frontend can show real staleness ("Last
-  // checked: 59 minutes ago") instead of every result looking equally fresh
-  // (issue #123).
-  checkedAt: number;
 }
 
 interface CacheEntry {

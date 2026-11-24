@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { BrowserDestinations } from "../shared/types.js";
 import {
   listBrowserDestinations,
   openRunningDestinationPreview,
@@ -40,7 +41,7 @@ export async function browserDestinationsRoute(app: FastifyInstance) {
       if (!result) return reply.notFound("Project not found");
       // `?sessionId=`: where that session's browser runs, resolved as ⇄
       // resolves it, so the pane knows which `localhost` entries it can load.
-      let agentBrowser: { hostId: string | null; reason: string | null } | null = null;
+      let agentBrowser: BrowserDestinations["agentBrowser"] = null;
       const rawSession = request.query.sessionId;
       if (rawSession !== undefined) {
         const sessionId = Number(rawSession);
@@ -53,7 +54,8 @@ export async function browserDestinationsRoute(app: FastifyInstance) {
           ? { hostId: host.result.hostId, reason: null }
           : { hostId: null, reason: host.result.reason };
       }
-      return { ...result, agentBrowser };
+      const body: BrowserDestinations = { ...result, agentBrowser };
+      return body;
     },
   );
 

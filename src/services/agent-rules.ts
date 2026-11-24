@@ -29,10 +29,18 @@ import path from "node:path";
 import { resolveCodexHome } from "./hook-adapters/codex.js";
 import { resolveClaudeConfigDir } from "./hook-adapters/claude-code.js";
 import { resolveOpenCodeConfigHome } from "./hook-adapters/opencode-skills.js";
-
-export type AgentRuleAgent = "claude-code" | "codex" | "opencode" | "agy";
-export type AgentRuleScope = "project" | "global";
-export type AgentRuleStatus = "active" | "shadowed";
+import type {
+  AgentRuleAgent,
+  AgentRuleScope,
+  AgentRuleStatus,
+  AgentRuleTarget,
+} from "../shared/types.js";
+export type {
+  AgentRuleAgent,
+  AgentRuleScope,
+  AgentRuleStatus,
+  AgentRuleTarget,
+} from "../shared/types.js";
 
 // tessera's `MAX_MEMORY_FILE_BYTES` / `MAX_MEMORY_FILES` guards, ported here
 // for the same reason: a hand-authored instruction file is always small in
@@ -228,30 +236,6 @@ function resolveTargetPath(def: TargetDef, projectCwd: string): string {
     throw new Error(`Refusing to build a path outside its target directory: ${def.fileName}`);
   }
   return resolved;
-}
-
-export interface AgentRuleTarget {
-  id: string;
-  agent: AgentRuleAgent;
-  agentLabel: string;
-  scope: AgentRuleScope;
-  fileName: string;
-  absolutePath: string;
-  exists: boolean;
-  size: number | null;
-  mtimeMs: number | null;
-  status: AgentRuleStatus | null;
-  content: string | null;
-  /** Set when `content` was withheld because the file exceeds
-   * MAX_RULE_FILE_BYTES — the target still reports exists/size/mtime, just
-   * not the body. */
-  truncated: boolean;
-  /** Set when the resolved path is itself a symlink (issue #431, Hermes
-   * review on PR #458) — `content` is still populated (informational), but
-   * writeAgentRule refuses to save through it (AgentRuleSymlinkError), so
-   * the UI should treat this target as read-only rather than offer an edit
-   * whose Save is guaranteed to fail. */
-  isSymlink: boolean;
 }
 
 /** Validates a caller-supplied target id against the fixed allow-list and

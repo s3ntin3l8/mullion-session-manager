@@ -16,6 +16,8 @@ import {
   pipeNetSocketToChannel,
   type MuxChannel,
 } from "./ssh-agent-mux.js";
+import type { SshAuthSockSource } from "../shared/types.js";
+export type { SshAuthSockSource } from "../shared/types.js";
 
 // Issue #820 — the agent-host half of the bridge's local surface: a real
 // unix socket a launched session's SSH_AUTH_SOCK can point at (see
@@ -202,15 +204,6 @@ export async function preflightBridgeSocket(
   const probe = win32 ? await probeMsysSocket(socketPath) : await probeSocket(socketPath);
   return probe === "dead" ? { ok: true } : { ok: false, reason: "occupied", probe };
 }
-
-/** Which of resolveSshAuthSock's three tiers (or genuine absence) produced
- * its result — see that function's own doc comment for the precedence.
- * Issue #820 PR7a: exists so a caller (routes/internal.ts's
- * buildAgentConfig, for Settings > Hosts) can report *why* a session gets
- * the SSH_AUTH_SOCK it does, not just the resulting path. Exported so
- * remote-host-client.ts's AgentConfig type can reuse it rather than
- * hand-copying the four string literals and risking drift. */
-export type SshAuthSockSource = "configured" | "ambient" | "bridge" | "none";
 
 /**
  * Issue #820 PR5d — what a spawned session's SSH_AUTH_SOCK should resolve

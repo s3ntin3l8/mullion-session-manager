@@ -1,0 +1,4 @@
+{
+  "note": "Frontend type names allowed to duplicate a backend type name, each with the reason (scripts/check-shared-type-twins.mjs). Empty since #2412: every twin found then was moved to src/shared/ or renamed. An entry that no longer matches a duplicate fails the check, so this list can only shrink.",
+  "allowed": {}
+}

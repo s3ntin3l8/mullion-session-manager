@@ -1,11 +1,6 @@
 import { request } from "./client.js";
-
-export interface DirectoryListing {
-  path: string;
-  parent: string | null;
-  directories: { name: string; path: string }[];
-  truncated: boolean;
-}
+import type { DirectoryListing } from "../../../src/shared/types.js";
+export type { DirectoryListing } from "../../../src/shared/types.js";
 
 export const fsApi = {
   /** `hostId` lists that host's filesystem instead of the primary's. */

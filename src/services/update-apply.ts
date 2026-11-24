@@ -11,6 +11,8 @@ import path from "node:path";
 import { toolNodePath } from "./agent-exe.js";
 import { resolveServiceUnit } from "./service-unit.js";
 import { NoSessionShellError, sessionShell } from "./session-shell.js";
+import type { UpdateStatus } from "../shared/types.js";
+export type { UpdateStatus } from "../shared/types.js";
 
 // In-flight phases self-update.sh writes to $MULLION_HOME/.update-status.json
 // while an update is running — see scripts/self-update.sh's write_status().
@@ -31,13 +33,6 @@ export const STALE_STATUS_SECONDS = 1800;
 export function isStale(status: UpdateStatus): boolean {
   if (status.updatedAt === undefined) return true;
   return Date.now() / 1000 - status.updatedAt > STALE_STATUS_SECONDS;
-}
-
-export interface UpdateStatus {
-  phase: string;
-  version?: string;
-  updatedAt?: number;
-  error?: string;
 }
 
 function statusFilePath(mullionHome: string): string {

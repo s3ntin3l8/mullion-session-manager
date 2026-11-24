@@ -7,11 +7,12 @@ import { useDashboardStore } from "../store/index.js";
 import { api } from "../api/index.js";
 import type * as ApiModule from "../api/index.js";
 import type {
-  GitHubPROrWithChecks,
+  PROrWithChecks,
   GitHubPRsStatus,
   GitHubStatus,
   ProjectReleaseStatus,
 } from "../api/index.js";
+import { makePr } from "../test/fixtures.js";
 
 vi.mock("../api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -27,20 +28,21 @@ vi.mock("../api/index.js", async (importOriginal) => {
   };
 });
 
-const pr = (n: number, over: Partial<GitHubPROrWithChecks> = {}): GitHubPROrWithChecks => ({
-  number: n,
-  title: `PR title ${n}`,
-  htmlUrl: `https://github.com/o/r/pull/${n}`,
-  author: "a",
-  headSha: "sha",
-  headBranch: "feat",
-  baseBranch: "main",
-  ciStatus: "success",
-  actionsRuns: [],
-  ...over,
-});
+const pr = (n: number, over: Partial<PROrWithChecks> = {}): PROrWithChecks =>
+  makePr({
+    number: n,
+    title: `PR title ${n}`,
+    htmlUrl: `https://github.com/o/r/pull/${n}`,
+    author: "a",
+    headSha: "sha",
+    headBranch: "feat",
+    baseBranch: "main",
+    ciStatus: "success",
+    actionsRuns: [],
+    ...over,
+  });
 
-const prsStatus = (prs: GitHubPROrWithChecks[]): GitHubPRsStatus => ({
+const prsStatus = (prs: PROrWithChecks[]): GitHubPRsStatus => ({
   prs,
   prSummary: { total: prs.length, pass: prs.length, fail: 0, pending: 0, unknown: 0 },
 });

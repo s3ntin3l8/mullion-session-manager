@@ -1,4 +1,4 @@
-import type { Theme } from "./types.js";
+import type { ResolvedTheme } from "./types.js";
 
 // The class every themed surface must carry, and the one that carries the
 // palette's CSS custom properties (`--fg`, `--bg`, `--border`, ...).
@@ -27,7 +27,7 @@ const THEME_LIGHT_CLASS = "light";
 // `undefined` are dropped, so a call site can pass a conditional class
 // inline (`sidebarCollapsed && "sidebar-collapsed"`) without building a string first.
 export function themeClassName(
-  theme: Theme,
+  theme: ResolvedTheme,
   ...extra: (string | false | null | undefined)[]
 ): string {
   const classes = [THEME_ROOT_CLASS];

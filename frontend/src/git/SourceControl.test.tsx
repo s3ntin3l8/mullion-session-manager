@@ -8,13 +8,13 @@ import { useDashboardStore } from "../store/index.js";
 import { api } from "../api/index.js";
 import type * as ApiModule from "../api/index.js";
 import type {
-  GitBranchDetail,
+  GitBranchDrilldown,
   GitBranchInfo,
   GitBranchPruneResult,
   GitBranchesResult,
-  GitHubPROrWithChecks,
+  PROrWithChecks,
 } from "../api/types.js";
-import { makeHost, makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import { makeHost, makePr, makeProject, makeSession, makeTask } from "../test/fixtures.js";
 
 vi.mock("../api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -80,7 +80,7 @@ const refs = (over: Partial<GitBranchesResult> = {}): GitBranchesResult => ({
   ...over,
 });
 
-const openPr: GitHubPROrWithChecks = {
+const openPr: PROrWithChecks = makePr({
   number: 11,
   title: "t",
   htmlUrl: "https://github.com/o/r/pull/11",
@@ -92,9 +92,9 @@ const openPr: GitHubPROrWithChecks = {
   actionsRuns: [],
   prPhase: "ci_failing",
   reviewDecision: "REVIEW_REQUIRED",
-};
+});
 
-const detail = (over: Partial<GitBranchDetail> = {}): GitBranchDetail => ({
+const detail = (over: Partial<GitBranchDrilldown> = {}): GitBranchDrilldown => ({
   name: "feat/open",
   sha: "a".repeat(40),
   upstream: "origin/feat/open",

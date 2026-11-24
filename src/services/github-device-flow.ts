@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { setOAuthToken } from "./github-integration.js";
+import type { DeviceFlowStatus, DeviceFlowSummary } from "../shared/types.js";
+export type { DeviceFlowStatus, DeviceFlowSummary } from "../shared/types.js";
 
 // GitHub's OAuth device authorization grant (issue #27, phase 4) — lets a
 // user connect without ever typing a token into this app. Deliberately an
@@ -25,17 +27,6 @@ export class DeviceFlowError extends Error {
     super(message);
     this.name = "DeviceFlowError";
   }
-}
-
-export type DeviceFlowStatus = "pending" | "connected" | "expired" | "denied" | "error";
-
-// Never includes device_code — that's this module's own internal secret,
-// not something any API response should carry (see the module comment).
-export interface DeviceFlowSummary {
-  status: DeviceFlowStatus;
-  userCode: string;
-  verificationUri: string;
-  errorMessage?: string;
 }
 
 interface DeviceFlowState {

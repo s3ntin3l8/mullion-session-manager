@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import type {
   GitHubIssueListItem,
-  GitHubPROrWithChecks,
+  PROrWithChecks,
   Preview,
   Project,
   ReviewRun,
@@ -96,7 +96,7 @@ export interface MullionLinks {
 }
 
 export interface MullionLinksInputs {
-  prs?: readonly GitHubPROrWithChecks[];
+  prs?: readonly PROrWithChecks[];
   issues?: readonly GitHubIssueListItem[];
   previews?: readonly Preview[];
   /** Extra relay runs (GET /api/reviews); `pr.relayReview` already covers PRs. */
@@ -322,7 +322,7 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
 }
 
 function prReviewLink(
-  pr: GitHubPROrWithChecks,
+  pr: PROrWithChecks,
   runs: readonly ReviewRun[] | undefined,
 ): ReviewLink | null {
   const relay = pr.relayReview;

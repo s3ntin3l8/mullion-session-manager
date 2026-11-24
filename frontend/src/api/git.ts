@@ -4,7 +4,7 @@
 import { request } from "./client.js";
 import type {
   GitBranchesResult,
-  GitBranchDetail,
+  GitBranchDrilldown,
   GitBranchPruneResult,
   DeleteBranchResult,
   RemoveWorktreeResult,
@@ -201,7 +201,7 @@ export const gitApi = {
 
   // A3 — one branch's drilldown. undefined (204) on a remote-host project.
   getProjectGitBranch: (projectId: number, name: string) =>
-    request<GitBranchDetail | undefined>(
+    request<GitBranchDrilldown | undefined>(
       `/api/projects/${projectId}/git-branch?name=${encodeURIComponent(name)}`,
     ),
 

@@ -1,4 +1,6 @@
 import { parseHostCwds } from "./host-cwds.js";
+import type { HostCwdsMeta } from "../shared/types.js";
+export type { HostCwdsMeta } from "../shared/types.js";
 
 // Issue #2090 — `projects.hostCwdsMeta`: which `hostCwds` entries were filled
 // in by the opt-in auto-detect sweep, and which hosts an operator declined.
@@ -9,14 +11,6 @@ import { parseHostCwds } from "./host-cwds.js";
 
 /** Most declined hosts remembered per project; the oldest are forgotten first. */
 export const MAX_DECLINED_HOSTS = 64;
-
-export interface HostCwdsMeta {
-  auto: string[];
-  declined: string[];
-  /** Hosts whose `hostCwds` entry is a Mullion-created clone (written by the
-   * materialization step, not by the clone endpoint itself). */
-  managed: string[];
-}
 
 function strings(value: unknown): string[] {
   if (!Array.isArray(value)) return [];

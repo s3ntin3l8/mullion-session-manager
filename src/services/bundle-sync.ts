@@ -71,8 +71,13 @@ import {
   INSTALLED_MARKER_NAME,
   INSTALLED_MARKER_CONTENT,
 } from "./hook-adapters/mullion-bundle.js";
-
-export type BundleSyncCli = "claude-code" | "codex" | "agy" | "opencode" | "mcode";
+import type { BundleSyncCli, BundleSyncStatus, BundleSyncStatusReport } from "../shared/types.js";
+export type {
+  BundleSyncCli,
+  BundleSyncStatus,
+  BundleSyncCliStatus,
+  BundleSyncStatusReport,
+} from "../shared/types.js";
 
 // Exported (issue #944) — getBundleSyncStatus's per-CLI rows below expose
 // entry-level detail (count, staleness) that a status-surface caller needs
@@ -970,27 +975,6 @@ export function removeBundleContentForCli(
 
     return { skillsRemoved, agentsRemoved };
   });
-}
-
-export type BundleSyncStatus = "synced" | "not-synced" | "stale" | "n-a" | "disabled";
-
-export interface BundleSyncCliStatus {
-  cli: BundleSyncCli;
-  /** From agent-detect.ts's getCachedAgents() — whether this CLI's binary
-   * was found on PATH at all, independent of whether Mullion has ever
-   * synced content to it. */
-  detected: boolean;
-  skills: { status: BundleSyncStatus; root: string; count: number };
-  agents: { status: BundleSyncStatus; root: string | null; count: number };
-}
-
-export interface BundleSyncStatusReport {
-  enabled: boolean;
-  /** The shipped bundle's content hash as of the last successful sync, or
-   * `null` when disabled or never synced. */
-  bundleHash: string | null;
-  manifestPath: string;
-  clis: BundleSyncCliStatus[];
 }
 
 const STATUS_CLI_ORDER: readonly BundleSyncCli[] = [

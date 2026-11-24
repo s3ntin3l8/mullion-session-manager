@@ -8,7 +8,7 @@ import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
 import type { GitHubPrDetail, ReviewSummary } from "../api/types.js";
 import { PR, stub, summaryOf } from "./prDetailTestKit.js";
-import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import { makeProject, makeSession, makeTask, makePr } from "../test/fixtures.js";
 
 // The review relay's state for the PR (issue #1630) — its own endpoint, so
 // it needs its own stub. `states` may hold one state for every PR, or one
@@ -782,7 +782,7 @@ describe("PrDetailView", () => {
         prsByProject: {
           1: {
             prs: [
-              {
+              makePr({
                 number: 12,
                 title: "Add thing",
                 htmlUrl: "u",
@@ -793,7 +793,7 @@ describe("PrDetailView", () => {
                 ciStatus: "success",
                 actionsRuns: [],
                 relayReview: { state: "requested", runId: "run_9", status: "running" },
-              },
+              }),
             ],
             prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
           },
@@ -875,7 +875,7 @@ describe("PrDetailView", () => {
         prsByProject: {
           1: {
             prs: [
-              {
+              makePr({
                 number: 12,
                 title: "Add thing",
                 htmlUrl: "u",
@@ -885,7 +885,7 @@ describe("PrDetailView", () => {
                 baseBranch: "main",
                 ciStatus: "success",
                 actionsRuns: [],
-              },
+              }),
             ],
             prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
           },
@@ -939,7 +939,7 @@ describe("PrDetailView", () => {
           prsByProject: {
             1: {
               prs: [
-                {
+                makePr({
                   number: 12,
                   title: "Add thing",
                   htmlUrl: "u",
@@ -949,7 +949,7 @@ describe("PrDetailView", () => {
                   baseBranch: "main",
                   ciStatus: "success",
                   actionsRuns: [],
-                },
+                }),
               ],
               prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
             },
@@ -1039,7 +1039,7 @@ describe("PrDetailView", () => {
         prsByProject: {
           1: {
             prs: [
-              {
+              makePr({
                 number: 12,
                 title: "Add thing",
                 htmlUrl: "u",
@@ -1049,7 +1049,7 @@ describe("PrDetailView", () => {
                 baseBranch: "main",
                 ciStatus: "success" as const,
                 actionsRuns: [],
-              },
+              }),
             ],
             prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
           },
@@ -1395,7 +1395,7 @@ describe("PrDetailView", () => {
         prsByProject: {
           1: {
             prs: [
-              {
+              makePr({
                 number: 12,
                 title: "Add thing",
                 htmlUrl: "u",
@@ -1405,7 +1405,7 @@ describe("PrDetailView", () => {
                 baseBranch: "main",
                 ciStatus: "success",
                 actionsRuns: [],
-              },
+              }),
             ],
             prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
           },

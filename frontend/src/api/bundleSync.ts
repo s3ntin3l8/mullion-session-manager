@@ -6,10 +6,14 @@
 // `/api/bundle-sync/*` prefix, matching this directory's one-module-per-
 // resource convention.
 import { request } from "./client.js";
-import type { BundleSyncStatus, BundleSyncResyncResult, BundleSyncRemoveResult } from "./types.js";
+import type {
+  BundleSyncStatusReport,
+  BundleSyncResyncResult,
+  BundleSyncRemoveResult,
+} from "./types.js";
 
 export const bundleSyncApi = {
-  getBundleSyncStatus: () => request<BundleSyncStatus>("/api/bundle-sync/status"),
+  getBundleSyncStatus: () => request<BundleSyncStatusReport>("/api/bundle-sync/status"),
 
   // 409 ({ error: "disabled" }) when sessions.injectMullionBundle is off —
   // the panel already hides/disables this action in that state, but the

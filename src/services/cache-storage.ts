@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { diskBytes, dirSize } from "./temp-storage.js";
+import type { CacheDirId, CacheDirStatus, CacheStorageStatus } from "../shared/types.js";
+export type { CacheDirId, CacheDirStatus, CacheStorageStatus } from "../shared/types.js";
 
 // A fixed allowlist of re-creatable cache directories (issue #1606): mostly
 // subtrees of ~/.cache, plus a few toolchain caches that live elsewhere under
@@ -71,7 +73,7 @@ const CACHE_DIRS = [
     keepNewest: true,
   },
 ] as const satisfies ReadonlyArray<{
-  id: string;
+  id: CacheDirId;
   label: string;
   dir: string;
   base: "cache" | "home";
@@ -86,7 +88,6 @@ const CACHE_DIRS = [
   permanent?: boolean;
 }>;
 
-export type CacheDirId = (typeof CACHE_DIRS)[number]["id"];
 export const CACHE_DIR_IDS: readonly CacheDirId[] = CACHE_DIRS.map((c) => c.id);
 
 export interface CacheStorageOptions {
@@ -104,21 +105,6 @@ export interface CacheStorageOptions {
 // before any process references it by path, so a cleanup landing mid-install
 // would otherwise delete the tree under it.
 const IN_USE_GRACE_MS = 10 * 60 * 1000;
-
-export interface CacheDirStatus {
-  id: CacheDirId;
-  label: string;
-  bytes: number;
-  exists: boolean;
-  /** Emptying is irreversible: the contents are not rebuilt or re-downloaded. */
-  permanent: boolean;
-}
-
-export interface CacheStorageStatus {
-  available: boolean;
-  root: string;
-  caches: CacheDirStatus[];
-}
 
 export interface CachePruneResult {
   output: string;

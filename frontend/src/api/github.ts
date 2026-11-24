@@ -20,9 +20,9 @@ import type {
   RunwayIntegration,
   RunwayQuota,
   ReviewRun,
-  ReviewMarker,
+  ReviewMarkerResult,
   SetGitHubAppResult,
-  DeviceFlowStatus,
+  DeviceFlowSummary,
   ProjectReleaseStatus,
   ReleaseRunResult,
   ReleaseApproveRunsResult,
@@ -100,7 +100,7 @@ export const githubApi = {
     request<GitHubPrDetail>(`/api/projects/${projectId}/github/prs/${number}`),
 
   reReviewProjectPr: (projectId: number, number: number) =>
-    request<{ status: string; runId: string; replayed: boolean; marker?: ReviewMarker }>(
+    request<{ status: string; runId: string; replayed: boolean; marker?: ReviewMarkerResult }>(
       `/api/projects/${projectId}/github/prs/${number}/re-review`,
       { method: "POST" },
     ),
@@ -277,8 +277,8 @@ export const githubApi = {
     request<void>("/api/integrations/github/reviewer-app", { method: "DELETE" }),
 
   startGitHubDeviceFlow: () =>
-    request<DeviceFlowStatus>("/api/integrations/github/device/start", { method: "POST" }),
+    request<DeviceFlowSummary>("/api/integrations/github/device/start", { method: "POST" }),
 
   getGitHubDeviceFlowStatus: () =>
-    request<DeviceFlowStatus>("/api/integrations/github/device/status"),
+    request<DeviceFlowSummary>("/api/integrations/github/device/status"),
 };

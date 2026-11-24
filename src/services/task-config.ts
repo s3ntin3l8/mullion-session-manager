@@ -1,5 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { getStoredSettings, type AppSettings } from "./settings.js";
+import type { ResolvedTaskMasterConfig } from "../shared/types.js";
+export type { ResolvedTaskMasterConfig } from "../shared/types.js";
 
 // Phase 6 Task Master follow-up (Settings UI for the safety envelope) — the
 // one place that understands settings.taskMaster's "inherit from env"
@@ -20,21 +22,6 @@ export interface TaskMasterEnvDefaults {
   rateLimitGraceMinutes: number;
   rateLimitMaxParkHours: number;
   skipPermissions: boolean;
-}
-
-export interface ResolvedTaskMasterConfig {
-  enabled: boolean;
-  autoClaimPaused: boolean;
-  maxConcurrent: number;
-  budgetMinutes: number;
-  workerStartTimeoutMinutes: number;
-  progressCommentMinutes: number;
-  rateLimitGraceMinutes: number;
-  rateLimitMaxParkHours: number;
-  skipPermissions: boolean;
-  reviewCiWaitMinutes: number;
-  /** Install-wide round cap; 0 = unlimited. See settings.ts. */
-  maxAutoReturnRounds: number;
 }
 
 // Pure — takes plain values rather than a FastifyInstance so the frontend

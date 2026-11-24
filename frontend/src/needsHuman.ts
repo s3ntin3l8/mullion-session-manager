@@ -1,4 +1,6 @@
 import { formatRelativeUntil } from "./relativeTime.js";
+import type { ApprovalState } from "../../src/shared/types.js";
+export type { ApprovalState } from "../../src/shared/types.js";
 
 // Why Task Master's automatic review loop stopped and is waiting on a human —
 // the board card and the task drawer share this wording so they can't drift.
@@ -88,10 +90,6 @@ export function needsHumanText(
       return "round cap reached";
   }
 }
-
-// #2234 — a task whose last review approved and is waiting on its approval.
-// Shared by the board card and the task drawer so the two can't drift.
-export type ApprovalState = "awaiting-human" | "auto-pending";
 
 /** The round-badge / strip text. `rounds` is `task.autoReturnRounds` (rounds
  * spent). The approving review is written as `## Round ${rounds + 1}` (an

@@ -63,5 +63,5 @@ export {
   FALLBACK_RUNTIME_ENV,
 } from "./constants.js";
 export { eventKey } from "./helpers.js";
-export type { Theme, ViewMode, TerminalPrefs, SplitRequest } from "./types.js";
+export type { ResolvedTheme, ViewMode, TerminalPrefs, SplitRequest } from "./types.js";
 export { clearTaskMasterEnvCacheForTests };

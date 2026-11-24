@@ -12,6 +12,8 @@
 import { createHash } from "node:crypto";
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
 import { parseParentIssueUrl } from "./github.js";
+import type { IssueComment } from "../shared/types.js";
+export type { IssueComment } from "../shared/types.js";
 
 const PAGE_SIZE = 50;
 /** Most raw list pages a title search reads (1000 issues) before giving up and flagging `truncated`. */
@@ -67,14 +69,6 @@ export interface IssueListResult {
   /** How many open issues match, when the query asked for a full scan
    *  (`countMatches`). A lower bound when `truncated` is set. */
   total?: number;
-}
-
-export interface IssueComment {
-  id: number;
-  author: string | null;
-  bodyHtml: string;
-  createdAt: string;
-  htmlUrl: string;
 }
 
 /** A sub-issue or parent, as the detail view's relationship card lists it. */

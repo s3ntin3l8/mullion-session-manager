@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { PrDetailView } from "./PrDetailView.js";
 import { useDashboardStore } from "../store/index.js";
 import { PR, stub } from "./prDetailTestKit.js";
-import { makeProject, makeTask } from "../test/fixtures.js";
+import { makeProject, makeTask, makePr } from "../test/fixtures.js";
 
 // A task PR's status strip: the task's own actions, now shared with the GitHub
 // sidebar's strip (epic #2847), split out of PrDetailView.test.tsx.
@@ -16,7 +16,7 @@ describe("PrDetailView task actions", () => {
     const prState = {
       1: {
         prs: [
-          {
+          makePr({
             number: 12,
             title: "Add thing",
             htmlUrl: "u",
@@ -26,7 +26,7 @@ describe("PrDetailView task actions", () => {
             baseBranch: "main",
             ciStatus: "success",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },
@@ -173,7 +173,7 @@ describe("PrDetailView task actions", () => {
       prsByProject: {
         1: {
           prs: [
-            {
+            makePr({
               number: 12,
               title: "Add thing",
               htmlUrl: "u",
@@ -183,7 +183,7 @@ describe("PrDetailView task actions", () => {
               baseBranch: "main",
               ciStatus: "success",
               actionsRuns: [],
-            },
+            }),
           ],
           prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
         },

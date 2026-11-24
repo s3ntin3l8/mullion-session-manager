@@ -1,7 +1,7 @@
 import type { NotificationEvent, Project, Session } from "../api/index.js";
 import { commandToBinary, resolveAgentLogo } from "../cliLogos.js";
 import { sessionNeedsYou, sessionUnreadCount } from "../eventDescriptions.js";
-import type { Theme } from "../store/index.js";
+import type { ResolvedTheme } from "../store/index.js";
 import { sessionPaneTitle } from "./sessionDisplay.js";
 import type { SessionTitleContexts } from "./sessionDisplay.js";
 
@@ -81,7 +81,7 @@ export interface RailPaneContext {
   lastSeenSeq: Record<number, number>;
   dismissedEventKeys: Record<string, true>;
   mutedSessionIds: number[];
-  theme: Theme;
+  theme: ResolvedTheme;
   activePanelId: string | null;
   /** Task titles and numbers (selectSessionTitleContexts, #3285). */
   titleContexts?: SessionTitleContexts;

@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import { useDashboardStore } from "../store/index.js";
-import type { Theme } from "../store/index.js";
+import type { ResolvedTheme } from "../store/index.js";
 import type { Session, Task } from "../api/index.js";
 import type { TaskBlocker } from "../api/index.js";
 import { commandToBinary } from "../cliLogos.js";
@@ -75,7 +75,7 @@ export function TaskCard({
   // for each, see its own doc comment.
   workerSession: Session | undefined | null;
   reviewSession: Session | undefined | null;
-  theme: Theme;
+  theme: ResolvedTheme;
   taskMasterEnabled: boolean;
   acceptsDrop: boolean;
   onOpen: () => void;

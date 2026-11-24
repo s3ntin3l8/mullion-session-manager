@@ -67,7 +67,7 @@ import {
   getBranchDetail,
   isPlainBranchName,
 } from "../services/git-refs.js";
-import type { DeleteBranchResult } from "../services/git-branch-delete.js";
+import type { DeleteBranchResponse, GitBranchDrilldown } from "../shared/types.js";
 import { planPrune } from "../services/branch-merge-state.js";
 import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
 import type { GitBranchOpResult } from "../services/git-branch-ops.js";
@@ -451,8 +451,7 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
       const taskId = branchClaimedByResumableTask(app, project.id, name);
       if (taskId !== null) {
         if (!force) {
-          const result:
-            DeleteBranchResult | { deleted: false; reason: "task-branch"; detail: string } = {
+          const result: DeleteBranchResponse = {
             deleted: false,
             reason: "task-branch",
             detail: `#${taskId}`,
@@ -776,7 +775,7 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
       const branch = refs.branches.find((b) => b.name === name);
       const worktree = refs.worktrees.find((w) => w.branch === name);
       const taskId = branchClaimedByResumableTask(app, project.id, name);
-      return {
+      const body: GitBranchDrilldown = {
         ...detail,
         isCurrent: branch?.isCurrent ?? false,
         mergeState: branch?.mergeState ?? null,
@@ -784,6 +783,7 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
         worktreePath: worktree?.path ?? null,
         taskId,
       };
+      return body;
     },
   );
 

@@ -16,6 +16,18 @@ import { DecryptionError } from "./encryption.js";
 import { GitHubApiError } from "./github.js";
 import { githubApiFetch } from "./github-fetch.js";
 import { fetchViewerLogin } from "./github-write.js";
+import type {
+  MintOutcome,
+  MarkerUnavailableReason,
+  ChecksMarkerOutcome,
+  GitHubAppStatus,
+} from "../shared/types.js";
+export type {
+  MintOutcome,
+  MarkerUnavailableReason,
+  ChecksMarkerOutcome,
+  GitHubAppStatus,
+} from "../shared/types.js";
 
 // Single GitHub credential for the whole install (issue #27) — not
 // per-project. Device flow (a later phase) yields one user token, so this
@@ -344,40 +356,6 @@ export function clearGitHubApp(app: FastifyInstance, provider: string = GITHUB_P
     .run();
 }
 
-export interface GitHubAppStatus {
-  configured: boolean;
-  // Public — a numeric App id, not a secret (the private key never leaves
-  // this function). `null` when no App is configured.
-  appId: string | null;
-  // How many accounts this App is installed on, straight from GitHub's own
-  // `/app/installations` list — the same call `resolveGitHubToken` makes
-  // to resolve an owner, just for display rather than to mint a token.
-  // `null` when not configured, or when the live list call itself failed
-  // (logged, not surfaced as an error — this is a status display, not a
-  // write path, so a transient GitHub outage shouldn't make the whole
-  // integration summary fail to load).
-  installationCount: number | null;
-  // #514 — a SHA-256/base64 fingerprint of the stored key's public half
-  // (see computeKeyFingerprint, github-app.ts), directly comparable to the
-  // fingerprint GitHub's own App settings page displays. Not a secret.
-  // `null` when not configured, or when the stored key can't be decrypted
-  // (e.g. a DB_ENCRYPTION_KEY mismatch) — same tolerance
-  // installationCount already has for its own failure mode.
-  keyFingerprint: string | null;
-  // #514 — when the currently-stored key was last set (initial configure
-  // or a rotation), for Settings' "Key set <date>" display. `null` when
-  // not configured, or for a row that predates this column.
-  keyRotatedAt: Date | null;
-  // #1790 — the outcome of the last Hermes in-flight marker write through this
-  // App, when one has been attempted since the server started. Absent before
-  // the first review request.
-  checksMarker?: ChecksMarkerOutcome;
-  // #2104 — the last token-mint result per scope, only the ones that did not
-  // come back clean, so Settings can say which App permission is missing and
-  // which operations are running under the operator's PAT instead.
-  mintOutcomes?: MintOutcome[];
-}
-
 /**
  * #489 remaining scope — non-secret visibility into whether a GitHub App is
  * configured and how many repos/orgs it's actually installed on, so "an App
@@ -448,7 +426,8 @@ async function readGitHubAppStatus(
     };
   }
   const appId = row.githubAppId;
-  const keyRotatedAt = row.githubAppKeyRotatedAt ?? null;
+  // Serialized here, not left to JSON: the shared type says string (#2412).
+  const keyRotatedAt = row.githubAppKeyRotatedAt?.toISOString() ?? null;
 
   // #514 — derived once, up front, from the stored PEM directly. This is
   // its OWN try/catch, separate from the installation-count one below and
@@ -697,14 +676,6 @@ export async function resolveChecksReadToken(
   }
 }
 
-/** Why the in-flight marker for a Hermes review could not be written. */
-export type MarkerUnavailableReason =
-  | "app-not-configured"
-  | "not-installed"
-  | "permission-not-granted"
-  | "mint-failed"
-  | "write-failed";
-
 export type ChecksTokenResult =
   | { token: string; reason?: undefined }
   | { token: null; reason: Exclude<MarkerUnavailableReason, "write-failed"> };
@@ -727,14 +698,6 @@ export function markerUnavailableMessage(
     case "write-failed":
       return `GitHub refused the check-run write${detail ? ` (${detail})` : ""} — the GitHub auto-review cannot see this run`;
   }
-}
-
-export interface ChecksMarkerOutcome {
-  /** "ok", or why the marker token could not be had / used. */
-  state: "ok" | MarkerUnavailableReason;
-  owner: string;
-  repo: string;
-  at: number;
 }
 
 // The last marker outcome per App id, for the Settings status — it reads this
@@ -764,25 +727,6 @@ const SCOPE_PERMISSION: Record<string, string> = {
   review: "Pull requests: write",
   workflows: "Workflows: write",
 };
-
-/** #2104 — the last mint result for one token scope. */
-export interface MintOutcome {
-  scope: string;
-  /** The GitHub permission that scope needs, in the App settings' wording. */
-  permission: string;
-  /** `denied`: GitHub refused the permission; `error`: the mint failed for
-   * another reason (a bad key, a network error, a 5xx) — not a missing grant.
-   * An App that simply does not cover this repo (not installed, or a 404
-   * installation/repo mismatch) is a supported steady state, not recorded. */
-  state: "ok" | "denied" | "error";
-  /** HTTP status GitHub answered the mint with, when it did. */
-  status?: number;
-  owner: string;
-  repo: string;
-  /** True when the operation went on under the shared PAT/OAuth token. */
-  fellBackToPat: boolean;
-  at: number;
-}
 
 // Keyed per repo so a success on one repo cannot hide a failure on another.
 const mintOutcomes = new Map<string, MintOutcome>();

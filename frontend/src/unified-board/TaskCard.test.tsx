@@ -24,7 +24,7 @@ import type {
   Session,
   Task,
 } from "../api/index.js";
-import { makeHost, makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import { makeHost, makeProject, makeSession, makeTask, makePr } from "../test/fixtures.js";
 import { boardStoreStubs } from "../test/boardStoreStubs.js";
 
 let sessions: Session[];
@@ -227,7 +227,7 @@ describe("UnifiedBoard task columns", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 12,
             title: "fix: the widget",
             htmlUrl: "https://github.com/o/r/pull/12",
@@ -237,7 +237,7 @@ describe("UnifiedBoard task columns", () => {
             baseBranch: "main",
             ciStatus: "success",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },
@@ -251,17 +251,18 @@ describe("UnifiedBoard task columns", () => {
 
   it("prefers the task's recorded PR number over the branch (matchSessionPr)", () => {
     tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7", prNumber: 21 })];
-    const pr = (number: number, headBranch: string) => ({
-      number,
-      title: `pr ${number}`,
-      htmlUrl: `https://github.com/o/r/pull/${number}`,
-      author: "mullion-bot",
-      headSha: "abc",
-      headBranch,
-      baseBranch: "main",
-      ciStatus: "success" as const,
-      actionsRuns: [],
-    });
+    const pr = (number: number, headBranch: string) =>
+      makePr({
+        number,
+        title: `pr ${number}`,
+        htmlUrl: `https://github.com/o/r/pull/${number}`,
+        author: "mullion-bot",
+        headSha: "abc",
+        headBranch,
+        baseBranch: "main",
+        ciStatus: "success" as const,
+        actionsRuns: [],
+      });
     prsByProject = {
       1: {
         prs: [pr(12, "mullion/task-7"), pr(21, "worker-switched-branch")],
@@ -279,7 +280,7 @@ describe("UnifiedBoard task columns", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 3,
             title: "unrelated",
             htmlUrl: "https://github.com/o/r/pull/3",
@@ -289,7 +290,7 @@ describe("UnifiedBoard task columns", () => {
             baseBranch: "main",
             ciStatus: "failure",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
       },
@@ -305,7 +306,7 @@ describe("UnifiedBoard task columns", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 12,
             title: "fix: the widget",
             htmlUrl: "https://github.com/o/r/pull/12",
@@ -315,7 +316,7 @@ describe("UnifiedBoard task columns", () => {
             baseBranch: "main",
             ciStatus: "in_progress",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 0, fail: 0, pending: 1, unknown: 0 },
       },
@@ -344,7 +345,7 @@ describe("UnifiedBoard task columns", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 12,
             title: "fix: the widget",
             htmlUrl: "https://github.com/o/r/pull/12",
@@ -354,7 +355,7 @@ describe("UnifiedBoard task columns", () => {
             baseBranch: "main",
             ciStatus: "success",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },

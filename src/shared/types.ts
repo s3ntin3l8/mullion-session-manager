@@ -1,5 +1,5 @@
 // Type-only shapes shared verbatim between the backend and
-// `frontend/src/api.ts`. These were previously hand-mirrored on both sides
+// `frontend/src/api/`. These were previously hand-mirrored on both sides
 // (each frontend copy annotated "Mirrors src/services/X.ts's Y 1:1"), kept
 // in sync by hand with zero compiler enforcement. Moving the physical
 // declaration here and having both sides `export type { X } from ...`
@@ -15,11 +15,14 @@
 // (`../../src/shared/types.js`), and re-exports so every existing frontend
 // consumer of these types keeps importing them from `./api.js` unchanged.
 //
-// NOT every hand-mirrored shape here lives in this file — a handful of
-// pairs were found to have a real (not cosmetic) divergence between the two
-// sides during the audit that produced this file, and were deliberately
-// left alone rather than papered over. See the PR description for the full
-// list.
+// The first wave left a handful of pairs alone because the two sides had
+// really diverged. The second wave (issue #2412) settled those and every
+// other same-named twin: the single declaration matches what the route
+// actually sends, and scripts/check-shared-type-twins.mjs (run by
+// `npm run lint`) fails if the frontend declares a type with a backend
+// type's name again. The second wave's types live in api-types/, one file per
+// area, re-exported at the bottom of this file, which stays the one entry
+// point both workspaces import.
 
 // ---------------------------------------------------------------------------
 // session-status.ts — SessionStatus / SessionSeverity
@@ -161,231 +164,6 @@ export interface SkillInfo {
 }
 
 // ---------------------------------------------------------------------------
-// git-refs.ts — GitBranchInfo / GitWorktreeInfo
-// ---------------------------------------------------------------------------
-
-export interface GitBranchInfo {
-  name: string;
-  isCurrent: boolean;
-  // Issue #442 — enrichment fields for Source Control's branch-management UI.
-  // All optional: the same shape crosses the /internal/git-branches proxy,
-  // so a new primary talking to an old agent (or the reverse) must degrade
-  // rather than break (see the plan's binding decision #7).
-  /** `%(upstream:short)` — e.g. "origin/main". Absent when no upstream is
-   * configured for this branch. */
-  upstream?: string;
-  /** Parsed from `%(upstream:track)`'s "[ahead N]"/"[ahead N, behind M]"
-   * form. Absent when there's no upstream or nothing to report. */
-  ahead?: number;
-  behind?: number;
-  /** True when `%(upstream:track)` reports "[gone]" — the upstream branch
-   * was deleted on the remote. */
-  upstreamGone?: boolean;
-  /** `%(committerdate:relative)` — e.g. "3 days ago". */
-  lastCommitRelative?: string;
-  /** Whether this branch is an ancestor of the resolved default base ref
-   * (`git branch --merged`). Only computed when `listBranches` is called
-   * with `{ detail: true }` (Source Control's explicit `?detail=1` fetch).
-   * Left `undefined` (not `false`) when detail wasn't requested, or when the
-   * base-ref chain fell through to `HEAD` (no remote configured) — "merged
-   * into whatever branch you're standing on" is a misleading thing to label
-   * a bare `merged`. */
-  isMerged?: boolean;
-  /** Tip commit (`%(objectname)`). Lets a caller pin a PR's head SHA to this
-   * branch so a reused branch name isn't mistaken for the merged one. */
-  sha?: string;
-  /** Why this branch counts as done, cheapest signal first. Detail only.
-   * `ancestor` / `upstream-gone` come from git alone; `pr-merged` /
-   * `pr-closed` are layered on by the route from the shared closed-PR lookup
-   * (a squash merge leaves the branch un-merged as far as git can tell).
-   * Absent = no signal that it is done. */
-  mergeState?: GitBranchMergeState;
-  /** The pull request for this branch's head, when one is known. */
-  pr?: GitBranchPr;
-}
-
-export type GitBranchMergeState = "ancestor" | "upstream-gone" | "pr-merged" | "pr-closed";
-
-export interface GitBranchPr {
-  number: number;
-  state: "open" | "merged" | "closed";
-  url: string;
-}
-
-export interface GitWorktreeInfo {
-  path: string;
-  /** `null` for a worktree checked out at a detached HEAD (or a bare repo
-   * entry) — not every worktree has a branch. */
-  branch: string | null;
-  /** The repo's original working directory — always first in `git worktree
-   * list`'s own output, never removable via `git worktree remove`. */
-  isMain: boolean;
-}
-
-// ---------------------------------------------------------------------------
-// git-status.ts — GitStatus / GitFileStatus / GitFileStatusCode
-// ---------------------------------------------------------------------------
-
-export type GitFileStatusCode = "M" | "A" | "D" | "U" | "?";
-
-export interface GitFileStatus {
-  path: string;
-  status: GitFileStatusCode;
-}
-
-export interface GitStatus {
-  branch: string;
-  hash: string | null;
-  ahead: number;
-  behind: number;
-  files: GitFileStatus[];
-  isClean: boolean;
-  hasConflicts: boolean;
-}
-
-// ---------------------------------------------------------------------------
-// git-pull.ts — GitPullReason / GitPullResult
-// ---------------------------------------------------------------------------
-
-export type GitPullReason =
-  | "not-a-repo"
-  | "unborn-head"
-  | "detached-head"
-  | "no-upstream"
-  | "dirty-tree"
-  | "not-fast-forward"
-  | "already-up-to-date"
-  | "pull-failed"
-  // Issue #1896 — a git operation (a clone repair) already holds the clone.
-  // Not a failure: the pull was refused, and trying again in a moment works.
-  | "busy"
-  // A lock file git names is old enough to be orphaned by a killed process.
-  // `detail` is "<path> (<age> old)"; Pull never deletes it.
-  | "stale-lock";
-
-export interface GitPullResult {
-  pulled: boolean;
-  reason?: GitPullReason;
-  detail?: string;
-}
-
-// ---------------------------------------------------------------------------
-// git-branch-ops.ts — GitBranchOpReason / GitBranchOpResult (issue #1672)
-//
-// The guarded checkout / create / rebase of the project's own checkout. A
-// refusal is a 200 with a reason, the same contract as GitPullResult.
-// ---------------------------------------------------------------------------
-
-export type GitBranchOpReason =
-  | "not-a-repo"
-  | "invalid-name"
-  | "no-such-branch"
-  | "no-such-ref"
-  | "already-exists"
-  | "already-current"
-  | "checked-out"
-  | "unborn-head"
-  | "detached-head"
-  | "dirty-tree"
-  | "operation-in-progress"
-  | "no-base"
-  | "already-up-to-date"
-  | "conflicts"
-  | "failed"
-  // Issue #3068 — the per-branch fast-forward Pull (`pullBranch`): the branch
-  // tracks nothing (or its upstream is gone), or it has commits its upstream
-  // lacks, so a fast-forward is impossible. Pull never merges or rebases.
-  | "no-upstream"
-  | "not-fast-forward"
-  // Added one layer up, by the routes: they need the sessions table and the
-  // clone registry, which the DB-less git service has no access to.
-  | "sessions-active"
-  | "busy";
-
-export interface GitBranchOpResult {
-  ok: boolean;
-  reason?: GitBranchOpReason;
-  /** Human-readable context: the worktree holding a branch, the ids of the
-   * active sessions, a truncated git stderr, or the ref a rebase used. */
-  detail?: string;
-  /** `conflicts` only: the files the aborted rebase stopped on. */
-  conflicts?: string[];
-}
-
-// ---------------------------------------------------------------------------
-// services/git-doctor.ts — CloneHealth, RepairPlan, RepairOutcome
-// (issues #1851 and #1896)
-//
-// CloneHealth is what the READ-ONLY half of the doctor found. It never
-// mutates anything.
-//
-// RepairPlan is what the repair WOULD do, computed from reads only — the app
-// shows it before asking for the confirmation, because the repair moves
-// files inside `.git/objects` and rewrites worktree indexes.
-//
-// RepairOutcome is what the repair DID.
-
-export interface CloneHealth {
-  /** The shared git dir, or null when this is not a git checkout. */
-  gitDir: string | null;
-  /** Zero-byte files that are loose objects — the #1836 damage. */
-  zeroByteObjects: string[];
-  /** Zero-byte files under objects/ that are NOT loose objects — a different,
-   * riskier kind of damage. */
-  otherZeroByteFiles: string[];
-  /** git fsck's error lines, without the `dangling …` noise that is normal. */
-  fsckErrors: string[];
-  /** True when nothing is wrong. */
-  healthy: boolean;
-  /** True when `git fsck` did not finish — the check's verdict is UNKNOWN,
-   * which is NOT the same as "damaged". */
-  timedOut: boolean;
-}
-
-/** What the repair would do — computed from reads only, so showing it
- * changes nothing. */
-export interface RepairPlan {
-  /** The shared git dir, or null when this is not a git checkout. */
-  gitDir: string | null;
-  /** The zero-byte loose objects that would be quarantined, by sha. */
-  quarantine: string[];
-  /** Whether `git fetch origin --prune` would run (there is an origin). */
-  willFetch: boolean;
-  /** The worktrees whose index would be rebuilt. */
-  indexesToRebuild: string[];
-  /** The worktrees whose index would be SKIPPED, and the paths responsible —
-   * staged content that is not in the working tree, which re-staging would
-   * discard. */
-  indexesToSkip: { path: string; paths: string[] }[];
-  /** True when the repair has damaged objects to move aside.
-   *
-   * NOT the same as "the clone is healthy": a clone whose object was deleted
-   * outright (rather than left zero-byte) has nothing to quarantine, and the
-   * fetch is what helps it. */
-  actionable: boolean;
-}
-
-/** What a repair did. */
-export interface RepairOutcome extends CloneHealth {
-  /** Where the moved-aside files went. */
-  quarantine: string | null;
-  /** The shas that were quarantined. */
-  quarantined: string[];
-  /** The shas that read fine again (they were only shadowed). */
-  recovered: string[];
-  /** The shas that are genuinely gone — never committed, not on the remote. */
-  unrecovered: string[];
-  /** Whether the remote refs were restored. */
-  refsRestored: boolean;
-  /** The worktrees whose index was rebuilt. */
-  indexesRebuilt: string[];
-  /** The worktrees whose index was left alone, and why. */
-  indexesSkipped: string[];
-  /** True when the clone is consistent again. */
-  whole: boolean;
-}
-
-// ---------------------------------------------------------------------------
 // routes/projects.ts — release-please detection/run/merge (#744)
 // ---------------------------------------------------------------------------
 //
@@ -501,23 +279,6 @@ export interface ReleaseMergeResult {
 }
 
 // ---------------------------------------------------------------------------
-// git-diff.ts — GitDiffStats
-// ---------------------------------------------------------------------------
-
-// Files-changed + insertions/deletions against HEAD for a session's own
-// effective cwd (its own cwd override, or its project's).
-export interface GitDiffStats {
-  filesChanged: number;
-  insertions: number;
-  deletions: number;
-  // Changed paths under `.github/workflows/` (a rename reports both sides'
-  // text as git prints it). Absent from a host agent that predates the
-  // workflow-change approval gate — a caller must read that as "unknown",
-  // never as "none".
-  workflowFiles?: string[];
-}
-
-// ---------------------------------------------------------------------------
 // project-config.ts — Launcher / LauncherKind / DockControl / DockerServiceInfo
 // ---------------------------------------------------------------------------
 
@@ -598,151 +359,19 @@ export interface DockControl {
 }
 
 // ---------------------------------------------------------------------------
-// settings.ts — AppSettings's leaf unions
+// api-types/ — the second wave (issue #2412)
 // ---------------------------------------------------------------------------
 //
-// AppSettings itself is NOT shared here: its `notifications.notificationMatrix`
-// field is typed `Record<string, ...>` on the backend (settings.ts persists
-// an arbitrary, possibly-stale JSON blob and deep-merges over defaults — see
-// that field's own doc comment) but `Record<SessionStatus, ...>` on the
-// frontend (a deliberate exhaustiveness check — the same
-// assign-object-literal-to-a-Record-typed-const technique session-status.ts
-// itself uses — so a SessionStatus added without a matching notification-
-// matrix entry is a frontend type error). That's a real type mismatch, not
-// cosmetic drift, so AppSettings stays hand-mirrored; only its
-// byte-identical leaf unions move here.
-
-export type Theme = "dark" | "light" | "system";
-export type CursorStyle = "block" | "bar" | "underline";
-export type SidebarDensity = "comfortable" | "compact";
-export type SoundName = "ping" | "chime" | "blip";
-// Tablet tier plan (.claude/plans/another-thing-to-investigate-lively-kitten.md,
-// PR 4) — "auto" resolves from live window width (frontend/src/lib/
-// layoutTier.ts's resolveLayoutTier); the three explicit values are an
-// escape hatch for a device whose reported metrics are ambiguous (the
-// motivating case: a foldable), and let a tier be reproduced in a desktop
-// browser for testing.
-export type LayoutMode = "auto" | "phone" | "tablet" | "desktop";
-
-// ---------------------------------------------------------------------------
-// mullion-links.ts — IssueTriageState
-// ---------------------------------------------------------------------------
-
-/**
- * The triage relay's state for one issue (epic #1965, A6). Absent (`null` on
- * the issue) means no run is known — never requested, or the in-memory run
- * index was lost to a restart; it is NOT "no triage pending".
- */
-export interface IssueTriageState {
-  state: "requested";
-  runId: string;
-  /**
-   * When the run was dispatched (ISO 8601). The index keeps finished runs too,
-   * so `state` alone cannot tell an in-flight triage from an old one — a
-   * consumer ages it out with this.
-   */
-  dispatchedAt: string;
-}
-
-// ---------------------------------------------------------------------------
-// review-relay.ts — RelayReviewState
-// ---------------------------------------------------------------------------
-
-/**
- * The Hermes review relay's state for one pull request (issue #1630).
- *
- * `"none"` means *no relay run is known for this PR* — never requested here,
- * or the server restarted. It does NOT mean "no review is pending": the run
- * index is in-memory, so a restart loses it. A UI must render "none" as
- * "nothing to show", never as "no review pending".
- */
-export interface RelayReviewState {
-  state: "none" | "requested" | "landed";
-  /** The relay run's id, when a run is known. */
-  runId?: string;
-  /** When the run was dispatched (ISO 8601). */
-  dispatchedAt?: string;
-  /** The Hermes run's own status: queued, running, completed, failed, … */
-  status?: string;
-  /**
-   * Whether the landed-review lookup actually ran (`false` when the lookup
-   * itself failed). Without it, a failed lookup and a review that simply has
-   * not landed are the same answer — "requested" — and the UI cannot say
-   * "could not confirm" instead.
-   */
-  landedChecked?: boolean;
-  /** Who posted the landed review. */
-  author?: string;
-  /** The review's state: APPROVED, CHANGES_REQUESTED, … */
-  verdict?: string;
-  /** The review's own text (bounded on the way in). */
-  body?: string;
-  /** True when `body` was cut short by the server's cap. */
-  bodyTruncated?: boolean;
-  /** A link to the landed review on GitHub. */
-  htmlUrl?: string;
-}
-
-/**
- * One review worth showing in full (epic #1965, A2): the latest human and the
- * latest bot review that has a body or leaves threads open.
- */
-export interface ReviewSummaryEntry {
-  author: string;
-  isBot: boolean;
-  /** APPROVED, CHANGES_REQUESTED, COMMENTED, … */
-  state: string;
-  /** Plain-text body, bounded server-side; empty for an inline-threads-only review. */
-  body: string;
-  submittedAt: string | null;
-  /** The commit the review was made on ("" when unknown). */
-  reviewedSha: string;
-  /** The PR head has moved since `reviewedSha`. */
-  stale: boolean;
-}
-
-/**
- * The PR's review status, computed ONCE on the server so the list pill and the
- * detail's Reviews row cannot disagree. GitHub's `latestReviews` (every state,
- * COMMENTED included — `latestOpinionatedReviews` drops what bots post) feeds
- * the buckets; the relay's state is folded in so it needs no block of its own.
- */
-export interface ReviewSummary {
-  /** GitHub's decision when it has one, else derived from the reviews. */
-  decision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "COMMENTED" | null;
-  approved: string[];
-  changesRequested: string[];
-  /** The `changesRequested` reviewers whose review is of an older commit than the head. */
-  changesRequestedStale?: string[];
-  commented: string[];
-  requested: string[];
-  relay: { state: "requested" | "landed"; reviewer: string | null; url: string | null } | null;
-  /** null = not fetched. */
-  unresolvedThreads: number | null;
-  /** Max 2: the latest human + the latest bot review with something to read. */
-  latest: ReviewSummaryEntry[];
-}
-
-// The placement mode of a project — issue #1723 / roadmap 8.9 — is NOT
-// declared here. It is derived from PLACEMENT_MODES in
-// src/shared/constants.ts (the TaskStatus/TASK_STATUSES precedent in that
-// file), so the runtime list and the type are one declaration and cannot
-// drift. It used to be spelled out here as its own union, which made the
-// pair two hand-maintained vocabularies — and this file is a leaf that
-// imports nothing, so the two could only be held together by hand.
-//
-// "pinned" (the default) keeps today's behaviour exactly: every session
-// under the project runs on the project's own host. "auto" opts the project
-// into automatic placement.
-
-// ---------------------------------------------------------------------------
-// github.ts — GitHubCiStatus
-// ---------------------------------------------------------------------------
-//
-// The backend's own declaration (src/services/github.ts) and the frontend's
-// hand-mirrored copy (frontend/src/api/types.ts) were the SAME union spelled
-// twice, and the backend's copy sat in a module the PR-phase helper imported
-// back — so github.ts and github-pr-phase.ts imported each other (issue
-// #2414). One declaration, both sides.
-
-export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
+// The same relocation, continued: every remaining frontend type that had a
+// same-named backend twin now lives in one of these per-area files, split out
+// only to keep each file under the repo's line ceiling. This file stays the
+// single entry point both workspaces import from.
+export type * from "./api-types/agents.js";
+export type * from "./api-types/devices.js";
+export type * from "./api-types/git.js";
+export type * from "./api-types/github.js";
+export type * from "./api-types/hosts.js";
+export type * from "./api-types/projects.js";
+export type * from "./api-types/sessions.js";
+export type * from "./api-types/settings.js";
+export type * from "./api-types/storage.js";

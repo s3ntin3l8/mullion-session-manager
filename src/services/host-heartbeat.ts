@@ -8,8 +8,8 @@ import { HostAgentTracker, agentsTtlMs, refreshRemoteHostAgents } from "./host-a
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { resolveHeartbeatSeconds } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
-
-export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
+import type { HostHealthStatus } from "../shared/types.js";
+export type { HostHealthStatus } from "../shared/types.js";
 
 export interface HostHealth {
   status: HostHealthStatus;

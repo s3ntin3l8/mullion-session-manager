@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import type { OrphanRecoveryInfo, OrphanRemovalStatus } from "../api/index.js";
+import type { OrphanRecovery, OrphanRemovalStatus } from "../api/index.js";
 import { usePolling } from "../hooks/usePolling.js";
 import { describeError } from "../lib/describeError.js";
 
 /** The last server-side orphan removal survives a disconnected request or reload. */
 export function useOrphanRemoval(
   onFinished: () => void,
-  onRecoveries: (recoveries: OrphanRecoveryInfo[]) => void,
+  onRecoveries: (recoveries: OrphanRecovery[]) => void,
 ) {
   const [job, setJob] = useState<OrphanRemovalStatus>({ state: "idle" });
   const [warnings, setWarnings] = useState<string[]>([]);

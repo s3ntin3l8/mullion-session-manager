@@ -1,5 +1,6 @@
-import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
+import type { GitBranchInfo, GitWorktreeInfo, PruneSkipReason } from "../shared/types.js";
 import type { ClosedPrRecord } from "./github-merged-prs.js";
+export type { PruneSkipReason } from "../shared/types.js";
 
 // Layers the GitHub-derived signals onto the git-derived ones git-refs.ts's
 // `listBranches` already set (`ancestor`, `upstream-gone`), and decides what a
@@ -37,8 +38,6 @@ export function applyPrState(
     }
   }
 }
-
-export type PruneSkipReason = "current" | "worktree" | "task-claimed" | "default";
 
 export interface PruneCandidate {
   name: string;

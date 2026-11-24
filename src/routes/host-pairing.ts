@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { HostPairingCreated, HostPairingSummary } from "../shared/types.js";
 import {
   issueHostPairingCode,
   listHostPairings,
@@ -117,7 +118,7 @@ export async function hostPairingRoute(app: FastifyInstance) {
       const url =
         (app.config.MULLION_PUBLIC_URL && normalizePairingOrigin(app.config.MULLION_PUBLIC_URL)) ||
         `${requestScheme(request)}://${request.headers.host}`;
-      return {
+      const created: HostPairingCreated = {
         id: pairing.id,
         // The link and code are shown to the operator once; they are never
         // logged and never stored in plaintext.
@@ -126,11 +127,12 @@ export async function hostPairingRoute(app: FastifyInstance) {
         code: pairing.code,
         expires_at: pairing.expiresAt.toISOString(),
       };
+      return created;
     },
   );
 
   app.get("/api/host-pairings", async () =>
-    listHostPairings(app).map((p) => ({
+    listHostPairings(app).map((p): HostPairingSummary => ({
       id: p.id,
       label: p.label,
       state: p.state,

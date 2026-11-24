@@ -1,5 +1,5 @@
 import type { Session } from "../api/index.js";
-import type { Theme } from "../store/index.js";
+import type { ResolvedTheme } from "../store/index.js";
 import {
   STATUS_PRESENTATION,
   formatStatusLabel,
@@ -31,7 +31,7 @@ export function TaskSessionSlot({
 }: {
   session: Session | undefined;
   role: "worker" | "review";
-  theme: Theme;
+  theme: ResolvedTheme;
   onOpenSession: (session: Session) => void;
 }) {
   if (!session) {

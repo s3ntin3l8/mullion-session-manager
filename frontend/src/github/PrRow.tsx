@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { GitHubPROrWithChecks, Task } from "../api/types.js";
+import type { PROrWithChecks, Task } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { useRunJobs } from "../hooks/useGitHubData.js";
@@ -33,7 +33,7 @@ export function PrRow({
   links,
   onOpen,
 }: {
-  pr: GitHubPROrWithChecks;
+  pr: PROrWithChecks;
   projectId: number;
   links: MullionLinkEntry | undefined;
   onOpen: (number: number) => void;

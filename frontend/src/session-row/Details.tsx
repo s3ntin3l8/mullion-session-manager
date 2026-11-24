@@ -1,7 +1,7 @@
 import type {
   BackgroundTask,
   GitDiffStats,
-  GitHubPROrWithChecks,
+  PROrWithChecks,
   GitStatus,
   SubagentInfo,
 } from "../api/index.js";
@@ -27,7 +27,7 @@ export interface DetailsProps {
   displayBranch: string | null | undefined;
   worktreeLabel: string | null;
   effectiveCwd: string;
-  matchedPr: GitHubPROrWithChecks | undefined;
+  matchedPr: PROrWithChecks | undefined;
   onOpenPr: (prNumber: number) => void;
   diffStats: GitDiffStats | null | undefined;
   // Row: files (issue #177) — `foldDetails` decides whether this renders

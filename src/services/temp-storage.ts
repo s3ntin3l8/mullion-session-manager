@@ -9,6 +9,8 @@ import {
   loadLiveSessions,
   scanClaudeDir,
 } from "./claude-scratch.js";
+import type { TempStorageStatus, TempPruneMode, ClaudeScratchStatus } from "../shared/types.js";
+export type { TempStorageStatus, TempPruneMode, ClaudeScratchStatus } from "../shared/types.js";
 
 const SAFE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const AGGRESSIVE_AGE_MS = 24 * 60 * 60 * 1000;
@@ -53,33 +55,10 @@ const DENYLIST: ReadonlyArray<RegExp> = [
   /^dbus-/,
 ];
 
-export type TempPruneMode = "safe" | "aggressive";
-
 export interface TempPruneResult {
   output: string;
   reclaimedBytes: number;
   /** Set when cleanup stopped early; earlier removals still freed space. */
-  error?: string;
-}
-
-export interface ClaudeScratchStatus {
-  /** Why `claude-<uid>` is being left alone entirely, when liveness is unknown. */
-  skipped?: string;
-  /** Registry files that were skipped but didn't stop the rest. */
-  warnings: string[];
-}
-
-export interface TempStorageStatus {
-  available: boolean;
-  root: string;
-  estimates: {
-    safeBytes: number;
-    aggressiveBytes: number;
-    /** Part of `aggressiveBytes`: the npm cache, which aggressive cleanup also clears. */
-    npmCacheBytes: number;
-  };
-  candidates: { safe: number; aggressive: number };
-  claudeScratch: ClaudeScratchStatus;
   error?: string;
 }
 

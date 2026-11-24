@@ -9,7 +9,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
 } from "./constants.js";
-import type { Theme, ViewMode } from "./types.js";
+import type { ResolvedTheme, ViewMode } from "./types.js";
 
 /**
  * Task Master is OFF, and known to be (#2461): settings and server-info have
@@ -95,7 +95,7 @@ export function systemPrefersDark(): boolean {
     : true;
 }
 
-export function resolveTheme(pref: ThemePreference): Theme {
+export function resolveTheme(pref: ThemePreference): ResolvedTheme {
   if (pref === "system") return systemPrefersDark() ? "dark" : "light";
   return pref;
 }
@@ -111,7 +111,7 @@ export function resolveTheme(pref: ThemePreference): Theme {
 // passes the OS `prefers-color-scheme` result instead — a login screen has
 // no prior resolved-theme write to fall back on for a genuinely first-ever
 // visit, so guessing dark there would be wrong for a light-OS visitor.
-export function readThemeHint(fallback: Theme = "dark"): Theme {
+export function readThemeHint(fallback: ResolvedTheme = "dark"): ResolvedTheme {
   return readString(STORAGE_KEYS.themeHint, fallback) === "light" ? "light" : "dark";
 }
 

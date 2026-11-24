@@ -4,12 +4,12 @@ import { startMaterialize } from "./checkout-materialize.js";
 import { listHosts } from "./host-registry.js";
 import { parseHostCwds, parsePlacementConstraints, platformFlagState } from "./placement.js";
 import { cachedProjectOrigin, hostProjectsRoots, warmProjectOriginUrl } from "./project-origin.js";
+import type { PreProvision } from "../shared/types.js";
+export type { PreProvision } from "../shared/types.js";
 
 // Per-project `preProvision`: clone a project's checkout onto hosts AHEAD of
 // the first placement. `"none"` (the default) / `"all"` / a list of host ids,
 // stored as JSON in a nullable column.
-
-export type PreProvision = "none" | "all" | string[];
 
 const MAX_PRE_PROVISION_HOSTS = 32;
 

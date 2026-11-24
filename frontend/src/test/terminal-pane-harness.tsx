@@ -14,7 +14,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { SearchAddon } from "@xterm/addon-search";
-import type { Theme } from "../store/index.js";
+import type { ResolvedTheme } from "../store/index.js";
 import { useDashboardStore } from "../store/index.js";
 import { TerminalPane } from "../TerminalPane.js";
 import { api, DEFAULT_SETTINGS } from "../api/index.js";
@@ -276,7 +276,7 @@ export function renderPane(
         keyCapture: { ctrlR: true, ctrlL: true, ctrlK: true },
       },
     }),
-    theme: "dark" as Theme,
+    theme: "dark" as ResolvedTheme,
     settingsLoaded: true,
     projects: [],
     sessions: [],

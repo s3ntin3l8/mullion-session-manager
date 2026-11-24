@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { api } from "../api/index.js";
-import type { GitBranchDetail } from "../api/types.js";
+import type { GitBranchDrilldown } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { describeError } from "../lib/describeError.js";
@@ -65,7 +65,7 @@ export function BranchDetail({
     | { kind: "loading" }
     | { kind: "unavailable" }
     | { kind: "error"; message: string }
-    | { kind: "ready"; detail: GitBranchDetail }
+    | { kind: "ready"; detail: GitBranchDrilldown }
   >({ kind: "loading" });
   // So a double click can't make two sessions.
   const [starting, setStarting] = useState(false);

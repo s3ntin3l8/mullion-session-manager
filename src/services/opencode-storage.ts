@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import type { OpencodeStorageStatus, Holder, OpencodeLastPrune } from "../shared/types.js";
+export type { OpencodeStorageStatus, Holder, OpencodeLastPrune } from "../shared/types.js";
 
 const require = createRequire(import.meta.url);
 
@@ -77,46 +79,6 @@ export interface OpencodeStorageOptions {
   vacuumTimeoutMs?: number;
 }
 
-export interface OpencodeStorageStatus {
-  /** False when there is no database, or it couldn't be read. */
-  available: boolean;
-  path: string;
-  /** The database plus its write-ahead log, as on disk. */
-  fileBytes: number;
-  /** Free pages a VACUUM would return (`freelist_count * page_size`). Exact. */
-  reclaimableBytes: number;
-  /** What the compacted database would take. */
-  liveBytes: number;
-  /** Some other process has it open; a VACUUM would lock it out, so it is skipped. */
-  inUse: boolean;
-  /** Who has it open, when `inUse`; what to stop to let the compaction run. */
-  holders?: Holder[];
-  /**
-   * Who has it open couldn't be established (no readable /proc, or one of this
-   * user's own processes can't be looked into). Unknown is not "nobody": it is
-   * skipped just like `inUse`.
-   */
-  holdersUnknown: boolean;
-  /** What couldn't be looked into, e.g. `cannot list /proc/1234/fd (EACCES)`. */
-  holdersUnknownReason?: string;
-  /**
-   * A compaction is running right now. Its child process has the database open,
-   * so the holder scan is skipped meanwhile rather than reporting opencode.
-   */
-  compacting: boolean;
-  /** How the last compaction since this server started ended; absent before any. */
-  lastPrune?: OpencodeLastPrune;
-  error?: string;
-}
-
-export interface OpencodeLastPrune {
-  output: string;
-  reclaimedBytes: number;
-  error?: string;
-  /** ISO time the compaction finished. */
-  finishedAt: string;
-}
-
 export interface OpencodePruneResult {
   output: string;
   reclaimedBytes: number;
@@ -145,15 +107,6 @@ async function sizeOf(file: string): Promise<number> {
   } catch {
     return 0;
   }
-}
-
-/**
- * A process with the database, its WAL or its shared-memory file open.
- * `command` is its command line (truncated), so the user can tell what to stop.
- */
-export interface Holder {
-  pid: number;
-  command: string;
 }
 
 /**

@@ -1,4 +1,4 @@
-import type { GitDiffStats, GitHubPROrWithChecks, GitStatus } from "../api/index.js";
+import type { GitDiffStats, PROrWithChecks, GitStatus } from "../api/index.js";
 import { PHASE_LABEL, phaseChip } from "../github/prPhase.js";
 import { sessionGitDotClass, sessionPrDotClass } from "../lib/sidebarStatus.js";
 
@@ -16,7 +16,7 @@ export interface GitLineProps {
   displayBranch: string | null | undefined;
   worktreeLabel: string | null;
   effectiveCwd: string;
-  matchedPr: GitHubPROrWithChecks | undefined;
+  matchedPr: PROrWithChecks | undefined;
   diffStats: GitDiffStats | null | undefined;
   /** Opens the PR's drill-in in the right sidebar (not github.com). */
   onOpenPr: (prNumber: number) => void;

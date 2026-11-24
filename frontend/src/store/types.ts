@@ -86,10 +86,9 @@ export interface SidebarHistoryEntry {
 // (imported as `ThemePreference` in store/helpers.ts, where resolveTheme()
 // converts one to the other), which additionally allows `"system"` — this
 // is always one of the two concrete values that preference resolves to.
-// Exported under the pre-existing name so cliLogos.ts's
-// `import type { Theme } from "./store/index.js"` (and any other consumer
-// expecting only "dark" | "light") keeps working unchanged.
-export type Theme = "dark" | "light";
+// Named ResolvedTheme, not Theme, so it cannot be mistaken for the shared
+// settings `Theme` it is resolved from (#2412).
+export type ResolvedTheme = "dark" | "light";
 
 // Back-compat alias other files already import from store.ts.
 export interface TerminalPrefs {
@@ -733,7 +732,7 @@ export interface UiSlice {
   // Derived read-only slices of `settings`, kept as real state fields (not
   // getters) so existing `useDashboardStore((s) => s.theme)`-style reactive
   // selectors across the app keep working unchanged.
-  theme: Theme;
+  theme: ResolvedTheme;
   terminalPrefs: TerminalPrefs;
   hideEndedSessions: boolean;
   // #9 — off by default: a task-linked session (a "killed" one is already

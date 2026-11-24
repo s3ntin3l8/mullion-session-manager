@@ -1,5 +1,5 @@
 import type { Launcher } from "./api/index.js";
-import type { Theme } from "./store/index.js";
+import type { ResolvedTheme } from "./store/index.js";
 
 import claudeAiLogo from "./assets/cli-logos/claude-ai.svg";
 import codexColorLogo from "./assets/cli-logos/codex-color.svg";
@@ -18,7 +18,7 @@ import piCodingAgentDarkLogo from "./assets/cli-logos/pi-coding-agent-dark.svg";
 // MIT for the LobeHub-sourced codex-color/antigravity-color logos).
 interface LogoEntry {
   base: string;
-  /** Theme-specific override, only needed for logos with poor contrast against
+  /** ResolvedTheme-specific override, only needed for logos with poor contrast against
    * one background (currently just opencode's mostly-monochrome mark). */
   light?: string;
   dark?: string;
@@ -51,7 +51,7 @@ const BINARY_TO_LOGO: Record<string, string> = {
   mcode: "minimax",
 };
 
-function resolveEntry(logoName: string, theme: Theme): string | null {
+function resolveEntry(logoName: string, theme: ResolvedTheme): string | null {
   const entry = LOGO_REGISTRY[logoName];
   if (!entry) return null;
   if (theme === "light" && entry.light) return entry.light;
@@ -74,7 +74,7 @@ export function commandToBinary(command: string): string {
  * "/usr/bin/opencode"). Returns null if no bundled logo exists. Handles
  * full session.command values (with arguments and/or paths).
  */
-export function resolveAgentLogo(command: string, theme: Theme): string | null {
+export function resolveAgentLogo(command: string, theme: ResolvedTheme): string | null {
   const binary = commandToBinary(command);
   const logoName = BINARY_TO_LOGO[binary];
   return logoName ? resolveEntry(logoName, theme) : null;
@@ -85,7 +85,7 @@ export function resolveAgentLogo(command: string, theme: Theme): string | null {
  * bundled (caller falls back to the generic glyph). Only agent launchers are
  * eligible — shells/npm-scripts/tasks/custom entries keep their own styling.
  */
-export function resolveLauncherLogo(launcher: Launcher, theme: Theme): string | null {
+export function resolveLauncherLogo(launcher: Launcher, theme: ResolvedTheme): string | null {
   if (launcher.kind !== "agent") return null;
 
   // `launcher.icon` is an opaque passthrough from a user's .crs/actions.json

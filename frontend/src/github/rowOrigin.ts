@@ -1,5 +1,5 @@
 import type { GitHubIssueOrigin } from "../api/github.js";
-import type { GitHubIssueListItem, GitHubPROrWithChecks } from "../api/types.js";
+import type { GitHubIssueListItem, PROrWithChecks } from "../api/types.js";
 import { isTaskBranch, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { splitTaskSessions } from "../ui/sidebar/linkDecisions.js";
 import { ATTENTION_ORDER } from "./prPhase.js";
@@ -13,7 +13,7 @@ export type OriginFilterValue = GitHubIssueOrigin;
 const manualCount = (link: MullionLinkEntry | undefined) =>
   splitTaskSessions(link?.sessions ?? [], link?.task ?? null).rest.length;
 
-export function prOrigin(pr: GitHubPROrWithChecks, link: MullionLinkEntry | undefined): RowOrigin {
+export function prOrigin(pr: PROrWithChecks, link: MullionLinkEntry | undefined): RowOrigin {
   // A `mullion/task-*` branch is Task Master's even when its task row is gone.
   if (link?.task || pr.taskId != null || isTaskBranch(pr.headBranch)) return "tm";
   return manualCount(link) > 0 ? "manual" : "none";
@@ -41,6 +41,6 @@ export function originClass(origin: RowOrigin): string {
 }
 
 /** A PR that wants the user (failing CI, changes requested, conflicts, ...). */
-export function needsAttention(pr: Pick<GitHubPROrWithChecks, "prPhase">): boolean {
+export function needsAttention(pr: Pick<PROrWithChecks, "prPhase">): boolean {
   return pr.prPhase != null && ATTENTION_ORDER.includes(pr.prPhase);
 }

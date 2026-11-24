@@ -21,7 +21,7 @@ import { useDashboardStore } from "../store/index.js";
  * GitHub view works the same wherever it is shown.
  */
 
-export type PreviewTarget =
+export type BranchPreviewTarget =
   | { kind: "branch"; branch: string; isCurrent?: boolean }
   | { kind: "pr"; number: number; branch: string };
 
@@ -44,7 +44,7 @@ export function previewErrorMessage(err: unknown): string {
   return describeError(err, "Could not start the preview");
 }
 
-export function targetKey(target: PreviewTarget): string {
+export function targetKey(target: BranchPreviewTarget): string {
   return target.kind === "pr" ? `pr:${target.number}` : `branch:${target.branch}`;
 }
 
@@ -56,7 +56,7 @@ export function useBranchPreview(projectId: number) {
   );
 
   const open = useCallback(
-    async (target: PreviewTarget, existing: Preview | null | undefined) => {
+    async (target: BranchPreviewTarget, existing: Preview | null | undefined) => {
       const { requestOpenPreview, refreshPreviews, reportError } = useDashboardStore.getState();
       if (existing && existing.upstreamPort == null && hasDevServer) {
         requestOpenPreview({ projectId, slug: existing.slug, branch: target.branch });

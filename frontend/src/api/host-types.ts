@@ -4,26 +4,18 @@ import type {
   PlacementMode,
 } from "../../../src/shared/constants.js";
 import type { HostProtocolStatus } from "../../../src/shared/agent-protocol.js";
-
-// Health is the primary's in-memory view as of the last sweep; lastSeenAt
-// falls back to the persisted time when no successful sweep is in memory.
-// Never carries a token, just whether one is set (hasToken), same
-// "no secrets over the API" rule AppSettings/ServerInfo above already follow.
-export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
-
-export interface HostRecentIdentityReplacement {
-  id: number;
-  at: string;
-  peer: string | null;
-}
-
-export interface HostChannelStatus {
-  ready: boolean;
-  bound: boolean;
-  status: "connected" | "bound to the outbound channel, not connected" | "not connected";
-  connectedAt: string | null;
-  carriedOperations: string[];
-}
+import type {
+  HostHealthStatus,
+  HostRecentIdentityReplacement,
+  HostCapacityReport,
+  HostChannelStatus,
+} from "../../../src/shared/types.js";
+export type {
+  HostHealthStatus,
+  HostRecentIdentityReplacement,
+  HostCapacityReport,
+  HostChannelStatus,
+} from "../../../src/shared/types.js";
 
 export interface HostSessionEnv {
   shell: string | null;
@@ -104,7 +96,7 @@ export interface Host {
   // without the route) or has not been polled yet. `sampledAt` is when the
   // numbers were measured, so a stale reading can be shown as stale — the
   // UI work is #1726.
-  capacity?: HostCapacity | null;
+  capacity?: HostCapacityReport | null;
   // Issue #1725 / roadmap 8.11 — whether this host is PARKED: it takes no
   // new work (the placement policy stops choosing it), but nothing about
   // it is torn down and it stays usable for manual placement.
@@ -118,18 +110,6 @@ export interface Host {
   // only); "burst" hosts stay out of automatic placement. Required for the
   // same reason as `drained`: the column is notNull with a default.
   role: HostRole;
-}
-
-// Mirrors src/services/host-capacity.ts's HostCapacity 1:1 — issue #1721,
-// roadmap 8.7.
-export interface HostCapacity {
-  platform: string;
-  logicalCores: number;
-  loadAverage1m: number;
-  memory: { totalBytes: number; freeBytes: number };
-  sessions: { tracked: number; alive: number };
-  /** When the numbers were measured, ISO-8601. */
-  sampledAt: string;
 }
 
 // Issue #1726 / roadmap 8.12 — the placement PREVIEW: "where would a new

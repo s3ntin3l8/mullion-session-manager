@@ -5,12 +5,12 @@ import { projects } from "../db/schema.js";
 import { gitRemoteGateKey } from "./git-remote.js";
 import { projectRemoteUrl, type HostCandidateCache } from "./host-checkout-detect.js";
 import { parseHostCwds } from "./placement.js";
+import type { RepoMatchReason } from "../shared/types.js";
+export type { RepoMatchReason } from "../shared/types.js";
 
 // Issue #2231 — "does a project already exist for this checkout?" Used by the
 // Discover route and by project create/edit, so adding a second host's clone
 // of a repo attaches to the existing project instead of duplicating it.
-
-export type RepoMatchReason = "path" | "origin";
 
 type ProjectRow = typeof projects.$inferSelect;
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
-import type { DeviceFlowStatus } from "./api/index.js";
+import type { DeviceFlowSummary } from "./api/index.js";
 import { GitHubIcon } from "./ui/icons.js";
 import { usePolling } from "./hooks/usePolling.js";
 import { SecondaryButton } from "./ui/primitives.js";
@@ -21,7 +21,7 @@ export function GitHubDeviceFlowModal({
   onClose: () => void;
   onConnected: () => void;
 }) {
-  const [state, setState] = useState<DeviceFlowStatus | null>(null);
+  const [state, setState] = useState<DeviceFlowSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   // A stable handle to the latest onConnected, read from inside the interval
