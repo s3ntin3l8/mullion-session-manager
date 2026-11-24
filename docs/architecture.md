@@ -715,6 +715,18 @@ list behind the rail's and the phone bar's Tasks badge, one row per task with
 `needsYouReason` as its text, opened through `useOpenTask`. The bell's badge is
 the sum of the two counts, and the panel opens on Sessions unless only Tasks
 has something.
+On the phone the bell is a full-height `BottomSheet`; on tablet and desktop it
+is one full-height side panel fixed to the right edge of the left rail (420px,
+or 480px and modal over a scrim on a touch tablet; Esc, an outside click and
+its close button close it). Both carry the section switch, then status chips
+(Sessions: Needs you, All, and Permission, Plan, Question, Failed, Review from
+`decisionCategory`; Tasks: Needs you, and Failed, Review, Stopped), then the
+list (`notification-bell/feed.ts` builds it, `notification-bell/rows.tsx`
+draws it). A row opens its target (a session in Workspace, a PR in the right
+sidebar, a task through `useOpenTask`) and records the panel's section and
+chip in the store's `bellReturn`, which the next opening restores once; on the
+phone the back gesture from the target reopens the bell from it (App.tsx,
+beside `crossLinkReturn`), and a real mode change forgets it.
 
 **Left sidebar** (projects and their sessions, workspaces; `Sidebar.tsx` with
 `WorkspaceSwitcher.tsx`): docked from 1100px, pushing the grid, never

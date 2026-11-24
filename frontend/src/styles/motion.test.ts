@@ -174,14 +174,13 @@ describe("styles/motion.css", () => {
 
   it("softens the edge under a header only on a scroll timeline, and only once scrolled", () => {
     const block = css.slice(css.indexOf("@supports (animation-timeline: scroll())"));
-    for (const list of [
-      ".task-board-lanes",
-      ".mobile-session-list",
-      ".rail-ws-scroll",
-      ".notif-feed-scroll",
-    ]) {
+    for (const list of [".task-board-lanes", ".mobile-session-list", ".rail-ws-scroll"]) {
       expect(block).toContain(list);
     }
+    // Not the notification feed's scrollers (#3466): their sticky header is
+    // their edge, and the mask would fade that header's top too.
+    expect(block).not.toContain(".notif-feed-scroll");
+    expect(block).not.toContain(".mobile-notif-scroll");
     expect(block).toMatch(/animation-timeline:\s*scroll\(self\)/);
     // At rest --scroll-edge is 0px, so the gradient masks nothing.
     expect(css).toMatch(/@property --scroll-edge[\s\S]*?initial-value:\s*0px/);
@@ -224,5 +223,13 @@ describe("styles/motion.css", () => {
     expect(body).toContain("background: var(--chrome)");
     expect(body).toMatch(/backdrop-filter:\s*none/);
     expect(rules(block, ".pane-tab-overflow-menu").length).toBeGreaterThan(0);
+  });
+
+  it("gives the notification feed's sticky header its own solid band, not a second material (#3466)", () => {
+    const header = rules(css, ".notif-panel .notif-group-header")
+      .map(([, body]) => body)
+      .join("\n");
+    expect(header).toMatch(/background:\s*var\(--sticky-band\)/);
+    expect(header).not.toContain("--material");
   });
 });

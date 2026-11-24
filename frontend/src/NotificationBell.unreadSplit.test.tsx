@@ -125,7 +125,7 @@ describe("NotificationBell on the real store (#3458, #3460)", () => {
     expect(spy).not.toHaveBeenCalled();
 
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /notifications/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     });
     expect(spy).toHaveBeenCalled();
   });
@@ -136,7 +136,7 @@ describe("NotificationBell on the real store (#3458, #3460)", () => {
     render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} sheet />);
     await act(async () => {});
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /notifications/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     });
     // Opening the panel read the grouped lines of session 2, not session 1's.
     expect(useDashboardStore.getState().lastSeenSeq[2]).toBe(2);
@@ -199,7 +199,7 @@ describe("NotificationBell on the real store (#3458, #3460)", () => {
     render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} sheet />);
     await act(async () => {});
     act(() => {
-      fireEvent.click(screen.getByRole("button", { name: /notifications/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     });
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));

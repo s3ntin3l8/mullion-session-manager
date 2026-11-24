@@ -333,6 +333,46 @@ chose it.
   it has one, else Sessions. The sheet's "Needs you | All" filter and "Read
   all" belong to the Sessions section.
 
+### The bigger view (#3461, #3462, #3463, #3466)
+
+- **Phone:** the `BottomSheet` is full height (the backdrop's whole box, less
+  the status bar). The section switch and the chips are pinned above the list;
+  the back gesture closes it, as before.
+- **Tablet and desktop:** one side panel, fixed from the rail's right edge to
+  the window's (`--shell-top` and `--kb-inset`, so it clears the keyboard when
+  the Deny field raises it). 420px with no scrim and not modal; on a touch
+  tablet 480px, `aria-modal`, over a `.motion-scrim` that stops at the rail
+  (so the bell stays where it was) and closes on a tap, and the back gesture
+  closes it (`usePhoneBackStack`), as the sheet it replaces did. It keeps the
+  `.pane-tab-overflow-menu` material shell (and so its text-token remap) and
+  overrides that class's popover geometry. `notifPanelPosition.ts` is gone.
+- **Chips:** single-select. Sessions: Needs you (the open decisions of the
+  sessions that count, the default when there are any), All (every open
+  decision, muted sessions' too, and the grouped lines), and one chip per
+  `decisionCategory` with an open row: a permission is a tool permission, a
+  review gate or a promote; a question is a question, an elicitation or an
+  agent's generic "needs your input"; a dev-server offer only shows under
+  Needs you and All. **Tasks has no "All"**: the section lists open items
+  only, so "All" would be "Needs you" again; it has Needs you, Failed, Review
+  and Stopped. Kind chips show only when they have a row (or are selected).
+- **Return:** a row's open handler opens the target, then writes
+  `bellReturn` (section and chip): after the target, because a session row
+  from Tasks mode switches mode, and a mode switch clears it. The next opening
+  of the bell restores it **once** (otherwise a stale chip would greet every
+  later opening, against § The two sections' default-section rule). On the
+  phone App.tsx registers a back entry while `bellReturn` is set; back asks
+  the bell to reopen (`bellReopenSeq`). The target stays open under it, so a
+  second back closes the bell and shows it. A real mode change clears the
+  return, like `crossLinkReturn`. An inline gate answer stays in the panel.
+- **The sticky group header (#3466):** a deliberate solid band,
+  `--sticky-band` (`--chrome`), in the panel and the sheet. Blending was tried
+  and measured over a white and a black page in both themes: a header with no
+  surface of its own and a backdrop blur matched the panel's pixels exactly
+  while its scroller was masked, but the rows showed through it; with the
+  scroller unmasked the rows hid, and the header doubled the tint (dark over
+  white: 18 against the panel's 49). The bell's scrollers are out of the
+  scroll-edge mask: the band is their edge.
+
 ## Implementation issues
 
 Ordered; each is one PR. Filed as sub-issues of the UI/UX epic

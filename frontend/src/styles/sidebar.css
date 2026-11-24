@@ -2518,14 +2518,12 @@ button.discover-header:hover {
 /* Notifications bottom sheet (NotificationBell.tsx's `sheet` branch) — reuses
    the session sheet's backdrop/sheet shell; everything below is scoped to
    `.mobile-notif-sheet` so the desktop popover's rows are untouched. */
+/* Full height (#3461): the backdrop's whole box (it already clears the
+   panned top and the keyboard), minus the status bar. */
 .mobile-notif-sheet {
-  height: min(88dvh, 760px);
+  height: 100%;
   max-height: none;
-}
-/* Tablet (touch): the sheet shouldn't stretch the full ~880px unfolded width. */
-.mobile-notif-sheet.mobile-notif-sheet--tablet {
-  width: min(560px, 100%);
-  align-self: center;
+  padding-top: env(safe-area-inset-top);
 }
 .mobile-notif-readall {
   display: flex;
@@ -2540,28 +2538,6 @@ button.discover-header:hover {
   font-size: 0.8125rem;
   cursor: pointer;
 }
-.mobile-notif-filters {
-  flex: none;
-  display: flex;
-  gap: 6px;
-  padding: 8px 12px;
-}
-.mobile-notif-filter {
-  flex: 1;
-  min-height: 44px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 0.875rem;
-  cursor: pointer;
-}
-.mobile-notif-filter.active {
-  color: var(--fg);
-  border-color: var(--accent-solid);
-  background: color-mix(in srgb, var(--accent-solid) 12%, transparent);
-}
 .mobile-notif-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -2574,7 +2550,7 @@ button.discover-header:hover {
   top: 0;
   z-index: 1;
   padding: 8px 6px 4px;
-  background: var(--chrome);
+  background: var(--sticky-band);
 }
 /* The sheet renders the whole feed (no virtualizer); let the browser skip
    layout/paint for rows that are scrolled far off-screen. */
@@ -2666,6 +2642,16 @@ button.discover-header:hover {
 .mobile-notif-sheet .notif-section-btn {
   min-height: 44px;
   font-size: 0.875rem;
+}
+/* #3461 — the chips' touch targets in the sheet. */
+.mobile-notif-sheet .notif-chips {
+  padding: 4px 12px 8px;
+  gap: 6px;
+}
+.mobile-notif-sheet .notif-chip {
+  min-height: 44px;
+  padding: 2px 14px;
+  font-size: 0.8125rem;
 }
 
 /* #3456 — the "spawned by" marker of a session spawned into this project by a

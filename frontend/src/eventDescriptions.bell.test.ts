@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   ALL_KINDS,
   bellClass,
+  decisionCategory,
   sessionGroupedSummary,
   sessionOpenDecisions,
 } from "./eventDescriptions.js";
@@ -272,5 +273,25 @@ describe("sessionGroupedSummary", () => {
     expect(sessionGroupedSummary(1, [exited(2)], 0, {}, true)).toBeNull();
     expect(sessionGroupedSummary(1, [finished(1)], 0, { "1:1:1001": true }, false)).toBeNull();
     expect(sessionGroupedSummary(1, undefined, 0, {}, false)).toBeNull();
+  });
+});
+
+describe("decisionCategory (#3461)", () => {
+  it("puts every open-decision kind under its status chip", () => {
+    const c = (kind: NotificationEvent["kind"], payload: Record<string, unknown> = {}) =>
+      decisionCategory({ kind, payload });
+    expect(c("permission_request")).toBe("permission");
+    expect(c("review_gate", { state: "waiting" })).toBe("permission");
+    expect(c("promote_request")).toBe("permission");
+    expect(c("plan_ready")).toBe("plan");
+    expect(c("question", { state: "started" })).toBe("question");
+    expect(c("elicitation", { state: "started" })).toBe("question");
+    expect(c("attention", { attention: true, signal: "hookNotification" })).toBe("question");
+    expect(c("stop_failure")).toBe("failed");
+    expect(c("session_end", { exitCode: 2 })).toBe("failed");
+    expect(c("pr_ci_failed", { number: 1 })).toBe("failed");
+    expect(c("pr_review_submitted", { decision: "APPROVED" })).toBe("review");
+    expect(c("dev_server_detected", { port: "5173" })).toBeNull();
+    expect(c("attention", { attention: true, signal: "agentIdle" })).toBeNull();
   });
 });

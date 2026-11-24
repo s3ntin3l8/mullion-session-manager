@@ -504,21 +504,70 @@
   margin-left: auto;
 }
 
-/* NotificationBell's dropdown — shares .pane-tab-overflow-menu's shell
-   (portal positioning, border, shadow, pop-in animation) but is wider and
-   its rows are multi-line, so they get their own classes rather than
-   reusing .pane-tab-overflow-item. Issue #169 turned this from a flat list
-   of at-most-one-row-per-session into a scrollable, grouped event feed — the
-   panel itself is now a fixed-height flex column (header pinned, only the
-   feed body scrolls/virtualizes) rather than the whole panel scrolling. */
+/* NotificationBell's panel (#3462): one full-height side panel beside the
+   left rail that holds the bell, on tablet and desktop (the phone gets a
+   full-height sheet). It keeps .pane-tab-overflow-menu's material shell (the
+   translucent surface, its text-colour remap, its enter and exit), and
+   overrides the popover geometry that class carries for PaneTab's in-pane
+   menu. Its own rows are multi-line, so they get their own classes. A flex
+   column: the header, the section switch and the chips stay put; only the
+   feed scrolls. `top`/`bottom` follow .app's own panned top and keyboard
+   inset (tablet.css): portaled to <body>, it does not get .app's shrink. */
 .notif-panel {
-  width: 380px;
-  /* Phone: NotificationBell.tsx's panelPosition() clamps `left` to the same
-     8px margins, so this is the whole available width. */
-  max-width: calc(100vw - 16px);
-  max-height: min(380px, 70dvh);
+  position: fixed;
+  top: var(--shell-top, 0px);
+  bottom: var(--kb-inset, 0px);
+  right: auto;
+  width: 420px;
+  max-width: calc(100vw - 56px);
+  max-height: none;
   display: flex;
   flex-direction: column;
+  padding: 6px 5px 0;
+  border-radius: 0 12px 12px 0;
+  border-left: none;
+  z-index: 56;
+  box-shadow: 18px 0 44px -12px rgba(0, 0, 0, 0.45);
+}
+/* A touch tablet: wider, for 44px targets, and modal over a scrim. */
+.notif-panel.notif-panel--touch {
+  width: 480px;
+}
+/* The scrim stops at the rail's edge, so the bell stays where it was. */
+.notif-scrim {
+  position: fixed;
+  /* The panel's own insets, so the two share their edges when the keyboard
+     raises (the Deny reason field) or iOS pans the visual viewport. */
+  top: var(--shell-top, 0px);
+  right: 0;
+  bottom: var(--kb-inset, 0px);
+  z-index: 55;
+  background: color-mix(in srgb, #000 40%, transparent);
+}
+.notif-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.notif-panel-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.notif-panel-close:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
+}
+.notif-panel--touch .notif-panel-close {
+  width: 44px;
+  height: 44px;
 }
 .notif-panel-header {
   display: flex;
@@ -1040,4 +1089,54 @@
   font-size: 0.71875rem;
   font-weight: 400;
   color: var(--muted);
+}
+
+/* #3461 — the status chips under the section switch: single-select, one row
+   that wraps. */
+.notif-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 10px 8px;
+  flex-shrink: 0;
+}
+.notif-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+.notif-chip:hover {
+  color: var(--fg);
+}
+.notif-chip.active {
+  color: var(--fg);
+  border-color: var(--accent-solid);
+  background: color-mix(in srgb, var(--accent-solid) 14%, transparent);
+}
+.notif-chip-count {
+  font-family: "Geist Mono", monospace;
+  font-size: 0.625rem;
+  color: var(--dim);
+}
+.notif-chip.active .notif-chip-count {
+  color: var(--fg);
+}
+/* A touch panel's chips and section switch: real touch targets. */
+.notif-panel--touch .notif-chip {
+  min-height: 44px;
+  padding: 2px 14px;
+  font-size: 0.8125rem;
+}
+.notif-panel--touch .notif-section-btn {
+  min-height: 44px;
+  font-size: 0.875rem;
 }

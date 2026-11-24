@@ -284,6 +284,8 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     rightSidebarWidth: readStoredRightSidebarWidth(),
     viewMode: readStoredViewMode(),
     crossLinkReturn: null,
+    bellReturn: null,
+    bellReopenSeq: 0,
     newTaskFormOpen: false,
     kanbanOrder: {},
     launcherRequest: null,
@@ -620,6 +622,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       set((s) => ({
         viewMode: value,
         crossLinkReturn: s.viewMode === value ? s.crossLinkReturn : null,
+        bellReturn: s.viewMode === value ? s.bellReturn : null,
         newTaskFormOpen: s.viewMode === value ? s.newTaskFormOpen : false,
       }));
     },
@@ -639,6 +642,10 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       get().moveToHalf(`session-${sessionId}`, "left", []);
       get().requestOpenSession(sessionId);
     },
+
+    setBellReturn: (bellReturn) => set({ bellReturn }),
+
+    requestBellReopen: () => set((s) => ({ bellReopenSeq: s.bellReopenSeq + 1 })),
 
     returnFromCrossLink: () => {
       const link = get().crossLinkReturn;
