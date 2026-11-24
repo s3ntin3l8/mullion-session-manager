@@ -9,6 +9,7 @@ import fs from "node:fs";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 import type * as ChildProcess from "node:child_process";
+import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 
 // Issue #2069 — POST /api/sessions refuses a dock session whose control's
 // port is already bound. Same fakes as sessions.test.ts: no real PTY or
@@ -25,9 +26,22 @@ vi.mock("node:child_process", async (importOriginal) => {
   return mocked;
 });
 
+const remoteDock = vi.hoisted(() => ({
+  resolveDockPortCheck: undefined as unknown as ReturnType<typeof vi.fn>,
+}));
+vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof RemoteHostClientModule>();
+  remoteDock.resolveDockPortCheck = vi.fn();
+  return {
+    ...actual,
+    getRemoteHostClient: (...args: Parameters<typeof actual.getRemoteHostClient>) =>
+      args[1] === "remote-1" ? remoteDock : actual.getRemoteHostClient(...args),
+  };
+});
+
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { projects } = await import("../../src/db/schema.js");
+const { projects, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 const { checkDockPortConflict } = await import("../../src/services/dock-port-check.js");
 const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
@@ -217,6 +231,70 @@ describe("POST /api/sessions — dock port conflict", () => {
       writeDock([{ id: "dev", title: "Dev", command: "npm run dev", port }]);
       const id = await remoteProject(null);
       expect(await checkDockPortConflict(app, id, "npm run dev", LOCAL_HOST_ID)).toBeNull();
+    });
+  });
+
+  describe("remote launch target (#3426)", () => {
+    async function remoteProject() {
+      const id = await projectFor("3000");
+      app.db
+        .update(projects)
+        .set({ hostId: "remote-1", cwd: "/remote/checkout" })
+        .where(eq(projects.id, id))
+        .run();
+      return id;
+    }
+
+    it("409s port_in_use when the agent reports the port taken", async () => {
+      const id = await remoteProject();
+      remoteDock.resolveDockPortCheck.mockResolvedValueOnce({ port: 5173 });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: id, command: "npm run dev", kind: "dock" },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        code: "port_in_use",
+        port: 5173,
+        message: "Port 5173 is in use by another process",
+      });
+      expect(remoteDock.resolveDockPortCheck).toHaveBeenCalledWith({
+        cwd: "/remote/checkout",
+        command: "npm run dev",
+        devServerUrl: "3000",
+      });
+    });
+
+    it("names the holder when the agent's holder is a session the primary knows", async () => {
+      const id = await remoteProject();
+      const holderSessionId = app.db
+        .insert(sessions)
+        .values({ projectId: id, command: "bash", status: "active" })
+        .returning({ id: sessions.id })
+        .get().id;
+      remoteDock.resolveDockPortCheck.mockResolvedValueOnce({ port: 5173, holderSessionId });
+      expect(await checkDockPortConflict(app, id, "npm run dev")).toEqual({
+        port: 5173,
+        holderSessionId,
+        message: `Port 5173 is in use by session ${holderSessionId}`,
+      });
+      // A holder id the primary has no row for degrades to "another process".
+      remoteDock.resolveDockPortCheck.mockResolvedValueOnce({
+        port: 5173,
+        holderSessionId: 999999,
+      });
+      expect(
+        (await checkDockPortConflict(app, id, "npm run dev"))?.holderSessionId,
+      ).toBeUndefined();
+    });
+
+    it("lets the launch through when the agent finds no conflict or cannot answer", async () => {
+      const id = await remoteProject();
+      remoteDock.resolveDockPortCheck.mockResolvedValueOnce(null);
+      expect(await checkDockPortConflict(app, id, "npm run dev")).toBeNull();
+      remoteDock.resolveDockPortCheck.mockRejectedValueOnce(new Error("404 old agent"));
+      expect(await checkDockPortConflict(app, id, "npm run dev")).toBeNull();
     });
   });
 });
