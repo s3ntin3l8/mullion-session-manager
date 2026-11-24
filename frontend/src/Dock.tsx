@@ -57,6 +57,8 @@ const GRID_MIN_HEIGHT = 160;
 // below — see the rail-divider drag handler below.
 const DEFAULT_RAIL_WIDTH = 280;
 const RAIL_MIN_WIDTH = 216;
+// Arrow-key nudge for the two keyboard-resizable dividers (issue #1264).
+const DIVIDER_KEYBOARD_STEP_PX = 16;
 // `.dock-rail-divider`'s own fixed CSS width (dock.css) — the stacked-layout
 // threshold below needs this same number in JS to reproduce what the CSS
 // actually costs.
@@ -468,7 +470,7 @@ export function Dock({
   // needs the "which column was dragged" ref indirection the per-column
   // version required; `lastSplitWidthRef` (above) is always the right thing
   // to measure.
-  const { onMouseDown: onRailDividerMouseDown } = useDragResize({
+  const { onMouseDown: onRailDividerMouseDown, keyboardProps: railKeyboardProps } = useDragResize({
     axis: "x",
     min: RAIL_MIN_WIDTH,
     // 40% of the dock's own split width — the plan's own clamp — floored at
@@ -479,6 +481,7 @@ export function Dock({
     onChange: setRailWidth,
     onCommit: (v) => writeNumber(STORAGE_KEYS.dockRailWidth, v),
     cursor: "col-resize",
+    keyboardStep: DIVIDER_KEYBOARD_STEP_PX,
   });
 
   // ---- Pane-divider resize (issue #1244) ----
@@ -509,7 +512,7 @@ export function Dock({
   const effectivePanePx = Math.round(effectiveRatio * paneAreaWidth);
 
   const draggedRef = useRef(false);
-  const { onMouseDown: onPaneDividerMouseDown } = useDragResize({
+  const { onMouseDown: onPaneDividerMouseDown, keyboardProps: paneKeyboardProps } = useDragResize({
     axis: "x",
     min: logPaneMinWidth,
     getMax: () => paneAreaWidth - logPaneMinWidth,
@@ -526,6 +529,7 @@ export function Dock({
       }
     },
     cursor: "col-resize",
+    keyboardStep: DIVIDER_KEYBOARD_STEP_PX,
   });
 
   return (
@@ -621,8 +625,9 @@ export function Dock({
               <div
                 className="dock-rail-divider"
                 role="separator"
-                aria-orientation="vertical"
+                aria-label="Resize rail"
                 onMouseDown={onRailDividerMouseDown}
+                {...railKeyboardProps}
               />
             )}
             <div ref={setPrimaryPaneHost} className="dock-pane-host" />
@@ -630,9 +635,9 @@ export function Dock({
               <div
                 className="dock-pane-divider"
                 role="separator"
-                aria-orientation="vertical"
                 aria-label="Resize log panes"
                 onMouseDown={onPaneDividerMouseDown}
+                {...paneKeyboardProps}
               />
             )}
             {showPinnedPane && <div ref={setPinnedPaneHost} className="dock-pane-host" />}

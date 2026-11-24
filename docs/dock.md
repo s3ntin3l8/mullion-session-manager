@@ -608,8 +608,8 @@ out the dock's own width — that's what this design replaces.
 | **Check/pull a Docker service**             | Click the ⋯ menu on a discovered Docker monitor                                                                                        |
 | **Pin a second log pane**                   | Click the "pin" tag on any row — in ANY tiled project, not just the active one — other than the row currently driving the primary pane |
 | **Unpin a second log pane**                 | Click the "pinned" tag again (on the row it's pinned to)                                                                               |
-| **Resize the rail**                         | Drag the divider between the rail and the log pane (`col-resize` cursor)                                                               |
-| **Resize the two log panes**                | Drag the divider between the primary and pinned log panes (`col-resize` cursor)                                                        |
+| **Resize the rail**                         | Drag the divider between the rail and the log pane (`col-resize` cursor), or focus it (Tab) and use ←/→ (16px), Home (min), End (max)  |
+| **Resize the two log panes**                | Drag the divider between the primary and pinned log panes (`col-resize` cursor), or focus it and use ←/→ (16px), Home (min), End (max) |
 
 Dock state persists to `localStorage`: collapsed state, region height,
 manually pinned project IDs, rail width, each project's own selected rail
@@ -638,10 +638,13 @@ narrowing the dock doesn't reset it: the dock clamps the stored ratio
 against its own measured width at render time, so a ratio that's legal at
 one width but would push a pane below its floor at a narrower one just
 degrades the rendering (without touching the stored value) until the dock
-is wide enough to honor it exactly. The divider itself is mouse-only (a
-non-focusable `role="separator"`, deliberately with no `tabIndex`) —
-keyboard-driven resizing for both this divider and the rail's is tracked
-separately as issue #1264. Only one row can be pinned at a time, in at most
+is wide enough to honor it exactly. Both dividers are also keyboard-operable
+window splitters (`role="separator"`, `tabIndex=0`, a visible
+`:focus-visible` ring): ←/→ nudge by 16px, Home/End jump to the same min/max
+a drag clamps to, and `aria-valuenow`/`aria-valuemin`/`aria-valuemax` track
+the real value and bounds. A key press persists exactly as a finished drag
+does. (The former between-columns divider no longer exists since the
+unified-rail rework; the dock-height handle is still mouse-only.) Only one row can be pinned at a time, in at most
 one project — pinning a different row (in the same or a different project)
 replaces the previous pin, and selecting the currently-pinned row as the
 new primary selection simply clears the pin (no automatic swap promoting
