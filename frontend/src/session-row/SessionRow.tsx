@@ -15,7 +15,8 @@ import { resolveAgentLogo, commandToBinary } from "../cliLogos.js";
 import { PromoteDialog } from "../PromoteDialog.js";
 import { CloseIcon, HostsIcon } from "../ui/icons.js";
 import { useLayoutContext } from "../lib/layoutTier.js";
-import { liveChildCount } from "../sidebarHierarchy.js";
+import { crossProjectChildren, crossProjectParent, liveChildCount } from "../sidebarHierarchy.js";
+import { OtherProjectsBadge, SpawnedByChip } from "./SpawnLinks.js";
 import {
   selectSessionTitleContexts,
   sessionDisplayTitle,
@@ -88,6 +89,7 @@ export function SessionRow({
   depth = 0,
   openInWorkspace = false,
   spansHosts = false,
+  onOpenSpawnParent,
 }: {
   session: Session;
   project: Project;
@@ -152,6 +154,10 @@ export function SessionRow({
   // another. Optional so the board's session lane (which has no workspace
   // layout of its own) stays unmarked.
   openInWorkspace?: boolean;
+  // #3456 — opens this child's cross-project coordinator, as clicking the
+  // coordinator's own row would. Unset (the board lanes) renders the marker as
+  // plain text.
+  onOpenSpawnParent?: (parent: Session) => void;
 }) {
   const isTerminal = session.status === "killed";
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
@@ -167,6 +173,16 @@ export function SessionRow({
   const allSessions = useDashboardStore((s) => s.sessions);
   const childCount = useMemo(
     () => liveChildCount(allSessions, session.id),
+    [allSessions, session.id],
+  );
+  const allProjects = useDashboardStore((s) => s.projects);
+  const titleContexts = useDashboardStore(selectSessionTitleContexts);
+  const spawnParent = useMemo(
+    () => crossProjectParent(session, allSessions, allProjects, titleContexts),
+    [session, allSessions, allProjects, titleContexts],
+  );
+  const otherProjectChildren = useMemo(
+    () => crossProjectChildren(allSessions, session.id),
     [allSessions, session.id],
   );
   const theme = useDashboardStore((s) => s.theme);
@@ -616,6 +632,33 @@ export function SessionRow({
             {nowLine.text}
             {nowLine.suffix && <span className="session-now-suffix"> · {nowLine.suffix}</span>}
           </span>
+        )}
+        {(spawnParent || otherProjectChildren.length > 0) && (
+          <div className="session-spawn-line">
+            {spawnParent && (
+              <SpawnedByChip
+                parent={spawnParent}
+                onOpenParent={
+                  onOpenSpawnParent
+                    ? () => {
+                        const parent = allSessions.find((p) => p.id === spawnParent.parentId);
+                        if (parent) onOpenSpawnParent(parent);
+                      }
+                    : undefined
+                }
+              />
+            )}
+            <OtherProjectsBadge
+              count={otherProjectChildren.length}
+              projectNames={[
+                ...new Set(
+                  otherProjectChildren.map(
+                    (c) => allProjects.find((p) => p.id === c.projectId)?.name ?? "another project",
+                  ),
+                ),
+              ]}
+            />
+          </div>
         )}
         {endError && (
           <span className="session-end-error" title={endError}>

@@ -452,6 +452,31 @@ export function Sidebar({
     [],
   );
 
+  // #3456 — a cross-project child's "spawned by" marker opens its
+  // coordinator exactly as clicking the coordinator's row would, and first
+  // expands the coordinator's project when the tree shows it collapsed, so the
+  // row is on screen. A project that is not in the tree (filtered out or
+  // hidden) is skipped silently: the pane still opens. `reveal` carries the
+  // expand to a mounted ProjectSection, whose collapse state is its own.
+  const [reveal, setReveal] = useState<{ projectId: number; nonce: number } | null>(null);
+  const openSpawnParent = useCallback(
+    (parent: Session) => {
+      const project = visibleProjects.find((p) => p.id === parent.projectId);
+      if (project) {
+        const derivedDefault = (baseSessionsByProject.get(project.id) ?? []).length === 0;
+        const collapsed =
+          project.id in projectCollapsedState ? projectCollapsedState[project.id] : derivedDefault;
+        if (collapsed && !filterActive) {
+          setProjectCollapsedPersisted(project.id, false);
+          setCollapseVersion((v) => v + 1);
+          setReveal((r) => ({ projectId: project.id, nonce: (r?.nonce ?? 0) + 1 }));
+        }
+      }
+      onOpenSession(parent);
+    },
+    [visibleProjects, baseSessionsByProject, filterActive, onOpenSession],
+  );
+
   // U3's flattened tree: projects → sessions, respecting collapse state and
   // the filter above, as a single array `VirtualizedProjectTree` windows
   // over. Only actually built once `shouldVirtualize` is true — below the
@@ -689,6 +714,7 @@ export function Sidebar({
                 spansHostsByProject={spansHostsByProject}
                 openSessionIds={openSessionIdSet}
                 onOpenSession={onOpenSession}
+                onOpenSpawnParent={openSpawnParent}
                 onOpenSessionAsFloat={onOpenSessionAsFloat}
                 onSessionEnded={onSessionEnded}
                 onOpenProjectLauncher={onOpenProjectLauncher}
@@ -712,6 +738,8 @@ export function Sidebar({
                   onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
                   forceExpanded={filterActive}
                   openSessionIds={openSessionIdSet}
+                  onOpenSpawnParent={openSpawnParent}
+                  revealNonce={reveal?.projectId === project.id ? reveal.nonce : 0}
                 />
               ))
             )}
@@ -1029,6 +1057,8 @@ export function ProjectSection({
   onOpenProjectSetup,
   forceExpanded = false,
   openSessionIds = null,
+  onOpenSpawnParent,
+  revealNonce = 0,
 }: {
   project: Project;
   sessions: Session[];
@@ -1059,6 +1089,11 @@ export function ProjectSection({
   // Issue #1877 — terminal panes already in this workspace. null (the
   // phone tier, and every caller that isn't the sidebar) marks nothing.
   openSessionIds?: ReadonlySet<number> | null;
+  // #3456 — opens a child's cross-project coordinator (see Sidebar's
+  // openSpawnParent), and the counter Sidebar bumps to expand THIS project
+  // after persisting that; the section's own collapse state follows it.
+  onOpenSpawnParent?: (parent: Session) => void;
+  revealNonce?: number;
 }) {
   // `manualCollapsed` is null until the user explicitly toggles — until then,
   // collapsed state is *derived* from whether the project has sessions
@@ -1077,6 +1112,13 @@ export function ProjectSection({
   const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(() =>
     project.id in projectCollapsedState ? projectCollapsedState[project.id] : null,
   );
+  // Render-phase adjustment on a state-backed prop (a number, so it
+  // converges): a new reveal expands the section and is then recorded as seen.
+  const [seenReveal, setSeenReveal] = useState(revealNonce);
+  if (revealNonce !== seenReveal) {
+    setSeenReveal(revealNonce);
+    if (revealNonce > 0) setManualCollapsed(false);
+  }
   const derivedCollapsed = manualCollapsed ?? sessions.length === 0;
   const collapsed = forceExpanded ? false : derivedCollapsed;
   const toggleCollapsed = () => {
@@ -1126,6 +1168,7 @@ export function ProjectSection({
               onOpen={() => onOpenSession(session)}
               onOpenAsFloat={() => onOpenSessionAsFloat(session)}
               openInWorkspace={openSessionIds?.has(session.id) ?? false}
+              onOpenSpawnParent={onOpenSpawnParent}
               // P9 — returns the promise (not `void`-discarded) so
               // SessionRow's own handleEnd can catch a rejection and
               // surface it inline instead of it disappearing.
@@ -1163,6 +1206,7 @@ function VirtualizedProjectTree({
   spansHostsByProject,
   openSessionIds,
   onOpenSession,
+  onOpenSpawnParent,
   onOpenSessionAsFloat,
   onSessionEnded,
   onOpenProjectLauncher,
@@ -1175,6 +1219,7 @@ function VirtualizedProjectTree({
   spansHostsByProject: ReadonlyMap<number, boolean>;
   openSessionIds: ReadonlySet<number> | null;
   onOpenSession: (session: Session) => void;
+  onOpenSpawnParent: (parent: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
   onOpenProjectLauncher: (projectId: number) => void;
@@ -1291,6 +1336,7 @@ function VirtualizedProjectTree({
                   onOpen={() => onOpenSession(row.session)}
                   onOpenAsFloat={() => onOpenSessionAsFloat(row.session)}
                   openInWorkspace={openSessionIds?.has(row.session.id) ?? false}
+                  onOpenSpawnParent={onOpenSpawnParent}
                   // P9 — see ProjectSection's identical onEnd above.
                   {...sessionEndHandlers(row.session, onSessionEnded, onOpenSession)}
                 />

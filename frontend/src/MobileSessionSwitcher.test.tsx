@@ -479,3 +479,45 @@ describe("MobileSessionSwitcher", () => {
     });
   });
 });
+
+describe("MobileSessionSwitcher spawned-by line (#3456)", () => {
+  const spawned = (state: "live" | "exited" | "killed" | "missing") =>
+    ({
+      parentId: 7,
+      title: "coordinator",
+      projectId: 2,
+      projectName: "hermes",
+      state,
+    }) as const;
+  const sectionsWith = (state: "live" | "exited" | "killed" | "missing") => [
+    {
+      key: "project-1",
+      label: "runway",
+      kind: "project" as const,
+      rows: [rowFor(ITEMS[0], { spawnedBy: spawned(state) })],
+    },
+  ];
+
+  it("renders a link that selects the parent, and closes the sheet", async () => {
+    const onSelectSpawnParent = vi.fn();
+    renderSwitcher({ sections: sectionsWith("live"), onSelectSpawnParent });
+    await userEvent.click(trigger());
+    await userEvent.click(screen.getByRole("button", { name: "spawned by coordinator · hermes" }));
+    expect(onSelectSpawnParent).toHaveBeenCalledWith(7);
+  });
+
+  it("marks an exited parent as ended", async () => {
+    renderSwitcher({ sections: sectionsWith("exited"), onSelectSpawnParent: vi.fn() });
+    await userEvent.click(trigger());
+    expect(
+      screen.getByRole("button", { name: "spawned by coordinator · hermes · ended" }),
+    ).toHaveClass("exited");
+  });
+
+  it("renders plain text for a removed parent", async () => {
+    renderSwitcher({ sections: sectionsWith("killed") });
+    await userEvent.click(trigger());
+    expect(screen.getByText("spawned by a removed session").tagName).toBe("SPAN");
+    expect(screen.queryByRole("button", { name: /spawned by/ })).toBeNull();
+  });
+});
