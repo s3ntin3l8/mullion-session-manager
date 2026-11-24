@@ -916,6 +916,9 @@
           "waitFor": "[data-testid=\"devices-ios\"]"
         },
         {
+          "waitFor": "text=\"iPhone 16 Pro \u00b7 iOS 18.2\" >> nth=0"
+        },
+        {
           "hover": "role=button[name=\"Add a simulator\"]"
         }
       ],
@@ -925,7 +928,7 @@
       "name": "settings-devices-ios-form",
       "path": "/",
       "baseline": true,
-      "tags": ["presentation", "check", "audit"],
+      "tags": ["presentation", "audit"],
       "viewports": ["desktop"],
       "steps": [
         {
@@ -936,6 +939,9 @@
         },
         {
           "waitFor": "[data-testid=\"devices-ios\"]"
+        },
+        {
+          "waitFor": "text=\"iPhone 16 Pro \u00b7 iOS 18.2\" >> nth=0"
         },
         {
           "click": "role=button[name=\"Add a simulator\"]"

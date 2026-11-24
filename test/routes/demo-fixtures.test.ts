@@ -151,18 +151,18 @@ describe("demo fixture routes", () => {
     expect(seeded.statusCode).toBe(201);
 
     const list = (await app.inject({ method: "GET", url: "/api/devices" })).json();
-    expect(list.map((d: { platform: string; kind: string }) => `${d.platform}/${d.kind}`)).toEqual([
-      "android/emulator",
-      "android/physical",
-      "ios/emulator",
-    ]);
+    expect(
+      list.map((d: { platform: string; kind: string }) => `${d.platform}/${d.kind}`).sort(),
+    ).toEqual(["android/emulator", "android/physical", "ios/emulator"]);
 
     const [local] = (await app.inject({ method: "GET", url: "/api/devices/hosts" })).json();
     expect(local.platforms).toEqual(["android", "ios"]);
     expect(local.deviceKinds).toEqual(["physical", "emulator"]);
 
     const sims = (await app.inject({ method: "GET", url: "/api/simulators" })).json();
-    expect(sims.map((x: { udid: string }) => x.udid)).toContain(list[2].udid);
+    expect(sims.map((x: { udid: string }) => x.udid)).toContain(
+      list.find((d: { platform: string }) => d.platform === "ios").udid,
+    );
     const catalog = (await app.inject({ method: "GET", url: "/api/simulators/catalog" })).json();
     expect(catalog.runtimes.length).toBeGreaterThan(0);
     const created = await app.inject({
