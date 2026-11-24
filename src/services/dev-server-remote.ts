@@ -10,6 +10,7 @@ import { getRemoteHostClient } from "./remote-host-client.js";
 
 const REMOTE_PORT_CACHE_TTL_MS = 10_000;
 const REMOTE_PORT_CACHE_MAX = 200;
+const MAX_SESSION_IDS = 100;
 const remotePortCache = new Map<string, { expiresAt: number; port: string | null }>();
 
 /** Exported for tests only. */
@@ -24,6 +25,8 @@ async function remotePort(
 ): Promise<string | null> {
   // A host the heartbeat has marked offline is not asked on every poll.
   if (app.hostHeartbeatTracker?.getHealth(hostId)?.status === "offline") return null;
+  // The agent route takes at most this many ids; the newest sessions win.
+  ids = ids.slice(-MAX_SESSION_IDS);
   const key = `${hostId}:${ids.join(",")}`;
   const hit = remotePortCache.get(key);
   if (hit && hit.expiresAt > Date.now()) return hit.port;

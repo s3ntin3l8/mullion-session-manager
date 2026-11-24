@@ -53,6 +53,15 @@ describe("detectDevServerPortAcrossHosts", () => {
     expect(remote.resolveDevServerPort).toHaveBeenCalledWith(["2", "3"]);
   });
 
+  it("sends at most 100 session ids, the newest", async () => {
+    remote.resolveDevServerPort.mockResolvedValue({ port: null });
+    const ids = Array.from({ length: 130 }, (_, i) => String(i + 1));
+    await detectDevServerPortAcrossHosts(fakeApp(), new Map([["mac", ids]]));
+    const sent = remote.resolveDevServerPort.mock.calls[0][0] as string[];
+    expect(sent).toHaveLength(100);
+    expect(sent[0]).toBe("31");
+  });
+
   it("degrades to null for an offline host, a failing agent, or an agent with no port", async () => {
     const byHost = new Map([["mac", ["2"]]]);
     expect(await detectDevServerPortAcrossHosts(fakeApp(["mac"]), byHost)).toBeNull();
