@@ -64,13 +64,19 @@ describe("reconcileTasks — auto-approve sweep", () => {
   let openApp: Awaited<ReturnType<typeof buildApp>> | undefined;
 
   async function openTestApp() {
+    // One app per test: a second would orphan the first and bring back the
+    // hooks.sock collision this lifecycle exists to prevent.
+    if (openApp) throw new Error("test opened a second app without closing the first");
     const app = await buildApp();
     openApp = app;
     return app;
   }
 
   afterEach(async () => {
-    // Close first, while the mocks the test installed are still in place.
+    // Vitest runs afterEach innermost-first, so the nested block's
+    // restorePassThroughMocks() has already run by now: the app closes last.
+    // That is fine — close() touches only the db, socket and pty, none of
+    // which the reconciler mocks replace.
     await openApp?.close();
     openApp = undefined;
   });
