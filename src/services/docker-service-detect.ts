@@ -678,7 +678,7 @@ export function clearComposeCacheForTests(): void {
  * per-process that a dedicated TTL would be pure overhead. */
 let composeAvailable: boolean | null = null;
 
-async function isDockerComposeAvailable(forceRefresh = false): Promise<boolean> {
+export async function isDockerComposeAvailable(forceRefresh = false): Promise<boolean> {
   if (!forceRefresh && composeAvailable !== null) return composeAvailable;
   const output = await runDocker(["compose", "version"]);
   composeAvailable = output !== null;
@@ -915,8 +915,13 @@ export interface DockerDockControl {
  * function is the trust boundary for user-authored `.crs/dock.json`, and
  * leaving it untouched makes it structurally impossible for a project's own
  * dock.json to forge a `source`/`docker` field. */
-export async function toDockControls(services: ComposeService[]): Promise<DockerDockControl[]> {
-  const composeAvailableNow = await isDockerComposeAvailable();
+export async function toDockControls(
+  services: ComposeService[],
+  // Issue #3427: a remote host's own `docker compose` availability, as the
+  // agent reported it; this process's probe says nothing about that host.
+  composeAvailable?: boolean,
+): Promise<DockerDockControl[]> {
+  const composeAvailableNow = composeAvailable ?? (await isDockerComposeAvailable());
   return services.map((svc) => ({
     id: `docker:${svc.composeProject}:${svc.service}`,
     title: svc.service,
