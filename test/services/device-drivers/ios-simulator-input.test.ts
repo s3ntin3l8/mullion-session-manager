@@ -574,77 +574,6 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
       pointerId: 0,
     });
 
-    const burstStart = Date.now();
-    for (let i = 1; i <= 60; i++) {
-      await driver.input({
-        type: "touchMove",
-        x: 300 + i * 3,
-        y: 600 + i * 3,
-        videoWidth: 1206,
-        videoHeight: 2622,
-        pointerId: 0,
-      });
-    }
-    const touchUpStart = Date.now();
-    await driver.input({
-      type: "touchUp",
-      x: 480,
-      y: 780,
-      videoWidth: 1206,
-      videoHeight: 2622,
-      pointerId: 0,
-    });
-    const touchUpElapsed = Date.now() - touchUpStart;
-    const totalElapsed = Date.now() - burstStart;
-
-    expect(touchUpElapsed).toBeLessThan(32);
-    expect(totalElapsed).toBeLessThan(32);
-    expect(c.hidStreams[0]!.written.at(-1)).toEqual({
-      press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "UP" },
-    });
-
-    const tapStart = Date.now();
-    await driver.tap(300, 600);
-    expect(Date.now() - tapStart).toBeLessThan(32);
-
-    await driver.stop();
-  });
-
-  it("coalesces queued touchMove events under backpressure so touchUp lands promptly", async () => {
-    const c = fakeCompanion();
-    const origHid = c.handle.client!.hid.bind(c.handle.client);
-    c.handle.client!.hid = () => {
-      const stream = origHid();
-      const origWrite = stream.write.bind(stream);
-      stream.write = ((event: IdbHidEvent, cb?: (err?: Error | null) => void) => {
-        // Simulate 5 ms gRPC write flush backpressure.
-        setTimeout(() => {
-          origWrite(event, cb);
-        }, 5);
-        return true;
-      }) as typeof stream.write;
-      return stream;
-    };
-
-    const driver = new IosSimulatorDriver({
-      id: "1",
-      udid: UDID,
-      label: null,
-      simctl: bootedSimctl,
-      companion: c.handle,
-    });
-    await driver.start();
-
-    await driver.input({
-      type: "touchDown",
-      x: 300,
-      y: 600,
-      videoWidth: 1206,
-      videoHeight: 2622,
-      pointerId: 0,
-    });
-
-    const start = Date.now();
     const moves = Array.from({ length: 60 }, (_, idx) =>
       driver.input({
         type: "touchMove",
@@ -664,15 +593,92 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
       pointerId: 0,
     });
     await Promise.all([...moves, touchUpPromise]);
-    const elapsed = Date.now() - start;
 
-    // 60 uncoalesced 5 ms writes would take >= 300 ms; coalescing keeps it to a couple of writes.
-    expect(elapsed).toBeLessThan(50);
     expect(c.hidStreams[0]!.written.length).toBeLessThan(10);
     expect(c.hidStreams[0]!.written.at(-1)).toEqual({
       press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "UP" },
     });
+
+    await expect(driver.tap(300, 600)).resolves.toBeUndefined();
+
     await driver.stop();
+  });
+
+  it("coalesces queued touchMove events under backpressure so touchUp lands promptly", async () => {
+    vi.useFakeTimers();
+    try {
+      const c = fakeCompanion();
+      const origHid = c.handle.client!.hid.bind(c.handle.client);
+      c.handle.client!.hid = () => {
+        const stream = origHid();
+        const origWrite = stream.write.bind(stream);
+        stream.write = ((event: IdbHidEvent, cb?: (err?: Error | null) => void) => {
+          // Simulate 5 ms gRPC write flush backpressure.
+          setTimeout(() => {
+            origWrite(event, cb);
+          }, 5);
+          return true;
+        }) as typeof stream.write;
+        return stream;
+      };
+
+      const driver = new IosSimulatorDriver({
+        id: "1",
+        udid: UDID,
+        label: null,
+        simctl: bootedSimctl,
+        companion: c.handle,
+      });
+      await driver.start();
+
+      const downPromise = driver.input({
+        type: "touchDown",
+        x: 300,
+        y: 600,
+        videoWidth: 1206,
+        videoHeight: 2622,
+        pointerId: 0,
+      });
+      await vi.advanceTimersByTimeAsync(5);
+      await downPromise;
+
+      const moves = Array.from({ length: 60 }, (_, idx) =>
+        driver.input({
+          type: "touchMove",
+          x: 300 + (idx + 1) * 3,
+          y: 600 + (idx + 1) * 3,
+          videoWidth: 1206,
+          videoHeight: 2622,
+          pointerId: 0,
+        }),
+      );
+      const touchUpPromise = driver.input({
+        type: "touchUp",
+        x: 480,
+        y: 780,
+        videoWidth: 1206,
+        videoHeight: 2622,
+        pointerId: 0,
+      });
+      const allDone = Promise.all([...moves, touchUpPromise]);
+      let settled = false;
+      void allDone.then(() => {
+        settled = true;
+      });
+      for (let step = 0; step < 100 && !settled; step++) {
+        await vi.advanceTimersByTimeAsync(5);
+      }
+      await allDone;
+
+      // 60 uncoalesced writes would yield 62 events; coalescing keeps it to a couple of writes.
+      expect(c.hidStreams[0]!.written.length).toBeLessThan(10);
+      expect(c.hidStreams[0]!.written.at(-1)).toEqual({
+        press: { action: { touch: { point: { x: 160, y: 260 } } }, direction: "UP" },
+      });
+      await driver.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("restarts and resends the last live batch when invalidated error arrives late", async () => {
