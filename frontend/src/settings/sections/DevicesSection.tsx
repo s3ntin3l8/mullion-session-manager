@@ -26,6 +26,7 @@ import { PlusIcon, TrashIcon } from "../../ui/icons.js";
 import { DeviceCreateForm } from "./DeviceCreateForm.js";
 import { SdkSystemImages } from "./SdkSystemImages.js";
 import { PairDeviceDialog } from "./PairDeviceDialog.js";
+import { Presence } from "../../ui/Presence.js";
 import { findReconnectSuggestions } from "./deviceReconnect.js";
 import { useServerInfo } from "../useServerInfo.js";
 import {
@@ -608,13 +609,13 @@ export function DevicesSection() {
 
       {deleteError && <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>}
       {toggleError && <ErrorText style={{ marginTop: 8 }}>{toggleError}</ErrorText>}
-      {pairOpen && (
+      <Presence when={pairOpen}>
         <PairDeviceDialog
           deviceHosts={deviceHosts}
           onClose={() => setPairOpen(false)}
           onPaired={() => setPairOpen(false)}
         />
-      )}
+      </Presence>
     </>
   );
 }
