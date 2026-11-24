@@ -338,3 +338,55 @@ describe.each([
     expect(screen.queryByRole("button", { name: /spawned by/ })).toBeNull();
   });
 });
+
+// #3062 — with many projects the tree virtualizes on project count, and the
+// coordinator's row can be far outside the mounted window: the marker asks
+// the virtualizer to scroll there, so the row mounts instead of the scroll
+// being skipped.
+describe("Sidebar spawned-by marker, coordinator outside the virtualized window (#3062)", () => {
+  it("scrolls the virtualizer to the coordinator's row and mounts it", async () => {
+    stubVirtualizerLayout();
+    // jsdom does no scrolling: let the scroll container take the offset the
+    // virtualizer asks for and announce it, as a browser would.
+    const scrollTo = vi.fn(function (this: HTMLElement, opts?: ScrollToOptions) {
+      Object.defineProperty(this, "scrollTop", { configurable: true, value: opts?.top ?? 0 });
+      this.dispatchEvent(new Event("scroll"));
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      writable: true,
+      value: scrollTo,
+    });
+    // The scrollable extent the virtualizer clamps its target to.
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get: () => 10_000,
+    });
+    const base = 870;
+    projects = Array.from({ length: 60 }, (_, i) =>
+      makeProject({ id: base * 100 + i, name: `p-${i}` }),
+    );
+    const workerProject = projects[0];
+    const coordProject = projects[59];
+    sessions = [
+      makeSession({ id: base * 1000, projectId: coordProject.id, command: "coordinator agent" }),
+      makeSession({
+        id: base * 1000 + 1,
+        projectId: workerProject.id,
+        command: "spawned worker",
+        parentSessionId: base * 1000,
+      }),
+    ];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    const { container } = renderSidebar({ onOpenSession });
+    expect(container.querySelector("[data-index]")).not.toBeNull();
+    expect(coordinatorTitle()).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: /spawned by coordinator agent/ }));
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(coordinatorTitle()).toBeDefined());
+    expect(scrollTo).toHaveBeenCalled();
+    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+    delete (HTMLElement.prototype as { scrollHeight?: unknown }).scrollHeight;
+  });
+});

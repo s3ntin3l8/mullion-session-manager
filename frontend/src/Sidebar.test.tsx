@@ -1896,3 +1896,117 @@ describe("failed rename (audit finding 9)", () => {
     expect(reportError).not.toHaveBeenCalled();
   });
 });
+
+// #3062 — the tree virtualizes on project count too: every listed project
+// mounts a ProjectHeader (store subscriptions, ⋯ menu), so many projects with
+// few sessions used to mount every header at once.
+describe("Sidebar virtualization on project count (#3062)", () => {
+  beforeEach(() => {
+    stubVirtualizerLayout();
+  });
+  // Own ids per test: the collapse state is module-level.
+  let nextBase = 50_000;
+  const manyProjects = (count: number) => {
+    const base = (nextBase += 1_000);
+    return Array.from({ length: count }, (_, i) =>
+      makeProject({ id: base + i, name: `proj-${base + i}` }),
+    );
+  };
+  const virtualized = (container: HTMLElement) => container.querySelector("[data-index]") !== null;
+
+  it("mounts a window of the expanded Other projects, not 200 headers (200 projects, 5 sessions)", async () => {
+    projects = manyProjects(200);
+    const tiled = projects[0];
+    sessions = Array.from({ length: 5 }, (_, i) =>
+      makeSession({ id: tiled.id * 10 + i, projectId: tiled.id, command: `s${i}` }),
+    );
+    const user = userEvent.setup();
+    const { container } = renderSidebar({ workspaceProjectIds: [tiled.id] });
+    expect(virtualized(container)).toBe(true);
+    const toggle = screen.getByRole("button", { name: /Other projects/ });
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    // The model holds all 199, the DOM only the rows in range (+ overscan).
+    const mounted = container.querySelectorAll(".project-row").length;
+    expect(mounted).toBeGreaterThan(1);
+    expect(mounted).toBeLessThan(40);
+    // The section header still counts all of them.
+    expect(within(toggle).getByText("199")).toBeInTheDocument();
+  });
+
+  it("virtualizes an unscoped tree of many projects with few sessions", () => {
+    projects = manyProjects(200);
+    sessions = [makeSession({ id: 9_999_001, projectId: projects[0].id, command: "only one" })];
+    const { container } = renderSidebar();
+    expect(virtualized(container)).toBe(true);
+    expect(container.querySelectorAll(".project-row").length).toBeLessThan(40);
+    expect(screen.getByText("only one")).toBeInTheDocument();
+  });
+
+  it("stays on the plain path at or under the threshold (30 projects)", () => {
+    projects = manyProjects(30);
+    const { container } = renderSidebar();
+    expect(virtualized(container)).toBe(false);
+    expect(container.querySelectorAll(".project-row").length).toBe(30);
+  });
+
+  it("does not swap paths when Other projects opens or the filter is typed in", async () => {
+    // 5 tiled + 30 others: over the project threshold whatever is open.
+    projects = manyProjects(35);
+    const user = userEvent.setup();
+    const { container } = renderSidebar({
+      workspaceProjectIds: projects.slice(0, 5).map((p) => p.id),
+    });
+    expect(virtualized(container)).toBe(true);
+    await user.click(screen.getByRole("button", { name: /Other projects/ }));
+    expect(virtualized(container)).toBe(true);
+    await user.type(screen.getByLabelText("Filter sessions"), "zzz");
+    // The filter hides Other projects; the strategy holds.
+    expect(screen.getByText("No sessions match")).toBeInTheDocument();
+  });
+
+  it("keyboard: the collapse toggle keeps focus and flips; Enter on a row opens it", async () => {
+    projects = manyProjects(40);
+    const target = projects[0];
+    sessions = [makeSession({ id: target.id * 10, projectId: target.id, command: "kb row" })];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    const { container } = renderSidebar({ onOpenSession });
+    expect(virtualized(container)).toBe(true);
+
+    const open = screen.getByRole("button", { name: /Open session kb row/ });
+    open.focus();
+    await user.keyboard("{Enter}");
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+
+    const toggle = screen.getByRole("button", { name: target.name });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    toggle.focus();
+    await user.keyboard("{Enter}");
+    // Same DOM node (stable row key), still focused, now collapsed.
+    expect(document.activeElement).toBe(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("kb row")).toBeNull();
+    expect(JSON.parse(localStorage.getItem("crs.projectCollapsed")!)).toMatchObject({
+      [target.id]: true,
+    });
+    await user.keyboard(" ");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("kb row")).toBeInTheDocument();
+  });
+
+  it("drag: a session row on this path still carries its session id", () => {
+    projects = manyProjects(40);
+    sessions = [
+      makeSession({ id: projects[0].id * 10, projectId: projects[0].id, command: "drag me" }),
+    ];
+    const { container } = renderSidebar();
+    expect(virtualized(container)).toBe(true);
+    const row = screen.getByText("drag me").closest(".session-item")!;
+    const dataTransfer = createDataTransfer();
+    const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(dragStart, "dataTransfer", { value: dataTransfer });
+    row.dispatchEvent(dragStart);
+    expect(dataTransfer.getData("application/x-mullion-session")).toBe(String(projects[0].id * 10));
+  });
+});
