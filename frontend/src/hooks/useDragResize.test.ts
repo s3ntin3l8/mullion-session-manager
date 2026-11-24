@@ -233,7 +233,11 @@ describe("useDragResize", () => {
         "aria-valuenow": 200,
         "aria-valuemin": 100,
         "aria-valuemax": 500,
+        "aria-orientation": "vertical",
       });
+      expect(setup({ axis: "y" }).hook.result.current.keyboardProps?.["aria-orientation"]).toBe(
+        "horizontal",
+      );
       expect(setup({ value: 900 }).hook.result.current.keyboardProps?.["aria-valuenow"]).toBe(500);
     });
 

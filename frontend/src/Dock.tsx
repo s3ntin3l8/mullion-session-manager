@@ -625,7 +625,6 @@ export function Dock({
               <div
                 className="dock-rail-divider"
                 role="separator"
-                aria-orientation="vertical"
                 aria-label="Resize rail"
                 onMouseDown={onRailDividerMouseDown}
                 {...railKeyboardProps}
@@ -636,7 +635,6 @@ export function Dock({
               <div
                 className="dock-pane-divider"
                 role="separator"
-                aria-orientation="vertical"
                 aria-label="Resize log panes"
                 onMouseDown={onPaneDividerMouseDown}
                 {...paneKeyboardProps}

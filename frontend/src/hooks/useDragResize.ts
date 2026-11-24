@@ -76,6 +76,7 @@ export interface SeparatorKeyboardProps {
   "aria-valuenow": number;
   "aria-valuemin": number;
   "aria-valuemax": number;
+  "aria-orientation": "vertical" | "horizontal";
 }
 
 export interface UseDragResizeResult {
@@ -164,6 +165,7 @@ export function useDragResize({
       "aria-valuenow": Math.round(Math.min(Math.max(value, min), max)),
       "aria-valuemin": min,
       "aria-valuemax": Math.round(max),
+      "aria-orientation": axis === "x" ? "vertical" : "horizontal",
     };
   }
 
