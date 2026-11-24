@@ -1460,6 +1460,9 @@ export interface GitHubIssuesResponse {
   hasMore: boolean;
   /** A title search hit the backend's scan cap; older matches may be missing. */
   truncated?: boolean;
+  /** How many open issues match an origin filter, across every page (a
+   *  lower bound when `truncated`). Absent without one. */
+  total?: number;
   /** Every label on the returned page, for the filter chips. */
   labels: GitHubIssueLabel[];
   taskMasterEnabled: boolean;

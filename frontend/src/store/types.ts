@@ -915,6 +915,10 @@ export interface UiSlice {
   // Palette / shortcut entry point: close if open, else reopen the last view.
   toggleRightSidebar: () => void;
   closeRightSidebar: () => void;
+  /** #2461 — moves a stored Tasks list off the drawer once Task Master is
+   *  known to be off (see `guardTasksView`), without opening or closing it
+   *  and without overwriting the stored view. */
+  settleRightSidebarView: () => void;
   setRightSidebarWidth: (value: number) => void;
   setViewMode: (value: ViewMode) => void;
   /** The mode switch's keyboard path (#3009): Workspace to Tasks and back. */

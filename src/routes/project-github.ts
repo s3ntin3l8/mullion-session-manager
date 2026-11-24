@@ -22,6 +22,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   getProjectById,
   getTaskStatusForIssue,
+  listTaskIssueNumbers,
   listTaskStatusesByIssue,
   type ProjectRow,
 } from "../services/project-records.js";
@@ -343,6 +344,7 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
       sort?: string;
       q?: string;
       page?: string;
+      origin?: string;
     };
   }>(
     "/api/projects/:id/github/issues",
@@ -356,21 +358,33 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
       });
       if (!ctx) return;
       const { repoRef, token } = ctx;
-      const { labels, assignee, sort, q, page } = request.query;
+      const { labels, assignee, sort, q, page, origin } = request.query;
       if (sort !== undefined && sort !== "updated" && sort !== "created" && sort !== "comments") {
         return reply.badRequest("sort must be updated, created or comments");
+      }
+      // The sidebar's All / Task Master / Manual filter (#2461), applied here
+      // so a match on a later page is found and the count covers every page.
+      // "tm" is an issue a task tracks; "manual" is every other one.
+      if (origin !== undefined && origin !== "all" && origin !== "tm" && origin !== "manual") {
+        return reply.badRequest("origin must be all, tm or manual");
       }
       const pageNum = page === undefined ? 1 : Number(page);
       if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 50) {
         return reply.badRequest("page must be an integer between 1 and 50");
       }
       try {
+        const tracked =
+          origin === "tm" || origin === "manual" ? listTaskIssueNumbers(app.db, projectId) : null;
         const result = await listIssues(token, repoRef.owner, repoRef.repo, {
           labels,
           assignee,
           sort,
           q,
           page: pageNum,
+          ...(tracked && {
+            match: (i) => tracked.has(i.number) === (origin === "tm"),
+            countMatches: true,
+          }),
         });
         const numbers = result.issues.map((i) => i.number);
         const taskRows =

@@ -1,3 +1,4 @@
+import type { GitHubIssueOrigin } from "../api/github.js";
 import type { GitHubIssueListItem, GitHubPROrWithChecks } from "../api/types.js";
 import { isTaskBranch, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { splitTaskSessions } from "../ui/sidebar/linkDecisions.js";
@@ -7,7 +8,7 @@ import { ATTENTION_ORDER } from "./prPhase.js";
  *  The filter treats everything that is not `"tm"` as Manual (see `matchesOrigin`); the
  *  `"manual"`/`"none"` split only decides whether the row gets a left-edge marker. */
 export type RowOrigin = "tm" | "manual" | "none";
-export type OriginFilterValue = "all" | "tm" | "manual";
+export type OriginFilterValue = GitHubIssueOrigin;
 
 const manualCount = (link: MullionLinkEntry | undefined) =>
   splitTaskSessions(link?.sessions ?? [], link?.task ?? null).rest.length;

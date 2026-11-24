@@ -8,7 +8,7 @@ import type * as ApiModule from "../api/index.js";
 import type { GitHubPROrWithChecks } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useDashboardStore } from "../store/index.js";
-import { makeProject, makeSession } from "../test/fixtures.js";
+import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
 
 vi.mock("../api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -139,5 +139,41 @@ describe("PrRow task vs sessions", () => {
     expect(screen.queryByText("worker-sess")).toBeNull();
     expect(screen.queryByText("reviewer-sess")).toBeNull();
     expect(screen.getByText("hand-sess")).toBeInTheDocument();
+  });
+});
+
+// #2461 — a task PR's row carries the task panel's quick actions; a failure
+// shows under the row, which had no error line before.
+describe("PrRow task quick actions", () => {
+  const before = {
+    retryTask: useDashboardStore.getState().retryTask,
+    approveTask: useDashboardStore.getState().approveTask,
+  };
+  afterEach(() => useDashboardStore.setState({ tasks: [], taskMasterEnabled: false, ...before }));
+  const taskPr = { ...PR, taskId: 9, taskStatus: "failed" } as GitHubPROrWithChecks;
+
+  it("Retry on a failed task's PR; its error shows on the row", async () => {
+    const retryTask = vi.fn().mockRejectedValue(new Error("Host is offline"));
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1 })],
+      taskMasterEnabled: true,
+      retryTask,
+      tasks: [makeTask({ id: 9, projectId: 1, status: "failed", prNumber: 42 })],
+    });
+    render(<PrRow pr={taskPr} projectId={1} links={undefined} onOpen={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Retry task" }));
+    expect(retryTask).toHaveBeenCalledWith(9);
+    expect(await screen.findByText("Host is offline")).toBeInTheDocument();
+  });
+
+  it("shows nothing for a task the store has not loaded", () => {
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1 })],
+      taskMasterEnabled: true,
+      tasks: [],
+    });
+    render(<PrRow pr={taskPr} projectId={1} links={undefined} onOpen={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Retry task/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Preview this PR" })).toBeInTheDocument();
   });
 });

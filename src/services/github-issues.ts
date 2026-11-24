@@ -9,12 +9,32 @@
 // Bodies come back as GitHub-rendered HTML (`body_html`), so no markdown
 // library is needed here; the frontend sanitizes before inserting it.
 
+import { createHash } from "node:crypto";
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
 import { parseParentIssueUrl } from "./github.js";
 
 const PAGE_SIZE = 50;
 /** Most raw list pages a title search reads (1000 issues) before giving up and flagging `truncated`. */
 const MAX_SEARCH_PAGES = 20;
+
+/**
+ * #2461 — a counting scan (the sidebar's origin filter) reads every page up
+ * to the cap, and each "Load more" or refetch asks again from page 1. The
+ * scanned open issues are kept briefly per repo, query and token, so those
+ * repeats filter in memory instead of re-walking GitHub. The match itself is
+ * never cached: it is re-applied to the kept pages on every request, so a
+ * task queued in the meantime shows up at once.
+ */
+const FULL_SCAN_TTL_MS = 60_000;
+const fullScanCache = new Map<
+  string,
+  { at: number; scan: Promise<{ issues: IssueListItem[]; exhausted: boolean }> }
+>();
+
+/** Test hook: forget the kept scans. */
+export function clearIssueScanCacheForTests(): void {
+  fullScanCache.clear();
+}
 const HTML_ACCEPT = "application/vnd.github.html+json";
 
 export interface IssueLabel {
@@ -44,6 +64,9 @@ export interface IssueListResult {
   truncated?: boolean;
   /** Every label seen on the returned page, for the filter chips. */
   labels: IssueLabel[];
+  /** How many open issues match, when the query asked for a full scan
+   *  (`countMatches`). A lower bound when `truncated` is set. */
+  total?: number;
 }
 
 export interface IssueComment {
@@ -86,6 +109,11 @@ export interface IssueListQuery {
   /** Case-insensitive substring match on the title, searched across the repo's open issues. */
   q?: string;
   page?: number;
+  /** A filter GitHub can't apply (the Task Master origin, #2461): issues it
+   *  rejects are skipped, scanning later pages for the requested page. */
+  match?: (issue: IssueListItem) => boolean;
+  /** Scan every page (up to the cap) so `total` counts all matches. */
+  countMatches?: boolean;
 }
 
 interface RawLabel {
@@ -251,28 +279,63 @@ export async function listIssues(
   let hasMore: boolean;
   let truncated = false;
 
-  if (!needle) {
+  const match = query.match;
+  const keep = (i: IssueListItem) =>
+    (!needle || i.title.toLowerCase().includes(needle)) && (!match || match(i));
+  let total: number | undefined;
+
+  if (!needle && !match) {
     const raw = await fetchRawPage(page);
     items = labelSource = toIssues(raw);
     // A full raw page (PRs included) may have another page behind it.
     hasMore = raw.length >= PAGE_SIZE;
   } else {
-    // GitHub can't filter by title substring on the list endpoint, so scan raw
-    // pages from the start (labels/assignee/sort already applied) until the
-    // matches cover the requested page plus one more, the repo is exhausted,
-    // or the scan cap is hit.
-    const matches: IssueListItem[] = [];
-    const scanned: IssueListItem[] = [];
+    // GitHub can't filter by title substring (or by Task Master origin) on the
+    // list endpoint, so scan raw pages from the start (labels/assignee/sort
+    // already applied) until the matches cover the requested page plus one
+    // more — or, when counting, every page — the repo is exhausted, or the
+    // scan cap is hit.
+    let matches: IssueListItem[] = [];
+    let scanned: IssueListItem[] = [];
     const wanted = page * PAGE_SIZE + 1;
     let exhausted = false;
-    for (let n = 1; n <= MAX_SEARCH_PAGES && matches.length < wanted; n++) {
-      const raw = await fetchRawPage(n);
-      const issues = toIssues(raw);
-      scanned.push(...issues);
-      matches.push(...issues.filter((i) => i.title.toLowerCase().includes(needle)));
-      if (raw.length < PAGE_SIZE) {
-        exhausted = true;
-        break;
+    if (query.countMatches) {
+      const scanAll = async () => {
+        const issues: IssueListItem[] = [];
+        for (let n = 1; n <= MAX_SEARCH_PAGES; n++) {
+          const raw = await fetchRawPage(n);
+          issues.push(...toIssues(raw));
+          if (raw.length < PAGE_SIZE) return { issues, exhausted: true };
+        }
+        return { issues, exhausted: false };
+      };
+      const tokenKey = createHash("sha256").update(token).digest("hex").slice(0, 16);
+      const key = `${repoPath}?${base.toString()}#${tokenKey}`;
+      const now = Date.now();
+      let hit = fullScanCache.get(key);
+      if (!hit || now - hit.at > FULL_SCAN_TTL_MS) {
+        for (const [k, v] of fullScanCache)
+          if (now - v.at > FULL_SCAN_TTL_MS) fullScanCache.delete(k);
+        const entry = { at: now, scan: scanAll() };
+        hit = entry;
+        fullScanCache.set(key, entry);
+        // A failed scan is not kept: the next request tries GitHub again.
+        entry.scan.catch(() => {
+          if (fullScanCache.get(key) === entry) fullScanCache.delete(key);
+        });
+      }
+      ({ issues: scanned, exhausted } = await hit.scan);
+      matches = scanned.filter(keep);
+    } else {
+      for (let n = 1; n <= MAX_SEARCH_PAGES && matches.length < wanted; n++) {
+        const raw = await fetchRawPage(n);
+        const issues = toIssues(raw);
+        scanned.push(...issues);
+        matches.push(...issues.filter(keep));
+        if (raw.length < PAGE_SIZE) {
+          exhausted = true;
+          break;
+        }
       }
     }
     items = matches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
@@ -280,15 +343,25 @@ export async function listIssues(
     hasMore = matches.length > page * PAGE_SIZE;
     // Out of scan budget with more raw pages unread: older matches may be missing.
     truncated = !hasMore && !exhausted;
+    if (query.countMatches) {
+      total = matches.length;
+      // Counting reads past the page, so more pages can still be unread.
+      truncated = !exhausted;
+    }
 
     // `123` / `#123` is an issue number: look it up directly (page 1 only) so
     // it is found even when it is not among the scanned pages.
-    const numberMatch = page === 1 ? /^#?(\d+)$/.exec(needle) : null;
+    const numberMatch = needle && page === 1 ? /^#?(\d+)$/.exec(needle) : null;
     const byNumber = numberMatch
       ? await findOpenIssue(token, repoPath, Number(numberMatch[1]))
       : null;
-    if (byNumber && !items.some((i) => i.number === byNumber.number))
-      items.unshift(toItem(byNumber));
+    const byNumberItem = byNumber ? toItem(byNumber) : null;
+    if (
+      byNumberItem &&
+      (!match || match(byNumberItem)) &&
+      !items.some((i) => i.number === byNumberItem.number)
+    )
+      items.unshift(byNumberItem);
   }
 
   const seen = new Map<string, IssueLabel>();
@@ -302,6 +375,7 @@ export async function listIssues(
     hasMore,
     ...(truncated ? { truncated } : {}),
     labels: [...seen.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    ...(total !== undefined ? { total } : {}),
   };
 }
 

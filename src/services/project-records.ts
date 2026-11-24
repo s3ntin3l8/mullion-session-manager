@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { getDb } from "../db/client.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -165,6 +165,17 @@ export function listTaskStatusesByIssue(
     .from(tasks)
     .where(and(eq(tasks.projectId, projectId), inArray(tasks.issueNumber, numbers)))
     .all();
+}
+
+/** Every issue number a project's tasks track: the issue list's Task Master
+ *  origin filter (#2461) — the same test as `taskStatus` being non-null. */
+export function listTaskIssueNumbers(db: Db, projectId: number): Set<number> {
+  const rows = db
+    .select({ issueNumber: tasks.issueNumber })
+    .from(tasks)
+    .where(and(eq(tasks.projectId, projectId), isNotNull(tasks.issueNumber)))
+    .all();
+  return new Set(rows.flatMap((r) => (r.issueNumber === null ? [] : [r.issueNumber])));
 }
 
 /** Status of the project's task for one issue, or `null`. */

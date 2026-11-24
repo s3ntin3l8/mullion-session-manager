@@ -21,6 +21,21 @@ connected GitHub identity.
   Approve or Request changes). These are writes; see
   [Sidebar writes](#sidebar-writes-additional-scope-1672) for the scope they need
   and the identity they post as.
+- With Task Master on, the PR and issue rows mark who is working them (a blue
+  left edge for a task, grey for a hand-started session) and carry the task's
+  **quick actions** on hover or focus (always shown on touch): Claim on a ready
+  task, Retry on a failed one, Re-review and Approve (it arms first, then
+  confirms) on one in review, Open session on one that is running. They are the
+  task panel's own handlers and gating; a tracking epic's "approve anyway?"
+  opens the task. Each section's **All / Task Master / Manual** filter is applied
+  by the server for issues (`GET /api/projects/:id/github/issues?origin=tm|manual`,
+  where `tm` is an issue a task tracks): it scans every page, up to the same
+  20-page cap as a title search, so a match on a later page is found and the
+  section count is the number of matches (a lower bound when the scan stopped
+  at the cap). The scanned pages are kept for a minute per repo, query and
+  token, so "Load more" and refetches filter them in memory; the match is
+  re-applied each time, so a newly queued issue counts at once. The PR count is
+  the filtered count too.
 
 Owner/repo is derived by parsing the project's own `.git/config` — no
 `git remote` shell-out. Non-github.com remotes (GitHub Enterprise, GitLab,

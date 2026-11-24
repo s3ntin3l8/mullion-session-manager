@@ -30,6 +30,10 @@ import type {
   RelayReviewState,
 } from "./types.js";
 
+/** The Issues list's All / Task Master / Manual filter (#2461): "tm" is an
+ *  issue a task tracks, "manual" every other one. Applied by the server. */
+export type GitHubIssueOrigin = "all" | "tm" | "manual";
+
 export const githubApi = {
   // undefined for the 204 "not applicable" response (see ./types.ts's
   // GitHubStatus) — request() already returns undefined for a 204 body,
@@ -61,9 +65,11 @@ export const githubApi = {
       sort?: GitHubIssueSort;
       q?: string;
       page?: number;
+      origin?: GitHubIssueOrigin;
     } = {},
   ) => {
     const params = new URLSearchParams();
+    if (query.origin && query.origin !== "all") params.set("origin", query.origin);
     if (query.labels?.length) params.set("labels", query.labels.join(","));
     if (query.assignee) params.set("assignee", query.assignee);
     if (query.sort) params.set("sort", query.sort);

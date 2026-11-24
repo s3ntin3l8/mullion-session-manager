@@ -537,6 +537,30 @@ describe("SidebarRow hover actions do not shift layout", () => {
   });
 });
 
+// #2461 — the attention tint (a PR that wants the user) against the row's own
+// hover and selected backgrounds. `.sb-row--attn:not(.sb-row--sel)` ties
+// `.sb-row:hover` on specificity, so source order decides: the combined rule
+// has to come after both, and carry the tint itself rather than drop it.
+describe("attention tint under hover and selection", () => {
+  const block = (sel: string) => {
+    const start = css.indexOf(sel);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const open = css.indexOf("{", start);
+    return { start, body: css.slice(open + 1, css.indexOf("}", open)) };
+  };
+
+  it("keeps a tinted background on a hovered or selected attention row", () => {
+    const plainHover = block(".sb-row:hover,\n.sb-row--sel {");
+    const attn = block(".sb-row--attn:not(.sb-row--sel) {");
+    const attnState = block(".sb-row--attn:hover,\n.sb-row--attn.sb-row--sel {");
+    expect(attnState.start).toBeGreaterThan(plainHover.start);
+    expect(attnState.start).toBeGreaterThan(attn.start);
+    expect(attnState.body).toMatch(
+      /background: color-mix\(in srgb, var\(--r\) \d+%, var\(--surface-hover\)\)/,
+    );
+  });
+});
+
 describe("SidebarRow chips under the hover actions", () => {
   // jsdom cannot hover, so the rendered cases drive the rule through its focus
   // branch, with the hover-media wrapper stripped; the hover branch (and its

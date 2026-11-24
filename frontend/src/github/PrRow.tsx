@@ -18,7 +18,9 @@ import {
   gatedSessions,
   type TriadItem,
 } from "../ui/sidebar/index.js";
+import { ErrorText } from "../ui/ErrorText.js";
 import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
+import { TaskRowActions } from "./TaskRowActions.js";
 import { needsAttention, originClass, prOrigin } from "./rowOrigin.js";
 import { prStatuses, reviewerRows, prTriadItems, relayPillTitle, runIdFromUrl } from "./prPhase.js";
 
@@ -37,6 +39,9 @@ export function PrRow({
   onOpen: (number: number) => void;
 }) {
   const [openKey, setOpenKey] = useState<TriadItem["key"] | null>(null);
+  // A row quick action's failure (#2461): shown under the row, which is the
+  // only place a list row has for it.
+  const [actionError, setActionError] = useState<string | null>(null);
   const prefetchGithubPr = useDashboardStore((st) => st.prefetchGithubPr);
   // Cached per run, so closing, re-opening or coming back from the PR detail
   // keeps the jobs instead of refetching them.
@@ -117,22 +122,26 @@ export function PrRow({
         rowKey={`pr:${pr.number}`}
         onClick={() => onOpen(pr.number)}
         actions={
-          <IconButton
-            label={links?.preview ? "Open preview" : "Preview this PR"}
-            onClick={() =>
-              void branchPreview.open(
-                { kind: "pr", number: pr.number, branch: pr.headBranch },
-                links?.preview,
-              )
-            }
-            disabled={branchPreview.starting.has(`pr:${pr.number}`)}
-          >
-            <GlobeIcon size={13} />
-          </IconButton>
+          <>
+            {task && <TaskRowActions taskId={task.id} onError={setActionError} />}
+            <IconButton
+              label={links?.preview ? "Open preview" : "Preview this PR"}
+              onClick={() =>
+                void branchPreview.open(
+                  { kind: "pr", number: pr.number, branch: pr.headBranch },
+                  links?.preview,
+                )
+              }
+              disabled={branchPreview.starting.has(`pr:${pr.number}`)}
+            >
+              <GlobeIcon size={13} />
+            </IconButton>
+          </>
         }
         extra={
           <>
             <StatusTriad items={prTriadItems(statuses, toggle)} openKey={openKey} />
+            {actionError && <ErrorText>{actionError}</ErrorText>}
             {showLinks && (
               <div className="pr-row-links">
                 {sessions.length > 0 && <SessionPills links={sessions} />}

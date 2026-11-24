@@ -1,4 +1,5 @@
 import { api } from "../api/index.js";
+import type { GitHubIssueOrigin } from "../api/github.js";
 import type {
   GitHubIssueLabel,
   GitHubIssueSort,
@@ -23,6 +24,9 @@ export interface GithubIssueUi {
   sort: GitHubIssueSort;
   /** The raw search box text; the debounced copy is the component's. */
   query: string;
+  /** The All / Task Master / Manual pick (#2461). Only sent while Task Master
+   *  is on: see `issueQueryUi`. */
+  origin: GitHubIssueOrigin;
   /** Paging resets when the filter key changes (derived, not stored). */
   pageState: { key: string; page: number };
   /** Labels seen across every fetched page, so a selected chip never vanishes. */
@@ -36,6 +40,7 @@ export const DEFAULT_ISSUE_UI: GithubIssueUi = {
   unassigned: false,
   sort: "updated",
   query: "",
+  origin: "all",
   pageState: { key: "", page: 1 },
   knownLabels: [],
   taskMaster: null,
@@ -50,11 +55,16 @@ export const issueKey = (projectId: number, n: number) => `${projectId}:issue:${
 export const issuesKey = (projectId: number, filterKey: string, page: number) =>
   `${projectId}:issues:${filterKey}:${page}`;
 
-export function issueFilterKey(
-  ui: Pick<GithubIssueUi, "labels" | "unassigned" | "sort">,
-  debouncedQuery: string,
-): string {
-  return JSON.stringify([ui.labels, ui.unassigned, ui.sort, debouncedQuery]);
+type IssueQueryUi = Pick<GithubIssueUi, "labels" | "unassigned" | "sort" | "origin">;
+
+/** The filter as it is sent: the origin pick only counts while Task Master is
+ *  on (its control is gone otherwise), so the prefetch and the list agree. */
+export function issueQueryUi(ui: GithubIssueUi, taskMasterEnabled: boolean): GithubIssueUi {
+  return taskMasterEnabled || ui.origin === "all" ? ui : { ...ui, origin: "all" };
+}
+
+export function issueFilterKey(ui: IssueQueryUi, debouncedQuery: string): string {
+  return JSON.stringify([ui.labels, ui.unassigned, ui.sort, debouncedQuery, ui.origin]);
 }
 
 // A 204 ("not applicable") is `undefined` on the wire; normalised to null so
@@ -74,7 +84,7 @@ export const fetchIssue = (projectId: number, n: number): Promise<GitHubIssueDet
   api.getProjectIssue(projectId, n);
 export const fetchIssuesPage = (
   projectId: number,
-  ui: Pick<GithubIssueUi, "labels" | "unassigned" | "sort">,
+  ui: IssueQueryUi,
   debouncedQuery: string,
   page: number,
 ): Promise<GitHubIssuesResponse> =>
@@ -84,4 +94,5 @@ export const fetchIssuesPage = (
     sort: ui.sort,
     q: debouncedQuery || undefined,
     page,
+    origin: ui.origin,
   });

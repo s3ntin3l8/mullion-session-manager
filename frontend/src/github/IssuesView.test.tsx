@@ -112,6 +112,10 @@ describe("IssuesSection", () => {
     await userEvent.click(screen.getByRole("button", { name: "Manual" }));
     expect(screen.getByText("Plain issue")).toBeInTheDocument();
     expect(screen.queryByText("Crash on start")).toBeNull();
+    // #2461 — the pick goes to the server, which filters across pages.
+    expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes("origin=manual"))).toBe(
+      true,
+    );
     await userEvent.click(screen.getByRole("button", { name: "Task Master" }));
     expect(screen.getByText("Crash on start")).toBeInTheDocument();
     expect(screen.queryByText("Plain issue")).toBeNull();
@@ -768,6 +772,7 @@ describe("Issues with a queued Task Master task but no session", () => {
     useDashboardStore.setState({
       claimTask,
       openRightSidebarTask,
+      taskMasterEnabled: true,
       projects: [makeProject({ id: 1 })],
       tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "ready" })],
     });
@@ -880,5 +885,181 @@ describe("Issues with a queued Task Master task but no session", () => {
     );
     await userEvent.click(await screen.findByRole("button", { name: "Claim" }));
     expect(await screen.findByText("nope")).toBeInTheDocument();
+  });
+});
+
+// #2461 — the origin filter runs on the server: a match on a later page is
+// found, and the section counts every match rather than the open-issue total.
+describe("Issues origin filter across pages", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useDashboardStore.setState({ taskMasterEnabled: false });
+  });
+
+  it("counts the server's matches for a pick, the open total without one", async () => {
+    useDashboardStore.setState({ taskMasterEnabled: true });
+    const fetchMock = vi.fn((input: RequestInfo | URL) =>
+      Promise.resolve(
+        jsonResponse(
+          200,
+          String(input).includes("origin=tm")
+            ? { ...LIST, total: 3, hasMore: true }
+            : { ...LIST, issues: [] },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = render(
+      <IssuesSection projectId={1} openIssues={40} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    const count = () => container.querySelector(".sb-count")?.textContent;
+    await waitFor(() => expect(count()).toBe("40"));
+    await userEvent.click(screen.getByRole("button", { name: "Task Master" }));
+    expect(await screen.findByText("Crash on start")).toBeInTheDocument();
+    expect(count()).toBe("3");
+    expect(screen.getByRole("button", { name: "Load more" })).toBeInTheDocument();
+  });
+
+  it("drops the pick while Task Master is off: nothing is sent, nothing filtered", async () => {
+    useDashboardStore.setState({ taskMasterEnabled: true });
+    const fetchMock = vi.fn((_input: RequestInfo | URL) =>
+      Promise.resolve(jsonResponse(200, LIST)),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { unmount } = render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Manual" }));
+    unmount();
+    useDashboardStore.setState({ taskMasterEnabled: false });
+    fetchMock.mockClear();
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    expect(await screen.findByText("Crash on start")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manual" })).toBeNull();
+    expect(fetchMock.mock.calls.every(([u]) => !String(u).includes("origin="))).toBe(true);
+  });
+});
+
+// #2461 — a task row's quick actions: the task panel's handlers, compact.
+describe("Issue row task quick actions", () => {
+  const actionsBefore = {
+    retryTask: useDashboardStore.getState().retryTask,
+    approveTask: useDashboardStore.getState().approveTask,
+    reReviewTask: useDashboardStore.getState().reReviewTask,
+    requestOpenSession: useDashboardStore.getState().requestOpenSession,
+    openRightSidebarTask: useDashboardStore.getState().openRightSidebarTask,
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useDashboardStore.setState({ tasks: [], taskMasterEnabled: false, ...actionsBefore });
+  });
+  const renderWith = (task: ReturnType<typeof makeTask>, extra = {}) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
+    useDashboardStore.setState({
+      taskMasterEnabled: true,
+      projects: [makeProject({ id: 1 })],
+      sessions: [],
+      tasks: [task],
+      ...extra,
+    });
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    return screen.findByText("Crash on start");
+  };
+  const failed = makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "failed" });
+  const reviewing = makeTask({
+    id: 4,
+    projectId: 1,
+    issueNumber: 7,
+    status: "reviewing",
+    lastReviewVerdict: "approved",
+    reviewSessionId: 11,
+    reviewFindingsIngestedSessionId: 11,
+  });
+
+  it("Retry on a failed task; its failure shows in the section", async () => {
+    const retryTask = vi.fn().mockRejectedValue(new Error("Branch is gone"));
+    await renderWith(failed, { retryTask });
+    await userEvent.click(screen.getByRole("button", { name: "Retry task" }));
+    expect(retryTask).toHaveBeenCalledWith(4);
+    expect(await screen.findByText("Branch is gone")).toBeInTheDocument();
+  });
+
+  it("a running Retry spins (busy, still focusable) instead of going inert", async () => {
+    let finish: () => void = () => {};
+    const retryTask = vi.fn(() => new Promise<void>((resolve) => (finish = resolve)));
+    await renderWith(failed, { retryTask });
+    const button = screen.getByRole("button", { name: "Retry task" });
+    await userEvent.click(button);
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).not.toBeDisabled();
+    await userEvent.click(button);
+    expect(retryTask).toHaveBeenCalledTimes(1);
+    finish();
+    await waitFor(() => expect(button).not.toHaveAttribute("aria-busy", "true"));
+  });
+
+  it("Retry is disabled, and says why, while Task Master is off", async () => {
+    await renderWith(failed, { taskMasterEnabled: false });
+    expect(screen.getByRole("button", { name: "Retry task — Task Master is off" })).toBeDisabled();
+  });
+
+  it("Approve arms first, then approves; Re-review fires directly", async () => {
+    const approveTask = vi.fn(async () => reviewing);
+    const reReviewTask = vi.fn(async () => reviewing);
+    await renderWith(reviewing, { approveTask, reReviewTask });
+    await userEvent.click(screen.getByRole("button", { name: "Re-review task" }));
+    expect(reReviewTask).toHaveBeenCalledWith(4);
+    await userEvent.click(screen.getByTitle("Approve task"));
+    expect(approveTask).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /click again to confirm/ }));
+    expect(approveTask).toHaveBeenCalledWith(4);
+  });
+
+  it("a tracking epic's approval hands over to the task's detail", async () => {
+    const { ApiError } = await import("../api/index.js");
+    const approveTask = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError("Epic #9 has 2 open sub-issues", 409, "tracking-epic-with-open-sub-issues"),
+      );
+    const openRightSidebarTask = vi.fn();
+    await renderWith(reviewing, { approveTask, openRightSidebarTask });
+    await userEvent.click(screen.getByTitle("Approve task"));
+    await userEvent.click(screen.getByRole("button", { name: /click again to confirm/ }));
+    await waitFor(() => expect(openRightSidebarTask).toHaveBeenCalledWith(4));
+    // A notice, not the section's red error line.
+    expect(useDashboardStore.getState().toasts.at(-1)).toMatchObject({
+      kind: "info",
+      message: expect.stringMatching(/approve it from the task/),
+    });
+    expect(screen.queryByText(/approve it from the task/)).toBeNull();
+  });
+
+  it("no Approve while a workflow change holds the task", async () => {
+    await renderWith({
+      ...reviewing,
+      workflowChange: JSON.stringify({ sha: "abc", files: [".github/x.yml"] }),
+    });
+    expect(screen.queryByTitle("Approve task")).toBeNull();
+    expect(screen.getByRole("button", { name: "Re-review task" })).toBeInTheDocument();
+  });
+
+  it("Open session while the task runs", async () => {
+    const requestOpenSession = vi.fn();
+    await renderWith(
+      makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "in_progress", sessionId: 21 }),
+      { requestOpenSession },
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open session" }));
+    expect(requestOpenSession).toHaveBeenCalledWith(21);
+  });
+
+  it("no Claim on a backlog task (the server only claims a ready one)", async () => {
+    await renderWith(makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "backlog" }));
+    expect(screen.queryByRole("button", { name: /Claim task/ })).toBeNull();
   });
 });

@@ -2,9 +2,13 @@
 // Right sidebar state: open/close/width actions must write through to
 // localStorage (persistedState.ts) and clamp the width, and the always-docked
 // panel must come back after a reload the way it was left (#3006).
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useDashboardStore } from "./index.js";
-import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "./constants.js";
+import {
+  FALLBACK_TASK_MASTER_ENV,
+  RIGHT_SIDEBAR_MAX_WIDTH,
+  RIGHT_SIDEBAR_MIN_WIDTH,
+} from "./constants.js";
 
 beforeEach(() => {
   localStorage.clear();
@@ -433,5 +437,58 @@ describe("git deep-link requests", () => {
       useDashboardStore.getState().setGithubOpenPr(5, null);
       expect(useDashboardStore.getState().githubOpenPrByProject[5]).toBeNull();
     });
+  });
+});
+
+// #2461 — the Tasks view has no rail button while Task Master is off.
+describe("opening the Tasks view with Task Master off", () => {
+  const known = { settingsLoaded: true, taskMasterEnv: FALLBACK_TASK_MASTER_ENV };
+  afterEach(() =>
+    useDashboardStore.setState({
+      settingsLoaded: false,
+      taskMasterEnv: null,
+      taskMasterEnabled: false,
+    }),
+  );
+
+  it("openRightSidebarView and toggleRightSidebarView open the default view instead", () => {
+    useDashboardStore.setState({ ...known, taskMasterEnabled: false });
+    useDashboardStore.getState().openRightSidebarView("tasks");
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(true);
+    useDashboardStore.setState({ rightSidebarView: "files", rightSidebarOpen: false });
+    useDashboardStore.getState().toggleRightSidebarView("tasks");
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    expect(localStorage.getItem("crs.rightSidebarView")).toBe("git");
+  });
+
+  it("opens it while Task Master is on, or before its state has loaded", () => {
+    useDashboardStore.setState({ ...known, taskMasterEnabled: true });
+    useDashboardStore.getState().openRightSidebarView("tasks");
+    expect(useDashboardStore.getState().rightSidebarView).toBe("tasks");
+    useDashboardStore.setState({
+      settingsLoaded: false,
+      taskMasterEnv: null,
+      taskMasterEnabled: false,
+      rightSidebarView: "git",
+    });
+    useDashboardStore.getState().openRightSidebarView("tasks");
+    expect(useDashboardStore.getState().rightSidebarView).toBe("tasks");
+  });
+
+  it("settleRightSidebarView leaves a task's detail alone and a closed drawer closed", () => {
+    useDashboardStore.setState({
+      ...known,
+      taskMasterEnabled: false,
+      rightSidebarView: "tasks",
+      rightSidebarOpen: false,
+      selectedTaskId: 3,
+    });
+    useDashboardStore.getState().settleRightSidebarView();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("tasks");
+    useDashboardStore.setState({ selectedTaskId: null });
+    useDashboardStore.getState().settleRightSidebarView();
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
   });
 });
