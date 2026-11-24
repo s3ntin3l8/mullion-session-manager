@@ -8,6 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { SERVER_INFO_FIXTURE } from "../../test/serverInfoFixture.js";
 import { Settings } from "../../Settings.js";
 import { DEVICES_POLL_MS } from "../../SidebarDevices.js";
+import { HOSTS_REFRESH_TICKS } from "./DevicesSection.js";
 import type { Device, DeviceHostEntry, IosSimulator } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { mockFetch } from "../../test/mockFetch.js";
@@ -525,7 +526,7 @@ describe("Settings -> Devices iOS Simulator", () => {
 
         // The Mac wakes up (or its agent is updated) and now reports simulators.
         deviceHostsDb = [{ ...deviceHostsDb[0], platforms: ["android", "ios"] }];
-        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        await vi.advanceTimersByTimeAsync(HOSTS_REFRESH_TICKS * DEVICES_POLL_MS + 500);
         expect(await screen.findByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
       } finally {
         vi.useRealTimers();
@@ -552,7 +553,7 @@ describe("Settings -> Devices iOS Simulator", () => {
 
         // The host list fails once: what was known stays.
         hostsFail = true;
-        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        await vi.advanceTimersByTimeAsync(HOSTS_REFRESH_TICKS * DEVICES_POLL_MS + 500);
         expect(screen.getByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
         expect(screen.getByRole("radiogroup", { name: "Simulator" })).toBeInTheDocument();
 
@@ -561,7 +562,7 @@ describe("Settings -> Devices iOS Simulator", () => {
         deviceHostsDb = [
           { ...deviceHostsDb[0], status: "unreachable", deviceKinds: [], platforms: [] },
         ];
-        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        await vi.advanceTimersByTimeAsync(HOSTS_REFRESH_TICKS * DEVICES_POLL_MS + 500);
         expect(screen.getByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
         expect(screen.getByRole("radiogroup", { name: "Simulator" })).toBeInTheDocument();
       } finally {
@@ -588,7 +589,7 @@ describe("Settings -> Devices iOS Simulator", () => {
             platforms: ["android", "ios"],
           },
         ];
-        await vi.advanceTimersByTimeAsync(DEVICES_POLL_MS + 500);
+        await vi.advanceTimersByTimeAsync(HOSTS_REFRESH_TICKS * DEVICES_POLL_MS + 500);
         expect(await screen.findByRole("region", { name: "iOS Simulator" })).toBeInTheDocument();
       } finally {
         vi.useRealTimers();

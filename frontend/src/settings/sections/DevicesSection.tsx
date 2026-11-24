@@ -73,6 +73,9 @@ function describeDevice(device: Device): string {
   }
 }
 
+// The device hosts are re-read every this many device polls (~32 s at 4 s).
+export const HOSTS_REFRESH_TICKS = 8;
+
 // Reconnect-prompt scan cadence (issue #1380).
 const DISCOVERY_RECONNECT_POLL_MS = 5000;
 
@@ -140,6 +143,7 @@ export function DevicesSection() {
   // Which hosts run which platform: decides which platform sections exist.
   const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[] | null>(null);
   const hostsInFlight = useRef(false);
+  const hostsTicks = useRef(0);
   // Physical phones are paired from their own dialog (issue #1379) — see
   // PairDeviceDialog.tsx. This section only owns whether it's open.
   const [pairOpen, setPairOpen] = useState(false);
@@ -170,8 +174,12 @@ export function DevicesSection() {
     // report simulators, when Settings opened must show up without reopening it.
     // A failed read keeps what was known (null stays "not loaded", then empty).
     // One read at a time: the endpoint probes every host, so a slow answer must
-    // not be overtaken by (or pile up behind) the next tick's.
-    if (!hostsInFlight.current) {
+    // not be overtaken by (or pile up behind) the next tick's. And not every
+    // tick: what a host can run changes over minutes, the device list over
+    // seconds, so the hosts are re-read every HOSTS_REFRESH_TICKS-th poll (and on
+    // the first).
+    const hostsTick = hostsTicks.current++;
+    if (hostsTick % HOSTS_REFRESH_TICKS === 0 && !hostsInFlight.current) {
       hostsInFlight.current = true;
       api
         .listDeviceHosts()
