@@ -53,21 +53,30 @@ export async function willRecreateOnApply(service: ComposeService): Promise<bool
   return currentHash !== service.configHash;
 }
 
-export const SERVICE_LIFECYCLE_ACTIONS = {
-  restart: restartComposeService,
-  stop: stopComposeService,
-  start: startComposeService,
-} as const;
-
-export type ServiceLifecycleAction = keyof typeof SERVICE_LIFECYCLE_ACTIONS;
+export type ServiceLifecycleAction = "restart" | "stop" | "start";
 
 /** Runs a per-service lifecycle action and, on success, refreshes the
- * discovery cache so the next poll sees the new state. */
+ * discovery cache so the next poll sees the new state. A `switch`, not a
+ * lookup table: `action` arrives from a request on the agent, and indexing an
+ * object with it would reach `constructor`/`toString`. */
 export async function runServiceLifecycleAction(
   action: ServiceLifecycleAction,
   service: ComposeService,
 ): Promise<boolean> {
-  const success = await SERVICE_LIFECYCLE_ACTIONS[action](service);
+  let success: boolean;
+  switch (action) {
+    case "restart":
+      success = await restartComposeService(service);
+      break;
+    case "stop":
+      success = await stopComposeService(service);
+      break;
+    case "start":
+      success = await startComposeService(service);
+      break;
+    default:
+      return false;
+  }
   if (success) await getComposeServices(true);
   return success;
 }

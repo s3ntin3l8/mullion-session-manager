@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
-import { projects } from "../../src/db/schema.js";
+import { projects, sessions } from "../../src/db/schema.js";
+import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../src/shared/constants.js";
+import { eq } from "drizzle-orm";
 
 // Issue #3427 - a REMOTE project's Docker discovery and service actions go to
 // its agent. The agent is scripted below; a method the test does not script
@@ -210,5 +212,70 @@ describe("remote projects: Docker discovery and actions on the agent (#3427)", (
     expect(res.statusCode).toBe(404);
 
     await app.close();
+  });
+
+  it("503s (not 404) a per-service action when the agent cannot be reached for discovery", async () => {
+    agent.scripted = {};
+    const app = await buildApp();
+    const projectId = await remoteProjectOn(app, "remote-down");
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/docker/check-update`,
+      payload: { controlId: "docker:sanctuary:web" },
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  describe("a remote stack session's liveness is the agent's, not this host's scope (#3427)", () => {
+    async function stackRestart(mode: "alive" | "dead" | "omitted" | "unreachable") {
+      agent.scripted = {
+        resolveDockerServices: () => ({ composeAvailable: true, services: [service()] }),
+        bulkIsMasterAlive: (ids) => {
+          if (mode === "unreachable") throw new Error("down");
+          if (mode === "omitted") return {};
+          return Object.fromEntries((ids as string[]).map((id) => [id, mode === "alive"]));
+        },
+      };
+      const app = await buildApp();
+      const projectId = await remoteProjectOn(app, `remote-live-${mode}`);
+      const { hostId } = app.db.select().from(projects).where(eq(projects.id, projectId)).get()!;
+      const row = app.db
+        .insert(sessions)
+        .values({
+          projectId,
+          hostId,
+          command: "docker compose restart",
+          kind: "dock",
+          status: "active",
+          name: `${DOCKER_STACK_SESSION_NAME_PREFIX}sanctuary`,
+        })
+        .returning()
+        .get();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/docker/stack/restart`,
+        payload: { controlId: "docker:sanctuary:web" },
+      });
+      const consulted = agent.calls.some((c) => c.method === "bulkIsMasterAlive");
+      await app.close();
+      return { res, row, consulted };
+    }
+
+    it.each(["alive", "omitted", "unreachable"] as const)(
+      "keeps and reuses the session when the agent says %s",
+      async (mode) => {
+        const { res, row, consulted } = await stackRestart(mode);
+        expect(consulted).toBe(true);
+        expect(res.statusCode).toBe(201);
+        expect(res.json()).toMatchObject({ sessionId: row.id, reused: true });
+      },
+    );
+
+    it("does not reuse a session the agent reports dead", async () => {
+      const { res, row, consulted } = await stackRestart("dead");
+      expect(consulted).toBe(true);
+      expect(res.json().sessionId).not.toBe(row.id);
+    });
   });
 });

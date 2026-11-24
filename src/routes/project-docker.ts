@@ -197,12 +197,13 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
     try {
       services = await discoveredServicesForProject(app, project);
     } catch (err) {
-      // A remote agent that cannot answer: nothing is owned, nothing is touched.
+      // A remote agent that cannot answer is "host unreachable" (the dock route
+      // says 503 too), not "this control no longer exists".
       app.log.warn(
         { hostId: project.hostId, err },
         "host unreachable, docker discovery unavailable",
       );
-      return null;
+      throw app.httpErrors.serviceUnavailable(`Host ${project.hostId} is unreachable`);
     }
     return services.find((s) => `docker:${s.composeProject}:${s.service}` === controlId) ?? null;
   }

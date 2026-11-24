@@ -20,11 +20,21 @@ export type DockerComposeAction = "restart" | "stop" | "start" | "check-update" 
 // still under the agent's own compose timeouts.
 const DOCKER_ACTION_TIMEOUT_MS = 180_000;
 
+// The agent's discovery on a cold cache runs `docker compose ps`, one `compose
+// config` per stack and `compose version` (5 s budget each), so it must be
+// allowed well past the client's 5 s default or the primary aborts first and
+// the dock silently loses its Docker monitors.
+const DOCKER_DISCOVERY_TIMEOUT_MS = 30_000;
+
 export function resolveDockerServices(
   request: GitRequest,
   cwd: string,
 ): Promise<RemoteDockerServices> {
-  return request(`/internal/docker-services?cwd=${encodeURIComponent(cwd)}`);
+  return request(
+    `/internal/docker-services?cwd=${encodeURIComponent(cwd)}`,
+    undefined,
+    DOCKER_DISCOVERY_TIMEOUT_MS,
+  );
 }
 
 export function runDockerComposeAction<T>(

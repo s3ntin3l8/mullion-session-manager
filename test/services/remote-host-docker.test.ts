@@ -10,7 +10,13 @@ describe("remote-host-docker facet", () => {
   it("asks for the services under a cwd, URL-encoded", async () => {
     const request = vi.fn().mockResolvedValue({ services: [], composeAvailable: false });
     await resolveDockerServices(request, "/a b/proj");
-    expect(request).toHaveBeenCalledWith("/internal/docker-services?cwd=%2Fa%20b%2Fproj");
+    expect(request).toHaveBeenCalledWith(
+      "/internal/docker-services?cwd=%2Fa%20b%2Fproj",
+      undefined,
+      expect.any(Number),
+    );
+    // longer than the client's 5 s default: the agent's cold discovery can take ~15 s
+    expect(request.mock.calls[0][2]).toBeGreaterThanOrEqual(20_000);
   });
 
   it("posts a compose action naming the service, never a docker argument, with a long timeout", async () => {
