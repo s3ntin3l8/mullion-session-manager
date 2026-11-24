@@ -428,6 +428,26 @@ describe("PairDeviceDialog (issue #1379)", () => {
       expect(api.listDiscoveredDevices).not.toHaveBeenCalledWith("local");
     });
 
+    it("keeps an explicitly chosen host when it later turns unreachable", async () => {
+      const { rerender } = render(
+        <PairDeviceDialog deviceHosts={hosts} onClose={vi.fn()} onPaired={vi.fn()} />,
+      );
+      pickDropdownOption(await screen.findByRole("combobox", { name: "Host" }), "h-pi");
+      await waitFor(() => expect(api.listDiscoveredDevices).toHaveBeenCalledWith("h-pi"));
+      vi.mocked(api.listDiscoveredDevices).mockClear();
+      rerender(
+        <PairDeviceDialog
+          deviceHosts={[hosts[0], { ...hosts[1], status: "unreachable" }]}
+          onClose={vi.fn()}
+          onPaired={vi.fn()}
+        />,
+      );
+      await waitFor(() => expect(api.listDiscoveredDevices).toHaveBeenCalledWith("h-pi"), {
+        timeout: DISCOVERY_POLL_MS * 2,
+      });
+      expect(api.listDiscoveredDevices).not.toHaveBeenCalledWith("local");
+    });
+
     it("lists on and pairs through the chosen agent host", async () => {
       vi.mocked(api.listDiscoveredDevices).mockImplementation(async (hostId) =>
         hostId === "h-pi" ? [discovered({ name: "Remote Pixel" })] : [],

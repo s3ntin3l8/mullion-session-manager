@@ -1933,7 +1933,8 @@ Commands:
   project list|actions|targets|dock|tooling
   preview create|get|delete|list
   dock start|stop|list
-  device list|get|create|pair|pair-and-connect|discovered [--host <hostId>]|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard
+  device list|get|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard
+  device pair|pair-and-connect|discovered take [--host <hostId>] (an agent host instead of the primary)
   task list [--status <s>] [--project <id>]
   task get <id>
   task retry <id> [--agent <a>] [--review-agent <r>]

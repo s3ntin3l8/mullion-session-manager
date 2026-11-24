@@ -67,6 +67,7 @@ export function PairDeviceDialog({
   const pairAndConnect = useDashboardStore((s) => s.pairAndConnect);
 
   const [chosenHostId, setHostId] = useState(LOCAL_HOST_ID);
+  const [hostPicked, setHostPicked] = useState(false);
   // Set when listing an agent's phones fails (503 unreachable, 400 unknown or
   // outdated agent) — shown instead of the "No devices found" hint.
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -97,22 +98,25 @@ export function PairDeviceDialog({
     return () => clearTimeout(id);
   }, []);
 
-  const pairHosts = (deviceHosts ?? []).filter(
-    (h) => h.status !== "ok" || h.deviceKinds.includes("physical"),
-  );
-  const hostOptions = pairHosts.map((h) => ({
+  // Every host stays listed so the picker is honest about the primary; one
+  // that can't pair a phone is shown disabled.
+  const hostOptions = (deviceHosts ?? []).map((h) => ({
     value: h.hostId,
     label:
       h.status === "unsupported"
         ? `${h.name} — unsupported (agent needs an update)`
         : h.status === "unreachable"
           ? `${h.name} — unreachable`
-          : h.name,
-    disabled: h.status !== "ok",
+          : !h.deviceKinds.includes("physical")
+            ? `${h.name} — cannot pair devices`
+            : h.name,
+    disabled: h.status !== "ok" || !h.deviceKinds.includes("physical"),
   }));
-  // The chosen host, or the first one that can pair when that one can't (the
-  // primary may have no adb of its own while an agent has).
-  const hostId = hostOptions.some((o) => o.value === chosenHostId && !o.disabled)
+  // Until the user picks one, the first host that can pair (the primary may
+  // have no adb of its own while an agent has). An explicit pick is kept even
+  // if that host later turns unreachable: the scan then says so, instead of
+  // pairing silently moving elsewhere.
+  const hostId = hostPicked
     ? chosenHostId
     : (hostOptions.find((o) => !o.disabled)?.value ?? chosenHostId);
 
@@ -162,6 +166,7 @@ export function PairDeviceDialog({
   const showHostPicker = hostOptions.length > 1;
 
   const changeHost = (next: string) => {
+    setHostPicked(true);
     if (next === hostId) return;
     setHostId(next);
     // Nothing scanned on the old host applies to the new one.
