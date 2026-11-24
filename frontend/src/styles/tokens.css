@@ -148,6 +148,8 @@
   --material-muted: #b5b5be;
   --material-dim: #b5b5bd;
   --material-accent: #34d399;
+  /* The tightest pair (4.59:1 over material on white): a step back
+     toward 84% or a --term change fails here first. */
   --material-accent-solid: #32ad84;
   --material-ring: #12b981;
   --material-r: #ea797b;

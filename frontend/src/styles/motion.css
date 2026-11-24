@@ -267,8 +267,11 @@
    is too much for some text colours over a white preview (dark theme) or a
    black terminal (light theme), so inside a sheet or popover every text role
    takes its --material-* value from tokens.css: the same hue, lifted until it
-   clears 4.5:1 over material on either. Two classes, so the rule beats
-   `.cmux-root.light` on a popover that is its own theme root. A sheet is a
+   clears 4.5:1 over material on either. On a popover that is its own theme
+   root this rule ties `.cmux-root.light` on specificity (0,2,0) and wins on
+   source order only: motion.css is index.css's last @import, which
+   motion.test.ts pins. Moved earlier in the cascade, popovers would silently
+   get the base palette back. A sheet is a
    child of its theme root, where the --status-*-fg tokens were already
    resolved from --g/--r/..., so those are remapped by name as well.
    Kept under reduced transparency: the lifted values clear AA on solid
