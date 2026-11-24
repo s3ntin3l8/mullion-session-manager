@@ -45,14 +45,59 @@ import type {
   ReviewGateBody,
   PromoteDecisionBody,
 } from "./internal-schemas.js";
+import { findDockPortConflict } from "../services/dock-port-check.js";
 import { INTERNAL_RATE_LIMIT } from "./internal-rate-limits.js";
-import { resolveWithinRoots } from "./internal-roots.js";
+import { requireWithinRoots, resolveWithinRoots } from "./internal-roots.js";
 
 /**
  * The agent's sessions and worktree comparison routes. Registered from `internalRoutes` so they sit
  * behind its auth hook and share its rate limits.
  */
 export function registerSessionRoutes(app: FastifyInstance): void {
+  // Issue #3426 — the primary's dock-launch port-conflict check, run on the
+  // host that will actually bind the port. READ-ONLY (a loopback bind probe
+  // and a scan of this agent's live sessions), so it is classified idempotent
+  // in remote-host-errors.ts. Answers `null` when there is no conflict.
+  app.post<{ Body: { cwd: string; command: string; devServerUrl?: string | null } }>(
+    "/internal/dock-port-check",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        body: {
+          type: "object",
+          required: ["cwd", "command"],
+          additionalProperties: false,
+          properties: {
+            cwd: { type: "string", minLength: 1 },
+            command: { type: "string", minLength: 1 },
+            devServerUrl: { type: ["string", "null"], maxLength: 2048 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      const conflict = await findDockPortConflict(app, {
+        cwd: resolvedCwd,
+        command: request.body.command,
+        devServerUrl: request.body.devServerUrl,
+        sessionIds: app.pty.list().map((s) => s.id),
+      });
+      reply.type("application/json");
+      return JSON.stringify(
+        conflict
+          ? {
+              port: conflict.port,
+              ...(conflict.holderSessionId !== undefined
+                ? { holderSessionId: conflict.holderSessionId }
+                : {}),
+            }
+          : null,
+      );
+    },
+  );
+
   // Mirrors POST /api/sessions' "create the row and spawn immediately" — an
   // agent has no row to create, just the spawn half. Idempotent the same way
   // app.pty.getOrCreate always is: calling this again for an id already

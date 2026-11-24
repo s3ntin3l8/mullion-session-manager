@@ -126,9 +126,9 @@ starts on the project's own placement again.
 - A simulator or emulator on that host reaches the dev server at the host's own
   localhost (`http://127.0.0.1:<port>` in the simulator's Safari); nothing links
   the two yet.
-- Not yet on a remote host: the port-conflict probe below, dev-server port
-  detection and Docker discovery (set `devServerUrl` to a bare port by hand), and
-  branch previews (`409 remote_unsupported`).
+- Not yet on a remote host: dev-server port detection and Docker discovery (set
+  `devServerUrl` to a bare port by hand), and branch previews
+  (`409 remote_unsupported`).
 
 ### Port conflicts
 
@@ -142,7 +142,12 @@ and nothing is spawned. `holderSessionId` is a live Mullion session whose
 output announced that port; absent means another process holds it. The Dock
 shows "Port 5173 is in use by session 12" on the row, with **Open holder** and
 **Stop holder and start** when a session holds it; the CLI and MCP print the
-same message. Local projects only.
+same message. On a remote launch target the probe runs on the agent
+(`POST /internal/dock-port-check`, read-only), against the agent's own checkout
+and loopback; `holderSessionId` is a session the agent holds, mapped to the
+primary's row (an unknown one reads as "another process"). An agent that cannot
+answer (an older build, unreachable) never blocks the launch. An Auto-placed
+or `targetPlatform` launch still skips the check (the host is unknown before placement).
 
 If a session's output ends in `EADDRINUSE`, "address already in use" or
 "Port N is in use" (not Vite's "…trying another one"), its ended detail reads

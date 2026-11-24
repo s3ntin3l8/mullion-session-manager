@@ -32,6 +32,7 @@ import {
 import type { DirectoryListing } from "./fs-dirs.js";
 import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 import * as git from "./remote-host-git.js";
+import * as dock from "./remote-host-dock.js";
 import { createBrowserClient, type BrowserClient } from "./remote-host-browser.js";
 import { createAvdsClient, type AvdsClient } from "./remote-host-avds.js";
 import { createDevicesClient, type DevicesClient } from "./remote-host-devices.js";
@@ -578,6 +579,15 @@ export class RemoteHostClient {
 
   resolveGitHubRepo(cwd: string): Promise<GitHubRepoRef | null> {
     return git.resolveGitHubRepo(this.boundRequest, cwd);
+  }
+
+  /** Issue #3426 — mirrors POST /internal/dock-port-check (read-only). */
+  resolveDockPortCheck(body: {
+    cwd: string;
+    command: string;
+    devServerUrl: string | null;
+  }): Promise<dock.DockPortCheckAnswer | null> {
+    return dock.resolveDockPortCheck(this.boundRequest, body);
   }
 
   resolveGitBranch(cwd: string): Promise<string | null> {
