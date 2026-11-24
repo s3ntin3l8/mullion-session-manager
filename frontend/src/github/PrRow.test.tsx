@@ -149,9 +149,7 @@ describe("PrRow task quick actions", () => {
     retryTask: useDashboardStore.getState().retryTask,
     approveTask: useDashboardStore.getState().approveTask,
   };
-  afterEach(() =>
-    useDashboardStore.setState({ tasks: [], taskMasterEnabled: false, ...before }),
-  );
+  afterEach(() => useDashboardStore.setState({ tasks: [], taskMasterEnabled: false, ...before }));
   const taskPr = { ...PR, taskId: 9, taskStatus: "failed" } as GitHubPROrWithChecks;
 
   it("Retry on a failed task's PR; its error shows on the row", async () => {

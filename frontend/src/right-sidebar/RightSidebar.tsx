@@ -1,12 +1,5 @@
 import type { ReactNode } from "react";
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDragResize } from "../hooks/useDragResize.js";
 import { useClearTaskSelectionOnProjectChange } from "../hooks/useClearTaskSelectionOnProjectChange.js";
 import { useFollowedProject } from "../hooks/useFollowedProject.js";

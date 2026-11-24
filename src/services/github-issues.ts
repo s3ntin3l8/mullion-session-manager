@@ -279,11 +279,7 @@ export async function listIssues(
     const scanned: IssueListItem[] = [];
     const wanted = page * PAGE_SIZE + 1;
     let exhausted = false;
-    for (
-      let n = 1;
-      n <= MAX_SEARCH_PAGES && (query.countMatches || matches.length < wanted);
-      n++
-    ) {
+    for (let n = 1; n <= MAX_SEARCH_PAGES && (query.countMatches || matches.length < wanted); n++) {
       const raw = await fetchRawPage(n);
       const issues = toIssues(raw);
       scanned.push(...issues);

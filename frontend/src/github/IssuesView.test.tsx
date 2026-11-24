@@ -113,9 +113,9 @@ describe("IssuesSection", () => {
     expect(screen.getByText("Plain issue")).toBeInTheDocument();
     expect(screen.queryByText("Crash on start")).toBeNull();
     // #2461 — the pick goes to the server, which filters across pages.
-    expect(
-      vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes("origin=manual")),
-    ).toBe(true);
+    expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes("origin=manual"))).toBe(
+      true,
+    );
     await userEvent.click(screen.getByRole("button", { name: "Task Master" }));
     expect(screen.getByText("Crash on start")).toBeInTheDocument();
     expect(screen.queryByText("Plain issue")).toBeNull();
@@ -1007,9 +1007,11 @@ describe("Issue row task quick actions", () => {
 
   it("a tracking epic's approval hands over to the task's detail", async () => {
     const { ApiError } = await import("../api/index.js");
-    const approveTask = vi.fn().mockRejectedValue(
-      new ApiError("Epic #9 has 2 open sub-issues", 409, "tracking-epic-with-open-sub-issues"),
-    );
+    const approveTask = vi
+      .fn()
+      .mockRejectedValue(
+        new ApiError("Epic #9 has 2 open sub-issues", 409, "tracking-epic-with-open-sub-issues"),
+      );
     const openRightSidebarTask = vi.fn();
     await renderWith(reviewing, { approveTask, openRightSidebarTask });
     await userEvent.click(screen.getByTitle("Approve task"));
@@ -1019,7 +1021,10 @@ describe("Issue row task quick actions", () => {
   });
 
   it("no Approve while a workflow change holds the task", async () => {
-    await renderWith({ ...reviewing, workflowChange: JSON.stringify({ sha: "abc", files: [".github/x.yml"] }) });
+    await renderWith({
+      ...reviewing,
+      workflowChange: JSON.stringify({ sha: "abc", files: [".github/x.yml"] }),
+    });
     expect(screen.queryByTitle("Approve task")).toBeNull();
     expect(screen.getByRole("button", { name: "Re-review task" })).toBeInTheDocument();
   });

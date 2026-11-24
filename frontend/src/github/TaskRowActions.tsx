@@ -62,13 +62,21 @@ function TaskRowButtons({
   switch (task.status) {
     case "ready":
       return (
-        <IconButton label={`Claim task${hint}`} disabled={gated} onClick={() => void actions.claim()}>
+        <IconButton
+          label={`Claim task${hint}`}
+          disabled={gated}
+          onClick={() => void actions.claim()}
+        >
           <PlayTriangleIcon size={14} />
         </IconButton>
       );
     case "failed":
       return (
-        <IconButton label={`Retry task${hint}`} disabled={gated} onClick={() => void actions.retry()}>
+        <IconButton
+          label={`Retry task${hint}`}
+          disabled={gated}
+          onClick={() => void actions.retry()}
+        >
           <RotateIcon size={14} />
         </IconButton>
       );

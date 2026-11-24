@@ -444,7 +444,11 @@ describe("git deep-link requests", () => {
 describe("opening the Tasks view with Task Master off", () => {
   const known = { settingsLoaded: true, taskMasterEnv: FALLBACK_TASK_MASTER_ENV };
   afterEach(() =>
-    useDashboardStore.setState({ settingsLoaded: false, taskMasterEnv: null, taskMasterEnabled: false }),
+    useDashboardStore.setState({
+      settingsLoaded: false,
+      taskMasterEnv: null,
+      taskMasterEnabled: false,
+    }),
   );
 
   it("openRightSidebarView and toggleRightSidebarView open the default view instead", () => {

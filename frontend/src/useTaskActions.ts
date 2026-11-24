@@ -25,7 +25,10 @@ export function isTrackingEpicConflict(err: unknown): err is ApiError {
  * starts) instead of the hook keeping it: a list row has no room for its own
  * error line and reports it to its section.
  */
-export function useTaskActions(task: Task, opts: { onError?: (message: string | null) => void } = {}) {
+export function useTaskActions(
+  task: Task,
+  opts: { onError?: (message: string | null) => void } = {},
+) {
   const claimTask = useDashboardStore((s) => s.claimTask);
   const retryTask = useDashboardStore((s) => s.retryTask);
   const approveTask = useDashboardStore((s) => s.approveTask);

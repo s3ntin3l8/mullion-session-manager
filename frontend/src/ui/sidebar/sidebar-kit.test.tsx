@@ -555,7 +555,9 @@ describe("attention tint under hover and selection", () => {
     const attnState = block(".sb-row--attn:hover,\n.sb-row--attn.sb-row--sel {");
     expect(attnState.start).toBeGreaterThan(plainHover.start);
     expect(attnState.start).toBeGreaterThan(attn.start);
-    expect(attnState.body).toMatch(/background: color-mix\(in srgb, var\(--r\) \d+%, var\(--surface-hover\)\)/);
+    expect(attnState.body).toMatch(
+      /background: color-mix\(in srgb, var\(--r\) \d+%, var\(--surface-hover\)\)/,
+    );
   });
 });
 
