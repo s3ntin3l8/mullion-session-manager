@@ -97,4 +97,39 @@ describe("dock divider keyboard resizing (issue #1264)", () => {
     fireEvent.keyDown(rail, { key: "Home" });
     expect(localStorage.getItem("crs.dockRailWidth")).toBe("216");
   });
+
+  it("moves and persists the dock-height handle by keyboard (#3451)", () => {
+    // jsdom has no layout: give the dock a 600px region so the drag's own max
+    // (region - 160px grid floor = 440) leaves room above the 240px default.
+    const clientHeight = vi
+      .spyOn(HTMLElement.prototype, "clientHeight", "get")
+      .mockReturnValue(600);
+    try {
+      render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+      const handle = () => document.querySelector(".dock-resize-handle") as HTMLElement;
+      const dock = () => document.querySelector(".dock") as HTMLElement;
+      expect(handle().getAttribute("role")).toBe("separator");
+      expect(handle().getAttribute("aria-orientation")).toBe("horizontal");
+      expect(handle().getAttribute("aria-label")).toBeTruthy();
+      expect(handle().getAttribute("tabindex")).toBe("0");
+      expect(handle().getAttribute("aria-valuemin")).toBe("120");
+      expect(handle().getAttribute("aria-valuemax")).toBe("440");
+
+      fireEvent.keyDown(handle(), { key: "Home" });
+      expect(dock().style.height).toBe("120px");
+      expect(localStorage.getItem("crs.dockHeight")).toBe("120");
+      expect(handle().getAttribute("aria-valuenow")).toBe("120");
+      // Inverted axis: ArrowUp grows the dock, ArrowDown shrinks it.
+      fireEvent.keyDown(handle(), { key: "ArrowUp" });
+      expect(dock().style.height).toBe("136px");
+      expect(localStorage.getItem("crs.dockHeight")).toBe("136");
+      fireEvent.keyDown(handle(), { key: "ArrowDown" });
+      expect(dock().style.height).toBe("120px");
+      fireEvent.keyDown(handle(), { key: "End" });
+      expect(dock().style.height).toBe("440px");
+      expect(localStorage.getItem("crs.dockHeight")).toBe("440");
+    } finally {
+      clientHeight.mockRestore();
+    }
+  });
 });
