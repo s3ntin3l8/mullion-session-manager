@@ -6,15 +6,15 @@ const files = import.meta.glob("./terminal.css", {
   query: "?raw",
   import: "default",
 }) as Record<string, string>;
-const css = files["./terminal.css"];
+const css = files["./terminal.css"]!;
 
 // jsdom has no layout, so this pins the CSS contract that keeps a long task title from running
 // behind the close/kebab buttons. It is only a CSS contract: no visual scene opens a tab with a long task title.
 
-function rule(selector: string): string {
-  const start = css.indexOf(`\n${selector} {`);
+function rule(selector: string, src: string = css): string {
+  const start = src.indexOf(`\n${selector} {`);
   expect(start, `${selector} rule exists`).toBeGreaterThanOrEqual(0);
-  return css.slice(start, css.indexOf("}", start));
+  return src.slice(start, src.indexOf("}", start));
 }
 
 describe("pane tab title truncation", () => {
@@ -44,12 +44,6 @@ const kitFiles = import.meta.glob("./sidebar-kit.css", {
 }) as Record<string, string>;
 const kit = kitFiles["./sidebar-kit.css"]!;
 
-function ruleIn(src: string, selector: string): string {
-  const start = src.indexOf(`\n${selector} {`);
-  expect(start, `${selector} rule exists`).toBeGreaterThanOrEqual(0);
-  return src.slice(start, src.indexOf("}", start));
-}
-
 describe("pane tab leading row (#3388)", () => {
   it("hard-stops at its own box so nothing paints over the actions", () => {
     const r = rule(".pane-tab-leading");
@@ -72,7 +66,7 @@ describe("pane tab leading row (#3388)", () => {
 
 describe("sidebar task actions row (#3356)", () => {
   it("is a wrapping flex row, not a stack", () => {
-    const r = ruleIn(kit, ".sb-actions-block");
+    const r = rule(".sb-actions-block", kit);
     expect(r).toMatch(/display:\s*flex/);
     expect(r).toMatch(/flex-wrap:\s*wrap/);
   });
