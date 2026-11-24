@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { expectNameHasVisibleText, expectNoNestedInteractive } from "./test/a11y.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 import { NotificationBell } from "./NotificationBell.js";
-import type { NotificationEvent, Project, Session } from "./api/index.js";
+import type { NotificationEvent, Project, Session, Task } from "./api/index.js";
 import {
   flushRaf,
   installFakeVisualViewport,
@@ -23,6 +23,8 @@ let projects: Project[];
 let events: Record<number, NotificationEvent[]>;
 let lastSeenSeq: Record<number, number>;
 let dismissedEventKeys: Record<string, true>;
+let tasks: Task[] = [];
+let mutedSessionIds: number[] = [];
 
 // Issue #1427 — gained a third `ts` segment (see store/helpers.ts's real
 // eventKey doc comment for why: seq alone is no longer unique across a
@@ -78,8 +80,9 @@ function storeState() {
     markSessionRead,
     dismissEvents,
     ackAttention,
-    mutedSessionIds: [],
+    mutedSessionIds,
     toggleSessionMute: vi.fn(),
+    tasks,
   };
 }
 
@@ -185,17 +188,29 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
-// Defaults to a bell-signal attention event (describeEvent -> "Bell") so
-// most tests don't need to spell out a payload just to get readable text.
+// Defaults to an open decision the simplest way there is one: Claude Code's
+// generic notification, on a session (`asking()`) whose live attention is
+// that notification. Its row reads ROW_TEXT.
+const ROW_TEXT = "Heads up — approve the push";
 function makeEvent(overrides: Partial<NotificationEvent> = {}): NotificationEvent {
   return {
     seq: 1,
     sessionId: 1,
     kind: "attention",
     ts: Date.now(),
-    payload: { attention: true, signal: "bell" },
+    payload: {
+      attention: true,
+      signal: "hookNotification",
+      title: "Heads up",
+      body: "approve the push",
+    },
     ...overrides,
   };
+}
+
+// A session waiting on its generic notification (the default makeEvent).
+function asking(overrides: Partial<Session> = {}): Session {
+  return makeSession({ attention: true, attentionKind: "hookNotification", ...overrides });
 }
 
 // Issue #1229 — header vs. event rows must report DIFFERENT heights for a
@@ -281,7 +296,9 @@ async function openPanel(onOpenSession = vi.fn()) {
 }
 
 beforeEach(() => {
-  sessions = [makeSession()];
+  sessions = [asking()];
+  tasks = [];
+  mutedSessionIds = [];
   projects = [{ id: 1, name: "mullion", cwd: "/x", hostId: "local" } as Project];
   events = {};
   lastSeenSeq = {};
@@ -309,27 +326,22 @@ describe("NotificationBell", () => {
     expect(screen.getByText("No notifications yet")).toBeInTheDocument();
   });
 
-  it("shows no unread badge on the trigger button when there are no events", () => {
+  it("shows no badge on the trigger button when there are no events", () => {
     render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     expect(document.querySelector(".attention-badge")).not.toBeInTheDocument();
   });
 
-  it("renders one row per notification-worthy event, grouped under a session header", async () => {
-    events = {
-      1: [
-        makeEvent({ seq: 1 }),
-        makeEvent({ seq: 2, kind: "status_change", payload: { reason: "exited" } }),
-      ],
-    };
+  it("renders an open decision as a row, grouped under a session header", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
     expect(screen.getByText("claude code")).toBeInTheDocument(); // group header title
     expect(screen.getByText("mullion")).toBeInTheDocument(); // group header subtitle
-    expect(screen.getByText("Bell")).toBeInTheDocument();
-    expect(screen.getByText("Exited")).toBeInTheDocument();
+    expect(screen.getByText(ROW_TEXT)).toBeInTheDocument();
+    expect(screen.getByText("Notification", { selector: ".notif-event-kind-pill" })).toBeVisible();
   });
 
   it("issue #1229 — the group header shows the session's current status, and tracks it live", async () => {
-    sessions = [makeSession({ sessionStatus: "working", sessionStatusSeverity: "busy" })];
+    sessions = [asking({ sessionStatus: "working", sessionStatusSeverity: "busy" })];
     events = { 1: [makeEvent({ seq: 1 })] };
     const { rerender } = render(
       <NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />,
@@ -341,25 +353,17 @@ describe("NotificationBell", () => {
     // own store mock — the panel just reads whatever storeState() returns
     // on the next render) — no extra plumbing should be needed for the
     // header to pick up the change.
-    sessions = [
-      makeSession({ sessionStatus: "awaiting_permission", sessionStatusSeverity: "blocked" }),
-    ];
+    sessions = [asking({ sessionStatus: "awaiting_permission", sessionStatusSeverity: "blocked" })];
     rerender(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     expect(screen.queryByText("Working")).not.toBeInTheDocument();
     expect(screen.getByText("Needs permission")).toBeInTheDocument();
   });
 
-  // Issue #1293 — PR #1284's group header deliberately calls
-  // formatStatusLabel(..., "compact") (NotificationBell.tsx) because this
-  // popover is a fixed 380x380px, too narrow for the verbose "label: detail"
-  // form PR #1285 enabled for four awaiting_* statuses. Every other
-  // FeedHeader test uses makeSession's default sessionStatusDetail: null, so
-  // compact and verbose render identically there — dropping the "compact"
-  // argument at the call site would leave this suite green. This test uses a
-  // long detail specifically so the two modes diverge visibly.
+  // Issue #1293 — the group header calls formatStatusLabel(..., "compact"):
+  // a long detail must not turn it into the verbose "label: detail" form.
   it("issue #1293 — the group header status stays in compact mode (bare label, no detail) even with a long sessionStatusDetail", async () => {
     sessions = [
-      makeSession({
+      asking({
         sessionStatus: "awaiting_review_gate",
         sessionStatusSeverity: "blocked",
         sessionStatusDetail: "x".repeat(180),
@@ -371,13 +375,13 @@ describe("NotificationBell", () => {
     expect(screen.queryByText(/Needs review:/)).not.toBeInTheDocument();
   });
 
-  // Hermes review, PR #1284 — there is no `.session-dot-exited` CSS class
-  // (styles/sidebar.css only defines attention/error/finished/idle/
-  // permission/plan/working); an "exited" status must render Sidebar.tsx's
-  // own CloseIcon substitute rather than an unstyled zero-width dot span.
+  // Hermes review, PR #1284 — there is no `.session-dot-exited` CSS class;
+  // an "exited" status renders a CloseIcon instead of an unstyled dot.
   it("issue #1229 — renders a CloseIcon instead of an unstyled dot for an exited session", async () => {
-    sessions = [makeSession({ sessionStatus: "exited", sessionStatusSeverity: "gone" })];
-    events = { 1: [makeEvent({ seq: 1, kind: "status_change", payload: { reason: "exited" } })] };
+    sessions = [
+      makeSession({ sessionStatus: "exited", sessionStatusSeverity: "gone", alive: false }),
+    ];
+    events = { 1: [makeEvent({ seq: 1, kind: "session_end", payload: { exitCode: 2 } })] };
     await openPanel();
     expect(screen.getByText("exited")).toBeInTheDocument();
     const statusEl = screen.getByText("exited").closest(".notif-group-header-status");
@@ -385,109 +389,62 @@ describe("NotificationBell", () => {
     expect(statusEl?.querySelector(".session-dot-exited")).not.toBeInTheDocument();
   });
 
-  it("issue #903 — a generic silence row shows the session's last file change; a specific question row keeps its own text", async () => {
+  it("issue #903 — a content-free notification row shows the session's last file change; a question row keeps its own text", async () => {
+    sessions = [
+      asking({ attentionKind: "question" }),
+      asking({ id: 2, name: "other", attentionKind: "hookNotification" }),
+    ];
     events = {
       1: [
         makeEvent({
+          seq: 1,
+          kind: "question",
+          payload: { state: "started", header: "Stack menu" },
+        }),
+      ],
+      2: [
+        makeEvent({
+          sessionId: 2,
           seq: 1,
           kind: "file_change",
           payload: { path: "src/hooks/forwarder-core.mjs", action: "modify" },
         }),
         makeEvent({
+          sessionId: 2,
           seq: 2,
-          kind: "attention",
-          payload: { attention: true, signal: "silence" },
-        }),
-        makeEvent({
-          seq: 3,
-          kind: "attention",
-          payload: { attention: true, signal: "question", header: "Stack menu" },
+          payload: { attention: true, signal: "hookNotification", title: "", body: "" },
         }),
       ],
     };
     await openPanel();
     expect(screen.getByText("edited src/hooks/forwarder-core.mjs")).toBeInTheDocument();
     expect(screen.getByText("Needs answer: Stack menu")).toBeInTheDocument();
-    expect(screen.queryByText("Gone quiet — needs input")).not.toBeInTheDocument();
   });
 
-  it("issue #1228 — a silence row carrying its own scrollback context is NOT overwritten by sessionContextMap's file-change substitution", async () => {
-    events = {
-      1: [
-        makeEvent({
-          seq: 1,
-          kind: "file_change",
-          payload: { path: "src/hooks/forwarder-core.mjs", action: "modify" },
-        }),
-        makeEvent({
-          seq: 2,
-          kind: "attention",
-          payload: { attention: true, signal: "silence", context: "build succeeded" },
-        }),
-      ],
-    };
-    await openPanel();
-    expect(screen.getByText("Gone quiet — build succeeded")).toBeInTheDocument();
-    expect(screen.queryByText("edited src/hooks/forwarder-core.mjs")).not.toBeInTheDocument();
-  });
-
-  it("issue #903 — two consecutive generic rows with identical derived context still fold to a repeat count", async () => {
-    events = {
-      1: [
-        makeEvent({ seq: 1, kind: "file_change", payload: { path: "src/x.ts", action: "modify" } }),
-        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "silence" } }),
-        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
-      ],
-    };
-    await openPanel();
-    expect(screen.getByText("edited src/x.ts")).toBeInTheDocument();
-    expect(screen.getByText("×2")).toBeInTheDocument();
-  });
-
-  it("code review (issue #903) — a bell and a silence sharing the SAME derived context do NOT fold together", async () => {
-    // Regression test: bell/silence share severity ("done" — notifySeverity
-    // falls through the same way for every generic signal) AND, once both
-    // substitute the same sessionContextMap context, the same text — folding
-    // on (severity, text) alone would wrongly collapse these into one row,
-    // hiding that two DIFFERENT things happened. The kind pill (label) is
-    // what still has to keep them apart.
-    events = {
-      1: [
-        makeEvent({ seq: 1, kind: "file_change", payload: { path: "src/x.ts", action: "modify" } }),
-        makeEvent({ seq: 2, kind: "attention", payload: { attention: true, signal: "bell" } }),
-        makeEvent({ seq: 3, kind: "attention", payload: { attention: true, signal: "silence" } }),
-      ],
-    };
-    await openPanel();
-    const rows = screen.getAllByText("edited src/x.ts");
-    expect(rows).toHaveLength(2);
-    expect(screen.queryByText("×2")).not.toBeInTheDocument();
-  });
-
-  it("excludes routine, high-frequency kinds (title_change, alt-screen status_change) from the feed", async () => {
+  it("excludes routine and informative kinds (title_change, alt-screen, bell, silence, tool failures) from the decision rows", async () => {
+    sessions = [makeSession({ attention: true, attentionKind: "silence" })];
     events = {
       1: [
         makeEvent({ seq: 1, kind: "title_change", payload: { title: "zsh" } }),
         makeEvent({ seq: 2, kind: "status_change", payload: { screen: "alt" } }),
-        makeEvent({ seq: 3 }),
+        makeEvent({ seq: 3, payload: { attention: true, signal: "bell" } }),
+        makeEvent({ seq: 4, payload: { attention: true, signal: "silence" } }),
+        makeEvent({ seq: 5, kind: "tool_failure", payload: { tool: "Bash", error: "exit 2" } }),
+        makeEvent({
+          seq: 6,
+          kind: "dev_server_detected",
+          payload: { port: "5173", state: "dismissed" },
+        }),
       ],
     };
     await openPanel();
-    // Neither routine kind ever gets its OWN row — that's the invariant this
-    // test protects. But (issue #903) they're still buffered into the
-    // session's own event ring, which sessionContextMap now reads: the
-    // generic `bell` row's text becomes "zsh" (the last title seen) instead
-    // of the bare, content-free "Bell" — its kind pill still reads "Bell"
-    // (notifyLabel, unaffected by the substitution), just not as the row's
-    // own body text.
-    expect(screen.queryByText("Entered full-screen mode")).not.toBeInTheDocument();
-    expect(screen.getByText("zsh")).toBeInTheDocument();
-    expect(screen.queryByText("Bell", { selector: ".notif-event-text" })).not.toBeInTheDocument();
-    expect(screen.getByText("Bell", { selector: ".notif-event-kind-pill" })).toBeInTheDocument();
+    expect(document.querySelector(".notif-event-row")).not.toBeInTheDocument();
+    expect(screen.getByText("No notifications yet")).toBeInTheDocument();
+    expect(document.querySelector(".attention-badge")).not.toBeInTheDocument();
   });
 
-  it("sorts sessions by recency — the session with the newest event leads", async () => {
-    sessions = [makeSession({ id: 1, name: "older" }), makeSession({ id: 2, name: "newer" })];
+  it("sorts sessions by recency — the session with the newest open decision leads", async () => {
+    sessions = [asking({ id: 1, name: "older" }), asking({ id: 2, name: "newer" })];
     events = {
       1: [makeEvent({ sessionId: 1, seq: 1, ts: 1000 })],
       2: [makeEvent({ sessionId: 2, seq: 1, ts: 5000 })],
@@ -498,54 +455,13 @@ describe("NotificationBell", () => {
     expect(headers[1]).toHaveTextContent("older");
   });
 
-  it("shows an unread count on the trigger badge for unread notification-worthy events", () => {
-    events = { 1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 })] };
-    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-    expect(screen.getByText("2")).toBeInTheDocument();
-  });
-
-  it("excludes dismissed events from the unread count", () => {
-    events = { 1: [makeEvent({ seq: 1, ts: 1000 }), makeEvent({ seq: 2, ts: 2000 })] };
-    dismissedEventKeys = { [eventKey(1, 1, 1000)]: true };
-    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
-    expect(screen.getByText("1")).toBeInTheDocument();
-  });
-
-  it("per-event mark-read advances the cursor to that event's own seq, without touching newer unread events", async () => {
-    // Making notifications relevant/scannable — two IDENTICAL bell events
-    // (the old default here) now fold into a single collapsed row (see
-    // buildFeedItems' foldConsecutiveRows), which would defeat this test's
-    // own premise of two independently mark-readable rows. Distinct
-    // signals (bell vs hookNotification) keep them from folding, same as
-    // any two genuinely different notifications would in practice.
-    events = {
-      1: [
-        makeEvent({ seq: 1 }),
-        makeEvent({
-          seq: 2,
-          payload: { attention: true, signal: "hookNotification", title: "heads up", body: "" },
-        }),
-      ],
-    };
-    await openPanel();
-    const markReadButtons = screen.getAllByRole("button", { name: "Mark read" });
-    expect(markReadButtons).toHaveLength(2);
-
-    // Rows render newest-first — the first "Mark read" button belongs to seq 2.
-    await userEvent.click(markReadButtons[0]);
-    expect(markEventSeen).toHaveBeenCalledWith(1, 2);
-    // Issue #1430 — "Mark read" is an explicit read action.
-    expect(ackAttention).toHaveBeenCalledWith(1);
-  });
-
   it("dismiss removes the event from the feed and it does not resurface on a later render", async () => {
-    // A fixed ts (not the makeEvent default's Date.now()) — a genuine
-    // redelivery of the same event below must carry the exact same ts, the
-    // same way the server's own ring buffer would replay it unchanged.
+    // A fixed ts: a genuine redelivery of the same event below must carry
+    // the exact same ts, the way the server's ring buffer replays it.
     events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
     const first = render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
-    expect(screen.getByText("Bell")).toBeInTheDocument();
+    expect(screen.getByText(ROW_TEXT)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(dismissEvents).toHaveBeenCalledWith(1, [1]);
@@ -553,28 +469,32 @@ describe("NotificationBell", () => {
     expect(ackAttention).toHaveBeenCalledWith(1);
     first.unmount();
 
-    // Simulate the dismissal actually landing in the store (the mock above
-    // already updated `dismissedEventKeys`) and a fresh mount — mirrors a
-    // reconnect's replay batch re-delivering an event this store already
-    // has: the SAME event (same seq AND ts) arrives again in `events`, and
-    // must still stay filtered out because dismissal is keyed on
-    // (sessionId, seq, ts), not on the event's continued presence in the
-    // `events` slice.
+    // A reconnect's replay re-delivers the same event (same seq AND ts): it
+    // stays filtered, dismissal is keyed on (sessionId, seq, ts).
     events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
     render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: /notifications/i }));
-    expect(screen.queryByText("Bell")).not.toBeInTheDocument();
+    expect(screen.queryByText(ROW_TEXT)).not.toBeInTheDocument();
     expect(screen.getByText("No notifications yet")).toBeInTheDocument();
   });
 
-  it("dismissing a folded (×N) row dismisses every folded seq in a single batched call", async () => {
-    // Three identical consecutive events (same kind/payload → same
-    // severity+text) fold into one row (foldConsecutiveRows) — its Dismiss
-    // button must clear all three seqs at once via dismissEvents, not just
-    // the representative (newest) one.
-    events = {
-      1: [makeEvent({ seq: 1 }), makeEvent({ seq: 2 }), makeEvent({ seq: 3 })],
-    };
+  it("folds identical open decisions (two gates with the same prompt) and dismisses every folded seq at once", async () => {
+    sessions = [
+      makeSession({
+        gates: [
+          { gateId: "g1", prompt: "Deploy?", at: 1 },
+          { gateId: "g2", prompt: "Deploy?", at: 2 },
+          { gateId: "g3", prompt: "Deploy?", at: 3 },
+        ],
+      }),
+    ];
+    const gate = (seq: number) =>
+      makeEvent({
+        seq,
+        kind: "review_gate",
+        payload: { state: "waiting", prompt: "Deploy?", gateId: `g${seq}` },
+      });
+    events = { 1: [gate(1), gate(2), gate(3)] };
     await openPanel();
     expect(screen.getByText("×3")).toBeInTheDocument();
 
@@ -582,21 +502,11 @@ describe("NotificationBell", () => {
     expect(dismissEvents).toHaveBeenCalledWith(1, [3, 2, 1]);
   });
 
-  it("mark-all-read advances every unread session's cursor to its true latest seq across all buffered events, not just notification-worthy ones", async () => {
-    events = {
-      1: [
-        makeEvent({ seq: 1 }),
-        // A routine title_change with a HIGHER seq than the notification-worthy
-        // event — mark-all-read should still clear the tab badge fully, so it
-        // must advance past this too, not stop at the last notify-worthy seq.
-        makeEvent({ seq: 2, kind: "title_change", payload: { title: "zsh" } }),
-      ],
-    };
+  it("has no per-row Mark read on a decision: it stays until answered or dismissed", async () => {
+    events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
-    await userEvent.click(screen.getByRole("button", { name: "Mark all read" }));
-    expect(markEventSeen).toHaveBeenCalledWith(1, 2);
-    // Issue #1430 — "Mark all read" is an explicit read action.
-    expect(ackAttention).toHaveBeenCalledWith(1);
+    expect(screen.queryByRole("button", { name: "Mark read" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
   });
 
   // Issue #1429 — one click destination everywhere (the phone sheet, push,
@@ -604,17 +514,16 @@ describe("NotificationBell", () => {
   it("clicking an event row opens the session, marks it read, and closes the panel", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     const onOpenSession = await openPanel();
-    await userEvent.click(screen.getByText("Bell"));
+    await userEvent.click(screen.getByText(ROW_TEXT));
     expect(onOpenSession).toHaveBeenCalledWith(sessions[0]);
     expect(markSessionRead).toHaveBeenCalledWith(1);
     // Issue #1430 — opening the row is an explicit read action.
     expect(ackAttention).toHaveBeenCalledWith(1);
-    expect(screen.queryByText("Bell")).not.toBeInTheDocument();
+    expect(screen.queryByText(ROW_TEXT)).not.toBeInTheDocument();
   });
 
-  // Issue #1429 — Timeline is now a secondary action alongside the row's
-  // own open-the-session behavior, not an alternate destination for the
-  // row click itself.
+  // Issue #1429 — Timeline is a secondary action alongside the row's own
+  // open-the-session behavior.
   it("offers a secondary Timeline button that opens the timeline without also opening the session", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     const onOpenSession = vi.fn();
@@ -630,10 +539,11 @@ describe("NotificationBell", () => {
     await userEvent.click(screen.getByRole("button", { name: "Timeline" }));
     expect(onOpenTimeline).toHaveBeenCalledWith(sessions[0]);
     expect(onOpenSession).not.toHaveBeenCalled();
-    expect(screen.queryByText("Bell")).not.toBeInTheDocument();
+    expect(screen.queryByText(ROW_TEXT)).not.toBeInTheDocument();
   });
 
   it("opens a pr_* event's PR in the right sidebar; the Session button still opens the terminal", async () => {
+    sessions = [makeSession()];
     events = {
       1: [makeEvent({ seq: 1, kind: "pr_ci_failed", payload: { number: 42, title: "Fix" } })],
     };
@@ -697,7 +607,6 @@ describe("NotificationBell", () => {
       expect(stops[0]).toBe(open);
       expect(stops.slice(1).map((b) => b.textContent || b.getAttribute("aria-label"))).toEqual([
         "Timeline",
-        "Mark read",
         "Dismiss",
       ]);
     });
@@ -724,23 +633,6 @@ describe("NotificationBell", () => {
       expect(onOpenTimeline).toHaveBeenCalledTimes(1);
       expect(onOpenSession).not.toHaveBeenCalled();
     });
-  });
-
-  it("keeps an already-read event visible in the feed (history, not just unread inbox), without a mark-read button", async () => {
-    events = { 1: [makeEvent({ seq: 1 })] };
-    lastSeenSeq = { 1: 1 };
-    await openPanel();
-    expect(screen.getByText("Bell")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Mark read" })).not.toBeInTheDocument();
-    // Dismiss is still offered even for a read event.
-    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
-  });
-
-  it("does not show the mark-all-read button when nothing is unread", async () => {
-    events = { 1: [makeEvent({ seq: 1 })] };
-    lastSeenSeq = { 1: 1 };
-    await openPanel();
-    expect(screen.queryByRole("button", { name: "Mark all read" })).not.toBeInTheDocument();
   });
 });
 
@@ -852,12 +744,14 @@ describe("review gate Approve/Deny (issue #178)", () => {
     expect(resolveReviewGate).not.toHaveBeenCalledWith(1, "g-first", "approved");
   });
 
-  it("does not show Approve/Deny once the session's gateState has moved past waiting, even though the waiting event is still in the feed", async () => {
+  // #3458 — an answered gate is no longer a decision: its row leaves the list,
+  // even though the waiting event is still buffered.
+  it("drops the row once the session's gate is no longer waiting, even though the waiting event is still buffered", async () => {
     sessions = [makeSession({ gateState: "approved" })];
     events = { 1: [makeGateEvent()] };
     await openPanel();
 
-    expect(screen.getByText(/Waiting for review/)).toBeInTheDocument();
+    expect(screen.queryByText(/Waiting for review/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
   });
@@ -878,7 +772,7 @@ describe("review gate Approve/Deny (issue #178)", () => {
     events = { 1: [makeGateEvent()] };
     await openPanel();
 
-    expect(screen.getByText(/Waiting for review/)).toBeInTheDocument();
+    expect(screen.queryByText(/Waiting for review/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deny" })).not.toBeInTheDocument();
   });
@@ -1010,12 +904,12 @@ describe("dev server detection Use/Dismiss (issue #404)", () => {
     expect(screen.getByRole("button", { name: "Ignore port" })).toBeInTheDocument();
   });
 
-  it("does not show Use this port once the session's pendingDevServerPort has moved past it, even though the event is still in the feed", async () => {
+  it("drops the offer once the session's pendingDevServerPort has moved past it, even though the event is still buffered", async () => {
     sessions = [makeSession({ pendingDevServerPort: null })];
     events = { 1: [makeDevServerEvent()] };
     await openPanel();
 
-    expect(screen.getByText("Detected dev server on port 5173")).toBeInTheDocument();
+    expect(screen.queryByText("Detected dev server on port 5173")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use this port" })).not.toBeInTheDocument();
   });
 
@@ -1087,9 +981,27 @@ describe("NotificationBell virtualization smoke test", () => {
     await openPanel();
     const panel = document.querySelector(".notif-feed-scroll");
     expect(panel).not.toBeNull();
-    expect(within(panel as HTMLElement).getByText("Bell")).toBeInTheDocument();
+    expect(within(panel as HTMLElement).getByText(ROW_TEXT)).toBeInTheDocument();
   });
 });
+
+// N open review gates on one session, prompts distinct so none fold: the one
+// decision kind that can hold many open rows at once.
+function manyOpenGates(sessionId: number, n: number, tsBase: number, tag: string) {
+  const gates = Array.from({ length: n }, (_, i) => ({
+    gateId: `${tag}${i}`,
+    prompt: `${tag}-Q${i}`,
+    at: i,
+  }));
+  const gateEvents = gates.map((g, i) => ({
+    seq: i + 1,
+    sessionId,
+    kind: "review_gate" as const,
+    ts: tsBase + i,
+    payload: { state: "waiting", prompt: g.prompt, gateId: g.gateId },
+  }));
+  return { gates, events: gateEvents };
+}
 
 function headerStyleFor(title: string): CSSStyleDeclaration | null {
   const titleEl = screen.queryByText(title);
@@ -1114,15 +1026,9 @@ describe("NotificationBell sticky group headers (issue #1229)", () => {
     // One session, 20 distinct events (varying `header` so none fold
     // together — see foldConsecutiveRows) — 21 rows total (1 header + 20
     // events), comfortably past `overscan: 8` once scrolled deep.
-    events = {
-      1: Array.from({ length: 20 }, (_, i) => ({
-        seq: i + 1,
-        sessionId: 1,
-        kind: "attention" as const,
-        ts: Date.now(),
-        payload: { attention: true, signal: "question", header: `Q${i}` },
-      })),
-    };
+    const one = manyOpenGates(1, 20, Date.now(), "g");
+    sessions = [makeSession({ gates: one.gates })];
+    events = { 1: one.events };
     await openPanel();
 
     // Rows sort newest-seq-first (buildFeedItems' own within-group sort),
@@ -1138,31 +1044,18 @@ describe("NotificationBell sticky group headers (issue #1229)", () => {
   });
 
   it("switches the active sticky header once scrolled past that group, and leaves the other absolutely positioned", async () => {
+    const one = manyOpenGates(1, 30, 2_000_000, "a");
+    const two = manyOpenGates(2, 30, 1_000_000, "b");
     sessions = [
-      makeSession({ id: 1, name: "session one" }),
-      makeSession({ id: 2, name: "session two" }),
+      makeSession({ id: 1, name: "session one", gates: one.gates }),
+      makeSession({ id: 2, name: "session two", gates: two.gates }),
     ];
     // Session 1 sorts first (newer ts) with enough events (30) that
     // scrolling partway into its own group keeps session two's header more
     // than `overscan: 8` rows away — otherwise, on a short enough list, it
     // would already be in the rendered window regardless of scroll, and
     // "not visible yet" would prove nothing.
-    events = {
-      1: Array.from({ length: 30 }, (_, i) => ({
-        seq: i + 1,
-        sessionId: 1,
-        kind: "attention" as const,
-        ts: 2_000_000 + i,
-        payload: { attention: true, signal: "question", header: `S1-Q${i}` },
-      })),
-      2: Array.from({ length: 30 }, (_, i) => ({
-        seq: i + 1,
-        sessionId: 2,
-        kind: "attention" as const,
-        ts: 1_000_000 + i,
-        payload: { attention: true, signal: "question", header: `S2-Q${i}` },
-      })),
-    };
+    events = { 1: one.events, 2: two.events };
     await openPanel();
 
     // Deep inside session one's own events, comfortably short of session
@@ -1210,13 +1103,15 @@ describe("NotificationBell popover — focus management (P11)", () => {
     expect(dialog).not.toHaveAttribute("aria-modal");
   });
 
-  it("moves focus into the panel (onto the first focusable item) when it opens", async () => {
+  it("moves focus into the panel when it opens, and Tab reaches the first row", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
 
-    // "Mark all read" is the first focusable descendant while there's an
-    // unread event.
-    expect(screen.getByTitle("Mark all as read")).toHaveFocus();
+    // The dialog itself: its rows are virtualized and mount after it opens,
+    // and Tab moves on into them from here.
+    expect(screen.getByRole("dialog", { name: "Notifications" })).toHaveFocus();
+    await userEvent.tab();
+    await waitFor(() => expect(document.querySelector("button.notif-event-open")).toHaveFocus());
   });
 
   it("restores focus to the bell button on close", async () => {
@@ -1263,7 +1158,7 @@ describe("NotificationBell popover — focus management (P11)", () => {
     const onOpenSession = await openPanel();
     const bell = screen.getByRole("button", { name: /notifications/i });
 
-    await userEvent.click(screen.getByText("Bell"));
+    await userEvent.click(screen.getByText(ROW_TEXT));
 
     expect(onOpenSession).toHaveBeenCalled();
     expect(bell).not.toHaveFocus();
@@ -1393,10 +1288,7 @@ describe("NotificationBell phone sheet", () => {
   });
 
   it("opens on 'Needs you' when a session needs you, and 'All' shows the rest", async () => {
-    sessions = [
-      makeSession({ id: 1, name: "needy", attention: true }),
-      makeSession({ id: 2, name: "calm" }),
-    ];
+    sessions = [asking({ id: 1, name: "needy" }), makeSession({ id: 2, name: "calm" })];
     events = {
       1: [makeEvent({ seq: 1, sessionId: 1 })],
       2: [
@@ -1404,32 +1296,32 @@ describe("NotificationBell phone sheet", () => {
       ],
     };
     await openPhoneSheet();
-    expect(screen.getByRole("button", { name: /Needs you/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Needs you 1" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     expect(screen.getByText("needy")).toBeInTheDocument();
-    expect(screen.queryByText("calm")).toBeNull();
+    expect(screen.queryByText("Earlier, no decision needed")).toBeNull();
 
     await userEvent.click(screen.getByRole("button", { name: "All" }));
-    expect(screen.getByText("calm")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Earlier, no decision needed/ }));
+    expect(screen.getByRole("button", { name: /^calm exited/ })).toBeInTheDocument();
   });
 
   it("opens on 'All' when nothing needs you", async () => {
+    sessions = [makeSession()];
     events = { 1: [makeEvent({ seq: 1, kind: "status_change", payload: { reason: "exited" } })] };
     await openPhoneSheet();
     expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("Exited")).toBeInTheDocument();
+    expect(screen.getByText("Nothing needs you right now")).toBeInTheDocument();
+    expect(screen.getByText("Earlier, no decision needed")).toBeInTheDocument();
   });
 
   it("says nothing needs you (not 'no notifications') on an empty Needs you filter", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
-    sessions = [makeSession({ attention: true })];
     await openPhoneSheet();
+    // Answered: the session's attention clears; the filter is empty.
     sessions = [makeSession({ attention: false })];
-    await userEvent.click(screen.getByRole("button", { name: /Needs you/ }));
-    // Once attention clears and the event is read, the filter is empty.
-    lastSeenSeq = { 1: 1 };
     await userEvent.click(screen.getByRole("button", { name: "All" }));
     await userEvent.click(screen.getByRole("button", { name: /Needs you/ }));
     expect(screen.getByText("Nothing needs you right now")).toBeInTheDocument();
@@ -1441,7 +1333,7 @@ describe("NotificationBell phone sheet", () => {
     };
     const onOpenTimeline = vi.fn();
     const onOpenSession = await openPhoneSheet({ onOpenTimeline });
-    await userEvent.click(screen.getByRole("button", { name: /Bell/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Heads up/ }));
     expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
     expect(onOpenTimeline).not.toHaveBeenCalled();
     // Cursor advances to the session's true latest seq (not just this row's).
@@ -1467,38 +1359,36 @@ describe("NotificationBell phone sheet", () => {
     expect(screen.queryByRole("button", { name: "Timeline" })).toBeNull();
   });
 
-  it("marks read / dismisses a row without opening it", async () => {
+  it("dismisses a row without opening it; a decision has no Mark read", async () => {
     events = { 1: [makeEvent({ seq: 4 })] };
     const onOpenSession = await openPhoneSheet();
-    await userEvent.click(screen.getByRole("button", { name: "Mark read" }));
-    expect(markEventSeen).toHaveBeenCalledWith(1, 4);
+    expect(screen.queryByRole("button", { name: "Mark read" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(dismissEvents).toHaveBeenCalledWith(1, [4]);
     expect(onOpenSession).not.toHaveBeenCalled();
-    // Issue #1430 — both "Mark read" and "Dismiss" are explicit read actions.
+    // Issue #1430 — "Dismiss" is an explicit read action.
     expect(ackAttention).toHaveBeenCalledWith(1);
-    expect(ackAttention).toHaveBeenCalledTimes(2);
   });
 
-  it("Read all only marks the sessions currently shown", async () => {
+  it("Read all sits with the grouped rows: under All, never touching a session with an open decision", async () => {
     sessions = [
-      makeSession({ id: 1, name: "needy", attention: true }),
-      makeSession({ id: 2, name: "calm" }),
+      asking({ id: 1, name: "needy" }),
+      makeSession({ id: 2, name: "calm", attention: true, attentionKind: "agentIdle" }),
     ];
     events = {
       1: [makeEvent({ seq: 5, sessionId: 1 })],
-      2: [
-        makeEvent({ seq: 9, sessionId: 2, kind: "status_change", payload: { reason: "exited" } }),
-      ],
+      2: [makeEvent({ seq: 9, sessionId: 2, payload: { attention: true, signal: "agentIdle" } })],
     };
     await openPhoneSheet();
+    // "Needs you" lists decisions only: nothing there to read.
+    expect(screen.queryByRole("button", { name: "Read all" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "All" }));
     await userEvent.click(screen.getByRole("button", { name: "Read all" }));
-    expect(markEventSeen).toHaveBeenCalledWith(1, 5);
-    expect(markEventSeen).not.toHaveBeenCalledWith(2, expect.anything());
-    // Issue #1430 — "Read all" is an explicit read action, scoped the same
-    // way markSessionRead already is (only the currently-shown sessions).
-    expect(ackAttention).toHaveBeenCalledWith(1);
-    expect(ackAttention).not.toHaveBeenCalledWith(2);
+    expect(markEventSeen).toHaveBeenCalledWith(2, 9);
+    expect(markEventSeen).not.toHaveBeenCalledWith(1, expect.anything());
+    // Issue #1430 — "Read all" is an explicit read action.
+    expect(ackAttention).toHaveBeenCalledWith(2);
+    expect(ackAttention).not.toHaveBeenCalledWith(1);
   });
 
   it("approves a pending gate inline from the sheet", async () => {
@@ -1533,8 +1423,7 @@ describe("NotificationBell phone sheet", () => {
   });
 
   it("does not offer a Needs you count/filter for a session the feed has nothing to list for", async () => {
-    // attention persists, but every notify-worthy event was dismissed.
-    sessions = [makeSession({ attention: true })];
+    // attention persists, but every decision event was dismissed.
     events = { 1: [makeEvent({ seq: 1, ts: 1000 })] };
     dismissedEventKeys = { [eventKey(1, 1, 1000)]: true };
     await openPhoneSheet();

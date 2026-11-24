@@ -1191,7 +1191,7 @@ describe("sessionUnreadCount / sessionNeedsYou", () => {
   });
 
   it("skips dismissed events", () => {
-    expect(sessionUnreadCount(1, [attention], 0, { "1:5": true }, false)).toBe(0);
+    expect(sessionUnreadCount(1, [attention], 0, { [`1:5:${attention.ts}`]: true }, false)).toBe(0);
   });
 
   it("counts nothing for a muted session", () => {
@@ -1210,7 +1210,13 @@ describe("sessionUnreadCount / sessionNeedsYou", () => {
     expect(sessionNeedsYou({ id: 1, attention: false }, [exited], 0, {}, false)).toBe(false);
     expect(sessionNeedsYou({ id: 1, attention: false }, [attention], 5, {}, false)).toBe(false);
     expect(
-      sessionNeedsYou({ id: 1, attention: false }, [attention], 0, { "1:5": true }, false),
+      sessionNeedsYou(
+        { id: 1, attention: false },
+        [attention],
+        0,
+        { [`1:5:${attention.ts}`]: true },
+        false,
+      ),
     ).toBe(false);
   });
 

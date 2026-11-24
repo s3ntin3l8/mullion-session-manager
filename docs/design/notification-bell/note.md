@@ -80,7 +80,7 @@ sidebar and pane tab.
 | Kind                                                                           | Source                                  | Fires                                          | Decision                                                                                                                                                                                                                                                                                  |
 | ------------------------------------------------------------------------------ | --------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `status_change` (`reason: "exited"`) / `session_end`                           | the process ended                       | once per session                               | **Grouped**. Today the `status_change` exit is listed (`session_end` itself never rings); an exit is information. A non-zero exit is Failed where the adapter reports one: `session_end` carries `exitCode?` (`hook-protocol.ts`), so issue 1 checks adapter coverage, not payload shape. |
-| `dev_server_detected`                                                          | scrollback shows a dev server listening | once per detected port (#404)                  | **Dropped** from the bell: an offer, nothing blocks on it. The session keeps its own banner (`pendingDevServerPort`).                                                                                                                                                                     |
+| `dev_server_detected`                                                          | scrollback shows a dev server listening | once per detected port (#404)                  | **Listed** while the session's `pendingDevServerPort` is this port (changed in #3458, see § As built). The first draft dropped it as "an offer", but the bell row is the only place "Use this port" exists (`docs/dock.md`); there is no session banner.                                  |
 | `pr_review_submitted` `CHANGES_REQUESTED`                                      | GitHub poller (`pr-session-events.ts`)  | on a change of `reviewDecision`                | **Listed** as Review verdict                                                                                                                                                                                                                                                              |
 | `pr_review_submitted` `APPROVED`                                               | same                                    | same                                           | **Listed as Review verdict only for a manual session's PR**; for a task's PR the Tasks section already carries "approved, needs your approval" (`approvalState`). Today it is not listed at all.                                                                                          |
 | `pr_ci_failed`, `pr_conflicts`                                                 | same                                    | on the transition into red/conflicting         | **Listed** as Failed, one row per PR, resolved by `pr_ci_passed`. For a task-owned PR the Tasks section covers it (`ci-still-red`, `rebase-exhausted`), so the row is dropped there.                                                                                                      |
@@ -236,6 +236,87 @@ grouped and already-read rows; "Needs you" shows open decisions only.
 5. **The read cursor is monotonic per session** (see § What "read" means), so
    "Read all" is limited to sessions with no open decision.
 6. **No real count.** See § Limits of the evidence.
+
+## As built
+
+What the implementation does where it had to choose, recorded in the PR that
+chose it.
+
+### Classification and liveness (#3458, #3460)
+
+- **`bellClass(event)`** (`frontend/src/eventDescriptions.ts`) implements the
+  per-type table: `decision`, `failed`, `verdict`, `grouped` or `dropped`, an
+  exhaustive switch over `NotificationEvent["kind"]`. The `attention` twin of
+  a specific kind (permissionRequest, planReady, question, elicitation,
+  reviewGate, promoteRequest, apiError) is `dropped`: every raise site in
+  `hook-handlers.ts` emits the specific kind beside it, which carries the
+  content.
+- **Liveness keys off each kind's own latch, not `attention` alone.**
+  `sessionOpenDecisions` reads `permissionState`, `planState`,
+  `elicitationState`, `promoteState`, `gates` (by `gateId`), `errorState`,
+  `pendingDevServerPort` and `alive`. Keying everything off `attention` would
+  resurrect every answered ask the moment a later "Finished" raised attention
+  again. A latch holds one request, so only the newest event of a latched
+  kind is open; older ones were answered before it was raised. `question`
+  uses `questionState`, which the backend already sent (`SessionInfo`) but
+  the frontend type did not declare; without it (an older backend) it falls
+  back to `attention && attentionKind === "question"`. Attention alone would
+  not do: two specific asks keep only the newest as `attentionKind`
+  (`moreAuthoritativeKind`), so a question followed by a plan would hide. An unpaired `hookNotification` is open while it is the
+  confirmed `attentionKind` and no specific ask landed within 5s of it,
+  answered or not (`hasRecentStructuredAsk` already drops most twins
+  server-side).
+- **An event counts only for the current raise of its latch.** A latch is set
+  before its event is emitted (a permission settles for up to 2s first, and is
+  never emitted if it is auto-approved meanwhile), so the newest
+  `permission_request` can belong to an earlier, answered raise. The frontend
+  now declares the raise timestamps the backend already sends
+  (`permissionAt`, `planAt`, `elicitationAt`, `questionAt`, `promoteAt`), and
+  an event older than its latch's raise is not listed. Only a request (not a
+  resolution record reusing its kind) pairs with a generic notification.
+- **The "×25" fold** stays for identical open rows, but under newest-only
+  latching only review gates (each its own `gateId`) can stack; 25
+  auto-approved permission asks are answered and no longer listed at all.
+- **A decision can leave without an answer**, which § Where the code
+  resists, 2 asked to pin: the stale-latch sweep (#320) clears a blocked latch
+  older than `staleErrorSeconds` (30 minutes by default, Settings) when the
+  agent has made no output since, and the row leaves with it, as the session's
+  own status degrades. That is the backstop for an ask whose resolving hook
+  never fires, so the bell follows it rather than keeping a row the session no
+  longer shows; a test pins it.
+- **`attention-tracker.ts` check** (§ Where the code resists, 2): the
+  decision kinds are `OUTPUT_IMMUNE_KINDS`, so the agent's own output never
+  clears them; they clear on the user's input, a `turn_start`, or the kind's
+  own resolution hook. `apiError` is output-clearable, which is why
+  `stop_failure` keys off `errorState` (cleared only by progress), and an
+  `ackAttention` from opening the row does not close it either.
+- **Dev-server offers are listed** (table above): dropping them would have
+  removed the only "Use this port" surface.
+- **Non-zero exit:** classified `failed` where `session_end` carries an
+  `exitCode`, open while the process is down, and then not repeated as a
+  grouped "exited" line. Adapter coverage: only the Claude Code forwarder
+  maps `exit_code` (`mapClaudeCodeSessionEnd`), and Claude Code's
+  `SessionEnd` input does not document one; codex and mcode map
+  `session_end` without a code; agy registers no `SessionEnd`. So today every
+  exit is grouped. The PTY's own exit status is the dtach client's, not the
+  program's, so it cannot stand in.
+- **PR rows:** red CI is open until a later pass, failure or merge of the
+  same PR number; conflicts and a verdict until a later one of the same kind
+  or a merge. The poller emits no "conflicts resolved", so Dismiss closes that
+  row otherwise. A task's sessions (its worker and reviewer) list no PR rows.
+- **Muted sessions** still list their decisions (they can still be answered
+  from the bell) but count nowhere, as before.
+- **Read:** opening the bell advances the read cursor for sessions with
+  grouped rows and no open decision; the lines keep their "new" marking until
+  the panel closes. "Read all" also acknowledges those sessions (clearing a
+  "Finished" the sidebar shows). Decision rows have no "Mark read".
+- **Focus:** the desktop panel focuses its own dialog root when it opens: its
+  rows are virtualized and mount a frame later, and with no "Read all" button
+  to land on, focus would otherwise stay outside, where Escape is not heard.
+- Found on the way: the pane tab badge checked dismissed events with a
+  two-part key (`id:seq`) while the store writes three (`id:seq:ts`, #1427),
+  so dismissing a row in the bell never cleared the tab's badge. Fixed with
+  #3458.
 
 ## Implementation issues
 

@@ -911,3 +911,52 @@
   font-size: 0.75rem;
   resize: vertical;
 }
+/* #3460 — "Earlier, no decision needed": the informative lines' header is a
+   group header (it pins the same way) holding one toggle button. */
+.notif-grouped-header {
+  padding: 4px 0 2px;
+}
+.notif-grouped-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dim);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.notif-grouped-toggle:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.notif-grouped-toggle .notif-group-header-title {
+  color: var(--dim);
+  font-weight: 600;
+}
+.notif-grouped-count {
+  margin-left: auto;
+  font-size: 0.65625rem;
+  font-family: "Geist Mono", monospace;
+  color: var(--dim);
+}
+/* One line per session, lighter than a decision row: it informs, it does
+   not ask. The session's name carries the weight, the verb does not. */
+.notif-grouped-line .notif-event-text {
+  font-weight: 400;
+  -webkit-line-clamp: 1;
+}
+.notif-grouped-line .notif-grouped-title {
+  font-weight: 600;
+}
+.notif-grouped-line.read .notif-grouped-title {
+  font-weight: 400;
+}
+/* The panel takes focus itself when it opens (NotificationBell.tsx): a ring
+   around the whole dialog says nothing a row's own ring does not. */
+.notif-panel:focus {
+  outline: none;
+}

@@ -1,22 +1,30 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet } from "./ui/BottomSheet.js";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import type { Range } from "@tanstack/react-virtual";
-import { eventKey, useDashboardStore } from "./store/index.js";
+import { useDashboardStore } from "./store/index.js";
 import { themeClassName } from "./store/theme.js";
 import {
   describeEvent,
-  notifyKind,
   notifyLabel,
-  notifySeverity,
   sessionContextMap,
-  sessionNeedsYou,
+  sessionGroupedSummary,
+  sessionOpenDecisions,
 } from "./eventDescriptions.js";
+import type { GroupedSummary, OpenDecisionClass } from "./eventDescriptions.js";
 import { api } from "./api/index.js";
-import type { NotificationEvent, Project, Session } from "./api/index.js";
-import { BellIcon, BlockedIcon, CheckIcon, CloseIcon, WarningTriangleIcon } from "./ui/icons.js";
+import type { NotificationEvent, Project, Session, Task } from "./api/index.js";
+import {
+  BellIcon,
+  BlockedIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CloseIcon,
+  WarningTriangleIcon,
+} from "./ui/icons.js";
 import { formatRelativeAge } from "./relativeTime.js";
 import { useFocusTrap } from "./hooks/useFocusTrap.js";
 import { usePresence } from "./hooks/usePresence.js";
@@ -27,45 +35,35 @@ import { panelPosition, railPanelPosition } from "./lib/notifPanelPosition.js";
 import type { NotifPanelPosition } from "./lib/notifPanelPosition.js";
 import { TextInput } from "./ui/primitives.js";
 
-// The toolbar bell, upgraded for issue #169 from a per-session "who's
-// currently ringing" list into an actual event feed: one row per buffered
-// NotificationEvent (issue #166's store.ts `events` slice), grouped by
-// session and sorted by recency, with past — already-read — events staying
-// visible rather than disappearing the moment a session stops needing
-// attention. Structurally still modeled on KebabMenu.tsx's portal-dropdown
-// pattern (position:fixed off the trigger's own getBoundingClientRect(), an
-// outside-click listener, and reapplying the `cmux-root`/`light` theme
-// classes on the portaled node — see this component's prior history for why
-// that last one is load-bearing).
+// The notification bell (#169, reworked by #3458/#3460; design note
+// docs/design/notification-bell/note.md). It lists what waits on a human
+// decision, not every event that rang:
 //
-// Read/dismiss state design (see store.ts for the fields themselves):
-// - "Read" reuses issue #166's existing `lastSeenSeq` read cursor — the
-//   same primitive PaneTab.tsx's tab badges already consume — rather than
-//   inventing a second one: an event is read once `seq <= lastSeenSeq`, and
-//   the per-event "mark read" button here just advances that cursor to the
-//   event's own seq (store.ts's markEventSeen, unchanged from #168). This
-//   is why the panel's read state and the tab badges can never disagree.
-// - "Dismiss" is a genuinely different operation — "stop listing this
-//   forever", not "I've seen it" — so it's backed by its own
-//   `dismissedEventKeys` set (store.ts) instead of also moving the cursor.
-//   Coupling dismiss to the read cursor would be actively wrong: cursors
-//   are monotonic per session, so dismissing the *newest* of several unread
-//   events would advance the cursor past all the older still-listed ones
-//   too, silently marking them read even though the user only dismissed
-//   one. Keeping the two orthogonal avoids that.
+// - Open decisions, grouped by session under a sticky header: a permission,
+//   plan, question, review gate, promote request, dev-server offer, a failure
+//   the agent will not recover from alone, a review verdict on a manual PR.
+//   eventDescriptions.ts's bellClass says what kind of row an event is, and
+//   sessionOpenDecisions whether it is still open, from the session's own
+//   live state. A decision leaves the list when that state clears, however it
+//   cleared; viewing the bell never clears it.
+// - "Earlier, no decision needed": one collapsed line per session for the
+//   informative events (a finished turn, an exit), never counted anywhere.
 //
-// Feed inclusion is intentionally narrower than "every buffered event this
-// session has": only the two kinds eventDescriptions.ts's `notifyKind`
-// already treats as an actual notification (an attention signal actually
-// ringing, and a program exiting) are shown here — not routine, high-
-// frequency chatter like every OSC title update or every alt-screen
-// open/close. This is the same filter PaneTab.tsx's own tab badge uses, so
-// this panel's feed and unread count stay consistent with what the tabs are
-// already showing, rather than surfacing "unread" items no tab badge agrees
-// are notification-worthy.
+// Needs you is state; read is a cursor, and it applies only to the grouped
+// lines. "Read" reuses issue #166's per-session `lastSeenSeq`, the cursor
+// PaneTab.tsx's tab badges read. It is monotonic, so advancing it past a
+// session's newest event would also mark that session's older decision
+// events read: opening the bell and "Read all" only advance it for sessions
+// with no open decision. "Dismiss" is a separate per-event set
+// (`dismissedEventKeys`), so dismissing one row never touches another's read
+// state.
+//
+// The badge is the number of sessions with an open decision (a muted session
+// counts for nothing), not an unread count.
 
 const HEADER_ROW_HEIGHT = 34;
 const EVENT_ROW_ESTIMATE_HEIGHT = 60;
+const GROUPED_LINE_ESTIMATE_HEIGHT = 44;
 // Making notifications relevant/scannable — the panel is a fixed-width
 // popover (see the portal's inline style below), so this is a character
 // budget calibrated by eye against that width, not a measured pixel value.
@@ -85,274 +83,218 @@ interface FeedEventItem {
   // row's icon/pill/age. See `foldedSeqs` below for why this alone isn't
   // enough to fully describe a collapsed row.
   event: NotificationEvent;
+  cls: OpenDecisionClass;
   // Issue #903 — the row's actual display text, decided in buildFeedItems
-  // BEFORE folding (see foldConsecutiveRows' own comment for why fold order
-  // matters here): describeEvent(event).text, unless that description is
-  // `generic: true` (content-free — "Gone quiet — needs input" says nothing
-  // about this session) AND sessionContextMap has something better for this
-  // event's own seq, in which case this is that context line instead. Kept
-  // on the item rather than recomputed in EventRow so the substitution and
-  // the fold decision can never disagree about what a row's text actually is.
+  // BEFORE folding: describeEvent(event).text, unless that description is
+  // `generic: true` (content-free) AND sessionContextMap has something better
+  // for this event's own seq. Kept on the item so the substitution and the
+  // fold decision can never disagree about what a row's text is.
   text: string;
-  read: boolean;
-  // Making notifications relevant/scannable — every event this row
-  // represents, newest first, always including `event.seq` itself
-  // (`repeatCount === foldedSeqs.length`). A row that wasn't collapsed has
-  // exactly one entry. Needed because dismissing a collapsed row must
-  // dismiss every folded event, not just the one driving the display — see
-  // EventRow's onDismiss below, and buildFeedItems'/foldConsecutiveRows' own
-  // comments for why the read cursor doesn't need the same treatment.
+  // Every event this row represents, newest first, always including
+  // `event.seq` itself. Dismissing a collapsed row dismisses all of them.
   foldedSeqs: number[];
 }
 
-type FeedItem = FeedHeaderItem | FeedEventItem;
+// The "Earlier, no decision needed" group's own header (#3460): a toggle,
+// and the sticky header while its lines scroll under it.
+interface FeedGroupedToggleItem {
+  type: "grouped-toggle";
+  sessionId: -1;
+  count: number;
+}
 
-// Making notifications relevant/scannable — folds consecutive rows (already
-// sorted newest-first by the caller) that would render IDENTICALLY into one
-// row carrying a repeat count, so e.g. 25 auto-approved opencode
-// `external_directory` permission asks for the same glob pattern show as one
-// "×25" row instead of 25 visually-identical ones. "Identical" is
-// (severity, label, described text). `label` (issue #903, code review) is
-// load-bearing, not redundant with severity: every one of describeEvent's
-// `generic: true` signals (bell/titleIdle/altScreenExit/silence/agentIdle/
-// bare hookNotification) shares the SAME severity ("done" — see
-// notifySeverity's own fallthrough), and sessionContextMap substitution can
-// now also give two of them the SAME text (e.g. a `bell` immediately
-// followed by a `silence`, with no file_change/todo/title_change event in
-// between to change the derived context) — `(severity, text)` alone would
-// wrongly fold those into one row, discarding the fact that two DIFFERENT
-// things happened. `label` (notifyLabel — the row's own kind pill: "Bell"
-// vs "Silence") is what still tells them apart. Deliberately does NOT fold
-// non-adjacent duplicates (an unrelated event in between breaks the run) —
-// that preserves chronological reading order rather than reordering the
-// feed around a foldable value.
+interface FeedGroupedLineItem {
+  type: "grouped";
+  sessionId: number;
+  title: string;
+  subtitle: string;
+  summary: GroupedSummary;
+  // Read as of when the panel opened: opening marks the lines read, and the
+  // ones that were new stay marked new until it closes.
+  read: boolean;
+}
+
+type FeedItem = FeedHeaderItem | FeedEventItem | FeedGroupedToggleItem | FeedGroupedLineItem;
+
+// Folds consecutive rows (already newest-first) that would render
+// identically into one row carrying a repeat count, so 25 permission asks
+// for the same glob read as one "×25" row. "Identical" is (class, kind label,
+// described text): the label keeps two different kinds that happen to share
+// substituted context text apart. Non-adjacent duplicates are not folded, so
+// the feed keeps its reading order.
 function foldConsecutiveRows(
-  rows: {
-    event: NotificationEvent;
-    read: boolean;
-    text: string;
-    label: string;
-    severity: string | null;
-  }[],
-): { event: NotificationEvent; read: boolean; text: string; foldedSeqs: number[] }[] {
+  rows: { event: NotificationEvent; cls: OpenDecisionClass; text: string; label: string }[],
+): { event: NotificationEvent; cls: OpenDecisionClass; text: string; foldedSeqs: number[] }[] {
   const folded: {
     event: NotificationEvent;
-    read: boolean;
-    foldedSeqs: number[];
+    cls: OpenDecisionClass;
     text: string;
     label: string;
-    severity: string | null;
+    foldedSeqs: number[];
   }[] = [];
   for (const row of rows) {
     const last = folded[folded.length - 1];
-    if (
-      last &&
-      last.severity === row.severity &&
-      last.label === row.label &&
-      last.text === row.text
-    ) {
+    if (last && last.cls === row.cls && last.label === row.label && last.text === row.text) {
+      // The representative event stays the newest of the run.
       last.foldedSeqs.push(row.event.seq);
-      // The representative event stays the NEWEST of the group (`rows`
-      // arrives newest-first, so `last` was already set from the first —
-      // i.e. newest — row of this run) — `event`/`read`/`text`/`label`/
-      // `severity` are intentionally left untouched here.
       continue;
     }
-    folded.push({
-      event: row.event,
-      read: row.read,
-      foldedSeqs: [row.event.seq],
-      text: row.text,
-      label: row.label,
-      severity: row.severity,
-    });
+    folded.push({ ...row, foldedSeqs: [row.event.seq] });
   }
-  // `text` (issue #903) is kept in the output now — it's the row's already-
-  // decided display text (see FeedEventItem.text's own comment), not just a
-  // fold-decision input to discard once folding is done. `label`/`severity`
-  // stay fold-decision-only, same as before.
-  return folded.map(({ event, read, text, foldedSeqs }) => ({ event, read, text, foldedSeqs }));
+  return folded.map(({ event, cls, text, foldedSeqs }) => ({ event, cls, text, foldedSeqs }));
 }
 
-// Turns the raw per-session event slices into one flat, virtualizable list:
-// a header row per session (only sessions with at least one feed-eligible,
-// non-dismissed event), followed by that session's events newest-first.
-// Sessions themselves are ordered by their own newest feed event, so the
-// session that rang most recently always leads.
+/** The session ids a Task Master task owns (its worker and its reviewer): a
+ * task's PR news is the Tasks section's to show, not a session row's. */
+function taskOwnedSessionIds(tasks: readonly Task[]): ReadonlySet<number> {
+  const ids = new Set<number>();
+  for (const t of tasks) {
+    if (t.sessionId !== null) ids.add(t.sessionId);
+    if (t.reviewSessionId !== null) ids.add(t.reviewSessionId);
+  }
+  return ids;
+}
+
+function sessionTitle(session: Session): string {
+  return session.name || session.command;
+}
+
+// The feed as one flat, virtualizable list: a header per session with an
+// open decision, then its decision rows newest first (sessions ordered by
+// their newest decision); then the grouped toggle and, when expanded, one
+// line per session with informative events (newest first). Muted sessions
+// still list their decisions (they can still be acted on from here); they
+// only do not count.
 function buildFeedItems(
   sessions: Session[],
   projects: Project[],
   events: Record<number, NotificationEvent[]>,
-  lastSeenSeq: Record<number, number>,
+  readCursor: Record<number, number>,
   dismissedEventKeys: Record<string, true>,
+  taskOwned: ReadonlySet<number>,
 ): FeedItem[] {
   const groups: {
     session: Session;
-    rows: { event: NotificationEvent; read: boolean; text: string; foldedSeqs: number[] }[];
+    rows: ReturnType<typeof foldConsecutiveRows>;
   }[] = [];
+  const grouped: { session: Session; summary: GroupedSummary }[] = [];
 
   for (const session of sessions) {
     const sessionEvents = events[session.id];
     if (!sessionEvents || sessionEvents.length === 0) continue;
-    const cursor = lastSeenSeq[session.id] ?? 0;
-    // Issue #903 — one context map per session, built once up front (NOT
-    // per row — see sessionContextMap's own comment for why a per-row scan
-    // would be O(rows × events) on every tick this panel is open).
-    const contextMap = sessionContextMap(sessionEvents, session.name || session.command);
-    const rawRows = sessionEvents
-      .filter(
-        (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq, e.ts)],
-      )
-      .map((e) => {
-        const described = describeEvent(e);
-        // Only a content-free row's OWN text is ever replaced — one that
-        // already carries real content (a permission summary, a question
-        // header, ...) keeps it untouched, substitution or not.
-        const context = described?.generic ? contextMap.get(e.seq) : undefined;
-        return {
-          event: e,
-          read: e.seq <= cursor,
-          text: context ?? described?.text ?? "Event",
-          // Code review (issue #903) — see foldConsecutiveRows' own comment
-          // for why this is load-bearing, not redundant with severity, once
-          // generic rows can share substituted text.
-          label: notifyLabel(e),
-          severity: notifySeverity(e),
-        };
-      })
-      .sort((a, b) => b.event.seq - a.event.seq);
-    const rows = foldConsecutiveRows(rawRows);
-    if (rows.length > 0) groups.push({ session, rows });
+    const decisions = sessionOpenDecisions(
+      session,
+      sessionEvents,
+      dismissedEventKeys,
+      false,
+      taskOwned.has(session.id),
+    );
+    if (decisions.length > 0) {
+      // Issue #903 — one context map per session, built once up front.
+      const contextMap = sessionContextMap(sessionEvents, sessionTitle(session));
+      const rows = foldConsecutiveRows(
+        decisions.map(({ event, cls }) => {
+          const described = describeEvent(event);
+          // Only a content-free row's own text is ever replaced.
+          const context = described?.generic ? contextMap.get(event.seq) : undefined;
+          return {
+            event,
+            cls,
+            text: context ?? described?.text ?? "Event",
+            label: notifyLabel(event),
+          };
+        }),
+      );
+      groups.push({ session, rows });
+    }
+    const summary = sessionGroupedSummary(
+      session.id,
+      sessionEvents,
+      readCursor[session.id] ?? 0,
+      dismissedEventKeys,
+      decisions.some((d) => d.event.kind === "session_end"),
+    );
+    if (summary) grouped.push({ session, summary });
   }
 
   groups.sort((a, b) => b.rows[0].event.ts - a.rows[0].event.ts);
+  grouped.sort((a, b) => b.summary.newestTs - a.summary.newestTs);
 
+  const projectName = (session: Session) =>
+    projects.find((p) => p.id === session.projectId)?.name ?? "Unknown project";
   const items: FeedItem[] = [];
   for (const group of groups) {
-    const project = projects.find((p) => p.id === group.session.projectId);
     items.push({
       type: "header",
       sessionId: group.session.id,
-      title: group.session.name || group.session.command,
-      subtitle: project?.name ?? "Unknown project",
+      title: sessionTitle(group.session),
+      subtitle: projectName(group.session),
     });
     for (const row of group.rows) {
+      items.push({ type: "event", sessionId: group.session.id, ...row });
+    }
+  }
+  if (grouped.length > 0) {
+    items.push({
+      type: "grouped-toggle",
+      sessionId: -1,
+      count: grouped.length,
+    });
+    // Built whether or not the group is expanded: "Read all" reads them.
+    for (const { session, summary } of grouped) {
       items.push({
-        type: "event",
-        sessionId: group.session.id,
-        event: row.event,
-        text: row.text,
-        read: row.read,
-        foldedSeqs: row.foldedSeqs,
+        type: "grouped",
+        sessionId: session.id,
+        title: sessionTitle(session),
+        subtitle: projectName(session),
+        summary,
+        read: !summary.unread,
       });
     }
   }
   return items;
 }
 
-// P3 perf fix — buildFeedItems above does an O(sessions × up-to-200 events)
-// filter+map, then sorts both the rows within each session AND the session
-// groups themselves. Before this fix, it re-ran on every store update that
-// touched `sessions` — including the 4s live-refresh poll tick, which gives
-// `sessions` a fresh array identity regardless of whether any event/read-
-// cursor actually changed — even while this panel was closed and nothing
-// was rendering its output. The toolbar bell's unread badge, however, DOES
-// need to stay live while closed. This does the same eligibility scan
-// buildFeedItems does (notifyKind !== null, not dismissed, unseen) but
-// without materializing or sorting a list — just a running count — so it
-// stays cheap enough to run on every tick regardless of panel state. See
-// the `items` useMemo below (gated on `open`) for where the expensive full
-// build now actually happens.
-// Making notifications relevant/scannable — deliberately counts RAW
-// unread notify-worthy events, not folded groups: the toolbar badge is a
-// magnitude indicator ("how much happened while you were away"), not a
-// promise that exactly this many rows will be visible once the panel opens
-// — replicating foldConsecutiveRows' sort-and-group work here would also
-// defeat the whole point of this function existing separately from
-// buildFeedItems (see the P3 perf fix comment above).
-function countUnread(
-  sessions: Session[],
-  events: Record<number, NotificationEvent[]>,
-  lastSeenSeq: Record<number, number>,
-  dismissedEventKeys: Record<string, true>,
-  mutedSessionIds: ReadonlyArray<number>,
-): number {
-  let count = 0;
-  for (const session of sessions) {
-    // #719 — a muted session doesn't count toward the toolbar's unread badge
-    // (it's been deliberately silenced — see useAttentionNotifications.ts),
-    // but its events still live in the feed/history when the panel is opened.
-    // `.includes` directly on the array (no per-recompute Set allocation in
-    // this hot path, per review).
-    if (mutedSessionIds.includes(session.id)) continue;
-    const sessionEvents = events[session.id];
-    if (!sessionEvents || sessionEvents.length === 0) continue;
-    const cursor = lastSeenSeq[session.id] ?? 0;
-    for (const e of sessionEvents) {
-      if (e.seq <= cursor) continue;
-      if (notifyKind(e) === null) continue;
-      if (dismissedEventKeys[eventKey(session.id, e.seq, e.ts)]) continue;
-      count += 1;
-    }
-  }
-  return count;
-}
-
-// Sessions that need the user — eventDescriptions.ts's sessionNeedsYou (the
-// predicate the phone session picker pins on), narrowed to sessions this
-// feed can actually LIST: `attention` can outlive every notify-worthy event
-// (all dismissed, or evicted past the buffer cap), and a "Needs you 1" chip
-// over an empty body with no way to reach the session is worse than no chip.
-// The picker still lists such a session — it can navigate to it, this feed
-// can't.
+/** Sessions that need you: an open decision, not muted (#3458). The badge,
+ * the sheet's "Needs you" count and its filter all read this one set, so they
+ * cannot disagree. Two linear passes per session, no sort: it runs on every
+ * live tick, panel open or not. */
 function collectNeedsYouIds(
   sessions: Session[],
   events: Record<number, NotificationEvent[]>,
-  lastSeenSeq: Record<number, number>,
   dismissedEventKeys: Record<string, true>,
   mutedSessionIds: ReadonlyArray<number>,
-): Set<number> {
+  taskOwned: ReadonlySet<number>,
+): ReadonlySet<number> {
   const ids = new Set<number>();
   for (const session of sessions) {
-    const sessionEvents = events[session.id];
-    const listable = sessionEvents?.some(
-      (e) => notifyKind(e) !== null && !dismissedEventKeys[eventKey(session.id, e.seq, e.ts)],
+    const open = sessionOpenDecisions(
+      session,
+      events[session.id],
+      dismissedEventKeys,
+      mutedSessionIds.includes(session.id),
+      taskOwned.has(session.id),
     );
-    if (
-      listable &&
-      sessionNeedsYou(
-        session,
-        sessionEvents,
-        lastSeenSeq[session.id] ?? 0,
-        dismissedEventKeys,
-        mutedSessionIds.includes(session.id),
-      )
-    ) {
-      ids.add(session.id);
-    }
+    if (open.length > 0) ids.add(session.id);
   }
   return ids;
 }
 
-const EMPTY_ID_SET: ReadonlySet<number> = new Set();
-
 // Stable reference for the closed-panel case — a fresh `[]` literal every
 // render would give useVirtualizer/the length check a new identity for no
-// reason, same anti-pattern P1 elsewhere in this PR removes for store
-// selectors.
+// reason.
 const EMPTY_FEED_ITEMS: FeedItem[] = [];
 
-// Making notifications relevant/scannable — three-tier severity replaces
-// the old bell-or-check binary (see eventDescriptions.ts's notifySeverity
-// for the full tier rationale): "blocked" (needs a decision) gets its own
-// distinct icon/color from "error" (something broke), which the old binary
-// collapsed into the same generic bell. `notifySeverity` can return null for
-// a shape neither table covers (defensive, not expected given feed items
-// are always pre-filtered to notifyKind() !== null) — falls back to the old
-// binary's "attention" treatment rather than rendering nothing.
-function kindTreatment(event: NotificationEvent): { icon: ReactNode; className: string } {
+// The row's icon and colour: a decision is "blocked" (waiting on you), a
+// failure "error"; a review verdict reads as what it says (changes requested
+// is red, an approval green).
+function kindTreatment(item: FeedEventItem): { icon: ReactNode; className: string } {
   const severity =
-    notifySeverity(event) ?? (notifyKind(event) === "attention" ? "blocked" : "done");
+    item.cls === "decision"
+      ? "blocked"
+      : item.cls === "failed" || item.event.payload.decision === "CHANGES_REQUESTED"
+        ? "error"
+        : "done";
   switch (severity) {
     case "blocked":
       return { icon: <BlockedIcon size={13} />, className: "notif-sev-blocked" };
@@ -361,6 +303,10 @@ function kindTreatment(event: NotificationEvent): { icon: ReactNode; className: 
     case "done":
       return { icon: <CheckIcon size={13} />, className: "notif-sev-done" };
   }
+}
+
+function needsYouText(count: number): string {
+  return count > 0 ? `${count} need${count === 1 ? "s" : ""} you` : "nothing needs you";
 }
 
 export function NotificationBell({
@@ -419,9 +365,9 @@ export function NotificationBell({
   const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
   const projects = useDashboardStore((s) => s.projects);
   const events = useDashboardStore((s) => s.events);
+  const tasks = useDashboardStore((s) => s.tasks);
   const lastSeenSeq = useDashboardStore((s) => s.lastSeenSeq);
   const dismissedEventKeys = useDashboardStore((s) => s.dismissedEventKeys);
-  const markEventSeen = useDashboardStore((s) => s.markEventSeen);
   const markSessionRead = useDashboardStore((s) => s.markSessionRead);
   const dismissEvents = useDashboardStore((s) => s.dismissEvents);
   const ackAttention = useDashboardStore((s) => s.ackAttention);
@@ -438,63 +384,102 @@ export function NotificationBell({
     wasOpen.current = open;
     onOpenChangeRef.current?.(open);
   }, [open]);
-  // Sheet only: which sessions' groups the feed shows.
+  // Sheet only: decisions alone, or everything (the grouped lines too).
   const [filter, setFilter] = useState<"needs" | "all">("all");
+  // "Earlier, no decision needed" starts collapsed.
+  const [groupedExpanded, setGroupedExpanded] = useState(false);
+  // The read cursors as they were when the panel opened: the grouped lines'
+  // "new" marking reads this, so the lines opening marked read stay marked
+  // new until the panel closes (#3460).
+  const [openCursor, setOpenCursor] = useState<Record<number, number>>({});
   const [pos, setPos] = useState<NotifPanelPosition | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // The expensive full build (filter + map + two sorts, see buildFeedItems'
-  // own comment) only runs while the panel is actually open — `open` is in
-  // the deps array specifically so this recomputes the moment the panel
-  // opens (picking up whatever changed while it was closed), not just on
-  // the next unrelated dependency change. While closed, this returns the
-  // same EMPTY_FEED_ITEMS reference every time regardless of how often
-  // `sessions`/`events`/etc. tick — the row list is never rendered while
-  // closed anyway (see the `open && pos &&` guard below), so there's
-  // nothing for a real list to do here but cost CPU.
-  const items = useMemo(
+  const taskOwned = useMemo(() => taskOwnedSessionIds(tasks), [tasks]);
+
+  // The badge, the sheet's "Needs you" count and its filter: one set,
+  // computed every tick (cheap: see collectNeedsYouIds).
+  const needsYouIds = useMemo(
+    () => collectNeedsYouIds(sessions, events, dismissedEventKeys, mutedSessionIds, taskOwned),
+    [sessions, events, dismissedEventKeys, mutedSessionIds, taskOwned],
+  );
+  const needsYouCount = needsYouIds.size;
+
+  // The full build (describe, fold, sort) only runs while the panel is open:
+  // while closed this returns the same EMPTY_FEED_ITEMS reference whatever
+  // ticks, and nothing renders it anyway.
+  const allItems = useMemo(
     () =>
       open
-        ? buildFeedItems(sessions, projects, events, lastSeenSeq, dismissedEventKeys)
+        ? buildFeedItems(sessions, projects, events, openCursor, dismissedEventKeys, taskOwned)
         : EMPTY_FEED_ITEMS,
-    [open, sessions, projects, events, lastSeenSeq, dismissedEventKeys],
+    [open, sessions, projects, events, openCursor, dismissedEventKeys, taskOwned],
   );
-  // Only computed while the sheet is open (the scan looks at every
-  // event, unlike countUnread's unread-only one — see the P3 perf comment on
-  // countUnread); openFilter below calls the same collector once at open time
-  // to pick the default filter.
-  const needsYouIds = useMemo(
-    () =>
-      sheet && open
-        ? collectNeedsYouIds(sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds)
-        : EMPTY_ID_SET,
-    [sheet, open, sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds],
+  // The grouped lines hide while their group is collapsed.
+  const items = useMemo(
+    () => (groupedExpanded ? allItems : allItems.filter((i) => i.type !== "grouped")),
+    [allItems, groupedExpanded],
   );
-  // What the phone sheet actually lists; the desktop popover always shows
-  // every group, so `items` itself is never filtered.
+  // What the sheet lists under "Needs you": the decision rows of the sessions
+  // that count. The desktop popover always shows everything.
   const shownItems = useMemo(
-    () => (sheet && filter === "needs" ? items.filter((i) => needsYouIds.has(i.sessionId)) : items),
+    () =>
+      sheet && filter === "needs"
+        ? items.filter(
+            (i) => (i.type === "header" || i.type === "event") && needsYouIds.has(i.sessionId),
+          )
+        : items,
     [sheet, filter, items, needsYouIds],
   );
-  // Opening defaults to "Needs you" when something does, else the full feed.
-  const openFilter = () =>
-    setFilter(
-      collectNeedsYouIds(sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds).size >
-        0
-        ? "needs"
-        : "all",
-    );
 
-  // Deliberately NOT derived from `items` (unlike before this fix) — the
-  // toolbar badge must stay accurate every tick regardless of whether the
-  // panel is open, and countUnread (above) gets there without paying for
-  // buildFeedItems' sort.
-  const unreadCount = useMemo(
-    () => countUnread(sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds),
-    [sessions, events, lastSeenSeq, dismissedEventKeys, mutedSessionIds],
-  );
+  // Sessions whose grouped lines "Read all" may mark: no open decision, and
+  // something left to read or acknowledge (a new line, or a raised
+  // "Finished" the sidebar still shows).
+  // Listed decisions, muted sessions' included: a muted session counts for
+  // nothing, but its cursor still must not move past its open decision.
+  const readAllIds = useMemo(() => {
+    const withDecision = new Set(
+      allItems.filter((i) => i.type === "event").map((i) => i.sessionId),
+    );
+    const ids: number[] = [];
+    for (const item of allItems) {
+      if (item.type !== "grouped" || withDecision.has(item.sessionId)) continue;
+      const session = sessions.find((s) => s.id === item.sessionId);
+      if (!item.read || session?.attention) ids.push(item.sessionId);
+    }
+    return ids;
+  }, [allItems, sessions]);
+
+  // Opening the panel marks the grouped lines read, for the sessions with no
+  // open decision: the cursor is monotonic and shared with the tab badges,
+  // so advancing it for a session with an open decision would mark that
+  // decision's events read too. Never acknowledges: that is "Read all".
+  const markGroupedRead = () => {
+    for (const session of sessions) {
+      const sessionEvents = events[session.id];
+      if (!sessionEvents || sessionEvents.length === 0) continue;
+      const cursor = lastSeenSeq[session.id] ?? 0;
+      if (sessionEvents[sessionEvents.length - 1].seq <= cursor) continue;
+      const decisions = sessionOpenDecisions(
+        session,
+        sessionEvents,
+        dismissedEventKeys,
+        false,
+        taskOwned.has(session.id),
+      );
+      if (decisions.length > 0) continue;
+      const summary = sessionGroupedSummary(
+        session.id,
+        sessionEvents,
+        cursor,
+        dismissedEventKeys,
+        false,
+      );
+      if (summary?.unread) markSessionRead(session.id);
+    }
+  };
 
   // Issue #1229 — sticky group headers. Plain CSS `position: sticky` can't
   // work here: every row (headers included) is absolutely positioned with
@@ -505,16 +490,12 @@ export function NotificationBell({
   // adds "whichever sticky header index is the last one at or before the
   // current top-of-viewport row" (activeStickyIndexRef) to the rendered
   // range, REGARDLESS of whether that header's own row is actually scrolled
-  // into view. Without that forced inclusion, a header scrolled off the top
-  // would simply unmount once outside the normal overscan window (measured
-  // rows are only ever the ones the range extractor returns) — there'd be
-  // nothing left to pin. The render loop below is what actually turns the
-  // active sticky row's positioning from `absolute` (normal virtualized flow)
-  // to `sticky` (pinned to the scroll container's own top).
+  // into view. The grouped toggle is a header too, so the last session's
+  // header does not stay pinned over the grouped lines.
   const stickyIndexes = useMemo(
     () =>
       items.reduce<number[]>((acc, item, index) => {
-        if (item.type === "header") acc.push(index);
+        if (item.type === "header" || item.type === "grouped-toggle") acc.push(index);
         return acc;
       }, []),
     [items],
@@ -533,8 +514,12 @@ export function NotificationBell({
   const rowVirtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (index) =>
-      items[index]?.type === "header" ? HEADER_ROW_HEIGHT : EVENT_ROW_ESTIMATE_HEIGHT,
+    estimateSize: (index) => {
+      const type = items[index]?.type;
+      if (type === "header" || type === "grouped-toggle") return HEADER_ROW_HEIGHT;
+      if (type === "grouped") return GROUPED_LINE_ESTIMATE_HEIGHT;
+      return EVENT_ROW_ESTIMATE_HEIGHT;
+    },
     overscan: 8,
     rangeExtractor,
   });
@@ -565,9 +550,14 @@ export function NotificationBell({
   // below is a ui/BottomSheet.tsx, which runs its own instance of this same
   // hook against the very same `panelRef`; without this gate both instances
   // would fight over focus-in/restore-on-close on the one DOM node.
+  // Initial focus goes to the dialog itself (tabIndex -1 below): its rows are
+  // virtualized and mount a frame after it opens, and with no "Read all" to
+  // land on, a first-focusable lookup would find nothing and leave focus
+  // outside, where the panel's own Escape handler never hears the key.
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
     active: !sheet && open,
     containerRef: panelRef,
+    initialFocusRef: panelRef,
   });
   // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
   const { present: panelPresent, state: panelPresence } = usePresence(!sheet && open, panelRef);
@@ -606,23 +596,110 @@ export function NotificationBell({
   }, [placement]);
   useVisualViewportChange(open, reposition);
 
-  // Advances every session with at least one unread feed item to that
-  // session's true latest seq (across ALL its buffered events, not just the
-  // notification-worthy ones shown here) — the same "seen everything"
-  // semantics PaneTab.tsx's own mark-seen-on-focus effect uses, so this also
-  // fully clears those sessions' tab badges, not just this panel's view.
+  // "Read all" (#3460): the grouped lines of the sessions with no open
+  // decision. Advances each to its latest seq (also clearing its tab badges)
+  // and acknowledges it (clearing a "Finished" the sidebar shows). A session
+  // with an open decision is left alone: see markGroupedRead.
   const markAllRead = () => {
-    const unreadSessionIds = new Set(
-      shownItems
-        .filter((i): i is FeedEventItem => i.type === "event" && !i.read)
-        .map((i) => i.sessionId),
-    );
-    for (const sessionId of unreadSessionIds) {
+    for (const sessionId of readAllIds) {
       markSessionRead(sessionId);
-      // Issue #1430 — "Read all"/"Mark all read" is an explicit action.
+      // Issue #1430 — "Read all" is an explicit action.
       ackAttention(sessionId);
     }
+    setOpenCursor((prev) => {
+      const next = { ...prev };
+      for (const sessionId of readAllIds) next[sessionId] = Number.MAX_SAFE_INTEGER;
+      return next;
+    });
   };
+
+  // Leaving the panel for whatever a row opens. `suppress` keeps the focus
+  // trap from snapping focus back to the bell once the target has it (P11,
+  // PR13/U7); the sheet and the popover each have their own.
+  const suppress = () => (sheet ? phoneSuppressRestoreRef.current?.() : suppressRestore());
+  const openSessionFromRow = (session: Session) => {
+    suppress();
+    setOpen(false);
+    // Issue #1429 — one click destination everywhere (the sheet, push, the
+    // ?session= deep link): the terminal, marked read. The timeline is a
+    // secondary action.
+    markSessionRead(session.id);
+    ackAttention(session.id);
+    onOpenSession(session);
+  };
+  const openPrFromRow = (session: Session, number: number) => {
+    suppress();
+    setOpen(false);
+    markSessionRead(session.id);
+    ackAttention(session.id);
+    openRightSidebarPr(session.projectId, number);
+  };
+  const openTimelineFromRow = onOpenTimeline
+    ? (session: Session) => {
+        suppress();
+        setOpen(false);
+        onOpenTimeline(session);
+      }
+    : undefined;
+
+  const renderItem = (item: FeedItem): ReactNode => {
+    const session = sessions.find((s) => s.id === item.sessionId);
+    switch (item.type) {
+      case "header":
+        return <FeedHeader item={item} session={session} />;
+      case "grouped-toggle":
+        return (
+          <GroupedToggle
+            item={item}
+            expanded={groupedExpanded}
+            onToggle={() => setGroupedExpanded((v) => !v)}
+          />
+        );
+      case "grouped":
+        return (
+          <GroupedLine
+            item={item}
+            session={session}
+            onOpen={openSessionFromRow}
+            onDismiss={() => dismissEvents(item.sessionId, item.summary.seqs)}
+          />
+        );
+      case "event":
+        return (
+          <EventRow
+            item={item}
+            session={session}
+            onOpen={openSessionFromRow}
+            // The phone has no right sidebar: a PR row opens the terminal.
+            onOpenPr={sheet ? undefined : openPrFromRow}
+            // The sheet's tap opens the terminal, so the timeline (this
+            // panel's per-session complement) is its own action there.
+            onTimeline={openTimelineFromRow}
+            onOpenBrowser={onOpenBrowser}
+            // A collapsed row dismisses every folded seq, not just the
+            // newest: dismissedEventKeys is per event, so dismissing only the
+            // head would resurrect the older folded rows on the next render.
+            onDismiss={() => {
+              dismissEvents(item.sessionId, item.foldedSeqs);
+              ackAttention(item.sessionId);
+            }}
+          />
+        );
+    }
+  };
+
+  const hasDecisions = items.some((i) => i.type === "event");
+  const readAllButton = (className: string) =>
+    readAllIds.length > 0 && (
+      <button
+        className={className}
+        onClick={markAllRead}
+        title="Mark the rows that need no decision read"
+      >
+        <CheckIcon size={className === "notif-mark-all-btn" ? 12 : 13} />
+        Read all
+      </button>
+    );
 
   return (
     <>
@@ -630,20 +707,16 @@ export function NotificationBell({
         ref={btnRef}
         className={triggerClassName}
         title={
-          unreadCount > 0 ? `Notifications — ${unreadCount} unread` : "No unread notifications"
+          needsYouCount > 0 ? `Notifications — ${needsYouText(needsYouCount)}` : "Nothing needs you"
         }
         // Issue #1894 — "dialog", not the generic "true". `aria-haspopup="true"`
         // maps to `menu` in the ARIA spec, so assistive technology was told
         // this trigger opens a menu; what it opens is the notifications
         // panel, which carries `role="dialog"` (the desktop popover) or is
         // a `ui/BottomSheet.tsx` on the phone — itself `role="dialog"`.
-        // The token states the actual relationship, and it is the one
-        // `ui/Modal.tsx`, `ui/BottomSheet.tsx`, `MobileSessionSwitcher.tsx`
-        // and `unified-board/TasksToolbar.tsx` already use for their own
-        // triggers.
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${label ?? "Notifications"}, ${unreadCount > 0 ? `${unreadCount} unread` : "none unread"}`}
+        aria-label={`${label ?? "Notifications"}, ${needsYouText(needsYouCount)}`}
         onClick={(e) => {
           e.stopPropagation();
           // iOS does not focus a tapped button, and the sheet returns focus to
@@ -651,7 +724,10 @@ export function NotificationBell({
           e.currentTarget.focus();
           if (!open && btnRef.current) {
             reposition();
-            openFilter();
+            // Opens on "Needs you" when something does, else everything.
+            setFilter(needsYouCount > 0 ? "needs" : "all");
+            setOpenCursor(lastSeenSeq);
+            markGroupedRead();
           }
           setOpen((v) => !v);
         }}
@@ -663,7 +739,7 @@ export function NotificationBell({
             <span className={labelClassName}>{label}</span>{" "}
           </>
         )}
-        {unreadCount > 0 && <span className="attention-badge">{unreadCount}</span>}
+        {needsYouCount > 0 && <span className="attention-badge">{needsYouCount}</span>}
       </button>
       {sheet && (
         <BottomSheet
@@ -678,14 +754,7 @@ export function NotificationBell({
           backStack
           sheetRef={panelRef}
           suppressRestoreRef={phoneSuppressRestoreRef}
-          headerActions={
-            shownItems.some((i) => i.type === "event" && !i.read) && (
-              <button className="mobile-notif-readall" onClick={markAllRead}>
-                <CheckIcon size={13} />
-                Read all
-              </button>
-            )
-          }
+          headerActions={filter === "all" && readAllButton("mobile-notif-readall")}
         >
           <div className="mobile-notif-filters" role="group" aria-label="Filter notifications">
             <button
@@ -693,7 +762,7 @@ export function NotificationBell({
               aria-pressed={filter === "needs"}
               onClick={() => setFilter("needs")}
             >
-              Needs you{needsYouIds.size > 0 ? ` ${needsYouIds.size}` : ""}
+              Needs you{needsYouCount > 0 ? ` ${needsYouCount}` : ""}
             </button>
             <button
               className={`mobile-notif-filter${filter === "all" ? " active" : ""}`}
@@ -704,53 +773,22 @@ export function NotificationBell({
             </button>
           </div>
           <div className="mobile-notif-scroll">
-            {shownItems.length === 0 ? (
+            {!shownItems.some((i) => i.type === "event") && (
               <div className="notif-empty">
-                {filter === "needs" ? "Nothing needs you right now" : "No notifications yet"}
+                {filter === "needs" || shownItems.length > 0
+                  ? "Nothing needs you right now"
+                  : "No notifications yet"}
               </div>
-            ) : (
-              shownItems.map((item) => {
-                const session = sessions.find((s) => s.id === item.sessionId);
-                if (item.type === "header") {
-                  return <FeedHeader key={`h-${item.sessionId}`} item={item} session={session} />;
-                }
-                return (
-                  <EventRow
-                    key={`e-${item.sessionId}-${item.event.seq}`}
-                    item={item}
-                    session={session}
-                    // Tap = the session's terminal (maximized by the
-                    // opener), and reading it marks that session seen —
-                    // the timeline view never advances the read cursor.
-                    onOpen={(target) => {
-                      phoneSuppressRestoreRef.current?.();
-                      setOpen(false);
-                      markSessionRead(target.id);
-                      ackAttention(target.id);
-                      onOpenSession(target);
-                    }}
-                    onTimeline={
-                      onOpenTimeline
-                        ? (target) => {
-                            phoneSuppressRestoreRef.current?.();
-                            setOpen(false);
-                            onOpenTimeline(target);
-                          }
-                        : undefined
-                    }
-                    onOpenBrowser={onOpenBrowser}
-                    onMarkRead={() => {
-                      markEventSeen(item.sessionId, item.event.seq);
-                      ackAttention(item.sessionId);
-                    }}
-                    onDismiss={() => {
-                      dismissEvents(item.sessionId, item.foldedSeqs);
-                      ackAttention(item.sessionId);
-                    }}
-                  />
-                );
-              })
             )}
+            {/* Direct children of the scroller, not wrapped: a wrapper would
+                confine each sticky header to its own box. */}
+            {shownItems.map((item) => (
+              <Fragment
+                key={`${item.type}-${item.sessionId}-${"event" in item ? item.event.seq : 0}`}
+              >
+                {renderItem(item)}
+              </Fragment>
+            ))}
           </div>
         </BottomSheet>
       )}
@@ -777,28 +815,18 @@ export function NotificationBell({
             onKeyDown={onPanelKeyDown}
             role="dialog"
             aria-label="Notifications"
+            tabIndex={-1}
           >
             <div className="notif-panel-header">
               <span className="notif-panel-title">Notifications</span>
-              {/* Issue #1431 — was gated on unreadCount, which excludes
-                  muted sessions (countUnread's own mute filter); those rows
-                  still render unread here, so the button used to hide with
-                  unread rows still on screen. Same rule the phone sheet's
-                  own "Read all" already uses. */}
-              {items.some((i) => i.type === "event" && !i.read) && (
-                <button
-                  className="notif-mark-all-btn"
-                  onClick={markAllRead}
-                  title="Mark all as read"
-                >
-                  <CheckIcon size={12} />
-                  Mark all read
-                </button>
-              )}
+              {readAllButton("notif-mark-all-btn")}
             </div>
-            {items.length === 0 ? (
-              <div className="notif-empty">No notifications yet</div>
-            ) : (
+            {!hasDecisions && (
+              <div className="notif-empty">
+                {items.length > 0 ? "Nothing needs you right now" : "No notifications yet"}
+              </div>
+            )}
+            {items.length > 0 && (
               <div ref={scrollRef} className="notif-feed-scroll">
                 <div
                   style={{
@@ -812,12 +840,10 @@ export function NotificationBell({
                     // Issue #1229 — the active sticky row (see rangeExtractor
                     // above) switches from the normal virtualized "absolute +
                     // translateY" positioning to `sticky`, pinning it to the
-                    // top of `.notif-feed-scroll` instead of wherever its own
-                    // measured offset would otherwise place it. Every OTHER
-                    // header keeps normal positioning — only one row is ever
-                    // sticky at a time.
+                    // top of `.notif-feed-scroll`. Only one row is ever sticky.
                     const isActiveSticky =
-                      item.type === "header" && virtualRow.index === activeStickyIndexRef.current;
+                      (item.type === "header" || item.type === "grouped-toggle") &&
+                      virtualRow.index === activeStickyIndexRef.current;
                     return (
                       <div
                         key={virtualRow.key}
@@ -835,67 +861,7 @@ export function NotificationBell({
                               }
                         }
                       >
-                        {item.type === "header" ? (
-                          <FeedHeader
-                            item={item}
-                            session={sessions.find((s) => s.id === item.sessionId)}
-                          />
-                        ) : (
-                          <EventRow
-                            item={item}
-                            session={sessions.find((s) => s.id === item.sessionId)}
-                            onOpen={(session) => {
-                              // P11 — opening a session moves focus to
-                              // whatever it opened (a terminal pane, per
-                              // PR13/U7); suppress the trap's restore so it
-                              // doesn't fight that by snapping focus back to
-                              // the bell button right after.
-                              suppressRestore();
-                              setOpen(false);
-                              // Issue #1429 — one click destination
-                              // everywhere (the phone sheet, push, the
-                              // ?session= deep link): the terminal, marked
-                              // read. Timeline is a secondary action now
-                              // (the button below).
-                              markSessionRead(session.id);
-                              ackAttention(session.id);
-                              onOpenSession(session);
-                            }}
-                            onOpenPr={(session, number) => {
-                              suppressRestore();
-                              setOpen(false);
-                              markSessionRead(session.id);
-                              ackAttention(session.id);
-                              openRightSidebarPr(session.projectId, number);
-                            }}
-                            onTimeline={
-                              onOpenTimeline
-                                ? (session) => {
-                                    suppressRestore();
-                                    setOpen(false);
-                                    onOpenTimeline(session);
-                                  }
-                                : undefined
-                            }
-                            onOpenBrowser={onOpenBrowser}
-                            onMarkRead={() => {
-                              markEventSeen(item.sessionId, item.event.seq);
-                              ackAttention(item.sessionId);
-                            }}
-                            // Making notifications relevant/scannable — a
-                            // collapsed row dismisses EVERY folded seq, not
-                            // just the newest: dismissedEventKeys is a
-                            // per-event set (see this file's own header
-                            // comment on why dismiss is deliberately NOT
-                            // cursor-based), so dismissing only the head
-                            // would resurrect the older folded rows on the
-                            // very next render.
-                            onDismiss={() => {
-                              dismissEvents(item.sessionId, item.foldedSeqs);
-                              ackAttention(item.sessionId);
-                            }}
-                          />
-                        )}
+                        {renderItem(item)}
                       </div>
                     );
                   })}
@@ -906,6 +872,90 @@ export function NotificationBell({
           document.body,
         )}
     </>
+  );
+}
+
+// "Earlier, no decision needed" (#3460): the header of the informative lines,
+// and the button that shows or hides them. Styled as a group header, so it
+// pins the same way while its lines scroll.
+function GroupedToggle({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: FeedGroupedToggleItem;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="notif-group-header notif-grouped-header">
+      <button
+        type="button"
+        className="notif-grouped-toggle"
+        aria-expanded={expanded}
+        onClick={onToggle}
+      >
+        {expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+        <span className="notif-group-header-title">Earlier, no decision needed</span>
+        <span className="notif-grouped-count">{item.count}</span>
+      </button>
+    </div>
+  );
+}
+
+// One informative line per session: "finished", "exited", or both, with the
+// newest one's age. Opens the session; Dismiss drops every grouped event the
+// line stands for.
+function GroupedLine({
+  item,
+  session,
+  onOpen,
+  onDismiss,
+}: {
+  item: FeedGroupedLineItem;
+  session: Session | undefined;
+  onOpen: (session: Session) => void;
+  onDismiss: () => void;
+}) {
+  const what = [item.summary.finished && "finished", item.summary.exited && "exited"]
+    .filter(Boolean)
+    .join(", ");
+  const age = formatRelativeAge(item.summary.newestTs);
+  const open = () => {
+    if (session) onOpen(session);
+  };
+  return (
+    <div className={`notif-event-row notif-grouped-line${item.read ? " read" : ""}`} onClick={open}>
+      {/* Same structure as EventRow (#3106): the row is a plain container,
+          the keyboard gets this one open button. */}
+      <button
+        type="button"
+        className="visually-hidden row-open-btn notif-event-open"
+        aria-label={`${item.title} ${what} — ${item.subtitle}, ${age}${item.read ? "" : ", new"}`}
+      />
+      <span className="notif-event-icon notif-sev-done">
+        <CheckIcon size={13} />
+      </span>
+      <span className="notif-event-body">
+        <span className="notif-event-text" title={`${item.title} ${what}`}>
+          <span className="notif-grouped-title">{item.title}</span> {what}
+        </span>
+        <span className="notif-event-time">{age}</span>
+      </span>
+      <span className="notif-event-actions">
+        <button
+          className="notif-event-action-btn"
+          title="Dismiss"
+          aria-label="Dismiss"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDismiss();
+          }}
+        >
+          <CloseIcon size={11} />
+        </button>
+      </span>
+    </div>
   );
 }
 
@@ -958,7 +1008,6 @@ function EventRow({
   onOpenPr,
   onTimeline,
   onOpenBrowser,
-  onMarkRead,
   onDismiss,
 }: {
   item: FeedEventItem;
@@ -968,14 +1017,13 @@ function EventRow({
   // its PR in the sidebar instead of the session's terminal, which stays one
   // click away on the row's "Session" button.
   onOpenPr?: (session: Session, number: number) => void;
-  // Phone sheet only: the row's tap opens the terminal there, so the
-  // timeline (this panel's per-session complement) is its own action.
+  // The row's tap opens the terminal, so the timeline (this panel's
+  // per-session complement) is its own action.
   onTimeline?: (session: Session) => void;
   onOpenBrowser: (projectId: number) => void;
-  onMarkRead: () => void;
   onDismiss: () => void;
 }) {
-  const { icon, className } = kindTreatment(item.event);
+  const { icon, className } = kindTreatment(item);
   const age = formatRelativeAge(item.event.ts);
   // Issue #903 — buildFeedItems already decided this row's actual text
   // (describeEvent's own text, or a sessionContextMap substitute for a
@@ -1057,9 +1105,11 @@ function EventRow({
 
   return (
     <div
-      className={`notif-event-row${item.read ? " read" : ""}`}
+      // A decision row has no read state: it stays until its decision is
+      // answered or dismissed (#3460).
+      className="notif-event-row"
       // #3106 — a plain container, not a role="button": the row holds its own
-      // buttons (Approve/Deny, Session, Timeline, Mark read, Dismiss), and a
+      // buttons (Approve/Deny, Session, Timeline, Dismiss), and a
       // control inside a control is axe's nested-interactive. A pointer still
       // opens by clicking anywhere on it (each nested control stops its own
       // click); the keyboard gets the one real button below, first in tab
@@ -1127,19 +1177,6 @@ function EventRow({
         )}
       </span>
       <span className="notif-event-actions">
-        {!item.read && (
-          <button
-            className="notif-event-action-btn"
-            title="Mark read"
-            aria-label="Mark read"
-            onClick={(e) => {
-              e.stopPropagation();
-              onMarkRead();
-            }}
-          >
-            <CheckIcon size={11} />
-          </button>
-        )}
         <button
           className="notif-event-action-btn"
           title="Dismiss"

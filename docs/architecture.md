@@ -691,6 +691,21 @@ sidebar's toggle (from 1100px only), the workspace chip and list
 not showing (`rail/RailPaneList.tsx`), and at the bottom the command box (the
 ⌘K palette), the notification bell and Settings.
 
+**The notification bell** (`NotificationBell.tsx`; design note
+[`design/notification-bell/note.md`](design/notification-bell/note.md)) lists
+what waits on a human decision: a permission, plan, question, review gate,
+promote request or dev-server offer, a failure the agent will not recover from
+alone (an API error, a non-zero exit, a manual session's red PR), a review
+verdict. `eventDescriptions.ts`'s `bellClass` says what kind of row an event
+is; `sessionOpenDecisions` says whether it is still open, from the session's
+own live latches (`permissionState`, `gates`, `errorState`, ...), so a row
+leaves when its decision is answered however it was answered. The badge counts
+sessions with an open decision. Informative events (a finished turn, an exit)
+sit in a collapsed "Earlier, no decision needed" group, never counted; opening
+the bell and "Read all" advance the read cursor only for sessions with no open
+decision, since that cursor also drives the pane tab badges. Byte-parsed
+signals (bell, silence, ...) and tool failures stay in the timeline only.
+
 **Left sidebar** (projects and their sessions, workspaces; `Sidebar.tsx` with
 `WorkspaceSwitcher.tsx`): docked from 1100px, pushing the grid, never
 floating. From 1280px it is open by default and the rail's toggle flips the

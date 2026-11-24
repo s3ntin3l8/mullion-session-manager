@@ -415,7 +415,8 @@ mullion notify --message "..." [--title "..."]
 
 Writes straight to the hook socket (`MULLION_HOOK_SOCKET`/
 `MULLION_HOOK_TOKEN`), bypassing the control socket entirely — surfaces in
-the notification bell/desktop-notify, same as a terminal BEL. Only works
+the notification bell as a row waiting on the human (until they answer the
+session or dismiss it) and as a desktop notification. Only works
 from inside a session, and deliberately can't target a _different_ session
 (the hook token pins you to your own). Use this to surface progress on a
 long-running task rather than relying on the human to be watching your
