@@ -105,7 +105,7 @@ export async function checkDockPortConflict(
   // remote project launched locally has its local checkout in `hostCwds`, not
   // at `project.cwd` (a path on the remote host). No checkout there, no probe.
   const cwd = projectCwdOnHost(project, targetHostId, parseHostCwds(project.hostCwds));
-  if (cwd === null) return null;
+  if (cwd === null || cwd === "") return null;
 
   if (targetHostId !== LOCAL_HOST_ID) {
     try {
