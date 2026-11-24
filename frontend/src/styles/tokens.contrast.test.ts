@@ -68,6 +68,23 @@ function tint(color: Rgb, surface: Rgb, percent: number): Rgb {
 
 const TONES = ["success", "danger", "warn", "info", "neutral", "merged"] as const;
 
+// Every text role styles/motion.css remaps inside material (#3038).
+const MATERIAL_TEXT = [
+  "--muted",
+  "--dim",
+  "--accent",
+  "--accent-solid",
+  "--ring",
+  "--r",
+  "--g",
+  "--b",
+  "--c",
+  "--y",
+  "--p",
+  "--o",
+  ...TONES.map((t) => `--status-${t}-fg`),
+];
+
 const themes = {
   dark: block(".cmux-root"),
   light: new Map([...block(".cmux-root"), ...block(".cmux-root.light")]),
@@ -166,49 +183,115 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
     );
   });
 
-  // #3015 — sheets and popovers are a translucent layer (--material) over
-  // whatever is behind them: a white web preview under the dark theme, a
+  // #3015/#3038 — sheets and popovers are a translucent layer (--material)
+  // over whatever is behind them: a white web preview under the dark theme, a
   // black terminal under the light one. Compositing is monotone, so pure white
   // and pure black are the worst backdrops (blur and saturation stay inside
-  // that range). The invariant: over either, material is never closer to the
-  // theme's text than solid --chrome is. Then every colour that clears AA on
-  // --chrome clears it on material, whether it is listed here or not.
-  it("material over any backdrop is never closer to the text than --chrome", () => {
+  // that range). Inside material every text role is remapped to its
+  // --material-* value (styles/motion.css), and each of those must clear AA
+  // over material on either backdrop.
+  const materialPercent = () => {
     const raw = vars.get("--material") ?? "";
-    const m = raw.match(/^color-mix\(in srgb,\s*var\((--[\w-]+)\)\s+(\d+)%,\s*transparent\)$/);
-    expect(m, `--material is a translucent mix: ${raw}`).not.toBeNull();
-    const [, base, percent] = m!;
-    expect(Number(percent)).toBeLessThan(100);
-    const chrome = luminance(resolve(vars, "--chrome"));
-    // Light text (dark theme) wants a surface no lighter than --chrome; dark
-    // text (light theme) one no darker.
-    const lightText = luminance(resolve(vars, "--fg")) > chrome;
-    for (const backdrop of [
-      [255, 255, 255],
-      [0, 0, 0],
-    ] as Rgb[]) {
-      const surface = luminance(tint(resolve(vars, base), backdrop, Number(percent)));
-      const where = `--material over rgb(${backdrop.join(",")})`;
-      if (lightText) expect(surface, where).toBeLessThanOrEqual(chrome);
-      else expect(surface, where).toBeGreaterThanOrEqual(chrome);
+    const m = raw.match(/^color-mix\(in srgb,\s*var\(--term\)\s+(\d+)%,\s*transparent\)$/);
+    expect(m, `--material is a translucent mix of --term: ${raw}`).not.toBeNull();
+    return Number(m![1]);
+  };
+  const materialSurfaces = () => {
+    const term = resolve(vars, "--term");
+    const percent = materialPercent();
+    return [
+      ["white", tint(term, [255, 255, 255], percent)],
+      ["black", tint(term, [0, 0, 0], percent)],
+    ] as const;
+  };
+
+  it("material is visibly translucent, and stays a sheet rather than a tint", () => {
+    const percent = materialPercent();
+    expect(percent).toBeLessThan(100);
+    expect(percent).toBeGreaterThanOrEqual(80);
+  });
+
+  it.each(MATERIAL_TEXT)("%s on material clears AA over a white or a black backdrop", (name) => {
+    const fg = resolve(vars, `--material-${name.slice(2)}`);
+    for (const [backdrop, surface] of materialSurfaces()) {
+      expect(contrast(fg, surface), `${name} on material over ${backdrop}`).toBeGreaterThanOrEqual(
+        4.5,
+      );
     }
-    // And so, for the text roles that sit on it:
-    for (const fg of ["--fg", "--muted", "--dim", "--accent", "--r"]) {
-      if (contrast(resolve(vars, fg), resolve(vars, "--chrome")) < 4.5) continue;
-      for (const backdrop of [
-        [255, 255, 255],
-        [0, 0, 0],
-      ] as Rgb[]) {
-        const surface = tint(resolve(vars, base), backdrop, Number(percent));
-        expect(contrast(resolve(vars, fg), surface), `${fg} on material`).toBeGreaterThanOrEqual(
-          4.5,
-        );
+    // Reduced transparency paints solid --chrome under the same remap.
+    expect(contrast(fg, resolve(vars, "--chrome")), `${name} on --chrome`).toBeGreaterThanOrEqual(
+      4.5,
+    );
+  });
+
+  it("--fg needs no material value: it clears AA on material as it is", () => {
+    for (const [backdrop, surface] of materialSurfaces()) {
+      expect(
+        contrast(resolve(vars, "--fg"), surface),
+        `--fg over ${backdrop}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // Rows inside sheets and popovers paint the same --seg hover/selected tint
+  // as the sidebar, so the two grey text roles hold on that too.
+  it("--dim and --muted on material clear AA under a --seg tint", () => {
+    const fg = resolve(vars, "--fg");
+    const seg = Number(vars.get("--seg")!.match(/(\d+)%/)![1]);
+    for (const [backdrop, surface] of materialSurfaces()) {
+      for (const name of ["--dim", "--muted"]) {
+        expect(
+          contrast(resolve(vars, `--material-${name.slice(2)}`), tint(fg, surface, seg)),
+          `${name} on --seg over material over ${backdrop}`,
+        ).toBeGreaterThanOrEqual(4.5);
       }
     }
   });
 
+  for (const tone of TONES) {
+    it(`material status-${tone} text still clears AA on its own tint`, () => {
+      const fg = resolve(vars, `--material-status-${tone}-fg`);
+      expect(contrast(fg, resolve(vars, `--status-${tone}-bg`))).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+
   it("defines eight graph lanes", () => {
     for (let i = 1; i <= 6; i++) expect(vars.has(`--lane-${i}`)).toBe(true);
     expect(vars.has("--lane-more")).toBe(true);
+  });
+});
+
+// The light map above inherits the dark block, so a material value the light
+// block forgot would be tested with the dark hex. Each theme defines its own.
+describe("material text tokens", () => {
+  it.each([".cmux-root", ".cmux-root.light"])("are all defined in %s itself", (selector) => {
+    const own = block(selector);
+    for (const name of MATERIAL_TEXT) {
+      expect(own.has(`--material-${name.slice(2)}`), `--material-${name.slice(2)}`).toBe(true);
+    }
+  });
+});
+
+// The tokens above only help if material actually uses them.
+const motionSources = import.meta.glob("./motion.css", {
+  eager: true,
+  query: "?raw",
+  import: "default",
+}) as Record<string, string>;
+
+describe("styles/motion.css remaps text inside material", () => {
+  const motion = motionSources["./motion.css"].replace(/\/\*[\s\S]*?\*\//g, "");
+  const rule = [...motion.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(
+    ([, selector]) =>
+      selector.includes(".cmux-root .mobile-session-sheet") &&
+      selector.includes(".cmux-root.pane-tab-overflow-menu"),
+  );
+
+  it("on sheets and on popovers that are their own theme root", () => {
+    expect(rule, "a .cmux-root-scoped remap rule for sheets and popovers").toBeDefined();
+  });
+
+  it.each(MATERIAL_TEXT)("%s", (name) => {
+    expect(rule![2]).toContain(`${name}: var(--material-${name.slice(2)});`);
   });
 });
