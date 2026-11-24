@@ -1883,3 +1883,87 @@ summary.space-row {
 .folder-picker-list button:focus-visible {
   background: var(--surface-hover);
 }
+
+/* Settings -> Devices: the simulator picker (SimulatorPicker.tsx). */
+.sim-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  width: min(100%, 380px);
+}
+
+.sim-picker-list {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+
+.sim-picker-group {
+  position: sticky;
+  top: 0;
+  padding: 6px 12px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  background: var(--bg);
+}
+
+.sim-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sim-picker-row:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+.sim-picker-row.selected {
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+}
+
+.sim-picker-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sim-picker-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-picker-meta {
+  font-size: 0.65625rem;
+  color: var(--dim);
+}
+
+.sim-picker-empty {
+  padding: 10px 12px;
+  font-size: 0.71875rem;
+  color: var(--dim);
+}
+
+.sim-picker-selected {
+  font-size: 0.71875rem;
+  color: var(--dim);
+}
+
+/* Mounted for the screen reader, but takes no room (or flex gap) while empty. */
+.sim-picker-selected:empty {
+  margin-top: -8px;
+}

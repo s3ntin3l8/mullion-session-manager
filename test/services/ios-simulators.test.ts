@@ -22,6 +22,7 @@ const SAMPLE_SIMCTL_JSON = JSON.stringify({
         state: "Booted",
         isAvailable: true,
         deviceTypeIdentifier: "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro",
+        lastBootedAt: "2026-11-20T10:15:00Z",
       },
       {
         udid: "1A2B3C4D-1111-2222-3333-444455556666",
@@ -78,12 +79,16 @@ describe("parseSimctlDevices", () => {
         name: "iPhone 16 Pro",
         runtime: "iOS 18.2",
         state: "Booted",
+        deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro",
+        lastBootedAt: "2026-11-20T10:15:00Z",
       },
       {
         udid: "1A2B3C4D-1111-2222-3333-444455556666",
         name: "iPhone 16",
         runtime: "iOS 18.2",
         state: "Shutdown",
+        // Never booted: simctl reports no lastBootedAt, so none is invented.
+        deviceTypeId: "com.apple.CoreSimulator.SimDeviceType.iPhone-16",
       },
     ]);
   });

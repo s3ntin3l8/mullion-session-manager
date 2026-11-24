@@ -11,9 +11,11 @@ import type {
 import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
 import { normalizeAvdHardware } from "../../../../src/shared/avd-hardware.js";
 import { useAsyncData } from "../../hooks/useAsyncData.js";
-import { Dropdown, Row, SecondaryButton, Segmented, TextInput } from "../../ui/primitives.js";
+import { Dropdown, Row, SecondaryButton, TextInput } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { NewSimulatorForm } from "./NewSimulatorForm.js";
+import { SimulatorPicker } from "./SimulatorPicker.js";
+import { viewSimulators } from "./simulatorList.js";
 
 // Same allowlist as src/routes/avds.ts's own AVD_NAME_PATTERN — checked
 // client-side too so a bad name fails fast instead of round-tripping to the
@@ -80,11 +82,17 @@ function describeSystemImage(image: SystemImage): string {
 }
 
 export function DeviceCreateForm({
+  platform,
+  deviceHosts,
   devices,
   installStatus,
   onCreated,
   onSimulatorsLoaded,
 }: {
+  // Fixed by the section that opened the form (Android or iOS Simulator).
+  platform: DevicePlatform;
+  // The hosts and the platforms each runs; null until loaded.
+  deviceHosts: DeviceHostEntry[] | null;
   devices: Device[];
   installStatus: string;
   onCreated: () => void;
@@ -93,9 +101,7 @@ export function DeviceCreateForm({
   const createDevice = useDashboardStore((s) => s.createDevice);
   const createIosDevice = useDashboardStore((s) => s.createIosDevice);
 
-  const [deviceHosts, setDeviceHosts] = useState<DeviceHostEntry[] | null>(null);
   const [createHostId, setCreateHostId] = useState(LOCAL_HOST_ID);
-  const [createPlatform, setCreatePlatform] = useState<DevicePlatform>("android");
   const [avdName, setAvdName] = useState("");
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -128,7 +134,7 @@ export function DeviceCreateForm({
     [deviceHosts],
   );
   const hasIosHost = iosHosts.length > 0;
-  const effectiveCreatePlatform: DevicePlatform = hasIosHost ? createPlatform : "android";
+  const effectiveCreatePlatform: DevicePlatform = platform;
 
   useAsyncData(
     () => api.listAvds().then(({ avds: list }) => list),
@@ -144,13 +150,6 @@ export function DeviceCreateForm({
     },
     [effectiveCreatePlatform],
     { enabled: effectiveCreatePlatform === "android" },
-  );
-
-  useAsyncData(
-    () => api.listDeviceHosts(),
-    (list) => setDeviceHosts(list),
-    () => setDeviceHosts([]),
-    [],
   );
 
   useAsyncData(
@@ -284,7 +283,19 @@ export function DeviceCreateForm({
     ) {
       return simulatorUdid;
     }
-    return simulators.find((s) => !activeIosUdids.has(s.udid))?.udid ?? simulators[0]?.udid ?? "";
+    // The first one the picker shows: a used simulator on the newest runtime,
+    // not whatever simctl happens to list first (the oldest, never booted).
+    const shown = viewSimulators(simulators, {
+      query: "",
+      showAll: false,
+      activeUdids: activeIosUdids,
+    }).groups.flatMap((g) => g.simulators);
+    return (
+      shown.find((s) => !activeIosUdids.has(s.udid))?.udid ??
+      simulators.find((s) => !activeIosUdids.has(s.udid))?.udid ??
+      simulators[0]?.udid ??
+      ""
+    );
   }, [simulatorUdid, simulators, activeIosUdids]);
 
   const submitCreate = () => {
@@ -379,21 +390,6 @@ export function DeviceCreateForm({
 
   return (
     <div style={{ marginTop: 10 }}>
-      {hasIosHost && (
-        <Row label="Platform">
-          <Segmented
-            options={[
-              { value: "android", label: "Android emulator" },
-              { value: "ios", label: "iOS Simulator" },
-            ]}
-            value={effectiveCreatePlatform}
-            onChange={(next) => {
-              setCreatePlatform(next);
-              setCreateError(null);
-            }}
-          />
-        </Row>
-      )}
       {(showHostPicker || singleRemoteIosHost) && (
         <Row
           label="Host"
@@ -431,17 +427,9 @@ export function DeviceCreateForm({
                   : `An available iOS Simulator on ${iosHosts.find((h) => h.hostId === effectiveHostId)?.name ?? "the selected machine"}.`
               }
             >
-              <Dropdown
-                options={simulators.map((sim) => {
-                  const inUse = activeIosUdids.has(sim.udid);
-                  return {
-                    value: sim.udid,
-                    label: inUse
-                      ? `${sim.name} (${sim.runtime} · ${sim.state}) — already added`
-                      : `${sim.name} (${sim.runtime} · ${sim.state})`,
-                    disabled: inUse,
-                  };
-                })}
+              <SimulatorPicker
+                simulators={simulators}
+                activeUdids={activeIosUdids}
                 value={selectedSimulatorUdid}
                 onChange={setSimulatorUdid}
               />

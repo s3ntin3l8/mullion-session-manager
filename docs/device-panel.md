@@ -118,20 +118,39 @@ Live H.264 video and HID input come from `idb_companion` over gRPC
 (`@grpc/grpc-js`, one companion process per device), which is restarted after
 every simulator boot because its HID connection goes stale across a reboot.
 
-**Creating a simulator.** Settings → Devices → Create a device → iOS Simulator
-has a **+ New simulator** button, the counterpart of **+ New AVD**. It lists the
-target host's own device types (iPhone and iPad) and available iOS runtimes
-(`GET /api/simulators/catalog?hostId=`, answered by `GET
-/internal/simulators/catalog` on an agent), and `POST /api/simulators`
+**The Settings → Devices page** has one section per platform. **Android** holds
+the Android devices (emulators and phones), **Create an emulator** and **Pair a
+phone or tablet**, the emulator window and GPU settings, and **SDK system
+images**; **iOS Simulator** holds the simulators and **Add a simulator**. A
+platform no host can run is not shown (an iOS-only Mac has no Android section
+and no SDK images), and a host reports what it runs in `GET /api/devices/hosts`
+(`platforms`).
+
+**Choosing a simulator.** Xcode provisions a default set of simulators for every
+installed runtime, so `simctl` lists far more than anyone uses and cannot say
+which are whose. The picker opens on the ones in use (booted now, already added
+to Mullion, or booted before: simctl's `lastBootedAt`), grouped by runtime with
+the newest first, iPhones before iPads. **Show all N** reveals the rest and the
+search box matches any simulator by name, runtime or state. A host with none in
+use (a fresh Xcode) shows them all. This is a heuristic: a simulator Xcode
+created and someone booted once counts as used.
+
+**Creating a simulator.** **+ New simulator**, under the picker, is the
+counterpart of **+ New AVD**. It lists the target host's own device types
+(iPhone and iPad, newest first, searchable) and available iOS runtimes (newest
+first, the newest preselected) (`GET /api/simulators/catalog?hostId=`, answered
+by `GET /internal/simulators/catalog` on an agent), and `POST /api/simulators`
 (`{hostId?, name, deviceTypeId, runtimeId}`, forwarded to `POST
-/internal/simulators` on an agent) runs `xcrun simctl create`. The ids are
-checked against that catalog and the name against a conservative pattern
-(1-64 characters, a letter or digit first, then letters, digits, spaces and
-`. _ ( ) ' -`; accented and non-Latin letters are fine) before anything runs, and everything reaches `simctl` as separate
-argv elements. The new simulator comes back `Shutdown` and is preselected in the
-form; adding it as a device is still the form's own **Create** step. Mullion only
-ever creates: it never deletes or erases a simulator. An agent that predates the
-routes answers "update its agent".
+/internal/simulators` on an agent) runs `xcrun simctl create`. The name is
+optional and defaults to `<device type> (<runtime>)`. The ids are checked
+against that catalog and the name against a conservative pattern (1-64
+characters, a letter or digit first, then letters, digits, spaces and
+`. _ ( ) ' -`; accented and non-Latin letters are fine) before anything runs,
+and everything reaches `simctl` as separate argv elements. The new simulator
+comes back `Shutdown` and is preselected in the form; adding it as a device is
+still the form's own **Create** step. Mullion only ever creates: it never
+deletes or erases a simulator. An agent that predates the routes answers
+"update its agent".
 
 **Video behaviour.** `idb_companion`'s `video_stream` opens with
 `format: "H264"`, `fps: 30`, and `key_frame_rate: 0` (idb's default GOP
