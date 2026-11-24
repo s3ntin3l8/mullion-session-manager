@@ -87,27 +87,36 @@ function isRunningSimulator(d: Device): boolean {
   return d.platform === "ios" && d.status === "active" && d.live != null;
 }
 
+/** How long a failed server-info read waits before it is retried. */
+const SERVER_INFO_RETRY_MS = 10_000;
+
 /** The preview proxy's settings, fetched once a running iOS Simulator exists:
  * a simulator that cannot reach the dev server's loopback, and every named
- * target, open through the Mullion preview URL. Null until known. */
-function usePreviewServerInfo(devices: Device[]): ServerInfo | null {
+ * target, open through the Mullion preview URL. "loading" until the first
+ * answer; a failed read reports "failed" (not "previews off") and is retried. */
+function usePreviewServerInfo(devices: Device[]): ServerInfo | "loading" | "failed" {
   const hasSimulator = devices.some(isRunningSimulator);
-  const [info, setInfo] = useState<ServerInfo | null>(null);
+  const [info, setInfo] = useState<ServerInfo | "loading" | "failed">("loading");
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!hasSimulator) return;
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     void api
       .getServerInfo()
       .then((res) => {
         if (!cancelled) setInfo(res);
       })
       .catch(() => {
-        if (!cancelled) setInfo(null);
+        if (cancelled) return;
+        setInfo("failed");
+        retry = setTimeout(() => setAttempt((n) => n + 1), SERVER_INFO_RETRY_MS);
       });
     return () => {
       cancelled = true;
+      if (retry) clearTimeout(retry);
     };
-  }, [hasSimulator]);
+  }, [hasSimulator, attempt]);
   return info;
 }
 
@@ -119,10 +128,10 @@ async function openPreviewInSimulator(
   projectId: number,
   deviceId: number,
   targetId: string | null,
-  info: ServerInfo | null,
+  info: ServerInfo | "loading" | "failed",
 ): Promise<void> {
   // A "preview" route is only offered once the info is known; never reached.
-  if (!info) throw new Error("Previews are not enabled on this server");
+  if (typeof info === "string") throw new Error("Previews are not enabled on this server");
   const { slug } =
     targetId === null
       ? await api.createProjectPreview(projectId)
@@ -165,7 +174,7 @@ function simulatorItems(
   devServer: { address: string; hostId: string } | null,
   targets: NamedPreviewTarget[],
   devices: Device[],
-  info: ServerInfo | null,
+  info: ServerInfo | "loading" | "failed",
 ): KebabMenuItem[] {
   return devices.filter(isRunningSimulator).flatMap((d) => {
     const name = d.name ?? `Simulator ${d.id}`;
@@ -186,20 +195,16 @@ function simulatorItems(
         ),
       );
     }
-    // Targets wait for the server info: until it arrives the menu cannot
-    // tell an enabled row from one disabled for want of previews.
-    if (info) {
-      for (const target of targets) {
-        const route = simulatorTargetRoute(d, info);
-        rows.push(
-          simulatorRow(
-            `simulator-${d.id}-${target.id}`,
-            `Open ${target.name} in simulator — ${name}${route.kind === "unavailable" ? " (unavailable)" : ""}`,
-            route,
-            () => openPreviewInSimulator(projectId, d.id, target.id, info),
-          ),
-        );
-      }
+    for (const target of targets) {
+      const route = simulatorTargetRoute(d, info);
+      rows.push(
+        simulatorRow(
+          `simulator-${d.id}-${target.id}`,
+          `Open ${target.name} in simulator — ${name}${route.kind === "unavailable" ? " (unavailable)" : ""}`,
+          route,
+          () => openPreviewInSimulator(projectId, d.id, target.id, info),
+        ),
+      );
     }
     return rows;
   });

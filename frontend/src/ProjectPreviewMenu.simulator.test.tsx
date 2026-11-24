@@ -56,6 +56,13 @@ const PREVIEWS_ON = {
   previewAuthRequired: false,
 };
 
+const STAGING: NamedPreviewTarget = {
+  id: "t1",
+  name: "Staging",
+  destination: "https://staging.example",
+  connectionOrigin: "project",
+};
+
 async function openMenu(
   devices: Device[],
   stubApi = true,
@@ -215,6 +222,85 @@ describe("Preview menu: Open in simulator", () => {
       sessions: [makeSession({ id: 91, projectId: 1, kind: "dock", status: "active" })],
     });
     await waitFor(() => expect(api.getBrowserDestinations).toHaveBeenCalledTimes(2));
+  });
+
+  it("reports a failed preview read as such, not as previews off, and retries it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.spyOn(api, "getBrowserDestinations").mockResolvedValue(destinations("local"));
+      const info = vi
+        .spyOn(api, "getServerInfo")
+        .mockRejectedValueOnce(new Error("rate limited"))
+        .mockResolvedValue(PREVIEWS_ON as ServerInfo);
+      resetStore({
+        projects: [makeProject({ id: 1, hostId: "local", devServerUrl: "3005" })],
+        devices: [sim({ hostId: "mac-1" })],
+      });
+      vi.spyOn(api, "getProjectPreviewTargets").mockResolvedValue({
+        devServerUrl: "3005",
+        targets: [STAGING],
+      });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<ProjectPreviewMenu projectId={1} onOpenDefault={vi.fn()} onManage={vi.fn()} />);
+      await waitFor(() => expect(info).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole("button", { name: "Preview" }));
+      const row = await screen.findByRole("menuitem", {
+        name: "Open Staging in simulator — iPhone 16 (unavailable)",
+      });
+      expect(row.getAttribute("title")).toMatch(/Could not read the server's preview settings/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await waitFor(() => expect(info).toHaveBeenCalledTimes(2));
+      expect(
+        await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
+      ).not.toHaveAttribute("aria-disabled", "true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens a named target from a simulator on another host", async () => {
+    vi.spyOn(api, "createTargetPreview").mockResolvedValue({ slug: "tgt" } as Preview);
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON, [STAGING]);
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
+    );
+    await waitFor(() =>
+      expect(api.openUrlOnDevice).toHaveBeenCalledWith(
+        7,
+        `${window.location.protocol}//preview-tgt.mullion.example.com/`,
+      ),
+    );
+  });
+
+  it("lists a simulator on another host disabled when the preview host is loopback", async () => {
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", {
+      ...PREVIEWS_ON,
+      previewBaseHost: "localhost:3000",
+    });
+    const item = await screen.findByRole("menuitem", {
+      name: "Open in simulator — iPhone 16 (on another host)",
+    });
+    expect(item.getAttribute("title")).toMatch(/loopback/);
+    await user.click(item);
+    expect(api.openUrlOnDevice).not.toHaveBeenCalled();
+  });
+
+  it("reports a preview that could not be created", async () => {
+    const { fetchMock } = mockFetch({
+      "POST /api/previews": () => jsonResponse(409, { message: "no dev server" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const reportError = vi.fn(() => 1);
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON);
+    useDashboardStore.setState({ reportError });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in simulator — iPhone 16 (via preview)" }),
+    );
+    await waitFor(() =>
+      expect(reportError).toHaveBeenCalledWith("Could not open in simulator", "no dev server"),
+    );
+    expect(api.openUrlOnDevice).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 
   it("reports a failed open instead of swallowing it", async () => {

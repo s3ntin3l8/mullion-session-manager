@@ -147,9 +147,10 @@ Simulator (`frontend/src/lib/simulatorUrl.ts` picks the route):
   (`POST /api/previews` with `kind: "target"`), on any host, so the proxy applies the
   target's connection origin exactly as for the Browser pane.
 
-A preview row is listed **disabled, with the reason as its tooltip**, when previews are
-not enabled (`PREVIEW_BASE_HOST` unset: there is no preview URL to hand over), or when
-`PREVIEW_BASE_HOST` is a loopback name (`localhost`, `*.localhost`, `127.x`, `[::1]`)
+A preview row is listed **disabled, with the reason as its tooltip**, while the server's
+preview settings are still loading or could not be read (retried every 10 seconds), when
+previews are not enabled (`PREVIEW_BASE_HOST` unset: there is no preview URL to hand over), or when
+`PREVIEW_BASE_HOST` is a loopback name (`localhost`, `*.localhost`, `127.x`, `::1`, `0.0.0.0`)
 and the simulator is on an agent host, which cannot resolve it to the primary. Beyond
 that, `preview-<slug>.<PREVIEW_BASE_HOST>` must resolve from the simulator's Mac and,
 over https, present a certificate the simulator trusts, the same as for a browser on
@@ -165,8 +166,8 @@ stripped from the redirect), and every later request in that Safari tab rides th
 cookie (`src/plugins/preview-proxy.ts`'s `evaluatePreviewAuth`, covered by
 `test/plugins/preview-proxy.test.ts`). As a top-level navigation the preview is the
 first party, so the cookie is stored whether it is the `Secure; SameSite=None;
-Partitioned` variant (https) or `SameSite=Lax` (http). The token is single-preview and
-expires after 60 seconds, so a URL left in the simulator's history is useless to replay;
+Partitioned` variant (https) or `SameSite=Lax` (http). The token is bound to that one preview and
+expires after 60 seconds, so a URL left in the simulator's history is useless once that minute has passed;
 once the cookie lapses (a 24-hour lifetime, slid forward while the preview is in use) Safari shows the 401 page again and
 re-opening from the menu mints a fresh token. With preview auth off no token is minted
 and the URL is the bare preview URL. This was established from the proxy's code and

@@ -41,7 +41,7 @@ describe("simulator route selection (#3491)", () => {
   const off = { previewsEnabled: false, previewBaseHost: "" };
 
   it("same host as the dev server: its loopback URL, previews or not", () => {
-    for (const previews of [on, off, null]) {
+    for (const previews of [on, off, "loading" as const, "failed" as const]) {
       expect(
         simulatorDevServerRoute("http://localhost:3005/", { hostId: "mac" }, "mac", previews),
       ).toEqual({ kind: "direct", url: "http://127.0.0.1:3005/" });
@@ -54,17 +54,21 @@ describe("simulator route selection (#3491)", () => {
     ).toEqual({ kind: "preview" });
   });
 
-  it("other host, previews off or not known yet: unavailable, with the reason", () => {
-    for (const previews of [off, null]) {
-      const route = simulatorDevServerRoute(
-        "http://localhost:3005/",
-        { hostId: "mac" },
-        "local",
-        previews,
-      );
-      expect(route).toMatchObject({ kind: "unavailable" });
-      expect(route.kind === "unavailable" && route.reason).toMatch(/Previews are not enabled/);
-    }
+  it("other host, previews off: unavailable, with the reason", () => {
+    const route = simulatorDevServerRoute(
+      "http://localhost:3005/",
+      { hostId: "mac" },
+      "local",
+      off,
+    );
+    expect(route.kind === "unavailable" && route.reason).toMatch(/Previews are not enabled/);
+  });
+
+  it("settings still loading or unreadable: unavailable, never reported as previews off", () => {
+    const loading = simulatorTargetRoute({ hostId: "mac" }, "loading");
+    expect(loading.kind === "unavailable" && loading.reason).toMatch(/Checking/);
+    const failed = simulatorTargetRoute({ hostId: "mac" }, "failed");
+    expect(failed.kind === "unavailable" && failed.reason).toMatch(/Could not read/);
   });
 
   it("a named target always goes through its preview, on any host", () => {
@@ -74,7 +78,14 @@ describe("simulator route selection (#3491)", () => {
   });
 
   it("a loopback preview host is unreachable from a simulator on an agent host", () => {
-    for (const previewBaseHost of ["localhost:3000", "dev.localhost", "127.0.0.1", "[::1]:80"]) {
+    for (const previewBaseHost of [
+      "localhost:3000",
+      "dev.localhost",
+      "127.0.0.1",
+      "[::1]:80",
+      "::1",
+      "0.0.0.0:8080",
+    ]) {
       const route = simulatorTargetRoute(
         { hostId: "mac" },
         { previewsEnabled: true, previewBaseHost },

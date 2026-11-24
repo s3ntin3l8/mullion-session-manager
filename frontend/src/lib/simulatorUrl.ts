@@ -41,11 +41,10 @@ export type SimulatorRoute =
   /** Cannot be opened; `reason` says why (shown on the disabled row). */
   | { kind: "unavailable"; reason: string };
 
-/** What the menu knows about the preview proxy (from `GET /api/server-info`). */
-export interface PreviewAvailability {
-  previewsEnabled: boolean;
-  previewBaseHost: string;
-}
+/** What the menu knows about the preview proxy (from `GET /api/server-info`):
+ * the settings, or that they are still loading or could not be read. */
+export type PreviewAvailability =
+  { previewsEnabled: boolean; previewBaseHost: string } | "loading" | "failed";
 
 const PREVIEWS_OFF =
   "Previews are not enabled on this server (PREVIEW_BASE_HOST), so there is no preview URL to open";
@@ -53,19 +52,32 @@ const PREVIEWS_OFF =
 /** A base host that only ever resolves to the primary's own loopback, which a
  * simulator on another host (an agent Mac) cannot reach. */
 function isLoopbackHost(host: string): boolean {
-  const name = host.trim().toLowerCase().replace(/:\d+$/, "");
+  const raw = host.trim().toLowerCase();
+  if (raw === "::1") return true;
+  // Drop a port before comparing names.
+  const name = raw.replace(/:\d+$/, "");
   return (
     name === "localhost" ||
     name.endsWith(".localhost") ||
     name === "[::1]" ||
+    name === "0.0.0.0" ||
     /^127(\.\d{1,3}){3}$/.test(name)
   );
 }
 
 /** Whether a preview URL can work for a simulator on `deviceHostId`, or the
  * reason it cannot. */
-function previewRoute(deviceHostId: string, previews: PreviewAvailability | null): SimulatorRoute {
-  if (!previews?.previewsEnabled || !previews.previewBaseHost.trim()) {
+function previewRoute(deviceHostId: string, previews: PreviewAvailability): SimulatorRoute {
+  if (previews === "loading") {
+    return { kind: "unavailable", reason: "Checking whether previews are enabled…" };
+  }
+  if (previews === "failed") {
+    return {
+      kind: "unavailable",
+      reason: "Could not read the server's preview settings; retrying shortly",
+    };
+  }
+  if (!previews.previewsEnabled || !previews.previewBaseHost.trim()) {
     return { kind: "unavailable", reason: PREVIEWS_OFF };
   }
   if (deviceHostId !== LOCAL_HOST_ID && isLoopbackHost(previews.previewBaseHost)) {
@@ -84,7 +96,7 @@ export function simulatorDevServerRoute(
   address: string,
   device: Pick<Device, "hostId">,
   devServerHostId: string,
-  previews: PreviewAvailability | null,
+  previews: PreviewAvailability,
 ): SimulatorRoute {
   const url = simulatorOpenUrl(address, device, devServerHostId);
   if (url) return { kind: "direct", url };
@@ -96,7 +108,7 @@ export function simulatorDevServerRoute(
  * with the target's connection origin). */
 export function simulatorTargetRoute(
   device: Pick<Device, "hostId">,
-  previews: PreviewAvailability | null,
+  previews: PreviewAvailability,
 ): SimulatorRoute {
   return previewRoute(device.hostId, previews);
 }
