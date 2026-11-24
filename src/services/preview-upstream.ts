@@ -4,7 +4,7 @@
 // from the same resolution the proxy dials).
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import { projects, projectPreviewTargets } from "../db/schema.js";
+import { projects, projectPreviewTargets, sessions } from "../db/schema.js";
 import { resolveExecutionContext } from "./execution-context.js";
 import { getPreviewBySlug } from "./preview-registry.js";
 import { resolveDevServerHostId } from "./dev-server-host.js";
@@ -122,6 +122,24 @@ export async function resolvePreviewTarget(
   // (a dock control can be started on another host, #3425).
   let hostId: string;
   if (preview.sessionId !== null) {
+    // #3467 — a port preview serves the service its Dock session ran, so once
+    // that session is no longer active nothing is left to serve: answer 503
+    // rather than dial whatever listens on the port now (the next prune sweep
+    // removes the row, after which the slug answers 404).
+    if (preview.portPreview) {
+      const [bound] = app.db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, preview.sessionId))
+        .all();
+      if (!bound || bound.status !== "active") {
+        app.log.warn(
+          { slug, sessionId: preview.sessionId },
+          "preview proxy: the port preview's session is not active",
+        );
+        return { ok: false, status: 503 };
+      }
+    }
     const ctx = await resolveExecutionContext(
       app,
       { projectId: project.id, sessionId: preview.sessionId },
@@ -143,9 +161,9 @@ export async function resolvePreviewTarget(
     // published port, which is only discovered on the project's own host
     // (docker-service-detect.ts), or a Dock command's port whose session row
     // was since deleted (SET NULL). Both were picked from this host's own
-    // discovery, which only covers local projects. Like the checkout preview,
-    // the row keeps serving the port after the service stops; nothing prunes
-    // it yet (follow-up issue linked from the PR).
+    // discovery, which only covers local projects. Unlike the checkout preview,
+    // the row is pruned once discovery stops listing the port
+    // (prunePortPreviews, #3467).
     hostId = project.hostId;
   } else {
     hostId = await resolveDevServerHostId(app, project);
