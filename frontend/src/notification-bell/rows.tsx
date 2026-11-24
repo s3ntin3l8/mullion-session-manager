@@ -246,10 +246,12 @@ export function FeedHeader({
             )}
             <span className={`session-status-label ${presentation.tone}`}>
               {/* Issue #1227 — "compact" explicit, not relying on
-                  showDetail being false for every awaiting_* status: once
-                  #1227 flips showDetail to true for four of them (with up to
-                  a 200-char gatePrompt/promoteSummary), this 380x380px
-                  popover has no room for the verbose form. */}
+                  showDetail being false for every awaiting_* status: four of
+                  them carry a detail of up to 200 characters (a gatePrompt,
+                  a promoteSummary). The header is one line, shared with the
+                  session's name, and it pins over the rows (#1229), so a
+                  verbose label would wrap it into a band of prompt text
+                  repeating what the decision row under it already shows. */}
               {formatStatusLabel(presentation, session?.sessionStatusDetail ?? null, "compact")}
             </span>
           </span>

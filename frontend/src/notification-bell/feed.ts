@@ -14,9 +14,11 @@ import type { TaskNeedsYouKind } from "../github/taskMasterSummary.js";
 export const HEADER_ROW_HEIGHT = 34;
 export const EVENT_ROW_ESTIMATE_HEIGHT = 60;
 export const GROUPED_LINE_ESTIMATE_HEIGHT = 44;
-// Making notifications relevant/scannable — the panel is a fixed-width
-// popover (see the portal's inline style below), so this is a character
-// budget calibrated by eye against that width, not a measured pixel value.
+// A row's head-truncation budget (truncateHead keeps a permission summary's
+// distinguishing tail): characters, calibrated by eye, not a measured width.
+// The narrowest surface is the side panel at 420px (terminal.css's
+// .notif-panel; 480px on a touch tablet), where 90 characters fill the two
+// lines .notif-event-text clamps to; the phone's sheet wraps the same rows.
 export const NOTIF_ROW_TEXT_MAX = 90;
 
 export interface FeedHeaderItem {

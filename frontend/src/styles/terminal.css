@@ -536,9 +536,11 @@
 /* The scrim stops at the rail's edge, so the bell stays where it was. */
 .notif-scrim {
   position: fixed;
-  top: 0;
+  /* The panel's own insets, so the two share their edges when the keyboard
+     raises (the Deny reason field) or iOS pans the visual viewport. */
+  top: var(--shell-top, 0px);
   right: 0;
-  bottom: 0;
+  bottom: var(--kb-inset, 0px);
   z-index: 55;
   background: color-mix(in srgb, #000 40%, transparent);
 }
