@@ -12,6 +12,7 @@ import {
   saveAgentIdentity,
 } from "../../src/services/agent-identity.js";
 import { redeemPairingCode } from "../../src/services/agent-pairing-redeem.js";
+import { main as runAgentPair, parseArgs, readFirstLineFromStdin } from "../../src/agent-pair.js";
 
 const tmpDb = path.join(os.tmpdir(), `agent-pairing-redeem-${process.pid}.db`);
 
@@ -353,5 +354,109 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
     process.env.SESSIONS_DIR = sessionsDir;
 
     await expect(buildApp()).rejects.toThrow(/refusing to boot an agent/i);
+  });
+
+  it("handles invalid primary URLs, HTTP 429/500, and malformed pairing responses", async () => {
+    newSessionsDir();
+    const validCode = "a".repeat(64); // pragma: allowlist secret
+
+    await expect(
+      redeemPairingCode({ primaryUrl: "not a url", code: validCode, sessionsDir }),
+    ).rejects.toThrow(/Invalid primary URL/);
+
+    await expect(
+      redeemPairingCode({ primaryUrl: "ftp://primary.invalid", code: validCode, sessionsDir }),
+    ).rejects.toThrow(/http:\/\/ or https:\/\//);
+
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 429 }));
+    await expect(
+      redeemPairingCode({ primaryUrl: "http://primary.invalid", code: validCode, sessionsDir }),
+    ).rejects.toThrow(/HTTP 429/);
+
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 500 }));
+    await expect(
+      redeemPairingCode({ primaryUrl: "http://primary.invalid", code: validCode, sessionsDir }),
+    ).rejects.toThrow(/HTTP 500/);
+
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ host_id: "" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    await expect(
+      redeemPairingCode({ primaryUrl: "http://primary.invalid", code: validCode, sessionsDir }),
+    ).rejects.toThrow(/did not include a valid machine identity/);
+  });
+
+  it("agent-pair CLI parses args, reads the first line from stdin, and redeems a pairing code", async () => {
+    newSessionsDir();
+    const code = await issueCode("cli-pair");
+    stubPrimaryFetch();
+
+    expect(
+      parseArgs([
+        "--primary-url",
+        "http://primary.invalid",
+        "--sessions-dir",
+        sessionsDir,
+        "--name",
+        "cli-host",
+        "--advertise-url",
+        "https://agent.example.com",
+      ]),
+    ).toEqual({
+      primaryUrl: "http://primary.invalid",
+      sessionsDir,
+      name: "cli-host",
+      advertiseUrl: "https://agent.example.com",
+    });
+
+    expect(() => parseArgs(["--bogus"])).toThrow(/Unknown or incomplete argument/);
+    expect(() => parseArgs(["--sessions-dir", sessionsDir])).toThrow(/--primary-url is required/);
+    expect(() => parseArgs(["--primary-url", "http://primary.invalid"])).toThrow(
+      /--sessions-dir is required/,
+    );
+
+    async function* chunks(items: Array<Buffer | string>) {
+      for (const item of items) yield item;
+    }
+
+    expect(
+      await readFirstLineFromStdin(chunks([Buffer.from(`  ${code}  \nignored-second-line\n`)])),
+    ).toBe(code);
+    expect(await readFirstLineFromStdin(chunks(["single-line"]))).toBe("single-line");
+
+    await expect(
+      runAgentPair(
+        ["--primary-url", "http://primary.invalid", "--sessions-dir", sessionsDir],
+        chunks(["   \n"]),
+      ),
+    ).rejects.toThrow(/Pairing code must be provided on stdin/);
+
+    let output = "";
+    await runAgentPair(
+      [
+        "--primary-url",
+        "http://primary.invalid",
+        "--sessions-dir",
+        sessionsDir,
+        "--name",
+        "cli-host",
+      ],
+      chunks([`${code}\n`]),
+      {
+        write: (chunk: string | Uint8Array) => {
+          output += String(chunk);
+          return true;
+        },
+      },
+    );
+
+    const identity = loadAgentIdentity(statePath);
+    expect(identity).not.toBeNull();
+    expect(output).toBe(`Paired host ${identity!.hostId}\n`);
   });
 });

@@ -1,6 +1,8 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { redeemPairingCode } from "./services/agent-pairing-redeem.js";
 
-function parseArgs(argv: string[]): {
+export function parseArgs(argv: string[]): {
   primaryUrl: string;
   sessionsDir: string;
   name?: string;
@@ -36,9 +38,11 @@ function parseArgs(argv: string[]): {
   return { primaryUrl, sessionsDir, name, advertiseUrl };
 }
 
-async function readFirstLineFromStdin(): Promise<string> {
+export async function readFirstLineFromStdin(
+  stdin: AsyncIterable<Buffer | string> = process.stdin,
+): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
+  for await (const chunk of stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
   }
   const text = Buffer.concat(chunks).toString("utf8");
@@ -46,9 +50,13 @@ async function readFirstLineFromStdin(): Promise<string> {
   return firstLine.trim();
 }
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  const code = await readFirstLineFromStdin();
+export async function main(
+  argv: string[] = process.argv.slice(2),
+  stdin: AsyncIterable<Buffer | string> = process.stdin,
+  stdout: Pick<NodeJS.WritableStream, "write"> = process.stdout,
+): Promise<void> {
+  const args = parseArgs(argv);
+  const code = await readFirstLineFromStdin(stdin);
   if (!code) {
     throw new Error("Pairing code must be provided on stdin");
   }
@@ -59,10 +67,23 @@ async function main(): Promise<void> {
     name: args.name,
     advertiseUrl: args.advertiseUrl,
   });
-  process.stdout.write(`Paired host ${result.hostId}\n`);
+  stdout.write(`Paired host ${result.hostId}\n`);
 }
 
-main().catch((err) => {
-  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
-});
+function isDirectEntrypoint(): boolean {
+  try {
+    return (
+      Boolean(process.argv[1]) &&
+      fs.realpathSync(process.argv[1]!) === fs.realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectEntrypoint()) {
+  main().catch((err) => {
+    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  });
+}
