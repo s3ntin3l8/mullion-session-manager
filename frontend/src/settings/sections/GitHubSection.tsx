@@ -17,6 +17,7 @@ import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { GitHubPollingSettings } from "../RuntimeSettings.js";
 import { SettingsForm, SettingsGroup } from "../SettingsForm.js";
+import { Presence } from "../../ui/Presence.js";
 
 // One credential for the whole install (issue #27), not per-project — see
 // src/services/github-integration.ts. Manages its own fetch rather than
@@ -165,7 +166,7 @@ export function GitHubSection() {
           </div>
         )}
 
-        {deviceFlowOpen && (
+        <Presence when={deviceFlowOpen}>
           <GitHubDeviceFlowModal
             onClose={() => setDeviceFlowOpen(false)}
             onConnected={() => {
@@ -176,7 +177,7 @@ export function GitHubSection() {
               setDeviceFlowOpen(false);
             }}
           />
-        )}
+        </Presence>
       </SettingsGroup>
       <WebhooksSection integration={integration} />
 

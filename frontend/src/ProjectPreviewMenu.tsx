@@ -5,6 +5,7 @@ import { useDashboardStore } from "./store/index.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
 import type { KebabMenuItem } from "./ui/KebabMenu.js";
 import { Modal } from "./ui/Modal.js";
+import { Presence } from "./ui/Presence.js";
 
 function usePreviewConfig(projectId: number) {
   const config = useDashboardStore((s) => s.projectPreviewConfigs[projectId]);
@@ -187,5 +188,9 @@ export function ProjectPreviewPicker(props: {
   onManage: (id: number) => void;
 }) {
   const id = useDashboardStore((s) => s.previewPickerProjectId);
-  return id === null ? null : <PickerBody key={id} projectId={id} {...props} />;
+  return (
+    <Presence when={id !== null}>
+      {id !== null && <PickerBody key={id} projectId={id} {...props} />}
+    </Presence>
+  );
 }

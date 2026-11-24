@@ -31,6 +31,7 @@ import { Details } from "./Details.js";
 import { QuotaBadge } from "./QuotaBadge.js";
 import { useRunwayQuota } from "../hooks/useRunwayQuota.js";
 import { expandedSessionRows, setSessionRowExpanded } from "./expandedSessionRows.js";
+import { Presence } from "../ui/Presence.js";
 
 // The 4 status treatments the redesign's States doc specifies (confirmed
 // against the design source — its tab-chrome badge grid has exactly these
@@ -647,14 +648,14 @@ export function SessionRow({
           lastAssistantMessage={session.lastAssistantMessage}
         />
       </div>
-      {promoteOpen && (
+      <Presence when={promoteOpen}>
         <PromoteDialog
           session={session}
           project={project}
           onClose={() => setPromoteOpen(false)}
           onPromoted={onPromoted}
         />
-      )}
+      </Presence>
     </>
   );
 }

@@ -6,7 +6,12 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
-import { useDismissExit } from "../hooks/usePresence.js";
+import {
+  ParentPresenceContext,
+  useBlurWhenLeaving,
+  useDismissExit,
+  useParentPresence,
+} from "../hooks/usePresence.js";
 import { ChevronLeftIcon, CloseIcon } from "./icons.js";
 
 // PR 24 pilot — the shared shell behind the `create-modal-*` family
@@ -35,13 +40,12 @@ import { ChevronLeftIcon, CloseIcon } from "./icons.js";
 // owns Escape directly, scoped to its own `onKeyDown` (not a window
 // listener) for the same "don't leak past this dialog" reasoning.
 //
-// `active: true` for the whole component lifetime, not a toggleable prop:
-// every one of the seven target modals is a fresh mount per open (an `{open
-// && <XModal .../>}` conditional at the call site, never a persistently
-// mounted "hidden" instance) — the same shape `useFocusTrap`'s own
-// Settings.tsx/CommandPalette call sites document as its `active: true`
-// case, and the same reason a `SetActive`-style prop would be dead weight
-// here.
+// The focus trap is active for as long as the dialog is open: every caller
+// mounts a fresh dialog per open (`<Presence when={open}>` around it, #3037),
+// never a persistently mounted "hidden" instance. The trap only lets go
+// early when the parent has closed the dialog and it is playing its exit:
+// focus goes back to the opener (or stays wherever `suppressRestore()`'s
+// caller sent it) at the close, not after the animation.
 //
 // A caller that opens this from inside another focus-trapped overlay (e.g.
 // `PromoteDialog`'s two triggers: `PaneActionsMenu`'s kebab menu and
@@ -194,19 +198,28 @@ function DialogModal({
 }: Omit<ModalProps, "surface">) {
   const modalRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
-  // #3015 — Escape, the backdrop and the close button play the exit
-  // (styles/motion.css) before `onClose`; the caller unmounts a dialog that
-  // has already gone. A dialog that must not close right now (`closeDisabled`)
-  // skips it: its caller guards `onClose` and keeps it, and an exit that
-  // came back would only flicker.
-  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
-  // Not `inert` while leaving (the menus are): that would blur the focused
-  // control, and a caller that refuses the close would get its dialog back
-  // with focus stranded on <body>. motion.css's `pointer-events: none` on a
-  // leaving overlay is enough to keep a stray click from landing.
-  const requestClose = closeDisabled ? onClose : dismiss;
+  // #3037 — inside a `<Presence>` the parent decides: Escape, the backdrop
+  // and the close button call `onClose` at once, and the Presence plays the
+  // one exit when the parent closes (or nothing, when it keeps the dialog).
+  const parent = useParentPresence(backdropRef);
+  const parentLeaving = parent?.leaving ?? false;
+  // #3015 — a bare Modal (no Presence around it): Escape, the backdrop and
+  // the close button play the exit (styles/motion.css) before `onClose`; the
+  // caller unmounts a dialog that has already gone. A dialog that must not
+  // close right now (`closeDisabled`) skips it: its caller guards `onClose`
+  // and keeps it, and an exit that came back would only flicker.
+  const { state: ownPresence, dismiss } = useDismissExit(onClose, backdropRef);
+  const presence = parentLeaving ? "leaving" : ownPresence;
+  // Not `inert` while its own exit plays (the menus are): that would blur the
+  // focused control, and a caller that refuses the close would get its
+  // dialog back with focus stranded on <body>. motion.css's
+  // `pointer-events: none` on a leaving overlay is enough to keep a stray
+  // click from landing. A dialog its parent has closed is `inert`: the
+  // parent has decided, and keys typed during the exit must not reach it.
+  const requestClose = closeDisabled || parent ? onClose : dismiss;
+  useBlurWhenLeaving(parentLeaving, backdropRef);
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: true,
+    active: !parentLeaving,
     containerRef: modalRef,
     initialFocusRef,
   });
@@ -237,6 +250,7 @@ function DialogModal({
       ref={backdropRef}
       className={`${backdropClassName} motion-scrim`}
       data-presence={presence}
+      inert={parentLeaving || undefined}
       onClick={requestClose}
     >
       <div
@@ -268,9 +282,13 @@ function DialogModal({
           </div>
         )}
 
-        <div className={bodyClassName}>{children}</div>
+        {/* A dialog opened from inside this one sits in its own Presence, or
+            none: it must not take this dialog's place in the one around it. */}
+        <ParentPresenceContext.Provider value={null}>
+          <div className={bodyClassName}>{children}</div>
 
-        {footer && <div className={footerClassName}>{footer}</div>}
+          {footer && <div className={footerClassName}>{footer}</div>}
+        </ParentPresenceContext.Provider>
       </div>
     </div>
   );

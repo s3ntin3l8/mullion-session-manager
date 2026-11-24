@@ -23,6 +23,7 @@ import { CheckoutChip } from "./CheckoutChip.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
+import { Presence } from "../ui/Presence.js";
 
 type Page = { kind: "list" } | { kind: "branch"; name: string } | { kind: "prune" };
 
@@ -312,14 +313,16 @@ export function GitSidebarView({
             </div>
           </div>
         )}
-        {promoteOpen && pendingPromote && project && (
-          <PromoteDialog
-            session={pendingPromote}
-            project={project}
-            onClose={() => setPromoteOpen(false)}
-            onPromoted={(s) => requestOpenSession(s.id)}
-          />
-        )}
+        <Presence when={Boolean(promoteOpen && pendingPromote && project)}>
+          {promoteOpen && pendingPromote && project && (
+            <PromoteDialog
+              session={pendingPromote}
+              project={project}
+              onClose={() => setPromoteOpen(false)}
+              onPromoted={(s) => requestOpenSession(s.id)}
+            />
+          )}
+        </Presence>
 
         {syncError && (
           <div className="sc-row-error" role="alert">

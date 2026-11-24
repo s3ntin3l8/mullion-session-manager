@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../api/index.js";
 import type { SetupStatus } from "../api/index.js";
 import { Modal } from "./Modal.js";
+import { Presence } from "./Presence.js";
 
 // Issue #2245 — the badge a session (its tab) and its task card show while the
 // project's setup recipe runs in the session's fresh worktree, and after it.
@@ -37,9 +38,9 @@ export function SetupBadge({
       >
         {LABELS[status]}
       </button>
-      {open && (
+      <Presence when={open}>
         <SetupLogModal sessionId={sessionId} status={status} onClose={() => setOpen(false)} />
-      )}
+      </Presence>
     </>
   );
 }

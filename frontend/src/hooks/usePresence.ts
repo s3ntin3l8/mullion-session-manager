@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { RefObject } from "react";
 import { canPlayExit, exitFinished } from "../lib/presence.js";
 import type { PresenceState } from "../lib/presence.js";
@@ -54,7 +62,9 @@ export function usePresence(
  * so the parent unmounts an overlay that has already gone.
  *
  * A close the parent makes on its own (a submit that succeeded, a command
- * that ran) still unmounts at once: the overlay never hears about it.
+ * that ran) still unmounts at once: the overlay never hears about it. That is
+ * what `ui/Presence.tsx` is for (#3037); an overlay inside one does not use
+ * this, and this stays the fallback for one rendered bare.
  *
  * If the parent keeps the overlay after `onClose` (a dialog that refuses to
  * close while something is in flight), it comes back.
@@ -95,4 +105,48 @@ export function useDismissExit(
   }, [leaving]);
 
   return { state: leaving ? "leaving" : "open", dismiss };
+}
+
+/**
+ * What `ui/Presence.tsx` tells the overlay inside it (#3037): whether the
+ * parent has closed it and it is now leaving, and where to hand over the
+ * overlay's root so its exit can be waited on. `null` outside a Presence.
+ */
+export interface ParentPresence {
+  leaving: boolean;
+  /** Hands over the overlay's root; returns the matching release. */
+  register: (el: Element | null) => () => void;
+}
+
+export const ParentPresenceContext = createContext<ParentPresence | null>(null);
+
+/**
+ * For `ui/Modal.tsx` and the command palette: the parent's presence, with the
+ * overlay's root (`ref`) registered for as long as it is mounted.
+ */
+export function useParentPresence(ref: RefObject<Element | null>): ParentPresence | null {
+  const parent = useContext(ParentPresenceContext);
+  const register = parent?.register;
+  useLayoutEffect(() => {
+    if (!register) return;
+    return register(ref.current);
+    // `ref` is a stable ref object, attached before layout effects run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [register]);
+  return parent;
+}
+
+/**
+ * Releases focus still inside an overlay the parent has closed: an unmount
+ * used to drop it, and keys typed during the exit must not reach a dialog
+ * that has already gone. `inert` does the same in a browser; this also
+ * covers an environment where it does not move focus.
+ */
+export function useBlurWhenLeaving(leaving: boolean, ref: RefObject<Element | null>): void {
+  useLayoutEffect(() => {
+    if (!leaving) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && ref.current?.contains(active)) active.blur();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaving]);
 }

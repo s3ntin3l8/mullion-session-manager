@@ -105,6 +105,7 @@ import { usePushResync } from "./hooks/usePushResync.js";
 import { usePostWorkspaceSwitchHighlight } from "./hooks/usePostWorkspaceSwitchHighlight.js";
 import { useRetriableLazy } from "./lib/retriableLazy.js";
 import { ResourceAlertBanner } from "./ResourceAlertBanner.js";
+import { Presence } from "./ui/Presence.js";
 
 // B2 — code-split Settings' ~2,700-line modal out of the initial bundle via
 // React.lazy (the two browser/preview panes and the Kanban board get the
@@ -1692,7 +1693,9 @@ export function App() {
         onOpenSession={placeLaunchedSession}
         projectActions={launcherProjectActions}
       />
-      {palette.open && (
+      {/* #3037 — plays the palette's exit however it closes (a command that ran,
+          the global Escape); the close itself is not delayed. */}
+      <Presence when={palette.open}>
         <CommandPalette
           scope={palette.scope}
           layoutTier={layoutTier}
@@ -1722,7 +1725,7 @@ export function App() {
           onShowWorkspace={handleSelectWorkspace}
           onOpenTasks={onOpenTasks}
         />
-      )}
+      </Presence>
       <ProjectSettingsHost phone={isMobile} backStack={compact} />
       {settingsOpen && (
         // ErrorBoundary's fallback (.crashed-pane, styles.css) has no

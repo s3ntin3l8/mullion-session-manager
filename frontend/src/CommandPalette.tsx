@@ -36,7 +36,7 @@ import { openSessionOn } from "./git/sessionLaunch.js";
 import { PaletteRow } from "./command-palette/PaletteRow.js";
 import { TextInput } from "./ui/primitives.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
-import { useDismissExit } from "./hooks/usePresence.js";
+import { useBlurWhenLeaving, useDismissExit, useParentPresence } from "./hooks/usePresence.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { useServerInfo } from "./settings/useServerInfo.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
@@ -330,16 +330,29 @@ export function CommandPalette({
   const isCoarsePointer = useCoarsePointer();
   const modalRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
-  // #3015 — the palette's own dismiss controls (Escape in the search field,
-  // the backdrop, the close button) play the exit before `onClose`. Running a
-  // command closes at once: the command's result is what the user looks at.
-  const { state: presence, dismiss } = useDismissExit(onClose, backdropRef);
+  // #3037 — App.tsx mounts the palette inside a `<Presence>`, which plays its
+  // exit whenever it closes: Escape in the search field, the backdrop, the
+  // close button, a command that ran, the global Escape. The close (and the
+  // command) happens at once; only the picture lingers. Its dismiss controls
+  // then just call `onClose`.
+  const parent = useParentPresence(backdropRef);
+  const parentLeaving = parent?.leaving ?? false;
+  // #3015 — rendered bare (tests, no Presence): its own dismiss controls play
+  // the exit before `onClose`, and anything else closes at once.
+  const { state: ownPresence, dismiss: ownDismiss } = useDismissExit(onClose, backdropRef);
+  const dismiss = parent ? onClose : ownDismiss;
+  const presence = parentLeaving ? "leaving" : ownPresence;
+  // Focus settles at the close, as it did when the close unmounted the
+  // palette: the trap lets go (restoring to the opener unless an action
+  // called `suppressRestore()`), and anything still focused inside is blurred
+  // (the palette is `inert` while it leaves).
+  useBlurWhenLeaving(parentLeaving, backdropRef);
   const {
     onKeyDown: onTrapKeyDown,
     suppressRestore,
     restoreTarget,
   } = useFocusTrap({
-    active: true,
+    active: !parentLeaving,
     containerRef: modalRef,
     initialFocusRef: isCoarsePointer ? modalRef : inputRef,
   });
@@ -812,6 +825,7 @@ export function CommandPalette({
       ref={backdropRef}
       className="overlay-backdrop cmd-palette-backdrop motion-scrim"
       data-presence={presence}
+      inert={parentLeaving || undefined}
       onClick={dismiss}
     >
       <div

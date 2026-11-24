@@ -14,6 +14,7 @@ import { sessionIdFromSessionPaneId } from "./lib/panelIds.js";
 import type { BrowserPanelParams } from "./lib/browserPanelParams.js";
 import { addressHandoffRefusal } from "./lib/browserHandoff.js";
 import type { PreviewSource } from "./lib/browserHandoff.js";
+import { Presence } from "./ui/Presence.js";
 
 // Lives in lib/ so the store can name it without importing this component.
 export type { BrowserPanelParams } from "./lib/browserPanelParams.js";
@@ -833,16 +834,18 @@ export function BrowserPanel({
           title="Preview"
           onLoad={() => setFrameLoaded(true)}
         />
-        {modalOpen && project && (
-          <SavedUrlModal
-            projectId={project.id}
-            projectName={project.name}
-            onClose={() => {
-              setModalOpen(false);
-              void refreshProjectUrls(project.id);
-            }}
-          />
-        )}
+        <Presence when={Boolean(modalOpen && project)}>
+          {modalOpen && project && (
+            <SavedUrlModal
+              projectId={project.id}
+              projectName={project.name}
+              onClose={() => {
+                setModalOpen(false);
+                void refreshProjectUrls(project.id);
+              }}
+            />
+          )}
+        </Presence>
       </div>
     );
   }

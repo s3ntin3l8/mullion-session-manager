@@ -49,6 +49,7 @@ import { DiscoverProjects } from "./sidebar/DiscoverProjects.js";
 import { ProjectHeader } from "./sidebar/ProjectHeader.js";
 import { expandedSessionRows } from "./session-row/expandedSessionRows.js";
 import { SessionRow } from "./session-row/SessionRow.js";
+import { Presence } from "./ui/Presence.js";
 
 // U3's three status filter chips. Deliberately only 3 of kanban.ts's 5
 // severity-derived columns (not "Finished"/"Idle") — matches the finding's
@@ -744,7 +745,7 @@ export function Sidebar({
           hosts={hosts}
         />
       </>
-      {addProjectOpen && (
+      <Presence when={addProjectOpen}>
         <CreateProjectModal
           hosts={hosts}
           initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
@@ -779,7 +780,7 @@ export function Sidebar({
             return project;
           }}
         />
-      )}
+      </Presence>
       {scaffoldOfferProject && (
         <div className="scaffold-offer-banner">
           <div className="scaffold-offer-banner-header">

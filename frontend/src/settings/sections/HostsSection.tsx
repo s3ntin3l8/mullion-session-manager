@@ -28,6 +28,7 @@ import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
 import { PairDesktopSection } from "./PairDesktopSection.js";
 import { HostHeartbeatSetting, HostStaleAfterSetting } from "../RuntimeSettings.js";
+import { Presence } from "../../ui/Presence.js";
 
 // Issue #647 / roadmap 7.8 — separate from ServerInfoSection's own
 // UPDATE_STATUS_POLL_MS (2000ms), which only gates the primary's own
@@ -1046,53 +1047,59 @@ export function HostsSection() {
         </div>
       )}
 
-      {addOpen && (
+      <Presence when={addOpen}>
         <CreateHostModal
           onClose={() => setAddOpen(false)}
           onSave={(name, baseUrl, token) =>
             createHost(name, baseUrl || undefined, token || undefined)
           }
         />
-      )}
-      {editing && (
-        <CreateHostModal
-          mode="edit"
-          initialName={editing.name}
-          initialBaseUrl={editing.baseUrl ?? ""}
-          hasToken={editing.hasToken}
-          canClearBaseUrl={canClearAddress(editing)}
-          onClose={() => setEditing(null)}
-          onSave={(name, baseUrl, token) =>
-            updateHost(editing.id, {
-              name,
-              // An emptied address on a host with an identity is a clear (#3091).
-              ...(baseUrl
-                ? { baseUrl }
-                : editing.baseUrl && canClearAddress(editing)
-                  ? { baseUrl: null }
-                  : {}),
-              ...(token ? { token } : {}),
-            })
-          }
-        />
-      )}
-      {rotated && (
-        <AgentInstallInstructions
-          kind="rotate"
-          token={rotated.token}
-          hostName={rotated.name}
-          agentUnaffected={rotated.liveIdentity}
-          primaryUrl={window.location.origin}
-          onClose={() => setRotated(null)}
-        />
-      )}
-      {viewingConfig && (
-        <HostConfigModal
-          hostId={viewingConfig.id}
-          hostName={viewingConfig.name}
-          onClose={() => setViewingConfig(null)}
-        />
-      )}
+      </Presence>
+      <Presence when={editing !== null}>
+        {editing && (
+          <CreateHostModal
+            mode="edit"
+            initialName={editing.name}
+            initialBaseUrl={editing.baseUrl ?? ""}
+            hasToken={editing.hasToken}
+            canClearBaseUrl={canClearAddress(editing)}
+            onClose={() => setEditing(null)}
+            onSave={(name, baseUrl, token) =>
+              updateHost(editing.id, {
+                name,
+                // An emptied address on a host with an identity is a clear (#3091).
+                ...(baseUrl
+                  ? { baseUrl }
+                  : editing.baseUrl && canClearAddress(editing)
+                    ? { baseUrl: null }
+                    : {}),
+                ...(token ? { token } : {}),
+              })
+            }
+          />
+        )}
+      </Presence>
+      <Presence when={Boolean(rotated)}>
+        {rotated && (
+          <AgentInstallInstructions
+            kind="rotate"
+            token={rotated.token}
+            hostName={rotated.name}
+            agentUnaffected={rotated.liveIdentity}
+            primaryUrl={window.location.origin}
+            onClose={() => setRotated(null)}
+          />
+        )}
+      </Presence>
+      <Presence when={viewingConfig !== null}>
+        {viewingConfig && (
+          <HostConfigModal
+            hostId={viewingConfig.id}
+            hostName={viewingConfig.name}
+            onClose={() => setViewingConfig(null)}
+          />
+        )}
+      </Presence>
 
       <div style={{ marginTop: 16 }}>
         <HostHeartbeatSetting />
