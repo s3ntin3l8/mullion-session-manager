@@ -8,6 +8,7 @@
 // refactoring roadmap).
 import { request } from "./client.js";
 import type { Preview, ProjectPreviewConfig } from "./types.js";
+import type { BrowserDestinations } from "./browserDestinationTypes.js";
 
 /** Which preview shows a page of the agent's browser (#3373). */
 export type PreviewForAgentAddress =
@@ -60,6 +61,20 @@ export const browserApi = {
       method: "PUT",
       body: JSON.stringify(config),
     }),
+  // #3003 — the Browser pane's quick pick: what the project runs now and
+  // what it has saved. Read-only.
+  getBrowserDestinations: (projectId: number) =>
+    request<BrowserDestinations>(`/api/projects/${projectId}/browser-destinations`),
+
+  // #3003 — the preview serving a running entry's port (created on first
+  // use). The server finds the port from the entry's key; 409 without
+  // PREVIEW_BASE_HOST, 404 once the service stopped.
+  openDestinationPreview: (projectId: number, key: string) =>
+    request<{ slug: string; label: string }>(
+      `/api/projects/${projectId}/browser-destinations/preview`,
+      { method: "POST", body: JSON.stringify({ key }) },
+    ),
+
   createTargetPreview: (projectId: number, targetId: string) =>
     request<Preview>("/api/previews", {
       method: "POST",

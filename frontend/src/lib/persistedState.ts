@@ -180,6 +180,9 @@ export const STORAGE_KEYS = {
   // through localStorage the same way mutedSessions does, not through the
   // WS `cursors`/`seen` frames.
   dismissedEventKeys: "crs.dismissedEventKeys",
+  // #3003 — the Browser pane quick pick's "Recent" group: the addresses each
+  // mode last opened, newest first (lib/browserRecents.ts). Device-local.
+  browserRecents: "crs.browserRecents",
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

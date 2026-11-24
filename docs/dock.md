@@ -516,6 +516,14 @@ starts or stops anything already running.
   isn't cancelled by that. Rare in practice; a subsequent Dock poll shows
   the container's real end state regardless of what the action reported.
 
+### Published ports
+
+Discovery also records the TCP ports a running service publishes on the host
+(`docker ps`'s `Ports` column, host side only, IPv4 and IPv6 bindings of one
+port counted once). The Dock does not show them; the Browser pane's quick pick
+lists each one under "Running now" (see
+[browser-previews.md](browser-previews.md)).
+
 ## Dev server port detection
 
 When a dock monitor's session output contains a dev server startup banner
