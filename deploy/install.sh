@@ -504,38 +504,94 @@ if [ "$ROLE" = "agent" ]; then
   fi
 fi
 
+# pair_identity_file SESSIONS_DIR — the machine-identity file a pairing
+# redeem would write. A relative SESSIONS_DIR resolves against
+# $MULLION_HOME/current (the redeem branch cds there), exactly like the
+# redeem itself does — never against the installer's own working directory.
+pair_identity_file() {
+  case "$1" in
+    /* | [A-Za-z]:/* | [A-Za-z]:\\*) printf '%s\n' "$1/agent-identity.json" ;;
+    *) printf '%s\n' "$MULLION_HOME/current/$1/agent-identity.json" ;;
+  esac
+}
+
+# identity_file_is_usable FILE — true when FILE is a machine identity the
+# agent itself would accept: parseable JSON with a non-empty string hostId
+# and a non-empty string machineCredential. This is the same shape check as
+# loadAgentIdentity (src/services/agent-identity.ts), which treats anything
+# else as "no identity" — so a truncated, hand-mangled or otherwise malformed
+# file counts as NO identity here too, and a supplied pairing code is
+# redeemed as usual (the redeem overwrites the broken file).
+identity_file_is_usable() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  "$NODE_PATH" -e '
+    const fs = require("fs");
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    } catch {
+      process.exit(1);
+    }
+    if (!parsed || typeof parsed !== "object") process.exit(1);
+    if (typeof parsed.hostId !== "string" || !parsed.hostId) process.exit(1);
+    if (typeof parsed.machineCredential !== "string" || !parsed.machineCredential) process.exit(1);
+  ' "$file" >/dev/null 2>&1
+}
+
 PAIRED_THIS_RUN=false
 if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
-  PAIR_PRIMARY_URL="${MULLION_AGENT_PRIMARY_URL:-}"
-  if is_blank "$PAIR_PRIMARY_URL" && [ -f "$MULLION_HOME/.env" ]; then
-    PAIR_PRIMARY_URL="$(env_value MULLION_PRIMARY_URL)"
-  fi
-  if is_blank "$PAIR_PRIMARY_URL"; then
-    echo "error: MULLION_AGENT_PAIRING_CODE requires MULLION_AGENT_PRIMARY_URL (or MULLION_PRIMARY_URL in $MULLION_HOME/.env) to be set." >&2
-    exit 1
-  fi
-  PAIR_SCRIPT="$MULLION_HOME/current/dist/agent-pair.js"
-  if [ ! -f "$PAIR_SCRIPT" ]; then
-    echo "error: pairing helper not found at $PAIR_SCRIPT — upgrade to a release that supports pairing codes." >&2
-    exit 1
-  fi
-  echo "==> Redeeming pairing code with primary"
-  case "$PAIR_SESSIONS_DIR" in
-    /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
-    *)
-      echo "WARNING: SESSIONS_DIR ($PAIR_SESSIONS_DIR) is relative, so the paired agent-identity.json will be written inside $MULLION_HOME/current and orphaned on the next release upgrade. Set SESSIONS_DIR to an absolute path outside the release directory (for example $MULLION_HOME/data/sessions) in $MULLION_HOME/.env." >&2
-      ;;
+  # Issue #3498 — a rerun of install.sh must NOT redeem a pairing code for a
+  # host that is already paired. A pairing code is one-time: a second
+  # converge would redeem a spent code (HTTP 401) and fail the play on every
+  # run after the first, and a freshly minted code per run would replace the
+  # agent's identity and create a new host row every time. So an existing,
+  # usable identity means "already paired": the supplied code is ignored and
+  # the identity file is left byte- and mtime-identical.
+  #
+  # MULLION_AGENT_PAIRING_FORCE=1 is the explicit opt-out — re-pair on
+  # purpose (what "Bring a revoked agent back" in deploy/README.md relies
+  # on): the code is redeemed and the identity overwritten, as before.
+  PAIRING_FORCE=false
+  case "${MULLION_AGENT_PAIRING_FORCE:-}" in
+    1 | true) PAIRING_FORCE=true ;;
   esac
-  PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$PAIR_SESSIONS_DIR")
-  if [ -n "${MULLION_AGENT_NAME:-}" ]; then
-    PAIR_ARGS+=(--name "$MULLION_AGENT_NAME")
+  PAIR_IDENTITY_FILE="$(pair_identity_file "$PAIR_SESSIONS_DIR")"
+  if [ "$PAIRING_FORCE" = false ] && identity_file_is_usable "$PAIR_IDENTITY_FILE"; then
+    echo "==> Already paired ($PAIR_IDENTITY_FILE exists), so the supplied pairing code is ignored — set MULLION_AGENT_PAIRING_FORCE=1 to re-pair on purpose."
+    unset MULLION_AGENT_PAIRING_CODE
+  else
+    PAIR_PRIMARY_URL="${MULLION_AGENT_PRIMARY_URL:-}"
+    if is_blank "$PAIR_PRIMARY_URL" && [ -f "$MULLION_HOME/.env" ]; then
+      PAIR_PRIMARY_URL="$(env_value MULLION_PRIMARY_URL)"
+    fi
+    if is_blank "$PAIR_PRIMARY_URL"; then
+      echo "error: MULLION_AGENT_PAIRING_CODE requires MULLION_AGENT_PRIMARY_URL (or MULLION_PRIMARY_URL in $MULLION_HOME/.env) to be set." >&2
+      exit 1
+    fi
+    PAIR_SCRIPT="$MULLION_HOME/current/dist/agent-pair.js"
+    if [ ! -f "$PAIR_SCRIPT" ]; then
+      echo "error: pairing helper not found at $PAIR_SCRIPT — upgrade to a release that supports pairing codes." >&2
+      exit 1
+    fi
+    echo "==> Redeeming pairing code with primary"
+    case "$PAIR_SESSIONS_DIR" in
+      /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
+      *)
+        echo "WARNING: SESSIONS_DIR ($PAIR_SESSIONS_DIR) is relative, so the paired agent-identity.json will be written inside $MULLION_HOME/current and orphaned on the next release upgrade. Set SESSIONS_DIR to an absolute path outside the release directory (for example $MULLION_HOME/data/sessions) in $MULLION_HOME/.env." >&2
+        ;;
+    esac
+    PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$PAIR_SESSIONS_DIR")
+    if [ -n "${MULLION_AGENT_NAME:-}" ]; then
+      PAIR_ARGS+=(--name "$MULLION_AGENT_NAME")
+    fi
+    if [ -n "${MULLION_AGENT_ADVERTISE_URL:-}" ]; then
+      PAIR_ARGS+=(--advertise-url "$MULLION_AGENT_ADVERTISE_URL")
+    fi
+    printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | ( cd "$MULLION_HOME/current" && "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}" )
+    PAIRED_THIS_RUN=true
+    unset MULLION_AGENT_PAIRING_CODE
   fi
-  if [ -n "${MULLION_AGENT_ADVERTISE_URL:-}" ]; then
-    PAIR_ARGS+=(--advertise-url "$MULLION_AGENT_ADVERTISE_URL")
-  fi
-  printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | ( cd "$MULLION_HOME/current" && "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}" )
-  PAIRED_THIS_RUN=true
-  unset MULLION_AGENT_PAIRING_CODE
 fi
 
 if [ -f "$MULLION_HOME/.env" ]; then
