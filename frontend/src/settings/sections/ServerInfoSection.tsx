@@ -219,9 +219,7 @@ export function ServerInfoSection() {
         <div className="settings-info-row zebra">
           <span className="settings-info-key">Android devices</span>
           <span className="settings-info-value">
-            {info.features.devices
-              ? `On${info.features.deviceDiscovery ? ", with network discovery" : ""}`
-              : "Off"}
+            {androidDevicesLabel(info.features)}
           </span>
         </div>
       </div>
@@ -236,6 +234,22 @@ export function ServerInfoSection() {
       <UpdatesSubsection />
     </>
   );
+}
+
+// The Android row follows the host's positive kind list: an iOS-only host
+// (#3436) has the device panel on but runs no Android kind, so it must not
+// read "On". An older server omits deviceKinds and keeps the plain flag.
+function androidDevicesLabel(features: {
+  devices: boolean;
+  deviceDiscovery: boolean;
+  deviceKinds?: string[];
+  devicePlatforms?: string[];
+}): string {
+  if (!features.devices) return "Off";
+  if (features.deviceKinds && features.deviceKinds.length === 0) {
+    return features.devicePlatforms?.includes("ios") ? "Off (iOS only)" : "Off";
+  }
+  return `On${features.deviceDiscovery ? ", with network discovery" : ""}`;
 }
 
 const UPDATE_STATUS_POLL_MS = 2000;

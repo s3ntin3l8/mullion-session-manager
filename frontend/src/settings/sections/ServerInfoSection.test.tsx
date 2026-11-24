@@ -130,4 +130,32 @@ describe("Settings -> Server", () => {
     expect(screen.getByText("Log level")).toBeInTheDocument();
     expect(screen.queryByText(/\/health/)).toBeNull();
   });
+
+  it("does not claim Android on an iOS-only host (#3472)", async () => {
+    setup();
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...info,
+      features: {
+        browser: true,
+        devices: true,
+        deviceDiscovery: false,
+        deviceKinds: [],
+        devicePlatforms: ["ios"],
+      },
+    } as ServerInfo);
+    render(<ServerInfoSection />);
+    const key = await screen.findByText("Android devices");
+    expect(key.nextElementSibling).toHaveTextContent("Off (iOS only)");
+  });
+
+  it("still reports Android on with discovery when a kind exists", async () => {
+    setup();
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...info,
+      features: { browser: true, devices: true, deviceDiscovery: true, deviceKinds: ["physical"] },
+    } as ServerInfo);
+    render(<ServerInfoSection />);
+    const key = await screen.findByText("Android devices");
+    expect(key.nextElementSibling).toHaveTextContent("On, with network discovery");
+  });
 });
