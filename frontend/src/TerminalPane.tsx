@@ -269,9 +269,14 @@ export function TerminalPane(props: {
   // `term.buffer.normal` (the Codex-during-question case). Every entry
   // point builds the snapshot with copySheetSnapshot, so the text is the
   // session's history in either case and only the title differs.
+  //
+  // #3019 — closing keeps the snapshot and only clears `open`, so the sheet
+  // stays mounted with its content while it leaves on the spring. Only a
+  // switch to another session drops it (null), at once.
   const [copyModeSheet, setCopyModeSheet] = useState<{
     text: string;
     title: string;
+    open: boolean;
   } | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   // Issue #2168: the session ended because its pty-host speaks a protocol this
@@ -1275,7 +1280,7 @@ export function TerminalPane(props: {
       // button's entry. The touch long-press and the Find bar's "view as
       // text" button build their own snapshot through the same helper; all
       // three open the same component (see copySheetSnapshot).
-      openCopyMode: () => setCopyModeSheet(copySheetSnapshot(term)),
+      openCopyMode: () => setCopyModeSheet({ ...copySheetSnapshot(term), open: true }),
       setCtrlModifier: (mode, onConsumed) => {
         ctrlModifierRef.current = { mode, onConsumed };
         if (mode !== "off") term.focus();
@@ -1492,7 +1497,7 @@ export function TerminalPane(props: {
       const pointerType = (event as PointerEvent).pointerType;
       if (pointerType ? pointerType === "touch" : isCoarsePointerRef.current) {
         event.preventDefault();
-        setCopyModeSheet(copySheetSnapshot(term));
+        setCopyModeSheet({ ...copySheetSnapshot(term), open: true });
         return;
       }
       if (!prefsRef.current.pasteOnRightClick) return;
@@ -2150,11 +2155,12 @@ export function TerminalPane(props: {
       }
       {copyModeSheet !== null && (
         <CopyModeSheet
+          open={copyModeSheet.open}
           text={copyModeSheet.text}
           title={copyModeSheet.title}
           // No terminal refocus on close: on touch that would pop the soft
           // keyboard back up over the output the user was just reading.
-          onClose={() => setCopyModeSheet(null)}
+          onClose={() => setCopyModeSheet((s) => (s ? { ...s, open: false } : s))}
         />
       )}
       {findOpen && (
@@ -2179,7 +2185,8 @@ export function TerminalPane(props: {
             // Ctrl+Shift+F handler, which set termRef in the same run, so
             // this just survives a future reordering of the two.
             const liveTerm = termRef.current;
-            if (liveTerm) setCopyModeSheet(copySheetSnapshot(liveTerm, "Scrollback"));
+            if (liveTerm)
+              setCopyModeSheet({ ...copySheetSnapshot(liveTerm, "Scrollback"), open: true });
             // Deliberately NOT inside the `if` above: the bar closes either
             // way. A null term means "nothing to show", not "leave the bar
             // hanging open over a Terminal that was never mounted" — moving
