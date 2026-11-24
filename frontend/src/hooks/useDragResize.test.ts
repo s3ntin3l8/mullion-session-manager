@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { act } from "react";
 import { renderHook } from "@testing-library/react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useDragResize } from "./useDragResize.js";
 
 function fireMouseMove(clientX: number, clientY: number) {
@@ -187,5 +187,98 @@ describe("useDragResize", () => {
     onChange.mockClear();
     fireMouseMove(999, 0);
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  describe("keyboard (issue #1264)", () => {
+    function key(k: string) {
+      const e = { key: k, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+      return e as unknown as ReactKeyboardEvent & typeof e;
+    }
+    function setup(over: { invert?: boolean; axis?: "x" | "y"; value?: number } = {}) {
+      const onChange = vi.fn();
+      const onCommit = vi.fn();
+      const hook = renderHook(() =>
+        useDragResize({
+          axis: over.axis ?? "x",
+          invert: over.invert,
+          min: 100,
+          getMax: () => 500,
+          value: over.value ?? 200,
+          onChange,
+          onCommit,
+          cursor: "col-resize",
+          keyboardStep: 16,
+        }),
+      );
+      return { hook, onChange, onCommit };
+    }
+
+    it("exposes no keyboard props unless keyboardStep is set", () => {
+      const { result } = renderHook(() =>
+        useDragResize({
+          axis: "x",
+          min: 1,
+          getMax: () => 2,
+          value: 1,
+          onChange: vi.fn(),
+          cursor: "col-resize",
+        }),
+      );
+      expect(result.current.keyboardProps).toBeUndefined();
+    });
+
+    it("reports aria value/bounds, clamping an out-of-range value", () => {
+      expect(setup().hook.result.current.keyboardProps).toMatchObject({
+        tabIndex: 0,
+        "aria-valuenow": 200,
+        "aria-valuemin": 100,
+        "aria-valuemax": 500,
+      });
+      expect(setup({ value: 900 }).hook.result.current.keyboardProps?.["aria-valuenow"]).toBe(500);
+    });
+
+    it("nudges by the step and commits like a drag end", () => {
+      const { hook, onChange, onCommit } = setup();
+      const grow = key("ArrowRight");
+      hook.result.current.keyboardProps!.onKeyDown(grow);
+      expect(onChange).toHaveBeenLastCalledWith(216);
+      expect(onCommit).toHaveBeenLastCalledWith(216);
+      expect(grow.preventDefault).toHaveBeenCalled();
+      expect(grow.stopPropagation).toHaveBeenCalled();
+      hook.result.current.keyboardProps!.onKeyDown(key("ArrowLeft"));
+      expect(onChange).toHaveBeenLastCalledWith(184);
+    });
+
+    it("inverts direction with invert, and uses vertical keys on the y axis", () => {
+      const a = setup({ invert: true });
+      a.hook.result.current.keyboardProps!.onKeyDown(key("ArrowLeft"));
+      expect(a.onChange).toHaveBeenLastCalledWith(216);
+      const b = setup({ axis: "y" });
+      b.hook.result.current.keyboardProps!.onKeyDown(key("ArrowDown"));
+      expect(b.onChange).toHaveBeenLastCalledWith(216);
+      b.hook.result.current.keyboardProps!.onKeyDown(key("ArrowRight"));
+      expect(b.onChange).toHaveBeenCalledTimes(1);
+    });
+
+    it("Home/End jump to the drag's own min/max, and a no-op at a bound does not commit", () => {
+      const { hook, onChange, onCommit } = setup();
+      hook.result.current.keyboardProps!.onKeyDown(key("Home"));
+      expect(onChange).toHaveBeenLastCalledWith(100);
+      hook.result.current.keyboardProps!.onKeyDown(key("End"));
+      expect(onChange).toHaveBeenLastCalledWith(500);
+      const atMax = setup({ value: 500 });
+      atMax.hook.result.current.keyboardProps!.onKeyDown(key("ArrowRight"));
+      expect(atMax.onChange).not.toHaveBeenCalled();
+      expect(atMax.onCommit).not.toHaveBeenCalled();
+      expect(onCommit).toHaveBeenCalledTimes(2);
+    });
+
+    it("ignores unrelated keys without swallowing them", () => {
+      const { hook, onChange } = setup();
+      const tab = key("Tab");
+      hook.result.current.keyboardProps!.onKeyDown(tab);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(tab.preventDefault).not.toHaveBeenCalled();
+    });
   });
 });

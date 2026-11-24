@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 
 // Consolidates the three independently hand-rolled single-axis
 // mousedown/mousemove/mouseup drag-to-resize implementations found across
@@ -58,6 +58,24 @@ export interface UseDragResizeOptions {
   onCommit?: (final: number) => void;
   /** `document.body.style.cursor` for the drag's duration. */
   cursor: "col-resize" | "ns-resize";
+  /** Opt in to the window-splitter keyboard pattern (issue #1264): the
+   * handle becomes focusable, arrow keys along `axis` nudge the value by
+   * `step` px (the direction the handle would move on screen, honouring
+   * `invert`), Home/End jump to `min`/`max`, and `keyboardProps` carries the
+   * `aria-value*` attributes. Bounds are exactly the drag's own
+   * (`min`, `getMax()`), and each key press goes through the same
+   * `onChange` + `onCommit` pair a completed drag does, so persistence is
+   * identical. Off by default: `getMax` is then only called at drag start
+   * (it may measure the DOM), not on every render. */
+  keyboardStep?: number;
+}
+
+export interface SeparatorKeyboardProps {
+  tabIndex: 0;
+  onKeyDown: (e: ReactKeyboardEvent) => void;
+  "aria-valuenow": number;
+  "aria-valuemin": number;
+  "aria-valuemax": number;
 }
 
 export interface UseDragResizeResult {
@@ -65,6 +83,9 @@ export interface UseDragResizeResult {
   dragging: boolean;
   /** Wire this to the handle's own `onMouseDown`. */
   onMouseDown: (e: ReactMouseEvent) => void;
+  /** Spread onto the handle when `keyboardStep` is set; `undefined`
+   * otherwise. */
+  keyboardProps: SeparatorKeyboardProps | undefined;
 }
 
 export function useDragResize({
@@ -76,6 +97,7 @@ export function useDragResize({
   onChange,
   onCommit,
   cursor,
+  keyboardStep,
 }: UseDragResizeOptions): UseDragResizeResult {
   const [dragging, setDragging] = useState(false);
   const dragRef = useRef<{ startCoord: number; startValue: number; max: number } | null>(null);
@@ -107,6 +129,43 @@ export function useDragResize({
     },
     [axis, value],
   );
+
+  const onKeyDown = useCallback(
+    (e: ReactKeyboardEvent) => {
+      if (keyboardStep === undefined) return;
+      const max = Math.max(min, getMaxRef.current());
+      const growKey =
+        axis === "x" ? (invert ? "ArrowLeft" : "ArrowRight") : invert ? "ArrowUp" : "ArrowDown";
+      const shrinkKey =
+        axis === "x" ? (invert ? "ArrowRight" : "ArrowLeft") : invert ? "ArrowDown" : "ArrowUp";
+      const current = Math.min(Math.max(value, min), max);
+      let next: number;
+      if (e.key === growKey) next = current + keyboardStep;
+      else if (e.key === shrinkKey) next = current - keyboardStep;
+      else if (e.key === "Home") next = min;
+      else if (e.key === "End") next = max;
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+      next = Math.min(Math.max(next, min), max);
+      if (next === value) return;
+      onChangeRef.current(next);
+      onCommitRef.current?.(next);
+    },
+    [axis, invert, min, value, keyboardStep],
+  );
+
+  let keyboardProps: SeparatorKeyboardProps | undefined;
+  if (keyboardStep !== undefined) {
+    const max = Math.max(min, getMax());
+    keyboardProps = {
+      tabIndex: 0,
+      onKeyDown,
+      "aria-valuenow": Math.round(Math.min(Math.max(value, min), max)),
+      "aria-valuemin": min,
+      "aria-valuemax": Math.round(max),
+    };
+  }
 
   useEffect(() => {
     if (!dragging) return;
@@ -140,5 +199,5 @@ export function useDragResize({
     };
   }, [dragging, axis, invert, min, cursor]);
 
-  return { dragging, onMouseDown };
+  return { dragging, onMouseDown, keyboardProps };
 }

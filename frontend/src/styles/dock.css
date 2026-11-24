@@ -442,6 +442,10 @@ button.dock-group-empty:hover {
   cursor: col-resize;
   position: relative;
 }
+.dock-rail-divider:focus-visible {
+  outline: 2px solid var(--ring, var(--muted));
+  outline-offset: -1px;
+}
 .dock-rail-divider::after {
   content: "";
   position: absolute;
@@ -451,7 +455,8 @@ button.dock-group-empty:hover {
   width: 2px;
   background: transparent;
 }
-.dock-rail-divider:hover::after {
+.dock-rail-divider:hover::after,
+.dock-rail-divider:focus-visible::after {
   background: var(--ring, var(--muted));
 }
 /* Issue #1244 — drag handle between the primary and pinned `.dock-log-pane`s
@@ -469,6 +474,10 @@ button.dock-group-empty:hover {
   cursor: col-resize;
   position: relative;
 }
+.dock-pane-divider:focus-visible {
+  outline: 2px solid var(--ring, var(--muted));
+  outline-offset: -1px;
+}
 .dock-pane-divider::after {
   content: "";
   position: absolute;
@@ -478,7 +487,8 @@ button.dock-group-empty:hover {
   width: 2px;
   background: transparent;
 }
-.dock-pane-divider:hover::after {
+.dock-pane-divider:hover::after,
+.dock-pane-divider:focus-visible::after {
   background: var(--ring, var(--muted));
 }
 .dock-empty {
