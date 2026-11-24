@@ -2650,6 +2650,14 @@ button.discover-header:hover {
      (a path, a URL) would otherwise do exactly that. */
   overflow-wrap: anywhere;
 }
+/* #3460 — the grouped toggle's touch target in the sheet. */
+.mobile-notif-sheet .notif-grouped-header {
+  padding: 4px 0 2px;
+}
+.mobile-notif-sheet .notif-grouped-toggle {
+  min-height: 44px;
+  font-size: 0.8125rem;
+}
 
 /* #3456 — the "spawned by" marker of a session spawned into this project by a
    coordinator in another one. Its own line under the row, like the meta line,

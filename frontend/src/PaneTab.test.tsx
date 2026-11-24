@@ -710,7 +710,7 @@ describe("PaneTab", () => {
           makeEvent({ seq: 2, kind: "attention", payload: { attention: true } }),
         ],
       };
-      dismissedEventKeys = { [`${session.id}:1`]: true };
+      dismissedEventKeys = { [`${session.id}:1:${events[session.id][0].ts}`]: true };
       render(<PaneTab {...makeProps()} />);
       // Only seq 2 counts — seq 1 was dismissed, not marked read, so it must
       // not inflate the badge even though its own seq is still > lastSeenSeq.

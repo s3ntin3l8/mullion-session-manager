@@ -1001,6 +1001,19 @@ export interface Session {
   subagents: SubagentInfo[];
   elicitationState: "idle" | "pending";
   elicitationServer: string | null;
+  /** An agent's question waiting on an answer (opencode's question.asked,
+   *  Claude Code's AskUserQuestion): mirrors SessionInfo.questionState. The
+   *  bell keys an open question off it (#3458). Optional: fixtures predate it. */
+  questionState?: "idle" | "pending";
+  /** When each decision latch was last raised (ms epoch), mirroring
+   *  SessionInfo's: the bell lists a latched kind's event only if it was
+   *  emitted for the current raise, not for an earlier, answered one (#3458).
+   *  Optional: fixtures predate them. */
+  permissionAt?: number | null;
+  planAt?: number | null;
+  elicitationAt?: number | null;
+  questionAt?: number | null;
+  promoteAt?: number | null;
   lastTurnEndedAt: number | null;
   /**
    * Issue #1735 — the last turn end that meant "the agent's work is done",

@@ -1,4 +1,7 @@
 import type { NotificationEvent } from "./api/index.js";
+// The store's own dismissal-key format, imported rather than re-spelled: a
+// second copy is how the tab badge drifted to a two-part key (#1427, #3458).
+import { eventKey } from "./store/helpers.js";
 
 // Issue #428 — mirrors src/services/background-tasks.ts's TERMINAL_STATUSES
 // set. Duplicated rather than imported: this is a separate npm workspace
@@ -998,9 +1001,9 @@ export interface UnreadEventSummary {
 // #168 / mobile UI overhaul, PR #613 Hermes review) — the identical "events
 // newer than the read cursor, minus anything already dismissed from the
 // notification panel, that classify as notify-worthy" derivation, previously
-// duplicated verbatim in both places. Inlines the `sessionId:seq` key format
-// directly rather than importing store.ts's own eventKey, so this leaf util
-// module doesn't pull store.ts's whole import graph into every consumer.
+// duplicated verbatim in both places. The dismissal key comes from
+// store/helpers.ts's eventKey (a light module, not the store itself): an
+// inlined copy kept the pre-#1427 two-part format and never matched.
 export function unreadEventSummary(
   sessionId: number,
   events: NotificationEvent[] | undefined,
@@ -1008,7 +1011,7 @@ export function unreadEventSummary(
   dismissedEventKeys: Record<string, true>,
 ): UnreadEventSummary {
   const kinds = (events ?? [])
-    .filter((e) => e.seq > lastSeenSeq && !dismissedEventKeys[`${sessionId}:${e.seq}`])
+    .filter((e) => e.seq > lastSeenSeq && !dismissedEventKeys[eventKey(sessionId, e.seq, e.ts)])
     .map(notifyKind)
     .filter((k): k is "attention" | "exited" => k !== null);
   return {
@@ -1033,11 +1036,12 @@ export function sessionUnreadCount(
   return unreadEventSummary(sessionId, events, lastSeenSeq, dismissedEventKeys).count;
 }
 
-// The one definition of "this session needs you", shared by every phone
-// surface that groups or filters on it (the session picker's pinned section
-// and the notifications sheet's "Needs you" filter) so they can't drift into
-// the same disagreement the audit found between the polled `attention`
-// boolean and the event stream. True when the session is flagged `attention`
+// "This session needs you" for the phone session picker's pinned section:
+// the polled `attention` boolean or an unread attention-kind event. The bell
+// no longer reads this (#3458): its "Needs you" is sessionOpenDecisions
+// below, decisions only, keyed off the session's live latches. The picker
+// keeps the broader rule on purpose: it navigates to a session, and a
+// finished turn is a reason to go look. True when the session is flagged `attention`
 // OR has an unread, undismissed attention-kind event (a pending gate,
 // attention, dev-server offer — NOT a plain exit). A muted session never
 // needs you: mute is the user saying "don't bother me about this one".
@@ -1053,4 +1057,366 @@ export function sessionNeedsYou(
   return (
     unreadEventSummary(session.id, events, lastSeenSeq, dismissedEventKeys).kind === "attention"
   );
+}
+
+// ---------------------------------------------------------------------------
+// The notification bell's classification (#3458, design note
+// docs/design/notification-bell/note.md, "Every notification type").
+//
+// The bell lists only what waits on a human decision. Every event is one of:
+// - "decision": a permission, plan, question, elicitation, review gate,
+//   promote request, dev-server offer, or an unpaired generic notification.
+// - "failed": the agent stopped on an API error, the process exited non-zero,
+//   or a manual session's PR went red (CI, conflicts).
+// - "verdict": a review decision landed on a PR.
+// - "grouped": informative, worth a glance, never counted ("Finished", an exit
+//   with code zero or none). Shown under "Earlier, no decision needed".
+// - "dropped": not in the bell at all; it stays in the session's timeline.
+//
+// Pure per-event: whether a decision is still OPEN is a property of the
+// session's live state, decided by sessionOpenDecisions below.
+// notifyKind/notifySeverity above are unchanged: the pane tab badge,
+// desktop notifications and the timeline keep their own rules.
+export type BellClass = "decision" | "failed" | "verdict" | "grouped" | "dropped";
+
+export function bellClass(event: Pick<NotificationEvent, "kind" | "payload">): BellClass {
+  const kind = event.kind;
+  switch (kind) {
+    case "attention": {
+      if (event.payload.attention !== true) return "dropped";
+      const signal = typeof event.payload.signal === "string" ? event.payload.signal : null;
+      // Claude Code's generic Notification hook: listed when no specific ask
+      // covers it (sessionOpenDecisions pairs it on time).
+      if (signal === "hookNotification") return "decision";
+      if (signal === "agentIdle") return "grouped";
+      // Every other signal is either the twin of a specific kind that every
+      // raise site in hook-handlers.ts emits alongside it (permissionRequest,
+      // planReady, question, elicitation, reviewGate, promoteRequest,
+      // apiError -> stop_failure), a tool failure the agent's next turn
+      // usually resolves, or a byte-parsed guess (bell, silence, title idle,
+      // ...) that cannot say what the decision is.
+      return "dropped";
+    }
+    case "permission_request":
+    case "plan_ready":
+      return "decision";
+    case "question":
+    case "elicitation":
+      // The kind is reused for the resolution record (`state: "finished"`).
+      return event.payload.state === "started" ? "decision" : "dropped";
+    case "review_gate":
+      return event.payload.state === "waiting" ? "decision" : "dropped";
+    case "promote_request":
+      // The resolution record carries `state: "accepted" | "declined"`.
+      return event.payload.state === undefined ? "decision" : "dropped";
+    case "dev_server_detected":
+      // Kept, against the note's first draft: this row's "Use this port" is
+      // the only place a plain session's detected dev server can be wired
+      // up (docs/dock.md), so it is an open offer, not news.
+      return event.payload.state === undefined ? "decision" : "dropped";
+    case "stop_failure":
+      return "failed";
+    case "session_end": {
+      const code = event.payload.exitCode;
+      return typeof code === "number" && code !== 0 ? "failed" : "dropped";
+    }
+    case "status_change":
+      return event.payload.reason === "exited" ? "grouped" : "dropped";
+    case "pr_ci_failed":
+    case "pr_conflicts":
+      return "failed";
+    case "pr_review_submitted":
+      return event.payload.decision === "CHANGES_REQUESTED" || event.payload.decision === "APPROVED"
+        ? "verdict"
+        : "dropped";
+    case "tool_failure":
+    case "title_change":
+    case "file_change":
+    case "todo":
+    case "session_diff":
+    case "pr_ci_passed":
+    case "pr_new_comments":
+    case "pr_merged":
+    case "message_sent":
+    case "message_received":
+      return "dropped";
+    default: {
+      // A new kind must be classified here before it compiles.
+      const unclassified: never = kind;
+      return unclassified;
+    }
+  }
+}
+
+/** The bell's row label for a class: what the status filter and the row's
+ * pill call it. A decision keeps its kind's own label (notifyLabel). */
+export type OpenDecisionClass = Exclude<BellClass, "grouped" | "dropped">;
+
+export interface OpenDecision {
+  event: NotificationEvent;
+  cls: OpenDecisionClass;
+}
+
+/** The session fields sessionOpenDecisions reads: its live decision latches. */
+export type DecisionLatches = Pick<
+  {
+    id: number;
+    alive: boolean;
+    attention: boolean;
+    attentionKind: string | null;
+    permissionState: "idle" | "pending";
+    planState: "idle" | "pending";
+    elicitationState: "idle" | "pending";
+    questionState?: "idle" | "pending";
+    permissionAt?: number | null;
+    planAt?: number | null;
+    elicitationAt?: number | null;
+    questionAt?: number | null;
+    promoteAt?: number | null;
+    promoteState: "idle" | "pending" | "accepted" | "declined";
+    errorState: "idle" | "api_error" | "tool_failure";
+    gates: ReadonlyArray<{ gateId: string }>;
+    pendingDevServerPort: string | null;
+  },
+  | "id"
+  | "alive"
+  | "attention"
+  | "attentionKind"
+  | "permissionState"
+  | "planState"
+  | "elicitationState"
+  | "questionState"
+  | "permissionAt"
+  | "planAt"
+  | "elicitationAt"
+  | "questionAt"
+  | "promoteAt"
+  | "promoteState"
+  | "errorState"
+  | "gates"
+  | "pendingDevServerPort"
+>;
+
+// Slack for comparing an event's timestamp with its latch's raise time: both
+// come from the same backend clock, the event at or after the raise.
+const LATCH_EVENT_SLACK_MS = 1_000;
+
+// The same window SessionTimeline.tsx pairs a generic attention row with its
+// specific sibling in.
+const HOOK_NOTIFICATION_PAIR_WINDOW_MS = 5_000;
+
+const SPECIFIC_ASK_KINDS = new Set<NotificationEvent["kind"]>([
+  "permission_request",
+  "plan_ready",
+  "question",
+  "elicitation",
+  "review_gate",
+  "promote_request",
+]);
+
+function prNumber(event: NotificationEvent): number | null {
+  return typeof event.payload.number === "number" ? event.payload.number : null;
+}
+
+/**
+ * The session's decisions that are still open, newest first (#3458).
+ *
+ * Needs-you is state, not a cursor: most decision events record the request
+ * and nothing records the answer (a permission_request has no "resolved"
+ * event), so whether a row is still open comes from the session's own live
+ * latches, which the backend clears when the decision is answered however it
+ * was answered (in the terminal, from the bell, a timeout). A latch holds one
+ * request, so for a latched kind only its newest event is open. Viewing the
+ * bell never closes a decision; only its state clearing, or Dismiss, does.
+ *
+ * - review_gate: its own gate still in `gates`.
+ * - permission_request / plan_ready / elicitation / promote_request: the
+ *   kind's latch is pending, and (for the kinds that record a resolution)
+ *   no later event of the kind.
+ * - question: its own latch (`questionState`), and no later question event
+ *   resolved it. Without the latch (an older backend), while the session's
+ *   confirmed attention is a question: attention keeps only the newest of two
+ *   specific asks, so a question with a plan raised after it would hide.
+ * - unpaired hookNotification: while it is the confirmed attention kind, and
+ *   no specific ask landed within 5s of it (Claude Code fires its generic
+ *   notification beside a permission; the specific row carries the content).
+ * - dev_server_detected: while the session's pending port is this one.
+ * - stop_failure: while `errorState` is "api_error" (any progress clears it).
+ * - session_end non-zero: while the process is not alive.
+ * - PR rows (manual sessions only; a task's PR is the Tasks section's): red
+ *   CI until a later pass, failure or merge of the same PR; conflicts and a
+ *   review verdict until a later one of the same kind or a merge (the poller
+ *   emits no "conflicts resolved", so Dismiss closes that row otherwise).
+ *
+ * A muted session has no open decisions (mute is "don't bother me").
+ * Cheap enough for the badge's every-tick path: two linear passes, no sort.
+ */
+export function sessionOpenDecisions(
+  session: DecisionLatches,
+  events: readonly NotificationEvent[] | undefined,
+  dismissedEventKeys: Record<string, true>,
+  muted: boolean,
+  taskOwned = false,
+): OpenDecision[] {
+  if (muted || !events || events.length === 0) return [];
+  // Requests only: a resolution record (a question's "finished", a resolved
+  // gate) reuses its kind, and must not hide an unrelated notification.
+  const specificAskTs: number[] = [];
+  for (const e of events) {
+    if (SPECIFIC_ASK_KINDS.has(e.kind) && bellClass(e) === "decision") specificAskTs.push(e.ts);
+  }
+  // A latch is raised before its event is emitted (a permission settles for
+  // up to 2s first, and is never emitted if auto-approved meanwhile), so the
+  // newest event of a kind can belong to an earlier, answered raise. Only an
+  // event emitted for the current raise counts; without the timestamp (an
+  // older backend) the newest one does.
+  const sinceRaise = (e: NotificationEvent, at: number | null | undefined) =>
+    at === null || at === undefined || e.ts >= at - LATCH_EVENT_SLACK_MS;
+
+  const out: OpenDecision[] = [];
+  const laterKinds = new Set<string>();
+  // Per PR number: what a later event already settled.
+  const prSettled = new Map<number, { ci: boolean; conflicts: boolean; review: boolean }>();
+  // addEvent keeps each session's buffer ascending by seq: walk newest first.
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    const cls = bellClass(e);
+    const signalKey =
+      e.kind === "attention" && typeof e.payload.signal === "string"
+        ? `attention:${e.payload.signal}`
+        : e.kind;
+    const pr = e.kind.startsWith("pr_") ? prNumber(e) : null;
+    const settled =
+      pr === null ? null : (prSettled.get(pr) ?? { ci: false, conflicts: false, review: false });
+
+    let open = false;
+    if (cls !== "grouped" && cls !== "dropped") {
+      switch (e.kind) {
+        case "review_gate": {
+          const gateId = typeof e.payload.gateId === "string" ? e.payload.gateId : null;
+          open =
+            gateId !== null
+              ? session.gates.some((g) => g.gateId === gateId)
+              : !laterKinds.has("review_gate:legacy") && session.gates.length > 0;
+          break;
+        }
+        case "permission_request":
+          open =
+            !laterKinds.has(e.kind) &&
+            session.permissionState === "pending" &&
+            sinceRaise(e, session.permissionAt);
+          break;
+        case "plan_ready":
+          open =
+            !laterKinds.has(e.kind) &&
+            session.planState === "pending" &&
+            sinceRaise(e, session.planAt);
+          break;
+        case "elicitation":
+          open =
+            !laterKinds.has(e.kind) &&
+            session.elicitationState === "pending" &&
+            sinceRaise(e, session.elicitationAt);
+          break;
+        case "promote_request":
+          open =
+            !laterKinds.has(e.kind) &&
+            session.promoteState === "pending" &&
+            sinceRaise(e, session.promoteAt);
+          break;
+        case "question":
+          // Its own latch when the session carries one; otherwise (an older
+          // backend) while the question is the confirmed attention.
+          open =
+            !laterKinds.has(e.kind) &&
+            (session.questionState !== undefined
+              ? session.questionState === "pending" && sinceRaise(e, session.questionAt)
+              : session.attention && session.attentionKind === "question");
+          break;
+        case "attention":
+          open =
+            !laterKinds.has(signalKey) &&
+            session.attention &&
+            session.attentionKind === "hookNotification" &&
+            !specificAskTs.some((ts) => Math.abs(ts - e.ts) <= HOOK_NOTIFICATION_PAIR_WINDOW_MS);
+          break;
+        case "dev_server_detected":
+          open =
+            typeof e.payload.port === "string" && session.pendingDevServerPort === e.payload.port;
+          break;
+        case "stop_failure":
+          open = !laterKinds.has(e.kind) && session.errorState === "api_error";
+          break;
+        case "session_end":
+          open = !laterKinds.has(e.kind) && !session.alive;
+          break;
+        case "pr_ci_failed":
+          open = !taskOwned && settled !== null && !settled.ci;
+          break;
+        case "pr_conflicts":
+          open = !taskOwned && settled !== null && !settled.conflicts;
+          break;
+        case "pr_review_submitted":
+          open = !taskOwned && settled !== null && !settled.review;
+          break;
+        default:
+          open = false;
+      }
+    }
+    if (open && !dismissedEventKeys[eventKey(session.id, e.seq, e.ts)]) {
+      out.push({ event: e, cls: cls as OpenDecisionClass });
+    }
+
+    // Record what this event settles for the older ones still to come.
+    laterKinds.add(signalKey);
+    if (e.kind === "review_gate" && typeof e.payload.gateId !== "string") {
+      laterKinds.add("review_gate:legacy");
+    }
+    if (pr !== null && settled !== null) {
+      if (e.kind === "pr_ci_failed" || e.kind === "pr_ci_passed" || e.kind === "pr_merged") {
+        settled.ci = true;
+      }
+      if (e.kind === "pr_conflicts" || e.kind === "pr_merged") settled.conflicts = true;
+      if (e.kind === "pr_review_submitted" || e.kind === "pr_merged") settled.review = true;
+      prSettled.set(pr, settled);
+    }
+  }
+  return out;
+}
+
+/** One session's informative events for the bell's "Earlier, no decision
+ * needed" group (#3460): never counted anywhere. */
+export interface GroupedSummary {
+  finished: boolean;
+  exited: boolean;
+  /** Every grouped, undismissed event, newest first (Dismiss takes them all). */
+  seqs: number[];
+  newestTs: number;
+  /** Any of them past the session's read cursor. */
+  unread: boolean;
+}
+
+export function sessionGroupedSummary(
+  sessionId: number,
+  events: readonly NotificationEvent[] | undefined,
+  lastSeenSeq: number,
+  dismissedEventKeys: Record<string, true>,
+  /** A failed exit is already a Failed row: do not also say "exited". */
+  failedExit: boolean,
+): GroupedSummary | null {
+  if (!events) return null;
+  let summary: GroupedSummary | null = null;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (bellClass(e) !== "grouped") continue;
+    if (dismissedEventKeys[eventKey(sessionId, e.seq, e.ts)]) continue;
+    const isExit = e.kind === "status_change";
+    if (isExit && failedExit) continue;
+    summary ??= { finished: false, exited: false, seqs: [], newestTs: e.ts, unread: false };
+    if (isExit) summary.exited = true;
+    else summary.finished = true;
+    summary.seqs.push(e.seq);
+    if (e.seq > lastSeenSeq) summary.unread = true;
+  }
+  return summary;
 }

@@ -173,7 +173,7 @@ describe("PhoneModeBar", () => {
 
   it("Inbox opens the notification feed as a sheet and returns focus to it", async () => {
     render(<Harness />);
-    const inbox = screen.getByRole("button", { name: "Inbox, none unread" });
+    const inbox = screen.getByRole("button", { name: "Inbox, nothing needs you" });
     expect(inbox).toHaveAttribute("aria-haspopup", "dialog");
     fireEvent.click(inbox);
     const sheet = screen.getByRole("dialog", { name: "Notifications" });
@@ -182,21 +182,36 @@ describe("PhoneModeBar", () => {
     expect(document.activeElement).toBe(inbox);
   });
 
-  it("carries the bell's unread count on Inbox", () => {
+  it("carries the bell's needs-you count on Inbox", () => {
+    // Two sessions waiting on a decision; an exit and a bell need no one.
+    const ask = (sessionId: number) =>
+      ({
+        seq: 1,
+        sessionId,
+        ts: Date.now(),
+        kind: "attention",
+        payload: { attention: true, signal: "hookNotification", title: "Heads up", body: "x" },
+      }) as NotificationEvent;
     useDashboardStore.setState({
-      sessions: [makeSession({ id: 1, name: "one" })],
+      sessions: [
+        makeSession({ id: 1, name: "one", attention: true, attentionKind: "hookNotification" }),
+        makeSession({ id: 2, name: "two", attention: true, attentionKind: "hookNotification" }),
+        makeSession({ id: 3, name: "three" }),
+      ],
       events: {
-        1: [
+        1: [ask(1)],
+        2: [ask(2)],
+        3: [
           {
             seq: 1,
-            sessionId: 1,
+            sessionId: 3,
             ts: Date.now(),
             kind: "attention",
             payload: { attention: true, signal: "bell" },
           },
           {
             seq: 2,
-            sessionId: 1,
+            sessionId: 3,
             ts: Date.now(),
             kind: "status_change",
             payload: { reason: "exited" },
@@ -206,7 +221,7 @@ describe("PhoneModeBar", () => {
       lastSeenSeq: {},
     });
     render(<Harness />);
-    const inbox = screen.getByRole("button", { name: "Inbox, 2 unread" });
+    const inbox = screen.getByRole("button", { name: "Inbox, 2 need you" });
     expect(inbox.querySelector(".attention-badge")).toHaveTextContent("2");
     // Exactly one bell: the bar's Inbox is the phone's only notifications trigger.
     expect(screen.getAllByRole("button", { name: /^(Inbox|Notifications),/ })).toHaveLength(1);
