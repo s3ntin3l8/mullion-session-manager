@@ -924,8 +924,8 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { id: string }; Body: { address?: string } }>(
     "/api/devices/:id",
     async (request, reply) => {
-      if (!app.devicePanelEnabled) {
-        return reply.badRequest(app.devicePanelUnavailableMessage);
+      if (!physicalDeviceEnabled(app)) {
+        return reply.badRequest(physicalDeviceUnavailableMessage(app));
       }
       const id = Number(request.params.id);
       if (!Number.isInteger(id)) return reply.badRequest("id path param is required");

@@ -303,7 +303,7 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
     });
   });
 
-  describe("mDNS discovery follows the panel, not the emulator capability", () => {
+  describe("mDNS discovery follows the panel and a configured adb, not the emulator capability", () => {
     it("is wired on darwin, where the physical half works", async () => {
       await withPlatform("darwin", async () => {
         process.env.DEVICE_ENABLED = "true";
