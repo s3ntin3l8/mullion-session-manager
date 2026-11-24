@@ -110,7 +110,9 @@ starts on the project's own placement again.
   dropdown follows where the project's dock already runs (the newest control on
   another host), and starting a stopped control goes there. Restart keeps a
   running control on the host its own session is on, so a control at home is not
-  moved by a dev server running on the Mac; pick a host to move it.
+  moved by a dev server running on the Mac; pick a host to move it. This holds
+  for a project placed automatically too: a dock control is a persistent monitor,
+  so Restart does not hand it back to placement to re-decide.
 - The control is read from `.crs/dock.json` **in the checkout on that host**, so
   its command and `cwd` are that checkout's. A host the project has no checkout
   on is refused with `409 no_checkout_on_host`, before anything stops.
