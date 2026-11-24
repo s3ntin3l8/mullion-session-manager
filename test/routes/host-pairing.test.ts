@@ -585,6 +585,52 @@ describe("host pairing (issue #2449)", () => {
     expect(expiredRes.statusCode).toBe(401);
     expect(expiredRes.json().message).toBe("invalid pairing code");
   });
+
+  it("invalidates pending host-bound codes when the target host is revoked and leaves deleted-target codes unredeemed", async () => {
+    const initial = await create({ label: "Revoke Target" });
+    const hostId = (await redeem(initial.code, { requestId: "req-rev-inv-0" })).json().host_id;
+
+    // Issue a host-bound code BEFORE revoking the host.
+    const preRevokeCode = await create({ hostId });
+
+    const revokeRes = await app.inject({
+      method: "POST",
+      url: `/api/hosts/${hostId}/revoke`,
+    });
+    expect(revokeRes.statusCode).toBe(204);
+
+    // The pre-revoke code must be invalidated and cannot re-arm the revoked host.
+    const preRevokeRedeem = await redeem(preRevokeCode.code, { requestId: "req-rev-inv-1" });
+    expect(preRevokeRedeem.statusCode).toBe(401);
+    expect(preRevokeRedeem.json().message).toBe("invalid pairing code");
+
+    const hostsAfterRevoke = (await app.inject({ method: "GET", url: "/api/hosts" })).json();
+    expect(hostsAfterRevoke.find((h: { id: string }) => h.id === hostId)).toMatchObject({
+      machineIdentityRevoked: true,
+      hasLiveMachineIdentity: false,
+    });
+
+    // A fresh host-bound code issued AFTER the revoke can re-arm the host.
+    const postRevokeCode = await create({ hostId });
+    const postRevokeRedeem = await redeem(postRevokeCode.code, { requestId: "req-rev-inv-2" });
+    expect(postRevokeRedeem.statusCode).toBe(200);
+    expect(postRevokeRedeem.json().host_id).toBe(hostId);
+
+    // If the target host is deleted before redeem, redeem returns 401 without claiming the row.
+    const beforeDeleteCode = await create({ hostId });
+    const deleteRes = await app.inject({
+      method: "DELETE",
+      url: `/api/hosts/${hostId}?cascade=true`,
+    });
+    expect(deleteRes.statusCode).toBe(204);
+
+    const afterDeleteRedeem = await redeem(beforeDeleteCode.code, { requestId: "req-del-1" });
+    expect(afterDeleteRedeem.statusCode).toBe(401);
+    const pairings = (await app.inject({ method: "GET", url: "/api/host-pairings" })).json();
+    expect(pairings.find((p: { id: string }) => p.id === beforeDeleteCode.id)?.state).toBe(
+      "pending",
+    );
+  });
 });
 
 describe("pairing link public URL (issue #2597)", () => {

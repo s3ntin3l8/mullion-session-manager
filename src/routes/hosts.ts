@@ -144,7 +144,7 @@ function channelStatus(app: FastifyInstance, hostId: string): HostChannelStatus 
   };
 }
 
-function onHostCredentialsChanged(app: FastifyInstance, id: string): void {
+export function onHostCredentialsChanged(app: FastifyInstance, id: string): void {
   app.hostHeartbeatTracker?.invalidateHost(id);
   // Issue #1721 — same staleness reasoning for the CAPACITY cache:
   // numbers measured against the OLD baseUrl describe a different

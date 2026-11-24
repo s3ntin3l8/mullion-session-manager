@@ -25,13 +25,11 @@ export interface HostPairingSummary {
 }
 
 export const hostPairingsApi = {
-  createHostPairing: (opts?: string | { label?: string; hostId?: string }) => {
-    const body = typeof opts === "string" ? { label: opts } : (opts ?? {});
-    return request<HostPairingCreated>("/api/host-pairings", {
+  createHostPairing: (opts: { label?: string; hostId?: string } = {}) =>
+    request<HostPairingCreated>("/api/host-pairings", {
       method: "POST",
-      body: JSON.stringify(body),
-    });
-  },
+      body: JSON.stringify(opts),
+    }),
 
   listHostPairings: () => request<HostPairingSummary[]>("/api/host-pairings"),
 

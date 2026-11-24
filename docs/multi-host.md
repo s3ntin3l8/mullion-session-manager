@@ -171,8 +171,8 @@ in `machine_credential`.
   tested through the real boot path
   (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not
   at rotation time: rotating to retire a leaked token (rotate and discard) does
-  not need it, but it leaves the `.env` token dead, so a later re-pairing
-  needs a second, fresh rotation. A credential unused for 90 days is rejected
+  not need it, but it leaves the `.env` token dead, so a later re-pairing via
+  that legacy recipe needs a second, fresh rotation. A credential unused for 90 days is rejected
   the same way as a revoked one, so the agent log's "revoked or unknown" can
   also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
@@ -185,7 +185,9 @@ in `machine_credential`.
   Because the grace credential slides on use, a replaced credential (a
   displaced agent, or a leaked copy of the state file) stays valid while
   its holder keeps presenting it, and each acceptance hands it the live
-  current credential; revocation is the only way to end its life.
+  current credential; revocation (or re-pairing the host with a host-bound
+  pairing code, which drops the displaced credential without a grace period)
+  ends its life.
 - **`SESSIONS_DIR` must be persistent.** The identity lives in
   `agent-identity.json` under the agent's `SESSIONS_DIR`. A container or
   image-based agent whose data dir does not survive a restart (an ephemeral

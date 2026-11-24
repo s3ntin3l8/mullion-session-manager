@@ -6,7 +6,6 @@ import {
   redeemHostPairingCode,
   revokeHostPairing,
 } from "../services/host-pairing.js";
-import { refreshHostProtocolSoon } from "../services/host-agents.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { requestScheme } from "../services/request-scheme.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
@@ -17,6 +16,7 @@ import {
   PAIRING_CODE_PATTERN,
 } from "../shared/pairing-link.js";
 import { getHostRow, LOCAL_HOST_ID, type HostRegistration } from "../services/host-registry.js";
+import { onHostCredentialsChanged } from "./hosts.js";
 import { closeAgentChannel } from "./agent-channel.js";
 import { AgentChannelCloseCode } from "../shared/agent-channel.js";
 
@@ -202,13 +202,7 @@ export async function hostPairingRoute(app: FastifyInstance) {
       // Disconnect any displaced agent holding an open channel for this host
       // immediately rather than waiting for the periodic credential recheck.
       closeAgentChannel(app, result.hostId, AgentChannelCloseCode.Expired);
-      app.hostHeartbeatTracker?.invalidateHost(result.hostId);
-      app.hostCapacityTracker?.invalidateHost(result.hostId);
-      app.hostAgentTracker?.invalidateHost(result.hostId);
-      app.reconfigureRemoteEventSubscriptions({ forceReconnect: [result.hostId] });
-      refreshHostProtocolSoon(app, result.hostId);
-      app.reconfigureSshAgentFanout();
-      app.reconfigureControlRelayFanout();
+      onHostCredentialsChanged(app, result.hostId);
       return respond(result);
     },
   );

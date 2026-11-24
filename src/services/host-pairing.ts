@@ -5,6 +5,8 @@ import { hostPairings } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 import {
   createPairedHost,
+  getHostRow,
+  LOCAL_HOST_ID,
   reissuePairedIdentity,
   rePairHost,
   type HostRegistration,
@@ -239,6 +241,10 @@ export function consumeHostPairing(
   peer: string | null = null,
 ): HostRegistration | null {
   return app.db.transaction((tx) => {
+    if (pairing.targetHostId) {
+      const target = getHostRow(app, pairing.targetHostId);
+      if (!target || target.id === LOCAL_HOST_ID) return null;
+    }
     const claimed = tx
       .update(hostPairings)
       .set({ redeemedAt: new Date(), redeemRequestHash: requestHash })
