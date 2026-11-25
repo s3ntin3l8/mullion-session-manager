@@ -124,10 +124,11 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     env: Record<string, string> = ansibleEnv,
     stdin: string = "",
     cwd?: string,
+    role: "agent" | "primary" = "agent",
   ) {
     const full: NodeJS.ProcessEnv = { ...baseEnv, ...env };
     await assertSandboxed(full);
-    const pending = execFileAsync("bash", [INSTALL_SCRIPT, "--role", "agent", mullionHome], {
+    const pending = execFileAsync("bash", [INSTALL_SCRIPT, "--role", role, mullionHome], {
       env: full,
       cwd,
       timeout: 20_000,
@@ -668,8 +669,9 @@ const arg = (name) => {
   // Before the fix only the exact strings "1" and "true" counted, so every
   // other spelling silently took the skip branch — the "Bring a revoked
   // agent back" recipe looked like it had worked while the agent stayed
-  // revoked.
-  it.each(["1", "true", "True", "TRUE", "yes", "on"])(
+  // revoked. The value is also trimmed, so a stray space around it (a
+  // templating bug) cannot decide the flag either.
+  it.each(["1", "true", "True", "TRUE", "yes", "on", " True ", "on "])(
     "redeems the code anyway with MULLION_AGENT_PAIRING_FORCE=%s and restarts an active unit",
     async (force) => {
       const home = pairedHome();
@@ -765,6 +767,109 @@ const arg = (name) => {
       }
     },
   );
+
+  // The sibling *_STDIN flags had the SAME truthiness gap as the force
+  // flag: an exact `= "1"` comparison meant a role that templated a YAML
+  // boolean (`mullion_pairing_code_stdin: true`, which reaches the shell as
+  // "True") read NOTHING from stdin — the piped code was never redeemed, so
+  // the install fell through to the "no complete credential path" warning
+  // and left an agent that crash-loops.
+  it.each(["1", "true", "True", "yes", "on"])(
+    "redeems the piped code when MULLION_AGENT_PAIRING_CODE_STDIN=%s",
+    async (flag) => {
+      const home = freshHome();
+      writeRedeemHelper(home);
+
+      const primary = await startFakePrimary();
+      try {
+        const result = await run(
+          home,
+          { MULLION_AGENT_PRIMARY_URL: primary.url, MULLION_AGENT_PAIRING_CODE_STDIN: flag },
+          `${PAIR_CODE}\n`,
+        );
+
+        // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+        expect(result.stdout).toContain("Redeeming pairing code with primary");
+        expect(result.stderr).not.toMatch(/MULLION_AGENT_PAIRING_CODE_STDIN/);
+        expect(primary.pairRequests).toHaveLength(1);
+        expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
+          hostId: "paired-host-1",
+        });
+      } finally {
+        await primary.close();
+      }
+    },
+  );
+
+  // An unrecognised value is treated as off — but it says so, because the
+  // silent version of this bug is an install that looks like it worked and
+  // leaves a credential-less agent behind.
+  it("warns and reads no code when MULLION_AGENT_PAIRING_CODE_STDIN is not a recognised value", async () => {
+    const home = freshHome();
+    writeRedeemHelper(home);
+
+    const primary = await startFakePrimary();
+    try {
+      const result = await run(
+        home,
+        { MULLION_AGENT_PRIMARY_URL: primary.url, MULLION_AGENT_PAIRING_CODE_STDIN: "maybe" },
+        `${PAIR_CODE}\n`,
+      );
+
+      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+      expect(result.stderr).toContain("MULLION_AGENT_PAIRING_CODE_STDIN='maybe'");
+      expect(result.stderr).toMatch(/not a recognised value/i);
+      expect(primary.pairRequests).toHaveLength(0);
+      expect(fs.existsSync(identityFile(home))).toBe(false);
+    } finally {
+      await primary.close();
+    }
+  });
+
+  it("reads the enrollment token from stdin when MULLION_AGENT_ENROLLMENT_TOKEN_STDIN is a YAML boolean", async () => {
+    const home = freshHome();
+    await run(
+      home,
+      { ...noTokenEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "True" },
+      `${ROTATED_TOKEN}\r\nsecond line ignored\n`,
+    );
+    expect(envFile(home)).toMatch(new RegExp(`^MULLION_ENROLLMENT_TOKEN=${ROTATED_TOKEN}$`, "m"));
+  });
+
+  // The primary role's own boolean-ish flag had the same gap, and its
+  // failure mode is a primary that refuses to boot at all: without a trust
+  // gateway (or an auth token pair) src/app.ts's fail-closed check refuses
+  // to start the unit.
+  //
+  // These live here rather than in install.test.ts: that file is exactly at
+  // its file-size ceiling (scripts/check-max-file-lines.mjs), so it cannot
+  // grow; this one has room.
+  it("writes MULLION_TRUST_GATEWAY=true when MULLION_INSTALL_TRUST_GATEWAY is a YAML boolean", async () => {
+    const home = freshHome();
+    const result = await run(
+      home,
+      { MULLION_INSTALL_TRUST_GATEWAY: "True" },
+      "",
+      undefined,
+      "primary",
+    );
+    expect(envFile(home)).toMatch(/^MULLION_TRUST_GATEWAY=true$/m);
+    expect(result.stderr).not.toMatch(/MULLION_INSTALL_TRUST_GATEWAY/);
+  });
+
+  it("warns and writes no trust gateway when MULLION_INSTALL_TRUST_GATEWAY is not a recognised value", async () => {
+    const home = freshHome();
+    const result = await run(
+      home,
+      { MULLION_INSTALL_TRUST_GATEWAY: "maybe" },
+      "",
+      undefined,
+      "primary",
+    );
+    expect(envFile(home)).not.toMatch(/^MULLION_TRUST_GATEWAY=/m);
+    expect(result.stderr).toContain("MULLION_INSTALL_TRUST_GATEWAY='maybe'");
+    expect(result.stderr).toMatch(/not a recognised value/i);
+  });
 
   it("redeems a pairing code when the host has no identity yet", async () => {
     const home = freshHome();
