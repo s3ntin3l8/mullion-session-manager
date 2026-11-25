@@ -473,8 +473,14 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) return { online: true };
     const pending = pendingHostReply(app, id, reply);
     if (pending) return pending;
-    const online = await getRemoteHostClient(app, id).ping();
-    return { online };
+    // Issue #3515 — the result is recorded the way a sweep's would be, and
+    // the answer is the verdict that recording leaves behind, so Test can
+    // never say online while placement (which reads the same tracker) says
+    // offline. A busy channel keeps the previous verdict, as in the sweep.
+    // With the heartbeat off nothing is recorded and the raw probe answers.
+    const probe = await getRemoteHostClient(app, id).probe();
+    const health = app.recordHostProbe?.(id, probe) ?? null;
+    return { online: health ? health.status === "online" : probe !== "down" };
   });
 
   // Issue #2090 — "Detect now": run the auto-detect sweep for this host on

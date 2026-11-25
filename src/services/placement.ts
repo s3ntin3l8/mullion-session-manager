@@ -14,7 +14,7 @@ import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protoco
 import { appVersion } from "./app-version.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
 import { parseHostCwds, serializeHostCwds } from "./host-cwds.js";
-import type { PlacementConstraints } from "../shared/types.js";
+import type { HostHealthStatus, PlacementConstraints } from "../shared/types.js";
 export type { PlacementConstraints } from "../shared/types.js";
 
 export { parseHostCwds, serializeHostCwds };
@@ -51,6 +51,13 @@ export interface PlacementCandidate {
    * answered.
    */
   online: boolean;
+  /**
+   * Issue #3515 — the heartbeat's verdict and last successful contact behind
+   * `online`, so a refusal can name the state ("pending", "degraded",
+   * "offline") and when the host was last reached. Optional: a candidate
+   * built without them is reported as plain "offline".
+   */
+  health?: { status: HostHealthStatus; lastSeenAt: number | null };
   /**
    * Drained/parked: the host takes no new work.
    *
@@ -558,6 +565,26 @@ function decideHost(
 }
 
 /**
+ * Issue #3515 — what a refusal says about a matching host that is not online:
+ * its actual state, and when it was last reached. "offline" alone sent people
+ * looking for a dead host when it was pending its first contact, or answering
+ * with one missed ping. The time is absolute on purpose: a held task's reason
+ * must stay the same text while nothing changes (task-claim.ts's holdClaim
+ * writes and broadcasts only when it differs), and the last successful contact
+ * does not move while the host is unreachable.
+ */
+export function notOnlineReason(candidate: PlacementCandidate): string {
+  const status = candidate.health?.status ?? "offline";
+  if (status === "pending") return "a matching host is pending (not reached yet)";
+  const lastSeenAt = candidate.health?.lastSeenAt ?? null;
+  const seen =
+    lastSeenAt === null
+      ? "never reached"
+      : `last seen ${new Date(lastSeenAt).toISOString().replace(/\.\d{3}Z$/, "Z")}`;
+  return `a matching host is ${status === "degraded" ? "degraded" : "offline"} (${seen})`;
+}
+
+/**
  * Why a candidate is not eligible — the FIRST rule it fails, or null when it
  * is eligible. One function, so the filter and the reported reason cannot
  * disagree.
@@ -761,6 +788,7 @@ function collectCandidates(
       // construction (host-heartbeat.ts says so explicitly); a remote host
       // that has never been reached reads as "pending".
       online: health?.status === "online",
+      health: { status: health?.status ?? "pending", lastSeenAt: health?.lastSeenAt ?? null },
       // Issue #1725 / roadmap 8.11 — the host's own drain flag: a parked
       // host takes no new work, so it is not a candidate. The flag is an
       // intent, not a teardown: nothing about the host is stopped, and it
@@ -968,7 +996,7 @@ function refuseForFlags(
     if (platformFlagState(candidate.platform, context.platforms) === "unknown") {
       why.add("a host that has not reported its platform yet may match once it is online");
     }
-    if (!candidate.online) why.add("a matching host is offline");
+    if (!candidate.online) why.add(notOnlineReason(candidate));
     else if (candidate.drained) why.add("a matching host is parked/drained");
     else if (capacity === null) why.add("a matching host has no capacity reading yet");
     if (candidate.projectCwd === null && candidate.needsCheckout !== true) {
@@ -1127,7 +1155,7 @@ function refusalReasons(
 ): string[] {
   const why = new Set<string>();
   for (const candidate of matching) {
-    if (!candidate.online) why.add("a matching host is offline");
+    if (!candidate.online) why.add(notOnlineReason(candidate));
     else if (candidate.drained) why.add("a matching host is parked/drained");
     else if ((candidate.isLocal ? localCapacity : candidate.capacity) === null) {
       why.add("a matching host has no capacity reading yet");

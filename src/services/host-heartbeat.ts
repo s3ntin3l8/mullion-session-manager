@@ -6,6 +6,10 @@ import { LOCAL_HOST_ID, fillHostPlatformIfUnset, listHosts } from "./host-regist
 import { HostCapacityTracker } from "./host-capacity.js";
 import { HostAgentTracker, agentsTtlMs, refreshRemoteHostAgents } from "./host-agents.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import {
+  heartbeatCapacityDeadlineMs,
+  heartbeatProbeDeadlineMs,
+} from "./remote-host-client-core.js";
 import { resolveHeartbeatSeconds } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
 import type { HostHealthStatus } from "../shared/types.js";
@@ -221,6 +225,53 @@ export class HostHeartbeatTracker {
   }
 }
 
+/** What one probe of a host found (RemoteHostClient.probe). */
+export type HostProbeResult = "ok" | "busy" | "down";
+
+const TIMED_OUT = Symbol("timed-out");
+
+/**
+ * Issue #3515 — `promise`, or TIMED_OUT once `ms` have passed. The promise is
+ * abandoned, not cancelled: whatever it settles with later is ignored, so a
+ * late answer can never overwrite a newer verdict.
+ */
+function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => resolve(TIMED_OUT), ms);
+    timer.unref?.();
+  });
+  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Records one probe's verdict — the single place the sweep and Settings'
+ * Test button (POST /api/hosts/:id/ping, #3515) both go through, so the two
+ * can never disagree about a host. `recovered` and `cameOnline` are the
+ * transitions the caller reports (see recordSuccess, and issue #2090).
+ */
+export function applyProbeResult(
+  tracker: HostHeartbeatTracker,
+  hostId: string,
+  probe: HostProbeResult,
+): { recovered: boolean; cameOnline: boolean } {
+  if (probe === "busy") {
+    tracker.recordBusy(hostId);
+    return { recovered: false, cameOnline: false };
+  }
+  if (probe === "down") {
+    tracker.recordFailure(hostId);
+    return { recovered: false, cameOnline: false };
+  }
+  // Issue #2090 — "came online" is broader than "recovered": it is also true
+  // for a FIRST contact (pending -> online), which a recovery never is. A
+  // single dropped ping (online -> degraded -> online) is neither: that is not
+  // worth a fleet-wide rescan.
+  const wasPending = tracker.getHealth(hostId).status === "pending";
+  const recovered = tracker.recordSuccess(hostId);
+  return { recovered, cameOnline: wasPending || recovered };
+}
+
 /**
  * One host's turn in the sweep: the health ping, and — only if the host
  * answered — its capacity.
@@ -248,40 +299,32 @@ async function sweepHost(
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
 ): Promise<{ recovered: boolean; cameOnline: boolean }> {
-  let reachable = false;
-  // Issue #2090 — "came online" is broader than "recovered": it is also true
-  // for a FIRST contact (pending -> online), which a recovery never is. A
-  // single dropped ping (online -> degraded -> online) is neither: that is not
-  // worth a fleet-wide rescan.
-  const wasPending = tracker.getHealth(hostId).status === "pending";
-  // Whether this contact is a RECOVERY — the host had been unreachable for
-  // at least two consecutive pings and is reachable again (see
-  // HostHeartbeatTracker.recordSuccess). The caller acts on it.
-  let recovered = false;
+  let probe: HostProbeResult;
   try {
-    const probe = await getRemoteHostClient(app, hostId).probe();
-    if (probe === "busy") {
-      // Up but saturated: bounded by the tracker, and no capacity poll (it
-      // would only queue behind the same hung transfers).
-      tracker.recordBusy(hostId);
-      return { recovered: false, cameOnline: false };
-    }
-    reachable = probe === "ok";
-    if (reachable) {
-      recovered = tracker.recordSuccess(hostId);
+    // Issue #3515 — bounded here as well as inside the client: a probe that
+    // never settles must cost this host one miss, never the whole sweep.
+    const deadlineMs = heartbeatProbeDeadlineMs();
+    const result = await withDeadline(getRemoteHostClient(app, hostId).probe(), deadlineMs);
+    if (result === TIMED_OUT) {
+      app.log.warn(
+        { hostId, deadlineMs },
+        "[host-heartbeat] the probe did not settle within its deadline; counting a miss",
+      );
+      probe = "down";
     } else {
-      tracker.recordFailure(hostId);
+      probe = result;
     }
   } catch (err) {
     // getRemoteHostClient throws synchronously if the row vanished
     // between listHosts() and here (e.g. concurrent delete) — treat
     // exactly like an unreachable ping rather than crashing the sweep.
     app.log.warn({ err, hostId }, "[host-heartbeat] ping threw unexpectedly");
-    tracker.recordFailure(hostId);
+    probe = "down";
   }
-
-  if (!reachable) return { recovered: false, cameOnline: false };
-  const cameOnline = wasPending || recovered;
+  // Up but saturated is recorded as busy (bounded by the tracker), with no
+  // capacity poll: it would only queue behind the same hung transfers.
+  const { recovered, cameOnline } = applyProbeResult(tracker, hostId, probe);
+  if (probe !== "ok") return { recovered: false, cameOnline: false };
 
   // Issue #2240 — the agent CLI list is re-read when its TTL lapses. A host
   // that just came online is refreshed by `onHostOnline` instead, so the two
@@ -296,7 +339,18 @@ async function sweepHost(
   }
 
   try {
-    const report = await getRemoteHostClient(app, hostId).resolveCapacity();
+    const deadlineMs = heartbeatCapacityDeadlineMs();
+    const report = await withDeadline(
+      getRemoteHostClient(app, hostId).resolveCapacity(),
+      deadlineMs,
+    );
+    if (report === TIMED_OUT) {
+      app.log.warn(
+        { hostId, deadlineMs },
+        "[host-heartbeat] the capacity read did not settle within its deadline, keeping the last known numbers",
+      );
+      return { recovered, cameOnline };
+    }
     if (report === null) {
       // An agent build without the capacity route. Nothing is recorded, the
       // health verdict above stands, and the previous numbers (if any) stay
@@ -335,6 +389,7 @@ async function sweep(
   app: FastifyInstance,
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
+  inFlight: Set<string>,
   onHostRecovered?: (hostId: string) => void,
   onHostOnline?: (hostId: string) => void,
 ): Promise<void> {
@@ -365,12 +420,31 @@ async function sweep(
   const cameOnline: string[] = [];
   await Promise.all(
     remoteHosts.map(async (host) => {
-      const result = await sweepHost(app, host.id, tracker, capacityTracker);
-      if (result.recovered) recovered.push(host.id);
-      if (result.cameOnline) cameOnline.push(host.id);
+      // A host whose previous turn is still running is skipped, not pinged
+      // again: an overlapping ping would count the same slow answer as a
+      // second miss. Per host (#3515), so one slow host holds up only itself.
+      if (inFlight.has(host.id)) return;
+      inFlight.add(host.id);
+      try {
+        const result = await sweepHost(app, host.id, tracker, capacityTracker);
+        if (result.recovered) recovered.push(host.id);
+        if (result.cameOnline) cameOnline.push(host.id);
+      } finally {
+        inFlight.delete(host.id);
+      }
     }),
   );
 
+  reportTransitions(app, cameOnline, recovered, onHostRecovered, onHostOnline);
+}
+
+function reportTransitions(
+  app: FastifyInstance,
+  cameOnline: readonly string[],
+  recovered: readonly string[],
+  onHostRecovered?: (hostId: string) => void,
+  onHostOnline?: (hostId: string) => void,
+): void {
   // Issue #2090 — a host that came ONLINE (first contact or a recovery) is
   // when "where does each project live on this machine?" is worth asking.
   // Reported after the whole sweep, like the recovery callback, and each call
@@ -434,36 +508,47 @@ export function startHostHeartbeat(
   app.hostAgentTracker = new HostAgentTracker();
 
   let timer: ReturnType<typeof setInterval> | null = null;
-  // Reentrancy guard (Hermes review, PR #524): each ping already has its
-  // own REQUEST_TIMEOUT_MS bound, but nothing stopped a slow/hung host from
-  // still being in flight when the next tick fires if
-  // HOST_HEARTBEAT_INTERVAL_SECONDS is set below that timeout (the schema
-  // only enforces minimum: 0). Without this, an overlapping tick would
-  // double-count a still-pending ping as a second miss, compressing the
-  // <=2-degraded/>=3-offline thresholds for one slow host into a single
-  // sweep window.
-  //
-  // Deliberately one flag for the whole sweep, not a per-host `inFlight`
-  // Set like git-fetcher.ts's — one slow/hung host throttles every other
-  // registered host's liveness update to its own timeout for that tick.
-  // Harmless at the 30s default; a per-host guard would remove the
-  // coupling at the cost of tracking a Set instead of a boolean, not
-  // pursued here since each host is already pinged concurrently
-  // (Promise.all in sweep()) — the guard only prevents overlap *across*
-  // ticks, not within one.
-  let sweepInFlight = false;
+  // Reentrancy guard (Hermes review, PR #524), per host since #3515: a host
+  // whose previous turn is still running is skipped by the next tick rather
+  // than pinged again (an overlapping ping would count one slow answer as a
+  // second miss). It used to be one flag for the whole sweep, so a single
+  // turn that never settled stopped every host's health from updating for
+  // the life of the process; each turn is now also bounded (sweepHost's
+  // deadlines), and a slow host holds up only itself.
+  const inFlight = new Set<string>();
+  // Off while the heartbeat is disabled: arm(0) forgets every verdict on
+  // purpose, and a Test click must not bring one back.
+  let enabled = false;
 
   function runSweep() {
-    if (sweepInFlight) return;
-    sweepInFlight = true;
-    sweep(app, hostHeartbeatTracker, hostCapacityTracker, onHostRecovered, onHostOnline)
-      .catch((err) => {
-        app.log.error({ err }, "[host-heartbeat] sweep failed");
-      })
-      .finally(() => {
-        sweepInFlight = false;
-      });
+    sweep(
+      app,
+      hostHeartbeatTracker,
+      hostCapacityTracker,
+      inFlight,
+      onHostRecovered,
+      onHostOnline,
+    ).catch((err) => {
+      app.log.error({ err }, "[host-heartbeat] sweep failed");
+    });
   }
+
+  // Issue #3515 — Settings' Test button records what it found through the
+  // same path as the sweep, recovery callbacks included, so Test and
+  // placement can never disagree. Returns the resulting health, or null when
+  // the heartbeat is off (nothing is recorded then).
+  app.recordHostProbe = (hostId, probe) => {
+    if (!enabled) return null;
+    const result = applyProbeResult(hostHeartbeatTracker, hostId, probe);
+    reportTransitions(
+      app,
+      result.cameOnline ? [hostId] : [],
+      result.recovered ? [hostId] : [],
+      onHostRecovered,
+      onHostOnline,
+    );
+    return hostHeartbeatTracker.getHealth(hostId);
+  };
 
   // (Re)arms the sweep timer. Called once at start with the resolved
   // interval (env default, overridable from Settings → Hosts) and again by
@@ -472,6 +557,7 @@ export function startHostHeartbeat(
   function arm(intervalSeconds: number) {
     if (timer) clearInterval(timer);
     timer = null;
+    enabled = intervalSeconds > 0;
     if (intervalSeconds <= 0) {
       // Forget every verdict so no host keeps showing a stale "online"
       // while nothing is checking it — the same "pending" state a server
@@ -504,6 +590,7 @@ export function startHostHeartbeat(
     app.hostCapacityTracker = undefined;
     app.hostAgentTracker = undefined;
     app.reconfigureHostHeartbeat = undefined;
+    app.recordHostProbe = undefined;
   };
 }
 
@@ -514,5 +601,7 @@ declare module "fastify" {
     // the same sweep that fills the health tracker above.
     hostCapacityTracker?: HostCapacityTracker;
     reconfigureHostHeartbeat?: (intervalSeconds: number) => void;
+    // Issue #3515 — records a probe made outside the sweep (Settings' Test).
+    recordHostProbe?: (hostId: string, probe: HostProbeResult) => HostHealth | null;
   }
 }

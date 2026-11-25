@@ -655,6 +655,36 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       );
     });
 
+    it("names the matching host's state and last contact in the refusal (#3515)", async () => {
+      const { projectId, hostId } = await setup();
+      const lastSeenAt = app.hostHeartbeatTracker!.getHealth(hostId).lastSeenAt!;
+      const seen = new Date(lastSeenAt).toISOString().replace(/\.\d{3}Z$/, "Z");
+      const create = () =>
+        app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId, command: "bash", targetPlatform: "darwin" },
+        });
+
+      // One missed ping: degraded, not "offline".
+      app.hostHeartbeatTracker?.recordFailure(hostId);
+      let res = await create();
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain(`a matching host is degraded (last seen ${seen})`);
+
+      // A deregister (agent shut down): offline, with the same last contact.
+      app.hostHeartbeatTracker?.markOffline(hostId);
+      res = await create();
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain(`a matching host is offline (last seen ${seen})`);
+
+      // Never reached since its verdict was dropped: pending.
+      app.hostHeartbeatTracker?.invalidateHost(hostId);
+      res = await create();
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("a matching host is pending (not reached yet)");
+    });
+
     it("creates the session on the targeted host and reads its status from THAT host", async () => {
       const { projectId, hostId, backend } = await setup();
       const liveStatus = vi.fn().mockResolvedValue({});

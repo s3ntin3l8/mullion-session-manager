@@ -355,6 +355,10 @@ async function exchange(
   let timedOut = false;
   let aborted = false;
   let abortOpen: ((err: Error) => void) | null = null;
+  // Settles the response wait directly (#3515). A timeout or abort must not
+  // depend on channel.close() firing the close listeners: on a channel that
+  // is already closed, close() is a no-op and the wait would never end.
+  let abortResponse: ((err: ChannelTransportError) => void) | null = null;
   const limitMs = req.idleTimeoutMs ?? req.timeoutMs;
   const timeoutMessage = `timed out after ${limitMs} ms${req.idleTimeoutMs ? " idle" : ""}`;
   let timer: NodeJS.Timeout | undefined;
@@ -362,6 +366,7 @@ async function exchange(
     timedOut = true;
     channel?.close();
     abortOpen?.(fail(timeoutMessage, sendStarted ? "after-send" : "before-send"));
+    abortResponse?.(fail(timeoutMessage, sendStarted ? "after-send" : "before-send"));
   };
   // The slot wait is not charged to the exchange: the timer is stopped while
   // queued and restarted with the full budget once the slot is granted. The
@@ -385,6 +390,7 @@ async function exchange(
     aborted = true;
     channel?.close();
     abortOpen?.(fail("aborted", sendStarted ? "after-send" : "before-send"));
+    abortResponse?.(fail("aborted", sendStarted ? "after-send" : "before-send"));
   };
   const release = () => {
     clearTimeout(timer);
@@ -457,6 +463,20 @@ async function exchange(
       throw fail(timedOut ? timeoutMessage : "aborted", "before-send");
     }
     const ch = channel;
+    // Issue #3515 — the peer can ack the open and close the channel in one
+    // read (an agent shutting down closes every channel right after acking
+    // a new one). The close then fired before any listener below was
+    // attached, and close listeners are not replayed: the exchange would wait
+    // forever, past its own timeout, and with it the heartbeat sweep that
+    // awaited it. Nothing was sent yet, so this is a plain before-send failure.
+    if (ch.closed) {
+      throw fail(
+        entry.terminal
+          ? `outbound channel closed: ${entry.terminal}`
+          : "outbound channel closed before the request was sent",
+        "before-send",
+      );
+    }
 
     const parser = new HeadAndBodyParser();
     const maxResponseBytes = req.maxResponseBytes ?? maxResponseBodyBytesForPath(req.path);
@@ -476,9 +496,11 @@ async function exchange(
       ) => {
         if (settled) return;
         settled = true;
+        abortResponse = null;
         if (err) reject(err);
         else resolve(value!);
       };
+      abortResponse = (err) => settle(err);
       // Streaming: set once the head is in, from then on the body goes here.
       let out: Readable | null = null;
       let eofSeen = false;
