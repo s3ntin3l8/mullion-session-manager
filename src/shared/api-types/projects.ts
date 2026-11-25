@@ -65,7 +65,7 @@ export interface MergeCounts {
 // Issue #937 — a small, finite set of well-known "how we work" policy
 // choices (branch-vs-direct-commit, merge strategy, review process, ...),
 // deterministically assembled into prose by buildWorkflowConventionsText
-// below. Same "pure function assembling structural output" posture as
+// (workflow-conventions.ts). Same "pure function assembling structural output" posture as
 // mullion-scaffold.ts's computeScaffold — no agent, no network, fully
 // unit-testable — but this is a STARTER, not an ongoing mode: running it
 // fills settings.sessions.workflowConventionsText (settings.ts) with the
@@ -84,7 +84,7 @@ export interface WorkflowConventionOption {
   label: string;
   /** The prose sentence(s) this option contributes when selected — joined
    * with every other selected fragment, in question order, by
-   * buildWorkflowConventionsText below. Deliberately plain sentences, not a
+   * buildWorkflowConventionsText (workflow-conventions.ts). Deliberately plain sentences, not a
    * markdown list item each: the assembled result reads as ordinary prose a
    * human would keep hand-editing afterward, not as a form dump. */
   fragment: string;

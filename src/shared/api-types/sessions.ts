@@ -45,8 +45,8 @@ export interface BackgroundTask {
    * carries (`command` for a background shell, `agent_type` for a
    * background subagent, `server`/`tool` for an MCP-backed task, `name` as
    * a generic label) — kept snake_case and untyped-beyond-string, same
-   * "opaque blob forwarded verbatim" posture this file already gives
-   * agent-authored payloads elsewhere (see the module header comment). */
+   * "opaque blob forwarded verbatim" posture hook-protocol.ts gives
+   * agent-authored payloads elsewhere (see that module's header comment). */
   command?: string;
   agent_type?: string;
   server?: string;

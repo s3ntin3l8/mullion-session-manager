@@ -88,6 +88,16 @@ const CACHE_DIRS = [
   permanent?: boolean;
 }>;
 
+// The other direction from the `satisfies` above: every shared CacheDirId has
+// an entry here, so the union (src/shared/api-types/storage.ts) cannot grow an
+// id no table produces.
+const _everyCacheDirIdHasAnEntry: Exclude<
+  CacheDirId,
+  (typeof CACHE_DIRS)[number]["id"]
+> extends never
+  ? true
+  : never = true;
+
 export const CACHE_DIR_IDS: readonly CacheDirId[] = CACHE_DIRS.map((c) => c.id);
 
 export interface CacheStorageOptions {

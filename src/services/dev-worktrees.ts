@@ -63,6 +63,13 @@ const ROOTS = [
   { dir: ".worktrees", kind: "wt" },
   { dir: path.join(".claude", "worktrees"), kind: "claude-agent" },
 ] as const satisfies ReadonlyArray<{ dir: string; kind: DevWorktreeKind }>;
+// The other direction: every shared DevWorktreeKind has a root here.
+const _everyDevWorktreeKindHasARoot: Exclude<
+  DevWorktreeKind,
+  (typeof ROOTS)[number]["kind"]
+> extends never
+  ? true
+  : never = true;
 
 /** Directories (relative to a project) that hold developer worktrees. */
 export const DEV_WORKTREE_DIRS: readonly string[] = ROOTS.map((root) => root.dir);

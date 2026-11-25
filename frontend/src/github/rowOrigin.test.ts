@@ -64,5 +64,7 @@ describe("rowOrigin", () => {
     expect(needsAttention({ prPhase: "ci_failing" })).toBe(true);
     expect(needsAttention({ prPhase: "ready_to_merge" })).toBe(false);
     expect(needsAttention({ prPhase: "unknown" })).toBe(false);
+    // An older cached row may still lack the field the shared type requires.
+    expect(needsAttention({} as Pick<PROrWithChecks, "prPhase">)).toBe(false);
   });
 });

@@ -131,6 +131,33 @@ describe("check-shared-type-twins.mjs", () => {
     expect(result.stderr).toContain("StorageView");
   });
 
+  it("matches an allowlist entry by own name only, so an inherited key like constructor is not allowed", async () => {
+    write("frontend/src/api/types.ts", "export type constructor = { id: string };\n");
+    write("src/services/odd.ts", "export type constructor = { id: string };\n");
+    writeAllowlist({});
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("constructor  frontend/src/api/types.ts:1");
+  });
+
+  it("fails loudly on an unreadable allowlist and on --allowlist without a path", async () => {
+    write("scripts/shared-type-twins.allowlist.json", "{ not json");
+    const bad = await run();
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toContain("not valid JSON");
+
+    write("scripts/shared-type-twins.allowlist.json", JSON.stringify({ allowed: ["x"] }));
+    const shape = await run();
+    expect(shape.code).toBe(1);
+    expect(shape.stderr).toContain("must be an object");
+
+    const usage = await execFileAsync(process.execPath, [SCRIPT, root, "--allowlist"]).catch(
+      (err: { code: number; stderr: string }) => err,
+    );
+    expect((usage as { code: number }).code).toBe(2);
+    expect((usage as { stderr: string }).stderr).toContain("usage:");
+  });
+
   it("passes on this repository as it stands", async () => {
     const result = await run(REPO_ROOT);
     expect(result.stderr).toBe("");

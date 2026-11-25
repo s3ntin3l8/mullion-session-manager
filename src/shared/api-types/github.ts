@@ -307,8 +307,9 @@ export type PrReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIR
 
 export type DeviceFlowStatus = "pending" | "connected" | "expired" | "denied" | "error";
 
-// Never includes device_code — that's this module's own internal secret,
-// not something any API response should carry (see the module comment).
+// Never includes device_code — that's github-device-flow.ts's own internal
+// secret, not something any API response should carry (see that module's
+// header comment).
 export interface DeviceFlowSummary {
   status: DeviceFlowStatus;
   userCode: string;
@@ -351,7 +352,7 @@ export interface ChecksMarkerOutcome {
 export interface GitHubAppStatus {
   configured: boolean;
   // Public — a numeric App id, not a secret (the private key never leaves
-  // this function). `null` when no App is configured.
+  // github-integration.ts's status reader). `null` when no App is configured.
   appId: string | null;
   // How many accounts this App is installed on, straight from GitHub's own
   // `/app/installations` list — the same call `resolveGitHubToken` makes

@@ -24,11 +24,16 @@
 //     module's private helper — `Entry`, `CacheEntry` — and a same-named
 //     frontend local is a coincidence, not a mirror).
 //
-// A same name is how a hand mirror is written (the old copies were annotated
+// A same name is how a hand mirror is usually written (the old copies were annotated
 // "Mirrors src/services/X.ts's Y 1:1"), so it is what this check looks for.
 // The fix is to import the shared declaration — move the backend's into
 // src/shared/ first if it is not there yet — or, when the two really are
 // different things that only happen to share a name, to rename one of them.
+//
+// What it does NOT catch: a copy under a different name (a frontend
+// `PlacementPreview` that mirrors the backend's `PlacementDecision`). Those
+// are still annotated "Mirrors src/..." where they exist; matching shapes
+// rather than names would flag every pair of small look-alike unions.
 //
 // THE ALLOWLIST
 //
@@ -54,7 +59,12 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--allowlist") {
-      options.allowlist = path.resolve(argv[++i]);
+      const value = argv[++i];
+      if (!value) {
+        console.error("usage: check-shared-type-twins.mjs [root] [--allowlist <path>]");
+        process.exit(2);
+      }
+      options.allowlist = path.resolve(value);
     } else {
       options.root = path.resolve(arg);
     }
@@ -93,13 +103,19 @@ const isTestFile = (rel) => /\.test\.tsx?$/.test(rel) || rel.startsWith("fronten
 
 function readAllowlist(file) {
   if (!existsSync(file)) return {};
+  let parsed;
   try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return parsed.allowed ?? {};
+    parsed = JSON.parse(readFileSync(file, "utf8"));
   } catch {
     console.error(`The allowlist is not valid JSON: ${file}`);
     process.exit(1);
   }
+  const allowed = parsed?.allowed ?? {};
+  if (typeof allowed !== "object" || allowed === null || Array.isArray(allowed)) {
+    console.error(`The allowlist's "allowed" must be an object of name -> reason: ${file}`);
+    process.exit(1);
+  }
+  return allowed;
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -130,7 +146,7 @@ for (const rel of collectSourceFiles(root, ["frontend/src"])) {
 }
 
 const allowed = readAllowlist(options.allowlist);
-const failures = [...twins.keys()].filter((name) => !(name in allowed)).sort();
+const failures = [...twins.keys()].filter((name) => !Object.hasOwn(allowed, name)).sort();
 const stale = Object.keys(allowed)
   .filter((name) => !twins.has(name))
   .sort();

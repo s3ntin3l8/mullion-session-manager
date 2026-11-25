@@ -18,7 +18,7 @@ import piCodingAgentDarkLogo from "./assets/cli-logos/pi-coding-agent-dark.svg";
 // MIT for the LobeHub-sourced codex-color/antigravity-color logos).
 interface LogoEntry {
   base: string;
-  /** ResolvedTheme-specific override, only needed for logos with poor contrast against
+  /** Theme-specific override, only needed for logos with poor contrast against
    * one background (currently just opencode's mostly-monochrome mark). */
   light?: string;
   dark?: string;

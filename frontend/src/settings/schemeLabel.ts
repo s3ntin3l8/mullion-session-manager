@@ -1,5 +1,5 @@
 // Only rewrites scheme names literally ending in " Dark" (Mullion Dark, One Dark).
-// ResolvedTheme-neutral names like "Solarized", "Dracula", "Gruvbox", "Tokyo Night" are
+// Theme-neutral names like "Solarized", "Dracula", "Gruvbox", "Tokyo Night" are
 // intentionally unchanged — they carry no dark/light bias in their base name.
 import type { ResolvedTheme } from "../store/index.js";
 

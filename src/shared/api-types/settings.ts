@@ -63,7 +63,7 @@ export interface AppSettings {
     fontFamily: string;
     fontSize: number;
     // Inner inset (px) between the dockview panel edge and the rendered
-    // terminal content, applied on all four sides — see frontend/src/api.ts's
+    // terminal content, applied on all four sides — see frontend/src/api/types.ts's
     // matching field for the full rationale (issue #91).
     padding: number;
     colorScheme: string;
@@ -115,7 +115,7 @@ export interface AppSettings {
       hotkeyEnabled: boolean;
       // BCP-47 tag (e.g. "en-US"), or "" to fall back to navigator.language
       // at dictation start. A free string like fontFamily above — no
-      // enum/leaf-union in shared/types.ts, and sanitizeSettings below
+      // enum/leaf-union in shared/types.ts, and settings.ts's sanitizeSettings
       // doesn't validate it for the same reason fontFamily isn't validated
       // there: an unrecognized tag is the Web Speech engine's own problem
       // to reject or fall back on, not this backend's to police.
@@ -187,10 +187,10 @@ export interface AppSettings {
     // #98/#168 (frontend PR) — auto-bring-into-focus on an attention
     // transition, read by frontend/src/App.tsx only; this backend never
     // acts on it. Added here (rather than left frontend-only) because
-    // deepMerge below only ever merges keys this interface already knows
+    // settings.ts's deepMerge only ever merges keys this interface already knows
     // about — a field missing from here would silently fail to persist
     // across a PATCH /api/settings + reload round-trip, defeating the
-    // point of a Settings toggle. Mechanical mirror of frontend/src/api.ts's
+    // point of a Settings toggle. Mechanical mirror of frontend/src/api/types.ts's
     // matching field; see that file for the default-off rationale. Combined
     // with `notificationMatrix`'s own `autoFocus` column (both must be true
     // for a given status to auto-focus) — see App.tsx.
@@ -383,7 +383,7 @@ export interface AppSettings {
     //
     // Default: every CURRENT `WORKFLOW_CONVENTION_QUESTIONS` id mapped to
     // `""`, never a bare `{}` — see DEFAULT_SETTINGS's own construction of
-    // this field (deepMerge below only ever touches a patch key that
+    // this field (settings.ts's deepMerge only ever touches a patch key that
     // already exists on `base`, so a `{}` default would make the wizard's
     // own real-answer PATCH merge to nothing). `""` per key is the "not yet
     // answered" state — indistinguishable, deliberately, from "this

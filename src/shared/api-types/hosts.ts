@@ -36,7 +36,7 @@ export interface UpdateCheckResult {
   // Whether this install is even capable of applying an update — i.e.
   // MULLION_HOME is configured (a versioned-release layout, not a dev
   // checkout). Threaded in by the caller rather than read from process.env
-  // here, so this stays a pure, easily-testable function like
+  // in update-checker.ts's checkForUpdate, so that stays a pure, easily-testable function like
   // github.ts's getRepoStatus.
   applyAvailable: boolean;
   // Epoch ms of when GitHub was actually last queried for this result — set
@@ -142,8 +142,6 @@ export interface HostPairingCreated {
   expires_at: string;
 }
 
-// GET/POST /api/host-pairings (src/routes/host-pairing.ts) — the wire shapes,
-// snake_case and ISO strings; the service's own HostPairingRecord carries Dates.
 export interface HostPairingSummary {
   id: string;
   label: string | null;
