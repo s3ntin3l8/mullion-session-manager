@@ -10,18 +10,18 @@ vi.mock("node:child_process", async (orig) => ({
   ...(await orig<typeof ChildProcess>()),
   execFile: execFileMock,
 }));
-/** `stat` passes through to the real one unless a test makes it fail once. */
-const statFail = vi.hoisted(() => ({ next: null as Error | null }));
+/** `open` passes through to the real one unless a test makes it fail once. */
+const openFail = vi.hoisted(() => ({ next: null as Error | null }));
 vi.mock("node:fs/promises", async (orig) => {
   const actual = await orig<typeof FsPromises>();
   return {
     ...actual,
-    stat: (async (...a: Parameters<typeof actual.stat>) => {
-      const err = statFail.next;
-      statFail.next = null;
+    open: (async (...a: Parameters<typeof actual.open>) => {
+      const err = openFail.next;
+      openFail.next = null;
       if (err) throw err;
-      return actual.stat(...a);
-    }) as typeof actual.stat,
+      return actual.open(...a);
+    }) as typeof actual.open,
   };
 });
 
@@ -363,9 +363,9 @@ describe("IosSimulatorDriver", () => {
       expect(existsSync(shotDir(calls))).toBe(false);
     });
 
-    it("rethrows a stat failure other than ENOENT, and still cleans up", async () => {
+    it("rethrows an open failure other than ENOENT, and still cleans up", async () => {
       const { driver, calls } = make();
-      statFail.next = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      openFail.next = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
       await expect(driver.screenshot()).rejects.toThrow("EACCES: permission denied");
       expect(existsSync(shotDir(calls))).toBe(false);
     });

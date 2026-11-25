@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pngDimensions } from "../screenshot-image.js";
@@ -25,21 +25,7 @@ export async function simctlScreenshot(simctl: SimctlRunner, udid: string): Prom
         stderr = b;
       },
     });
-    // No file at all reads as empty; any other stat failure is a real error.
-    const size = await stat(file).then(
-      (st) => st.size,
-      (err: NodeJS.ErrnoException) => {
-        if (err.code === "ENOENT") return 0;
-        throw err;
-      },
-    );
-    if (size > SCREENSHOT_MAX_BYTES) {
-      throw new DeviceActionError(
-        502,
-        `screencap returned ${size} bytes, over the ${SCREENSHOT_MAX_BYTES}-byte limit`,
-      );
-    }
-    const out = size > 0 ? await readFile(file) : Buffer.alloc(0);
+    const out = await readBounded(file);
     if (!PNG_SIGNATURE.equals(out.subarray(0, 8))) {
       // What simctl said, then what it wrote: the first 200 bytes of each, scrubbed.
       const head = [Buffer.concat([stderr, stdout]), out]
@@ -62,5 +48,35 @@ export async function simctlScreenshot(simctl: SimctlRunner, udid: string): Prom
     return png;
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/** Reads `file` through one handle (fstat, then at most that many bytes), so
+ * the size checked is the size read. No file at all reads as empty; any other
+ * open failure is a real error. */
+async function readBounded(file: string): Promise<Buffer> {
+  const handle = await open(file, "r").catch((err: NodeJS.ErrnoException) => {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  });
+  if (!handle) return Buffer.alloc(0);
+  try {
+    const { size } = await handle.stat();
+    if (size > SCREENSHOT_MAX_BYTES) {
+      throw new DeviceActionError(
+        502,
+        `screencap returned ${size} bytes, over the ${SCREENSHOT_MAX_BYTES}-byte limit`,
+      );
+    }
+    const buf = Buffer.alloc(size);
+    let read = 0;
+    while (read < size) {
+      const { bytesRead } = await handle.read(buf, read, size - read, read);
+      if (bytesRead === 0) break;
+      read += bytesRead;
+    }
+    return buf.subarray(0, read);
+  } finally {
+    await handle.close();
   }
 }
