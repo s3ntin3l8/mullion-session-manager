@@ -294,6 +294,9 @@ if (process.argv.some((a) => a.includes(stdinCode))) {
   process.stderr.write("code leaked into argv\\n");
   process.exit(2);
 }
+// Issue #3499 — record the redeem child's OWN environment, so the test can
+// prove the pairing code never reached it.
+fs.writeFileSync(path.join(__dirname, "child-env.json"), JSON.stringify(process.env));
 fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
 fs.writeFileSync(
   path.join(sessionsDir, "agent-identity.json"),
@@ -317,6 +320,13 @@ fs.writeFileSync(
     expect(result.stdout + result.stderr).not.toContain(pairingCode);
     const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
     expect(commands).not.toContain(pairingCode);
+    // The redeem child's environment holds no trace of the code either: the
+    // code travels through the pipe it already uses, never through an export.
+    const childEnv = JSON.parse(
+      fs.readFileSync(path.join(home, "releases", "9.9.9", "dist", "child-env.json"), "utf8"),
+    ) as Record<string, string>;
+    expect(childEnv.MULLION_AGENT_PAIRING_CODE).toBeUndefined();
+    expect(Object.values(childEnv).some((value) => value.includes(pairingCode))).toBe(false);
     expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
       hostId: "paired-host-1",
     });
