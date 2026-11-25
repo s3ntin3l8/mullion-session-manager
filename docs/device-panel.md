@@ -101,7 +101,8 @@ backend; the first real Android operation reports it.
 
 ### iOS Simulator
 
-The iOS Simulator driver (`src/services/device-drivers/ios-simulator.ts`,
+The iOS Simulator driver (`src/services/device-drivers/ios-simulator.ts`, with its
+screenshot in `ios-screenshot.ts` and the `xcrun simctl` runner in `simctl.ts`,
 [#1943](https://github.com/s3ntin3l8/mullion-session-manager/issues/1943)) runs
 on macOS hosts when all of the following hold (`iosSimulatorAvailable()` in
 `src/services/device-kinds.ts`):
@@ -145,13 +146,28 @@ the `platforms` list is unchanged either way.
 **How it works (`simctl` + `idb_companion`).** `xcrun simctl` handles simulator
 lifecycle (`boot`, `bootstatus -b`, `shutdown` — `stop()` shuts the simulator
 down only if this Mullion process booted it, and never deletes or erases it),
-screenshots (`simctl io <udid> screenshot --type=png -`), logs (`simctl spawn
-<udid> log show --last 5m --style compact`), and clipboard (`pbcopy`/`pbpaste`).
+screenshots (`simctl io <udid> screenshot --type=png <file>`, see below), logs
+(`simctl spawn <udid> log show --last 5m --style compact`), and clipboard
+(`pbcopy`/`pbpaste`, over stdin/stdout).
 `openurl` runs `simctl openurl <udid> <url>`: `mullion device openurl <id> <url>`,
 the `use_device` MCP tool's `openurl` action, or "Open in simulator" in the Dock's
 Preview menu. Only http(s) URLs are accepted (`simctl openurl` would otherwise launch
 any registered URL scheme). It is manual: nothing opens on dev-server start. Android
 devices answer it with a 400.
+
+**iOS screenshots go through a temp file (#3517).** `screenshot()`
+(`simctlScreenshot` in `src/services/device-drivers/ios-screenshot.ts`) makes a fresh
+directory under `os.tmpdir()` with `mkdtemp` (mode 0700), has `simctl` write
+`screenshot.png` there, checks its size against the 64 MiB cap before reading it,
+checks the PNG signature and header, and removes the directory in a `finally`,
+whatever happened. It never passes `-` for stdout: Xcode 27's `simctl` (seen on
+27.2, 27B52, with an iOS 27.0 simulator) takes `-` as a filename, writes a file
+literally named `-` into its working directory, prints `Wrote screenshot to:
+<cwd>/-` on stderr and nothing on stdout, so every screenshot failed with
+`screencap did not return a PNG` and left a stray `-` behind. When no PNG comes
+back, the 502 quotes the first 200 bytes of what `simctl` printed (stderr, then
+stdout) and of the file it wrote, whichever are non-empty. No other `simctl` call writes output to a
+path: `pbcopy`/`pbpaste` use stdin/stdout and there is no `recordVideo`.
 
 **What the Preview menu opens (#3429, #3491).** One set of rows per running iOS
 Simulator (`frontend/src/lib/simulatorUrl.ts` picks the route):

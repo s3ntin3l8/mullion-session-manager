@@ -1,11 +1,29 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type * as ChildProcess from "node:child_process";
+import type * as FsPromises from "node:fs/promises";
+import { existsSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname } from "node:path";
 
 const execFileMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (orig) => ({
   ...(await orig<typeof ChildProcess>()),
   execFile: execFileMock,
 }));
+/** `open` passes through to the real one unless a test makes it fail once. */
+const openFail = vi.hoisted(() => ({ next: null as Error | null }));
+vi.mock("node:fs/promises", async (orig) => {
+  const actual = await orig<typeof FsPromises>();
+  return {
+    ...actual,
+    open: (async (...a: Parameters<typeof actual.open>) => {
+      const err = openFail.next;
+      openFail.next = null;
+      if (err) throw err;
+      return actual.open(...a);
+    }) as typeof actual.open,
+  };
+});
 
 import {
   IosSimulatorDriver,
@@ -30,26 +48,58 @@ function listing(state: string): Buffer {
   );
 }
 
+/** What `io <udid> screenshot <path>` does in the fake: like Xcode 27's simctl
+ * (#3517) it writes the file named by its last argv element and prints nothing
+ * on stdout. `size` makes a sparse file of that size instead; `null` writes
+ * nothing. */
+interface FakeShot {
+  file?: Buffer | null;
+  size?: number;
+  stdout?: Buffer;
+  stderr?: Buffer;
+}
+
 /** A scripted simctl: `state` is what `list` reports, other verbs are recorded. */
 function fakeSimctl(initial = "Shutdown") {
   const calls: string[][] = [];
   const inputs: Array<string | undefined> = [];
-  const res: { state: string; out: Record<string, Buffer>; fail: Record<string, Error> } = {
+  /** The screenshot directory's mode as simctl saw it. */
+  const shotDirModes: number[] = [];
+  const res: {
+    state: string;
+    out: Record<string, Buffer>;
+    fail: Record<string, Error>;
+    shot: FakeShot;
+  } = {
     state: initial,
     out: {},
     fail: {},
+    shot: {},
   };
   const simctl: SimctlRunner = async (args, options) => {
     calls.push(args);
     inputs.push(options?.input);
     const verb = args[0]!;
+    if (verb === "io") shotDirModes.push(statSync(dirname(args.at(-1)!)).mode & 0o777);
+    if (verb === "io" && res.fail.io && res.shot.file) writeFileSync(args.at(-1)!, res.shot.file);
     if (res.fail[verb]) throw res.fail[verb];
     if (verb === "list") return listing(res.state);
     if (verb === "boot") res.state = "Booted";
     if (verb === "shutdown") res.state = "Shutdown";
+    if (verb === "io") {
+      const path = args.at(-1)!;
+      if (res.shot.size !== undefined) {
+        writeFileSync(path, png());
+        truncateSync(path, res.shot.size);
+      } else if (res.shot.file !== null) {
+        writeFileSync(path, res.shot.file ?? png());
+      }
+      if (res.shot.stderr) options?.onStderr?.(res.shot.stderr);
+      return res.shot.stdout ?? Buffer.alloc(0);
+    }
     return res.out[verb] ?? Buffer.alloc(0);
   };
-  return { simctl, calls, inputs, res };
+  return { simctl, calls, inputs, res, shotDirModes };
 }
 
 const verbs = (calls: string[][]) => calls.map((c) => c[0]);
@@ -245,30 +295,98 @@ describe("IosSimulatorDriver", () => {
   });
 
   describe("screenshot", () => {
-    it("returns the PNG", async () => {
-      const { driver, calls, res } = make();
-      res.out.io = png(3, 2);
+    /** The private directory a screenshot call was given. */
+    const shotDir = (calls: string[][]) => dirname(calls.find((c) => c[0] === "io")!.at(-1)!);
+
+    it("writes to a private temp file, returns the PNG and removes the directory", async () => {
+      const { driver, calls, res, shotDirModes } = make();
+      res.shot.file = png(3, 2);
       const out = await driver.screenshot();
       expect(Buffer.from(out).equals(png(3, 2))).toBe(true);
-      expect(calls[0]).toEqual(["io", UDID, "screenshot", "--type=png", "-"]);
+      const args = calls[0]!;
+      expect(args.slice(0, 4)).toEqual(["io", UDID, "screenshot", "--type=png"]);
+      expect(args).not.toContain("-");
+      expect(args.at(-1)!.startsWith(tmpdir())).toBe(true);
+      expect(shotDirModes).toEqual([0o700]);
+      expect(existsSync(shotDir(calls))).toBe(false);
     });
 
-    it("502s on output that is not a PNG", async () => {
-      const { driver, res } = make();
-      res.out.io = Buffer.from("An error\x01 occurred");
+    it("uses a fresh directory per call", async () => {
+      const { driver, calls } = make();
+      await driver.screenshot();
+      await driver.screenshot();
+      expect(calls[0]!.at(-1)).not.toBe(calls[1]!.at(-1));
+    });
+
+    it("502s on a file that is not a PNG, with the file's first bytes, and cleans up", async () => {
+      const { driver, calls, res } = make();
+      res.shot.file = Buffer.from("An error\x01 occurred");
       const err = await driver.screenshot().catch((e: unknown) => e);
       expect(err).toBeInstanceOf(DeviceActionError);
       expect((err as DeviceActionError).statusCode).toBe(502);
       expect((err as Error).message).toBe("screencap did not return a PNG: An error? occurred");
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("502s when simctl writes no file, quoting what it printed", async () => {
+      const { driver, calls, res } = make();
+      res.shot = { file: null, stderr: Buffer.from("Wrote screenshot to: /x/-\n") };
+      await expect(driver.screenshot()).rejects.toMatchObject({
+        statusCode: 502,
+        message: "screencap did not return a PNG: Wrote screenshot to: /x/-",
+      });
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("502s on an oversize file without reading it, and cleans up", async () => {
+      const { driver, calls, res } = make();
+      res.shot.size = 64 * 1024 * 1024 + 1;
+      await expect(driver.screenshot()).rejects.toMatchObject({
+        statusCode: 502,
+        message: `screencap returned ${64 * 1024 * 1024 + 1} bytes, over the ${64 * 1024 * 1024}-byte limit`,
+      });
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("propagates a simctl failure and still removes the directory", async () => {
+      const { driver, calls, res } = make();
+      res.fail.io = new Error("exit 1: no such device");
+      await expect(driver.screenshot()).rejects.toThrow("exit 1: no such device");
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("removes a partly written file when simctl fails after writing", async () => {
+      const { driver, calls, res } = make();
+      res.shot.file = png().subarray(0, 10);
+      res.fail.io = new Error("timed out");
+      await expect(driver.screenshot()).rejects.toThrow("timed out");
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("rethrows an open failure other than ENOENT, and still cleans up", async () => {
+      const { driver, calls } = make();
+      openFail.next = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      await expect(driver.screenshot()).rejects.toThrow("EACCES: permission denied");
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("quotes both what simctl printed and what it wrote", async () => {
+      const { driver, res } = make();
+      res.shot = { file: Buffer.from("garbage"), stderr: Buffer.from("Wrote screenshot to: /x\n") };
+      await expect(driver.screenshot()).rejects.toMatchObject({
+        statusCode: 502,
+        message: "screencap did not return a PNG: Wrote screenshot to: /x | garbage",
+      });
     });
 
     it("502s on a PNG with no readable header", async () => {
-      const { driver, res } = make();
-      res.out.io = png().subarray(0, 12);
+      const { driver, calls, res } = make();
+      res.shot.file = png().subarray(0, 12);
       await expect(driver.screenshot()).rejects.toMatchObject({
         statusCode: 502,
         message: "screencap returned a PNG with no readable header",
       });
+      expect(existsSync(shotDir(calls))).toBe(false);
     });
   });
 
@@ -325,14 +443,16 @@ describe("IosSimulatorDriver", () => {
 
   describe("supports() through performDeviceAction", () => {
     it("answers screenshot, logcat and clipboard", async () => {
-      const { driver, res } = make();
-      res.out.io = png();
+      const { driver, calls, res } = make();
+      res.shot.file = png();
       res.out.spawn = Buffer.from("a\nb");
       res.out.pbpaste = Buffer.from("clip");
       expect(await performDeviceAction(driver, { action: "screenshot" })).toMatchObject({
         nativeWidth: 3,
         nativeHeight: 2,
       });
+      expect(calls.flat()).not.toContain("-");
+      expect(existsSync(dirname(calls[0]!.at(-1)!))).toBe(false);
       expect(await performDeviceAction(driver, { action: "logcat" })).toEqual({ logcat: "a\nb" });
       expect(await performDeviceAction(driver, { action: "clipboard", op: "get" })).toEqual({
         text: "clip",
@@ -455,6 +575,17 @@ describe("execSimctl", () => {
       expect.any(Function),
     );
     expect(stdin.end).toHaveBeenCalledWith("hi");
+  });
+
+  it("hands a successful call's stderr to onStderr", async () => {
+    execFileMock.mockImplementation((...a) => {
+      const cb = a[3];
+      cb(null, Buffer.alloc(0), Buffer.from("Wrote screenshot to: /tmp/x"));
+      return {};
+    });
+    const onStderr = vi.fn();
+    await execSimctl(["io", UDID, "screenshot", "/tmp/x"], { onStderr });
+    expect(onStderr.mock.calls[0]![0].toString()).toBe("Wrote screenshot to: /tmp/x");
   });
 
   it("rejects with stderr detail, and applies default limits", async () => {

@@ -1,8 +1,8 @@
-import { execFile } from "node:child_process";
 import { CLIPBOARD_MAX_BYTES } from "../device-defaults.js";
-import { pngDimensions } from "../screenshot-image.js";
 import { AnnexBPacketizer, GOP_BUFFER_MAX_BYTES, GopBuffer } from "./annexb.js";
 import { isOpenableUrl } from "./actions.js";
+import { simctlScreenshot } from "./ios-screenshot.js";
+import { execSimctl, type SimctlRunner } from "./simctl.js";
 import type {
   IdbGrpcClient,
   IdbHidEvent,
@@ -29,6 +29,8 @@ import {
   type Unsubscribe,
 } from "./types.js";
 
+export { execSimctl, type SimctlOptions, type SimctlRunner } from "./simctl.js";
+
 // The simctl half of the iOS Simulator driver (#1943): lifecycle, screenshot,
 // logs and clipboard, plus video from idb_companion (input comes later).
 //
@@ -40,54 +42,10 @@ import {
 const UDID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
 const POLL_INTERVAL_MS = 5000;
-const DEFAULT_TIMEOUT_MS = 30_000;
 const BOOT_TIMEOUT_MS = 180_000;
 const LOGS_TIMEOUT_MS = 60_000;
-const DEFAULT_MAX_BYTES = 1024 * 1024;
-const SCREENSHOT_MAX_BYTES = 64 * 1024 * 1024;
 const LOGS_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_LOG_LINES = 200;
-
-export interface SimctlOptions {
-  /** Bytes written to the child's stdin (then closed). */
-  input?: string;
-  timeoutMs?: number;
-  /** Cap on stdout; the call fails when exceeded. */
-  maxBytes?: number;
-}
-
-/** Runs `xcrun simctl <args>` and resolves with stdout; rejects on a non-zero
- * exit, a timeout or an exceeded output cap. */
-export type SimctlRunner = (args: string[], options?: SimctlOptions) => Promise<Buffer>;
-
-/** The production runner: `execFile` with an argv array (never a shell), a
- * per-call timeout and an output cap. */
-export const execSimctl: SimctlRunner = (args, options = {}) =>
-  new Promise<Buffer>((resolve, reject) => {
-    const child = execFile(
-      "xcrun",
-      ["simctl", ...args],
-      {
-        encoding: "buffer",
-        timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        maxBuffer: options.maxBytes ?? DEFAULT_MAX_BYTES,
-      },
-      (err, stdout, stderr) => {
-        if (err) {
-          const detail = Buffer.from(stderr ?? "")
-            .toString("utf8")
-            .trim();
-          reject(new Error(detail ? `${err.message}: ${detail}` : err.message));
-          return;
-        }
-        resolve(Buffer.from(stdout));
-      },
-    );
-    if (options.input !== undefined) {
-      child.stdin?.on("error", () => undefined);
-      child.stdin?.end(options.input);
-    }
-  });
 
 /** The slice of `IdbCompanion` the driver needs, so a test can substitute it. */
 export interface IdbCompanionHandle {
@@ -460,22 +418,7 @@ export class IosSimulatorDriver implements DeviceDriver {
   }
 
   async screenshot(): Promise<Uint8Array> {
-    const out = await this.simctl(["io", this.udid, "screenshot", "--type=png", "-"], {
-      maxBytes: SCREENSHOT_MAX_BYTES,
-    });
-    const png = new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
-    if (!PNG_SIGNATURE.equals(out.subarray(0, 8))) {
-      const head = out
-        .subarray(0, 200)
-        .toString("utf8")
-        // eslint-disable-next-line no-control-regex
-        .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
-      throw new DeviceActionError(502, `screencap did not return a PNG: ${head}`);
-    }
-    if (!pngDimensions(png)) {
-      throw new DeviceActionError(502, "screencap returned a PNG with no readable header");
-    }
-    return png;
+    return simctlScreenshot(this.simctl, this.udid);
   }
 
   async tap(x: number, y: number): Promise<void> {
@@ -1316,8 +1259,6 @@ export class IosSimulatorDriver implements DeviceDriver {
     }
   }
 }
-
-const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** Hands a packet to one listener, never a delta before its first keyframe. */
 function deliver(
