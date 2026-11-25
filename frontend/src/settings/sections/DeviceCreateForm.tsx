@@ -503,6 +503,7 @@ export function DeviceCreateForm({
               >
                 <TextInput
                   style={{ width: 220 }}
+                  aria-label="New virtual device name"
                   placeholder="Pixel_8_API_35"
                   value={newAvdName}
                   onChange={(e) => setNewAvdName(e.target.value)}
