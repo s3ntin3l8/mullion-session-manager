@@ -1619,6 +1619,51 @@ in-memory state only, never written to the `hosts` table — an unreachable
 primary restart resets every host back to "pending" until the next sweep,
 same as a fresh boot.
 
+A host bound to its outbound channel (an outbound-only agent has no address at
+all) is not probed at `/health`: one small request through the channel
+(`GET /internal/protocol`) is its ping. A channel whose every slot is held reads
+as _busy_, which keeps the previous verdict for a few sweeps and then turns the
+host degraded with the reason "channel saturated"; a busy answer never brings a
+host back from offline.
+
+**Each host's turn is bounded on its own** (#3515). The sweep pings every host
+at once, and a host whose previous turn has not finished is skipped by the next
+tick rather than pinged twice. A turn whose probe does not settle within the
+request timeout plus the channel's slot wait plus a margin (about 15 s by
+default) counts as one missed ping and is abandoned: whatever it answers later
+is ignored. The capacity read after a successful ping has the same kind of
+bound, and a late one keeps the last known numbers. So one host that stops
+answering mid-request costs only its own verdict, never the other hosts'. (The
+guard used to be one flag for the whole sweep, and a single request that never
+settled froze every host's health until the primary restarted: an
+outbound-only Mac stayed "offline" for hours after it had reconnected.)
+
+**Test agrees with placement** (#3515). **Test** in Settings → Hosts
+(`POST /api/hosts/:id/ping`) runs the same probe as the sweep, under the same
+deadline (a probe that never answers is reported offline, not left hanging), and
+records its result in the same place. A success marks the host online and, after a
+deregister or two missed pings, runs the same recovery as the sweep (forced
+reconnects, the agent list re-read). A failure takes an online or pending host
+to degraded, but repeated failing clicks never count further misses: escalating
+to offline stays the sweep's job, so three quick clicks cannot mark a host
+offline. A busy channel records nothing. The answer is the verdict the
+recording leaves behind, so Test can no longer say online while automatic
+placement, which reads the same verdict, says offline. A sweep answer that
+arrives after a newer verdict was recorded (a Test click or a deregister while
+its probe was out) is dropped rather than overwriting it. The Hosts list
+refreshes after a Test, so the row's badge and subtitle follow at once. With
+the heartbeat disabled (interval `0`) nothing is recorded and Test reports only
+whether the host answered.
+
+When automatic placement or a targeted spawn finds no eligible host, the
+refusal names each matching host's actual state and its last successful
+contact: "a matching host is offline (last seen 2026-11-25T12:16:35Z)",
+"degraded (channel saturated, last seen …)", "offline (never reached)", or
+"pending (not reached yet)". After a primary restart, when the in-memory verdict
+has no contact yet, the persisted `hosts.last_seen_at` (written at most hourly)
+is named instead. The time is absolute so a held task's reason does not change
+from one dispatch tick to the next while nothing else does.
+
 ## Host capabilities
 
 Issue [#2306](https://github.com/s3ntin3l8/mullion-session-manager/issues/2306)

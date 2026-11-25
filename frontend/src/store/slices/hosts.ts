@@ -51,6 +51,12 @@ export const createHostsSlice: StateCreator<DashboardState, [], [], HostsSlice> 
 
   pingHost: async (id) => {
     const { online } = await api.pingHost(id);
+    // Issue #3515 — the server records what Test found as the host's health,
+    // so the row's badge and subtitle follow it now, not at the next poll. A
+    // failed refresh changes nothing the Test answer itself says.
+    await get()
+      .refreshHosts()
+      .catch(() => undefined);
     return online;
   },
 });

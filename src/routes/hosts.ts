@@ -47,6 +47,7 @@ import {
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
 import type { ReleaseByTagResult } from "../services/update-checker.js";
 import type { UpdateStatus } from "../services/update-apply.js";
+import { boundedProbe } from "../services/host-heartbeat.js";
 
 interface CreateHostBody {
   name: string;
@@ -473,8 +474,15 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) return { online: true };
     const pending = pendingHostReply(app, id, reply);
     if (pending) return pending;
-    const online = await getRemoteHostClient(app, id).ping();
-    return { online };
+    // Issue #3515 — the result is recorded the way a sweep's would be, and
+    // the answer is the verdict that recording leaves behind, so Test can
+    // never say online while placement (which reads the same tracker) says
+    // offline. A busy channel keeps the previous verdict, as in the sweep.
+    // With the heartbeat off nothing is recorded and the raw probe answers.
+    // Bounded like the sweep's probe, so a request can never hang the click.
+    const probe = await boundedProbe(app, id);
+    const health = app.recordHostProbe?.(id, probe) ?? null;
+    return { online: health ? health.status === "online" : probe !== "down" };
   });
 
   // Issue #2090 — "Detect now": run the auto-detect sweep for this host on

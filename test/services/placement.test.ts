@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   chooseHost,
+  notOnlineReason,
   parseHostCwds,
   parsePlacementConstraints,
   projectCwdOnHost,
@@ -697,5 +698,39 @@ describe("negotiated support (issue #2569)", () => {
     expect(chooseHost(hosts, context()).reason ?? "").not.toContain("agent protocol unknown");
     const legacy = [candidate({ hostId: "legacy", protocol: protocol([]) })];
     expect(chooseHost(legacy, context()).hostId).toBe("legacy");
+  });
+});
+
+describe("notOnlineReason (#3515)", () => {
+  it("names the heartbeat state and the last contact as a stable absolute time", () => {
+    const lastSeenAt = Date.UTC(2026, 10, 25, 12, 16, 35, 789);
+    expect(
+      notOnlineReason(candidate({ online: false, health: { status: "offline", lastSeenAt } })),
+    ).toBe("a matching host is offline (last seen 2026-11-25T12:16:35Z)");
+    expect(
+      notOnlineReason(candidate({ online: false, health: { status: "degraded", lastSeenAt } })),
+    ).toBe("a matching host is degraded (last seen 2026-11-25T12:16:35Z)");
+    expect(
+      notOnlineReason(
+        candidate({ online: false, health: { status: "offline", lastSeenAt: null } }),
+      ),
+    ).toBe("a matching host is offline (never reached)");
+    expect(
+      notOnlineReason(
+        candidate({ online: false, health: { status: "pending", lastSeenAt: null } }),
+      ),
+    ).toBe("a matching host is pending (not reached yet)");
+    expect(
+      notOnlineReason(
+        candidate({
+          online: false,
+          health: { status: "degraded", lastSeenAt, reason: "channel saturated" },
+        }),
+      ),
+    ).toBe("a matching host is degraded (channel saturated, last seen 2026-11-25T12:16:35Z)");
+    // A candidate built without the heartbeat's verdict reads as offline.
+    expect(notOnlineReason(candidate({ online: false }))).toBe(
+      "a matching host is offline (never reached)",
+    );
   });
 });

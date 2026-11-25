@@ -26,6 +26,8 @@ import type { HostTransport } from "./agent-channel-tunnel.js";
 import { downloadOverChannel, uploadOverChannel } from "./remote-host-channel-transfers.js";
 import { openStreamOnTransport } from "./agent-channel-streams.js";
 import {
+  AGENT_CHANNEL_SLOT_WAIT_GRACE_MS,
+  AGENT_CHANNEL_SLOT_WAIT_MS,
   AGENT_CHANNEL_STREAMS_OPERATION,
   type AgentChannelStreamKind,
 } from "../shared/agent-channel.js";
@@ -108,9 +110,8 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // than the default on purpose. Capacity is ADVISORY input to a placement
 // policy, while the health ping next to it decides a verdict; the sweep
 // awaits the capacity call after the ping, so a hung capacity route would
-// otherwise add its own timeout to the sweep and, with the sweep's
-// reentrancy guard, push the NEXT tick (and with it every host's health
-// update) out. Two seconds is generous for a reading of four numbers on
+// otherwise add its own timeout to this host's turn and, with the sweep's
+// per-host reentrancy guard, push this host's NEXT health update out. Two seconds is generous for a reading of four numbers on
 // the far end of a LAN.
 const CAPACITY_REQUEST_TIMEOUT_MS = 2_000;
 
@@ -153,6 +154,31 @@ export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
     defaultRequestTimeoutMs = previous;
     capacityRequestTimeoutMs = previousCapacity;
   };
+}
+
+// Issue #3515 — the heartbeat's hard bound on one host's probe and capacity
+// read. Each call already has its own timeout, but a channel request does not
+// charge the wait for a free slot to it, and a call that never settles (a bug,
+// not a slow host) must not be able to stall the sweep: the bound is the
+// call's own budget plus the slot wait plus a margin, so it only fires when
+// the call's own bounds failed. Derived from the live budgets so the test
+// override that widens them widens these too.
+const HEARTBEAT_DEADLINE_MARGIN_MS = 5_000;
+export function heartbeatProbeDeadlineMs(): number {
+  return (
+    defaultRequestTimeoutMs +
+    AGENT_CHANNEL_SLOT_WAIT_MS +
+    AGENT_CHANNEL_SLOT_WAIT_GRACE_MS +
+    HEARTBEAT_DEADLINE_MARGIN_MS
+  );
+}
+export function heartbeatCapacityDeadlineMs(): number {
+  return (
+    capacityRequestTimeoutMs +
+    AGENT_CHANNEL_SLOT_WAIT_MS +
+    AGENT_CHANNEL_SLOT_WAIT_GRACE_MS +
+    HEARTBEAT_DEADLINE_MARGIN_MS
+  );
 }
 
 // Bulk live-status responses are reused for this long — see the plan's
