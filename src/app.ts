@@ -9,6 +9,7 @@ import { ptyPlugin } from "./plugins/pty.js";
 import { browserPlugin } from "./plugins/browser.js";
 import { runtimeSettingsPlugin } from "./plugins/runtime-settings.js";
 import { devicePlugin } from "./plugins/device.js";
+import { warmCapabilitiesOnReady } from "./services/host-capabilities.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { bundleSyncPlugin } from "./plugins/bundle-sync.js";
 import { sshAgentPlugin } from "./plugins/ssh-agent.js";
@@ -479,6 +480,10 @@ export async function buildApp() {
   // Same posture as browserPlugin just above — see the agent-role branch's
   // own comment on devicePlugin for its ordering requirement.
   await app.register(devicePlugin);
+  // #3511 — the primary is its own local host: warm its capability cache at
+  // boot (an agent does so from its probe routes), so the first device or
+  // server-info request on a Mac does not wait out a cold Xcode probe.
+  warmCapabilitiesOnReady(app);
   // hooksPlugin must register after ptyPlugin: it reads app.pty.hookSocketPath
   // and app.pty.resolveToken(), both only available once ptyPlugin has
   // decorated app.pty.

@@ -70,6 +70,8 @@ export class HostAgentTracker {
   readonly refreshing = new Set<string>();
   /** Bumped by `invalidateHost`, so a read started before it cannot record. */
   private epochs = new Map<string, number>();
+  /** Hosts with a capabilities read in flight; it outlives the refresh that started it (#3511). */
+  readonly capabilitiesReading = new Set<string>();
   /** The refresh in flight per host, so a gate can wait on the read already running. */
   readonly inflight = new Map<string, Promise<void>>();
   /** The bounded read a gate started per host, shared by concurrent gates (issue #2596). */
@@ -88,6 +90,16 @@ export class HostAgentTracker {
   record(hostId: string, entry: Omit<HostAgentEntry, "checkedAt">, now = Date.now()): void {
     if (entry.protocol) this.protocolReadFailures.delete(hostId);
     this.entries.set(hostId, { ...entry, checkedAt: now });
+  }
+
+  /**
+   * A capabilities read that landed after its refresh recorded (#3511). Only
+   * the capabilities change; a host with no entry (pruned meanwhile) is left
+   * alone, and the entry's age is not refreshed.
+   */
+  patchCapabilities(hostId: string, capabilities: string[] | null): void {
+    const entry = this.entries.get(hostId);
+    if (entry) this.entries.set(hostId, { ...entry, capabilities });
   }
 
   recordProtocolReadFailure(hostId: string, now = Date.now()): void {
@@ -169,6 +181,48 @@ export function refreshRemoteHostAgents(app: FastifyInstance, hostId: string): P
   return run;
 }
 
+/** How long the agents record waits for capabilities before recording without them. */
+export const CAPABILITIES_INLINE_WAIT_MS = 2_000;
+const PENDING = Symbol("pending");
+/** A failed read (not a 404): keep the previous reading, stale but real. */
+const KEEP_CAPABILITIES = Symbol("keep");
+type CapabilitiesOutcome = string[] | null | typeof KEEP_CAPABILITIES;
+
+/**
+ * One capabilities read per host at a time (its budget is minutes, #3511); a
+ * refresh that finds one running records the previous reading instead. Never
+ * rejects: an older agent's 404 is "unknown" (null), any other failure keeps
+ * the previous reading.
+ */
+function startCapabilitiesRead(
+  tracker: HostAgentTracker,
+  client: ReturnType<typeof getRemoteHostClient>,
+  hostId: string,
+): Promise<CapabilitiesOutcome> | null {
+  if (tracker.capabilitiesReading.has(hostId)) return null;
+  tracker.capabilitiesReading.add(hostId);
+  // Deferred so a synchronous throw lands in the rejection handler, as an
+  // awaited call inside a try did.
+  return Promise.resolve()
+    .then(() => client.detectCapabilities())
+    .then(
+      (res): CapabilitiesOutcome => res.capabilities,
+      (err: unknown): CapabilitiesOutcome =>
+        err instanceof HostRequestError && err.statusCode === 404 ? null : KEEP_CAPABILITIES,
+    )
+    .finally(() => tracker.capabilitiesReading.delete(hostId));
+}
+
+function settleWithin<T>(p: Promise<T>, ms: number): Promise<T | typeof PENDING> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    p,
+    new Promise<typeof PENDING>((resolve) => {
+      timer = setTimeout(() => resolve(PENDING), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
 async function readRemoteHostAgents(
   app: FastifyInstance,
   tracker: HostAgentTracker,
@@ -176,21 +230,15 @@ async function readRemoteHostAgents(
 ): Promise<void> {
   const epoch = tracker.epoch(hostId);
   const client = getRemoteHostClient(app, hostId);
+  // Started first and read off the critical path (#3511): a cold agent's Xcode
+  // probe can take minutes, and the agent list and protocol must not wait.
+  const capabilitiesRead = startCapabilitiesRead(tracker, client, hostId);
   let agents: string[] | null;
   try {
     agents = availableAgentBins(await client.detectAgents());
   } catch (err) {
     if (!(err instanceof HostRequestError && err.statusCode === 404)) throw err;
     agents = null;
-  }
-  // A capabilities failure must not discard the agent list. An older agent's
-  // 404 is "unknown" (null); any other failure keeps the previous reading
-  // (stale, but real), like the agent list does.
-  let capabilities: string[] | null = tracker.get(hostId)?.capabilities ?? null;
-  try {
-    capabilities = (await client.detectCapabilities()).capabilities;
-  } catch (err) {
-    if (err instanceof HostRequestError && err.statusCode === 404) capabilities = null;
   }
   // Same rule: 404 is unknown, any other failure keeps the previous reading.
   let sessionEnv: SessionEnvInfo | null = tracker.get(hostId)?.sessionEnv ?? null;
@@ -221,6 +269,23 @@ async function readRemoteHostAgents(
       protocolStale = false;
     }
   }
+  // A capabilities read that lands within a short grace is recorded with the
+  // rest; a slower one is patched into the entry when it lands.
+  const early = capabilitiesRead
+    ? await settleWithin(capabilitiesRead, CAPABILITIES_INLINE_WAIT_MS)
+    : KEEP_CAPABILITIES;
+  if (early === PENDING && capabilitiesRead) {
+    void capabilitiesRead.then((late) => {
+      if (late !== KEEP_CAPABILITIES && tracker.epoch(hostId) === epoch) {
+        tracker.patchCapabilities(hostId, late);
+      }
+    });
+  }
+  // Read at record time, not at the start: a patch may have landed meanwhile.
+  const capabilities =
+    early === PENDING || early === KEEP_CAPABILITIES
+      ? (tracker.get(hostId)?.capabilities ?? null)
+      : early;
   // The host's address or token changed while we were reading: this list
   // describes the OLD agent, so it must not be recorded as fresh.
   if (tracker.epoch(hostId) !== epoch) return;

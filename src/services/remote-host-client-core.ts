@@ -81,6 +81,7 @@ import type {
   ProjectSearchListing,
 } from "./project-files.js";
 import { DEFAULT_SETUP_TIMEOUT_MS, type SetupRunResult } from "./setup-recipe-shared.js";
+import { XCODE_PROBE_WORST_CASE_MS } from "./xcode-probe-budget.js";
 
 export type {
   AgentConfig,
@@ -112,6 +113,13 @@ const REQUEST_TIMEOUT_MS = 5_000;
 // update) out. Two seconds is generous for a reading of four numbers on
 // the far end of a LAN.
 const CAPACITY_REQUEST_TIMEOUT_MS = 2_000;
+
+// Issue #3511 — the capabilities call's own budget: the agent's Xcode probe
+// may legitimately take its worst case (every step timing out, retried once)
+// before it answers, and a cold cache on a loaded Mac is slower than the 5 s
+// default by definition. host-agents.ts reads it off the critical path, so a
+// long wait does not hold up the agent list or the protocol handshake.
+export const CAPABILITIES_REQUEST_TIMEOUT_MS = XCODE_PROBE_WORST_CASE_MS + 10_000;
 
 // Test-only knob (issue #1634): a full local `make test` runs hundreds of real
 // Fastify servers in parallel, and the multi-host integration tests make REAL
@@ -543,7 +551,7 @@ export class RemoteHostClient {
 
   // Issue #2306 — an agent build without the route answers 404 (unknown).
   detectCapabilities = (): Promise<{ capabilities: string[] }> =>
-    this.request("/internal/capabilities");
+    this.request("/internal/capabilities", undefined, CAPABILITIES_REQUEST_TIMEOUT_MS);
 
   // Issue #3156 — the session environment summary; 404 on an older agent.
   detectSessionEnv = (): Promise<SessionEnvInfo> => this.request("/internal/session-env");

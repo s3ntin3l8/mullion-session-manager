@@ -7,6 +7,7 @@ import type { DetectedAgent } from "../../src/services/agent-detect.js";
 const getCachedAgents = vi.fn();
 const getCachedCapabilities = vi.fn();
 vi.mock("../../src/services/host-capabilities.js", () => ({
+  warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
 }));
 vi.mock("../../src/services/agent-detect.js", () => ({
@@ -32,6 +33,7 @@ vi.mock("../../src/services/remote-host-client.js", async () => {
 });
 
 const {
+  CAPABILITIES_INLINE_WAIT_MS,
   HostAgentTracker,
   availableAgentBins,
   isOlderVersion,
@@ -260,6 +262,99 @@ describe("host agent tracker (issue #2240)", () => {
     client.resolveConfig.mockResolvedValue({ version: "1" });
     await refreshRemoteHostAgents(fakeApp(tracker), "mac");
     expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: ["xcode"] });
+  });
+
+  describe("a slow capabilities read (#3511)", () => {
+    function deferred<T>() {
+      let resolve!: (v: T) => void;
+      const promise = new Promise<T>((r) => (resolve = r));
+      return { promise, resolve };
+    }
+
+    it("records the agent list without waiting, then patches capabilities in when they land", async () => {
+      vi.useFakeTimers();
+      try {
+        const tracker = new HostAgentTracker();
+        tracker.record("mac", {
+          agents: [],
+          capabilities: ["android-emulator"],
+          mullionVersion: null,
+        });
+        const caps = deferred<{ capabilities: string[] }>();
+        client.detectAgents.mockResolvedValue([agent("claude", true)]);
+        client.detectCapabilities.mockReturnValue(caps.promise);
+        client.resolveConfig.mockResolvedValue({ version: "1" });
+        const run = refreshRemoteHostAgents(fakeApp(tracker), "mac");
+        await vi.advanceTimersByTimeAsync(CAPABILITIES_INLINE_WAIT_MS);
+        await run;
+        // Recorded with the previous capabilities, not held for the probe.
+        expect(tracker.get("mac")).toMatchObject({
+          agents: ["claude"],
+          capabilities: ["android-emulator"],
+        });
+        caps.resolve({ capabilities: ["xcode"] });
+        await vi.waitFor(() =>
+          expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: ["xcode"] }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("drops a late result after the host was invalidated", async () => {
+      vi.useFakeTimers();
+      try {
+        const tracker = new HostAgentTracker();
+        const caps = deferred<{ capabilities: string[] }>();
+        client.detectAgents.mockResolvedValue([agent("claude", true)]);
+        client.detectCapabilities.mockReturnValue(caps.promise);
+        client.resolveConfig.mockResolvedValue({ version: "1" });
+        const run = refreshRemoteHostAgents(fakeApp(tracker), "mac");
+        await vi.advanceTimersByTimeAsync(CAPABILITIES_INLINE_WAIT_MS);
+        await run;
+        expect(tracker.get("mac")).toMatchObject({ capabilities: null });
+        tracker.invalidateHost("mac");
+        // The new agent's own refresh records a fresh entry (the old read still
+        // holds the slot, so capabilities stay unknown); only the epoch guard
+        // keeps the OLD agent's late answer out of it.
+        await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+        expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: null });
+        caps.resolve({ capabilities: ["xcode"] });
+        await caps.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: null });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not start a second capabilities read while one is in flight", async () => {
+      vi.useFakeTimers();
+      try {
+        const tracker = new HostAgentTracker();
+        const caps = deferred<{ capabilities: string[] }>();
+        client.detectAgents.mockResolvedValue([agent("claude", true)]);
+        client.detectCapabilities.mockReturnValue(caps.promise);
+        client.resolveConfig.mockResolvedValue({ version: "1" });
+        const app = fakeApp(tracker);
+        const first = refreshRemoteHostAgents(app, "mac");
+        await vi.advanceTimersByTimeAsync(CAPABILITIES_INLINE_WAIT_MS);
+        await first;
+        await refreshRemoteHostAgents(app, "mac");
+        expect(client.detectCapabilities).toHaveBeenCalledTimes(1);
+        caps.resolve({ capabilities: ["xcode"] });
+        await vi.waitFor(() =>
+          expect(tracker.get("mac")).toMatchObject({ capabilities: ["xcode"] }),
+        );
+        // Once it landed, the next refresh reads again.
+        client.detectCapabilities.mockResolvedValue({ capabilities: [] });
+        await refreshRemoteHostAgents(app, "mac");
+        expect(client.detectCapabilities).toHaveBeenCalledTimes(2);
+        expect(tracker.get("mac")).toMatchObject({ capabilities: [] });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("records an older agent (404 on capabilities) as unknown and keeps its agents", async () => {

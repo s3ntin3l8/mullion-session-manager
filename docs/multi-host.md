@@ -1634,9 +1634,19 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
   `xcrun simctl list runtimes available -j` exits 0 and lists at least one
   runtime. The last step only runs after the second passed, because
   `simctl list` on an incomplete install starts the first-launch installer.
-  Each step has a 10 s budget. A timeout or spawn error is inconclusive, not
-  "lacks": the previous reading is kept (and a warning logged), while a clean
-  non-zero exit is a real "lacks". The agent logs at info, once per change,
+  Each step has a 30 s budget (a loaded Mac takes over 10 s, #3511). A timeout
+  or spawn error is inconclusive, not "lacks": the probe is retried once, and
+  if that is inconclusive too the previous reading is kept (and one warning
+  logged), while a clean non-zero exit is a real "lacks". So a cold probe on a
+  wedged Mac can take up to ~3 minutes (2 attempts × 3 steps × 30 s) before it
+  falls back. Every host, the primary included, starts the first probe at
+  startup rather than on the first request, so the 60 s cache is usually warm
+  by the first ask; a request that arrives during that first probe still waits
+  for it, and a stale answer is served while a later refresh runs. The
+  primary's `/internal/capabilities` request is sized to that worst case and
+  runs beside the agent-list read rather than ahead of it: a slow answer is
+  patched in when it lands, and the agent list and protocol are recorded
+  without waiting for it. The agent logs at info, once per change,
   which step failed (`simctl missing`, `first launch incomplete`,
   `no simulator runtime`); Settings → Hosts shows the `Xcode` chip when present
   (and does not show the failing-step reason). It does **not** promise
