@@ -152,7 +152,21 @@ interface RawCompanionServiceClient extends grpc.Client {
 }
 
 type CompanionServiceConstructor = grpc.ServiceClientConstructor & {
-  new (address: string, credentials: grpc.ChannelCredentials): RawCompanionServiceClient;
+  new (
+    address: string,
+    credentials: grpc.ChannelCredentials,
+    options?: grpc.ChannelOptions,
+  ): RawCompanionServiceClient;
+};
+
+/** Reconnect backoff for the loopback channel. grpc-js backs off
+ * exponentially (to 120 s) after a refused connection, and a call made in
+ * between fails with UNAVAILABLE without dialing: a companion that comes up
+ * late in a cold start would go unseen for tens of seconds (#3527). The peer
+ * is a local process, so redialing every second at most costs nothing. */
+const IDB_CHANNEL_OPTIONS: grpc.ChannelOptions = {
+  "grpc.initial_reconnect_backoff_ms": 250,
+  "grpc.max_reconnect_backoff_ms": 1_000,
 };
 
 let cachedCompanionService: CompanionServiceConstructor | null = null;
@@ -186,7 +200,11 @@ export function createIdbGrpcClient(port: number): IdbGrpcClient {
     throw new RangeError(`invalid idb_companion port: ${String(port)}`);
   }
   const CompanionService = loadIdbCompanionService();
-  const client = new CompanionService(`127.0.0.1:${port}`, grpc.credentials.createInsecure());
+  const client = new CompanionService(
+    `127.0.0.1:${port}`,
+    grpc.credentials.createInsecure(),
+    IDB_CHANNEL_OPTIONS,
+  );
 
   return {
     videoStream(start: IdbVideoStreamStart) {

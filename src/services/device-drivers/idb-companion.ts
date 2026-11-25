@@ -10,7 +10,10 @@ import { createIdbGrpcClient, type IdbGrpcClient } from "./idb-grpc.js";
 
 const UDID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
-const DEFAULT_START_TIMEOUT_MS = 15_000;
+/** A cold start (the first companion right after a simulator boot) refuses
+ * connections for well over 15 s on a real Mac (#3527); every refusal inside
+ * this bound is retried. */
+const DEFAULT_START_TIMEOUT_MS = 60_000;
 const DEFAULT_READY_POLL_INTERVAL_MS = 100;
 const DEFAULT_DESCRIBE_TIMEOUT_MS = 1_000;
 const DEFAULT_STOP_GRACE_MS = 2_000;
@@ -31,7 +34,9 @@ export interface IdbCompanionOptions {
   udid: string;
   executablePath: string;
   spawn?: IdbCompanionSpawn;
-  /** Readiness timeout for start() in ms (default 15_000). */
+  /** Overall readiness bound for start() in ms (default 60_000). Every failed
+   * describe() probe inside it (UNAVAILABLE while the companion is still
+   * starting) is retried. */
   startTimeoutMs?: number;
   /** Poll interval between describe() readiness probes in ms (default 100). */
   readyPollIntervalMs?: number;
@@ -41,6 +46,10 @@ export interface IdbCompanionOptions {
   stderrMaxBytes?: number;
   /** Override for stale-companion cleanup (defaults to ps-based matching). */
   killStaleCompanions?: (udid: string) => Promise<void>;
+  /** Override for the gRPC client factory (tests substitute a fake). */
+  createClient?: (port: number) => IdbGrpcClient;
+  /** Override for the loopback port allocator (tests avoid real sockets). */
+  allocatePort?: () => Promise<number>;
   /** Optional listener invoked when the companion exits unexpectedly. */
   onExit?: IdbCompanionExitListener;
 }
@@ -293,6 +302,8 @@ export class IdbCompanion {
   private readonly readyPollIntervalMs: number;
   private readonly stopGraceMs: number;
   private readonly killStaleFn: (udid: string) => Promise<void>;
+  private readonly createClientFn: (port: number) => IdbGrpcClient;
+  private readonly allocatePortFn: () => Promise<number>;
   private readonly stderrBuffer: StderrRingBuffer;
   private readonly exitListeners = new Set<IdbCompanionExitListener>();
 
@@ -320,6 +331,8 @@ export class IdbCompanion {
     this.killStaleFn =
       options.killStaleCompanions ??
       ((u) => killStaleIdbCompanions(u, this.executablePath, this.stopGraceMs));
+    this.createClientFn = options.createClient ?? createIdbGrpcClient;
+    this.allocatePortFn = options.allocatePort ?? allocateLoopbackPort;
     if (options.onExit) {
       this.exitListeners.add(options.onExit);
     }
@@ -367,7 +380,7 @@ export class IdbCompanion {
 
     try {
       await this.killStaleFn(this.udid);
-      const port = await allocateLoopbackPort();
+      const port = await this.allocatePortFn();
 
       const child = this.spawnFn(
         this.executablePath,
@@ -420,7 +433,7 @@ export class IdbCompanion {
         });
       });
 
-      const client = createIdbGrpcClient(port);
+      const client = this.createClientFn(port);
       this.currentClient = client;
 
       const deadline = Date.now() + this.startTimeoutMs;

@@ -410,3 +410,109 @@ describe("IosSimulatorDriver video (fake idb_companion)", () => {
     await driver.stop();
   });
 });
+
+/** A companion child that never runs: kill() exits it, so stop() returns. */
+class FakeChild extends EventEmitter {
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  kill(signal: NodeJS.Signals = "SIGTERM") {
+    if (this.exitCode !== null || this.signalCode !== null) return false;
+    this.signalCode = signal;
+    queueMicrotask(() => this.emit("exit", null, signal));
+    return true;
+  }
+}
+
+/** A real IdbCompanion whose child is a stub and whose gRPC client refuses
+ * describe() with UNAVAILABLE until `readyAfterMs` of (fake) time. */
+function coldStartCompanion(readyAfterMs: number) {
+  const t0 = Date.now();
+  const streams: FakeStream[] = [];
+  const spawned: FakeChild[] = [];
+  let probes = 0;
+  const client = {
+    describe: async () => {
+      probes++;
+      if (Date.now() - t0 < readyAfterMs) {
+        throw new Error("14 UNAVAILABLE: No connection established. Last error: connect ECONNREFUSED");
+      }
+      return { target_description: { udid: UDID } };
+    },
+    videoStream: () => {
+      const s = new FakeStream();
+      streams.push(s);
+      return s;
+    },
+    close: () => undefined,
+  } as unknown as IdbGrpcClient;
+  const companion = new IdbCompanion({
+    udid: UDID,
+    executablePath: "/usr/local/bin/idb_companion",
+    killStaleCompanions: async () => undefined,
+    allocatePort: async () => 50_000,
+    createClient: () => client,
+    spawn: () => {
+      const child = new FakeChild();
+      spawned.push(child);
+      return child as unknown as ChildProcess;
+    },
+  });
+  return { companion, streams, spawned, probes: () => probes };
+}
+
+describe("IosSimulatorDriver idb_companion cold start (#3527)", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const makeDriver = (companion: IdbCompanion) =>
+    new IosSimulatorDriver({
+      id: "9",
+      udid: UDID,
+      label: null,
+      simctl: bootedSimctl,
+      companion,
+      // Keep the driver's own reopen out of the window under test.
+      streamReopenDelayMs: 600_000,
+    });
+
+  it("keeps booting while the companion refuses connections, then streams", async () => {
+    const { companion, streams, probes } = coldStartCompanion(40_000);
+    const driver = makeDriver(companion);
+    const started = driver.start();
+    // Past the old 15 s window the device is still booting, not failed.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(driver.toInfo().status).toBe("booting");
+    expect(driver.toInfo().error).toBeNull();
+    expect(streams).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(21_000);
+    await started;
+    expect(probes()).toBeGreaterThan(100);
+    expect(streams).toHaveLength(1);
+    expect(driver.toInfo().status).toBe("booting");
+    streams[0]!.feed(fixture);
+    expect(driver.toInfo().status).toBe("streaming");
+    await driver.stop();
+    await companion.stop();
+  });
+
+  it("fails with the last gRPC reason only after the full 60 s bound", async () => {
+    const { companion, streams, spawned } = coldStartCompanion(Number.POSITIVE_INFINITY);
+    const driver = makeDriver(companion);
+    const started = driver.start();
+    await vi.advanceTimersByTimeAsync(59_000);
+    expect(driver.toInfo().status).toBe("booting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await started;
+    const info = driver.toInfo();
+    expect(info.status).toBe("error");
+    expect(info.error).toContain("failed to become ready within 60000ms");
+    expect(info.error).toContain("14 UNAVAILABLE");
+    expect(streams).toHaveLength(0);
+    // The never-ready companion was killed, not leaked.
+    expect(spawned.every((c) => c.signalCode !== null)).toBe(true);
+    await driver.stop();
+    await companion.stop();
+  });
+});
