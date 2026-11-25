@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import type * as ChildProcess from "node:child_process";
+import type * as HostCapabilities from "../../src/services/host-capabilities.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -25,11 +26,18 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const getCachedCapabilities = vi.fn();
-vi.mock("../../src/services/host-capabilities.js", () => ({
-  getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
-  detectCapabilities: async () => getCachedCapabilities(),
-  clearCapabilityCache: () => undefined,
-}));
+// Partial mock: only the probe is faked. Everything else stays real, so an
+// export added to the module later (as warmCapabilitiesOnReady was, #3511)
+// cannot break this suite; the real warmCapabilitiesOnReady is a no-op under
+// NODE_ENV=test.
+vi.mock("../../src/services/host-capabilities.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof HostCapabilities>();
+  return {
+    ...actual,
+    getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
+    detectCapabilities: async () => getCachedCapabilities(),
+  };
+});
 
 const tmpDb = path.join(os.tmpdir(), `internal-devices-kinds-test-${process.pid}.db`);
 const auth = { authorization: "Bearer secret-agent-token" };
