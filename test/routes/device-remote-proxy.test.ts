@@ -45,6 +45,7 @@ class MockSocket extends EventEmitter {
 
 const openSocket = vi.fn();
 const getOrCreate = vi.fn();
+const deviceInfo = vi.fn();
 const getDeviceRowMock = vi.fn();
 
 vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
@@ -53,7 +54,7 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
 });
 vi.mock("../../src/services/device-host.js", async (importOriginal) => {
   const actual = await importOriginal<typeof DeviceHostModule>();
-  return { ...actual, getDeviceHost: vi.fn(() => ({ getOrCreate })) };
+  return { ...actual, getDeviceHost: vi.fn(() => ({ getOrCreate, info: deviceInfo })) };
 });
 vi.mock("../../src/services/device-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof DeviceStoreModule>();
@@ -64,6 +65,11 @@ const {
   proxyToRemoteDevice,
   attachSocketToDevice,
   REMOTE_DEVICE_OPEN_TIMEOUT_MS,
+  REMOTE_DEVICE_START_TIMEOUT_MS,
+  REMOTE_DEVICE_VIDEO_TIMEOUT_MS,
+  REMOTE_DEVICE_STATUS_TIMEOUT_MS,
+  REMOTE_DEVICE_SECOND_CHANCE_MS,
+  REMOTE_DEVICE_BOOT_GRACE_MS,
   REFUSAL_BODY_TIMEOUT_MS,
 } = await import("../../src/routes/device.js");
 
@@ -111,6 +117,7 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
   beforeEach(() => {
     openSocket.mockReset();
     getOrCreate.mockReset().mockResolvedValue({ info: undefined, port: 5560 });
+    deviceInfo.mockReset().mockResolvedValue({ id: "7", status: "streaming", error: null });
     getDeviceRowMock.mockReset().mockReturnValue(ROW);
     browser = new MockSocket();
     upstream = new MockSocket();
@@ -529,12 +536,226 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
       });
     });
 
-    it("does not time out once the upstream opened", async () => {
+    it("does not time out once the upstream opened and sent a keyframe", async () => {
       vi.useFakeTimers();
       await start();
-      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_OPEN_TIMEOUT_MS * 2);
+      upstream.emit("message", frame(1, true), true);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_BOOT_GRACE_MS * 2);
       expect(upstream.closeSpy).not.toHaveBeenCalled();
       expect(browser.closeSpy).not.toHaveBeenCalled();
+      expect(deviceInfo).not.toHaveBeenCalled();
+    });
+  });
+
+  // Issue #3526: no step of the relay may hang silently.
+  describe("bounded relay steps (#3526)", () => {
+    const textSent = (s: MockSocket) =>
+      s.sendSpy.mock.calls
+        .filter(([, o]) => !(o as { binary?: boolean } | undefined)?.binary)
+        .map(([d]) => JSON.parse(d as string) as { type: string; message: string });
+
+    it("fails the panel with a reason when getOrCreate never settles", async () => {
+      vi.useFakeTimers();
+      getOrCreate.mockReturnValue(new Promise(() => undefined));
+      const app = fakeApp();
+      const run = proxyToRemoteDevice(app, browser as unknown as WebSocket, ROW);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_START_TIMEOUT_MS - 1);
+      expect(browser.sendSpy).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+      expect(textSent(browser)).toEqual([
+        { type: "error", message: "Host agent-1 did not start device 7 in time" },
+      ]);
+      expect(browser.closeSpy).toHaveBeenCalledTimes(1);
+      expect(openSocket).not.toHaveBeenCalled();
+      expect(app.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "agent-1", deviceId: 7 }),
+        "remote device did not start in time for its socket",
+      );
+    });
+
+    it("logs the early return when the panel left while getOrCreate was pending", async () => {
+      getOrCreate.mockImplementation(async () => {
+        browser.readyState = MockSocket.CLOSED;
+        return { info: undefined, port: null };
+      });
+      const app = fakeApp();
+      await proxyToRemoteDevice(app, browser as unknown as WebSocket, ROW);
+      expect(app.log.warn).toHaveBeenCalledWith(
+        { hostId: "agent-1", deviceId: 7 },
+        "device panel socket closed before the relay opened",
+      );
+    });
+
+    it("tells the panel the reason when the upstream never opens, before closing it", async () => {
+      vi.useFakeTimers();
+      // A ChannelSocket in CONNECTING emits "close" synchronously from close().
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_OPEN_TIMEOUT_MS);
+      expect(textSent(browser)).toEqual([
+        { type: "error", message: "Host agent-1 did not answer in time" },
+      ]);
+    });
+
+    it("asks why when an opened upstream sends no keyframe, and fails the panel", async () => {
+      vi.useFakeTimers();
+      const app = fakeApp();
+      await proxyToRemoteDevice(app, browser as unknown as WebSocket, ROW);
+      upstream.open();
+      // A configuration packet alone is no video.
+      upstream.emit("message", frame(0, false), true);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_VIDEO_TIMEOUT_MS - 1);
+      expect(deviceInfo).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(deviceInfo).toHaveBeenCalledWith(7);
+      // One more chance: a keyframe is asked for, and the status checked again.
+      expect(textSent(upstream)).toEqual([{ type: "requestKeyframe" }]);
+      expect(textSent(browser)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_SECOND_CHANCE_MS);
+      expect(deviceInfo).toHaveBeenCalledTimes(2);
+      expect(textSent(browser)).toEqual([
+        {
+          type: "error",
+          message: "Host agent-1 reports device 7 streaming but sent this panel no video",
+        },
+      ]);
+      expect(browser.closeSpy).toHaveBeenCalled();
+      expect(upstream.closeSpy).toHaveBeenCalled();
+      expect(app.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: "agent-1", deviceId: 7, status: "streaming" }),
+        "remote device ws upstream sent no video in time",
+      );
+    });
+
+    it("keeps a booting device's panel waiting, within the boot grace", async () => {
+      vi.useFakeTimers();
+      deviceInfo.mockResolvedValue({ id: "7", status: "booting", error: null });
+      await start();
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_VIDEO_TIMEOUT_MS * 3);
+      expect(deviceInfo).toHaveBeenCalledTimes(3);
+      expect(browser.closeSpy).not.toHaveBeenCalled();
+      // Video arrives: no further checks.
+      upstream.emit("message", frame(1, true), true);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_VIDEO_TIMEOUT_MS * 3);
+      expect(deviceInfo).toHaveBeenCalledTimes(3);
+      expect(browser.closeSpy).not.toHaveBeenCalled();
+    });
+
+    it("gives up on a device still booting past the boot grace", async () => {
+      vi.useFakeTimers();
+      deviceInfo.mockResolvedValue({ id: "7", status: "starting", error: null });
+      await start();
+      await vi.advanceTimersByTimeAsync(
+        REMOTE_DEVICE_BOOT_GRACE_MS + REMOTE_DEVICE_VIDEO_TIMEOUT_MS,
+      );
+      expect(textSent(browser)).toEqual([
+        {
+          type: "error",
+          message: `Device 7 on host agent-1 is still starting after ${REMOTE_DEVICE_BOOT_GRACE_MS / 1000} s`,
+        },
+      ]);
+    });
+
+    it("keeps the panel when the second chance brings a keyframe (a recovering stream)", async () => {
+      vi.useFakeTimers();
+      deviceInfo.mockResolvedValue({ id: "7", status: "error", error: "reopening" });
+      await start();
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_VIDEO_TIMEOUT_MS);
+      upstream.emit("message", frame(1, true), true);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_SECOND_CHANCE_MS * 2);
+      expect(deviceInfo).toHaveBeenCalledTimes(1);
+      expect(textSent(browser)).toEqual([]);
+      expect(browser.closeSpy).not.toHaveBeenCalled();
+    });
+
+    it("measures the video deadline from the upstream's open, not the panel's arrival", async () => {
+      vi.useFakeTimers();
+      await proxyToRemoteDevice(fakeApp(), browser as unknown as WebSocket, ROW);
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_OPEN_TIMEOUT_MS - 1);
+      upstream.open();
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_VIDEO_TIMEOUT_MS - 1);
+      expect(deviceInfo).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(deviceInfo).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      [
+        { id: "7", status: "error", error: "idb failed" },
+        "Device 7 on host agent-1 failed: idb failed",
+      ],
+      [{ id: "7", status: "exited", error: null }, "Device 7 on host agent-1 has exited"],
+      [undefined, "Host agent-1 is not running device 7"],
+    ])("names the device's state %j when there is no video", async (info, message) => {
+      vi.useFakeTimers();
+      deviceInfo.mockResolvedValue(info);
+      await start();
+      await vi.advanceTimersByTimeAsync(
+        REMOTE_DEVICE_VIDEO_TIMEOUT_MS + REMOTE_DEVICE_SECOND_CHANCE_MS,
+      );
+      expect(textSent(browser)).toEqual([{ type: "error", message }]);
+    });
+
+    it("bounds a status check that never answers", async () => {
+      vi.useFakeTimers();
+      deviceInfo.mockReturnValue(new Promise(() => undefined));
+      await start();
+      await vi.advanceTimersByTimeAsync(
+        REMOTE_DEVICE_VIDEO_TIMEOUT_MS + REMOTE_DEVICE_STATUS_TIMEOUT_MS,
+      );
+      expect(textSent(browser)).toEqual([
+        {
+          type: "error",
+          message: "Host agent-1 sent no video for device 7 and did not answer a status check",
+        },
+      ]);
+    });
+
+    it("does not report a panel that left while the status check ran", async () => {
+      vi.useFakeTimers();
+      let answer: (v: unknown) => void = () => undefined;
+      deviceInfo.mockReturnValue(new Promise((r) => (answer = r)));
+      await start();
+      await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_VIDEO_TIMEOUT_MS);
+      browser.close();
+      answer({ id: "7", status: "streaming", error: null });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(textSent(browser)).toEqual([]);
+    });
+
+    it.each([
+      [false, "Host agent-1 closed the device socket before accepting it"],
+      [true, "Host agent-1 closed the device socket before sending video"],
+    ])("reports an upstream closed without video (opened: %s)", async (opened, message) => {
+      const app = fakeApp();
+      await proxyToRemoteDevice(app, browser as unknown as WebSocket, ROW);
+      if (opened) upstream.open();
+      upstream.close();
+      expect(textSent(browser)).toEqual([{ type: "error", message }]);
+      expect(app.log.warn).toHaveBeenCalledWith(
+        { hostId: "agent-1", deviceId: 7, opened },
+        "remote device ws upstream closed before any video",
+      );
+    });
+
+    it("closes the panel without an error when the upstream ends after video", async () => {
+      await start();
+      upstream.emit("message", frame(1, true), true);
+      upstream.close();
+      expect(textSent(browser)).toEqual([]);
+      expect(browser.closeSpy).toHaveBeenCalled();
+    });
+
+    it("logs and closes an upstream that opens after the panel left", async () => {
+      const app = fakeApp();
+      await proxyToRemoteDevice(app, browser as unknown as WebSocket, ROW);
+      browser.readyState = MockSocket.CLOSED;
+      upstream.open();
+      expect(upstream.closeSpy).toHaveBeenCalled();
+      expect(app.log.info).toHaveBeenCalledWith(
+        { hostId: "agent-1", deviceId: 7 },
+        "device panel socket closed before its upstream opened",
+      );
     });
   });
 });

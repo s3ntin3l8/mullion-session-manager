@@ -706,6 +706,39 @@ describe("DevicePane (issue #1326)", () => {
     await waitFor(() => expect(screen.queryByText("Waiting for video…")).toBeNull());
   });
 
+  it("shows the server's error reason instead of 'Waiting for video…', and does not reconnect over it (#3526)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      resetStore({ devices: [makeDevice()], devicesLoaded: true });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+      expect(screen.getByText("Waiting for video…")).toBeTruthy();
+
+      const reason = "Host macbook reports device 7 streaming but sent this panel no video";
+      act(() =>
+        socket.emit("message", { data: JSON.stringify({ type: "error", message: reason }) }),
+      );
+      expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+      // The server's own close follows: it must not schedule a reconnect that
+      // would clear the reason on its "open".
+      act(() => socket.emit("close"));
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(screen.getByText(reason)).toBeTruthy();
+      expect(screen.getByText("Disconnected")).toBeTruthy();
+      expect(screen.queryByText("Waiting for video…")).toBeNull();
+
+      // Retry starts over.
+      act(() => screen.getByRole("button", { name: /Retry now/ }).click());
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders with WebGL when supported, and falls back to the bitmap renderer when not", () => {
     resetStore({ devices: [makeDevice()], devicesLoaded: true });
     const first = render(<DevicePane params={{ deviceId: 7 }} />);

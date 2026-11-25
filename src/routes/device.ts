@@ -3,6 +3,7 @@ import type { WebSocket } from "@fastify/websocket";
 import { IncomingMessage, STATUS_CODES } from "node:http";
 import { getDeviceRow, type DeviceRow } from "../services/device-store.js";
 import { getDeviceHost } from "../services/device-host.js";
+import type { DeviceInfo } from "../services/device-drivers/types.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { iosSimulatorAvailable } from "../services/device-kinds.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
@@ -25,8 +26,34 @@ import {
 export { attachSocketToDevice } from "../services/device-attach.js";
 export type { AttachDeviceParams } from "../services/device-attach.js";
 
-/** How long the primary waits for an agent's device socket to open. */
+/** How long, from the panel's socket arriving, the primary waits for an
+ *  agent's device socket to open. */
 export const REMOTE_DEVICE_OPEN_TIMEOUT_MS = 15_000;
+
+/** How long the relay waits for the agent to get-or-create the device before
+ *  it fails the panel (#3526). The spawn request's own budget is longer
+ *  (DEVICE_REQUEST_TIMEOUT_MS): it is left to finish in the background, and a
+ *  retry finds the device up. */
+export const REMOTE_DEVICE_START_TIMEOUT_MS = 10_000;
+
+/** How long, from the upstream's open, the relay waits for the first keyframe
+ *  before it asks the agent why there is none (#3526). */
+export const REMOTE_DEVICE_VIDEO_TIMEOUT_MS = 6_000;
+
+/** The bound on that status check. */
+export const REMOTE_DEVICE_STATUS_TIMEOUT_MS = 5_000;
+
+/** A device the agent reports `streaming` or `error` gets one more chance: a
+ *  stream that just (re)started has not sent its keyframe yet, and the iOS
+ *  driver reports `error` while it retries a reopen. The proxy asks for a
+ *  keyframe and checks again after this long. With the two status checks the
+ *  panel hears a reason within 20 s of the upstream's open. */
+export const REMOTE_DEVICE_SECOND_CHANCE_MS = 4_000;
+
+/** A device the agent reports as still starting or booting keeps the panel
+ *  waiting (an emulator's cold boot takes longer than the video timeout), but
+ *  not forever. */
+export const REMOTE_DEVICE_BOOT_GRACE_MS = 180_000;
 
 /** How long the proxy waits for a refusal's BODY before it reports the
  *  refusal without it. The body rides the same response as the status, so it
@@ -132,6 +159,44 @@ function readRefusalReason(res: IncomingMessage): Promise<string | null> {
   });
 }
 
+/** A relay step that did not finish in time. */
+class RelayTimeoutError extends Error {}
+
+/** `promise`, failed with a RelayTimeoutError after `ms`. The promise itself is
+ *  not cancelled: a late outcome is ignored. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new RelayTimeoutError(`timed out after ${ms} ms`)), ms);
+    timer.unref();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
+
+/** Why an accepted device socket carried no video, in the panel's words. */
+function noVideoMessage(hostId: string, deviceId: number, info: DeviceInfo | undefined | null) {
+  if (info === null) {
+    return `Host ${hostId} sent no video for device ${deviceId} and did not answer a status check`;
+  }
+  if (info === undefined) return `Host ${hostId} is not running device ${deviceId}`;
+  if (info.status === "streaming") {
+    return `Host ${hostId} reports device ${deviceId} streaming but sent this panel no video`;
+  }
+  const detail = info.error ? `: ${info.error}` : "";
+  if (info.status === "starting" || info.status === "booting") {
+    return `Device ${deviceId} on host ${hostId} is still ${info.status} after ${REMOTE_DEVICE_BOOT_GRACE_MS / 1000} s${detail}`;
+  }
+  return `Device ${deviceId} on host ${hostId} ${info.status === "exited" ? "has exited" : "failed"}${detail}`;
+}
+
 /**
  * Relays the device panel's socket to the agent that runs the device (#3200),
  * modelled on routes/browser.ts's proxyToRemoteBrowser: control messages go
@@ -145,6 +210,11 @@ function readRefusalReason(res: IncomingMessage): Promise<string | null> {
  * agent's own socket, which cannot see this hop's backlog. Everything else
  * (the agent's own keyframe gating on attach, the codec configuration
  * replay) stays agent-side, and binary frames pass through byte for byte.
+ *
+ * No step here may hang silently (#3526): the get-or-create, the upstream's
+ * open and its first keyframe are each bounded, and every exit that leaves
+ * the panel without video logs a warning naming the host and device and tells
+ * the panel why.
  */
 export async function proxyToRemoteDevice(
   app: FastifyInstance,
@@ -163,16 +233,28 @@ export async function proxyToRemoteDevice(
   // Same get-or-create the local socket does, over REST first: it reattaches a
   // device that survived an agent restart and persists the port the agent
   // holds, which the socket's own attach cannot report back.
+  const startedAt = Date.now();
   let current: DeviceRow;
   try {
-    await getDeviceHost(app, hostId).getOrCreate(row);
+    await withTimeout(getDeviceHost(app, hostId).getOrCreate(row), REMOTE_DEVICE_START_TIMEOUT_MS);
     current = getDeviceRow(app, deviceId) ?? row;
   } catch (err) {
+    if (err instanceof RelayTimeoutError) {
+      app.log.warn(
+        { hostId, deviceId, timeoutMs: REMOTE_DEVICE_START_TIMEOUT_MS },
+        "remote device did not start in time for its socket",
+      );
+      fail(`Host ${hostId} did not start device ${deviceId} in time`);
+      return;
+    }
     app.log.error({ err, hostId, deviceId }, "failed to start remote device for its socket");
     fail(err instanceof Error ? err.message : `Host ${hostId} is unreachable`);
     return;
   }
-  if (deviceSocket.readyState !== deviceSocket.OPEN) return;
+  if (deviceSocket.readyState !== deviceSocket.OPEN) {
+    app.log.warn({ hostId, deviceId }, "device panel socket closed before the relay opened");
+    return;
+  }
 
   let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["devices"]["openSocket"]>;
   try {
@@ -208,6 +290,7 @@ export async function proxyToRemoteDevice(
   });
   deviceSocket.on("close", () => {
     stopStallTimer();
+    stopVideoWatchdog();
     closeUpstream();
   });
   // A socket error must not escape as an uncaught exception; the close that
@@ -218,12 +301,82 @@ export async function proxyToRemoteDevice(
 
   // An upstream that neither opens nor fails would hold this socket open for
   // nothing.
-  const openTimer = setTimeout(() => {
-    app.log.warn({ hostId, deviceId }, "remote device ws upstream did not open in time");
-    closeUpstream();
-    fail(`Host ${hostId} did not answer in time`);
-  }, REMOTE_DEVICE_OPEN_TIMEOUT_MS);
+  const openTimer = setTimeout(
+    () => {
+      app.log.warn({ hostId, deviceId }, "remote device ws upstream did not open in time");
+      // The panel is told first: closing the upstream closes the panel too.
+      fail(`Host ${hostId} did not answer in time`);
+      closeUpstream();
+    },
+    Math.max(0, startedAt + REMOTE_DEVICE_OPEN_TIMEOUT_MS - Date.now()),
+  );
   openTimer.unref();
+
+  // An upstream that opens and then carries no video would leave the panel on
+  // "Waiting for video…" for good (#3526): nothing else here is timed once it
+  // is open. So the first keyframe is awaited too, and when it does not come
+  // the agent is asked why. A device still booting keeps the panel waiting.
+  let opened = false;
+  let sawKeyframe = false;
+  let secondChance = false;
+  let videoTimer: ReturnType<typeof setTimeout> | null = null;
+  const stopVideoWatchdog = () => {
+    if (videoTimer) clearTimeout(videoTimer);
+    videoTimer = null;
+  };
+  const armVideoWatchdog = (ms: number) => {
+    stopVideoWatchdog();
+    videoTimer = setTimeout(() => void checkVideo(), ms);
+    videoTimer.unref();
+  };
+  const stillWaiting = () =>
+    !sawKeyframe &&
+    deviceSocket.readyState === deviceSocket.OPEN &&
+    upstream.readyState === upstream.OPEN;
+  const checkVideo = async () => {
+    videoTimer = null;
+    if (!stillWaiting()) return;
+    let info: DeviceInfo | undefined | null;
+    try {
+      info = await withTimeout(
+        getDeviceHost(app, hostId).info(deviceId),
+        REMOTE_DEVICE_STATUS_TIMEOUT_MS,
+      );
+    } catch (err) {
+      app.log.warn({ err, hostId, deviceId }, "remote device status check failed");
+      info = null;
+    }
+    if (!stillWaiting()) return;
+    const status = info?.status;
+    if (
+      (status === "starting" || status === "booting") &&
+      Date.now() - startedAt < REMOTE_DEVICE_BOOT_GRACE_MS
+    ) {
+      app.log.warn(
+        { hostId, deviceId, status },
+        "remote device still starting; its panel keeps waiting for video",
+      );
+      armVideoWatchdog(REMOTE_DEVICE_VIDEO_TIMEOUT_MS);
+      return;
+    }
+    if ((status === "streaming" || status === "error") && !secondChance) {
+      secondChance = true;
+      app.log.warn(
+        { hostId, deviceId, status, error: info?.error ?? null },
+        "remote device sent no video yet; asking for a keyframe and checking again",
+      );
+      upstream.send(JSON.stringify({ type: "requestKeyframe" }));
+      armVideoWatchdog(REMOTE_DEVICE_SECOND_CHANCE_MS);
+      return;
+    }
+    const message = noVideoMessage(hostId, deviceId, info);
+    app.log.warn(
+      { hostId, deviceId, status: status ?? null, error: info?.error ?? null, message },
+      "remote device ws upstream sent no video in time",
+    );
+    fail(message);
+    closeUpstream();
+  };
 
   let awaitingKeyframe = false;
   let droppedSinceFrame = false;
@@ -252,16 +405,41 @@ export async function proxyToRemoteDevice(
 
   upstream.on("open", () => {
     clearTimeout(openTimer);
-    if (deviceSocket.readyState !== deviceSocket.OPEN) closeUpstream();
+    opened = true;
+    if (deviceSocket.readyState !== deviceSocket.OPEN) {
+      app.log.info({ hostId, deviceId }, "device panel socket closed before its upstream opened");
+      closeUpstream();
+      return;
+    }
+    armVideoWatchdog(REMOTE_DEVICE_VIDEO_TIMEOUT_MS);
   });
   upstream.on("close", () => {
     clearTimeout(openTimer);
     stopStallTimer();
+    stopVideoWatchdog();
+    // The agent closed a socket the panel still holds: say so. Our own closes
+    // (the panel left, a reported failure) find the panel already closed.
+    if (!refused && deviceSocket.readyState === deviceSocket.OPEN) {
+      if (sawKeyframe) {
+        app.log.info({ hostId, deviceId }, "remote device ws upstream closed");
+      } else {
+        app.log.warn(
+          { hostId, deviceId, opened },
+          "remote device ws upstream closed before any video",
+        );
+        fail(
+          opened
+            ? `Host ${hostId} closed the device socket before sending video`
+            : `Host ${hostId} closed the device socket before accepting it`,
+        );
+      }
+    }
     closeDevice();
   });
   upstream.on("error", (err) => {
     clearTimeout(openTimer);
     stopStallTimer();
+    stopVideoWatchdog();
     // A refusal is its own event, reported below with the agent's reason; the
     // error that follows it is only the teardown of a socket we closed.
     if (refused) return;
@@ -278,6 +456,7 @@ export async function proxyToRemoteDevice(
     refused = true;
     clearTimeout(openTimer);
     stopStallTimer();
+    stopVideoWatchdog();
     const report = (reason: string | null): void => {
       const message = refusalMessage(hostId, res, reason);
       // Tell the panel first: the close below tears the upstream down, and a
@@ -319,6 +498,10 @@ export async function proxyToRemoteDevice(
     // [1 byte type][1 byte flags][payload]; see encodeVideoFrame.
     const head = data as Buffer;
     const isData = head[0] === 1;
+    if (isData && (head[1] & 1) === 1 && !sawKeyframe) {
+      sawKeyframe = true;
+      stopVideoWatchdog();
+    }
     if (isData) {
       if (deviceSocket.bufferedAmount > BACKPRESSURE_MAX_BUFFERED_BYTES) {
         droppedSinceFrame = true;
