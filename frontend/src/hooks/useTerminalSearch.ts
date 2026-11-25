@@ -3,7 +3,7 @@ import type { RefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import type { SearchAddon } from "@xterm/addon-search";
 import { buildSearchDecorations } from "../terminalTheme.js";
-import type { Theme } from "../store/index.js";
+import type { ResolvedTheme } from "../store/index.js";
 
 // Terminal scrollback search (U1) — find-bar open/query/match state and the
 // addon plumbing that drives it. Extracted verbatim from TerminalPane.tsx
@@ -50,7 +50,7 @@ export interface UseTerminalSearchResult {
 
 export function useTerminalSearch(params: {
   colorScheme: string;
-  theme: Theme;
+  theme: ResolvedTheme;
   // Owned by TerminalPane's mount effect (see header comment above) — only
   // read here (never mutated) to hand focus back to the terminal when the
   // find bar closes.

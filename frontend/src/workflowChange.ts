@@ -1,11 +1,8 @@
 // The workflow-change approval gate's payload (`tasks.workflowChange`, set by
 // the backend's task-workflow-gate.ts while a push waits on the operator).
 import type { Task } from "./api/index.js";
-
-export interface WorkflowChange {
-  sha: string;
-  files: string[];
-}
+import type { WorkflowChange } from "../../src/shared/types.js";
+export type { WorkflowChange } from "../../src/shared/types.js";
 
 export function parseWorkflowChange(raw: string | null | undefined): WorkflowChange | null {
   if (!raw) return null;

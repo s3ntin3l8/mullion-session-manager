@@ -34,6 +34,8 @@ import {
   unavailableFromResponse,
 } from "./hermes-client.js";
 import type { HermesRun } from "./hermes-client.js";
+import type { HermesModelProvider, ReviewMarkerResult } from "../shared/types.js";
+export type { HermesModelProvider, ReviewMarkerResult } from "../shared/types.js";
 
 // The error classes and the URL policy live in the client; re-exported so the
 // relay's importers keep their import site.
@@ -264,14 +266,6 @@ export interface RelayTarget {
   markerWriteToken?: string;
   markerUnavailable?: Exclude<MarkerUnavailableReason, "write-failed">;
 }
-
-/**
- * What became of the in-flight marker for a dispatched pull-request review
- * (#1790). Absent for a replayed request, which writes none.
- */
-export type ReviewMarkerResult =
-  | { written: true; checkRunId: number }
-  | { written: false; reason: MarkerUnavailableReason; message: string };
 
 /**
  * The Hermes session a pull request's review rounds run in — one per PR, so
@@ -644,13 +638,6 @@ export async function testHermesConnection(app: FastifyInstance): Promise<void> 
   const { apiUrl } = getStoredSettings(app.db).reviewRelay;
   if (!apiUrl) throw new HermesNotConfiguredError("Set the Hermes API URL first");
   await checkHealth(baseUrl(apiUrl), true);
-}
-
-export interface HermesModelProvider {
-  /** Hermes provider slug — what a run's `provider` field takes. */
-  provider: string;
-  name: string;
-  models: string[];
 }
 
 /**

@@ -7,7 +7,7 @@ import { themeClassName } from "./store/theme.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import { AuthStatusContext } from "./authContext.js";
 
-type GateState = "loading" | "unauthenticated" | "authenticated";
+type AuthGateState = "loading" | "unauthenticated" | "authenticated";
 
 /**
  * Wraps <App/> (the actual dashboard) so its data-fetching effects — which
@@ -23,7 +23,7 @@ type GateState = "loading" | "unauthenticated" | "authenticated";
  * immediately — identical to before this feature existed.
  */
 export function AuthGate() {
-  const [state, setState] = useState<GateState>("loading");
+  const [state, setState] = useState<AuthGateState>("loading");
   const [status, setStatus] = useState<AuthStatus | null>(null);
 
   const checkStatus = () => {

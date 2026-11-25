@@ -1,24 +1,20 @@
 // The device panel's API types, split out of types.ts to keep it under its
 // size ceiling; types.ts re-exports everything here, so importers are unchanged.
 
-// The device panel — routes/devices.ts's response shape: the `devices` DB
-// row's own intent merged with DeviceManager's live status at the route
-// layer, same "row is intent, manager is live truth" split as
-// BridgeSummary/Host above.
-export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" | "error";
-export type DeviceKind = "emulator" | "physical";
-
-export interface DeviceInfo {
-  id: string;
-  kind: DeviceKind;
-  avdName: string | null;
-  label: string | null;
-  status: DeviceLiveStatus;
-  serial: string | null;
-  error: string | null;
-}
-
-export type DevicePlatform = "android" | "ios";
+import type { DeviceKind, DeviceInfo, DevicePlatform } from "../../../src/shared/types.js";
+export type {
+  DeviceLiveStatus,
+  DeviceKind,
+  DeviceInfo,
+  DevicePlatform,
+  DiscoveredDevice,
+  DeviceHostEntry,
+  IosSimulatorState,
+  SimulatorDeviceType,
+  SimulatorRuntime,
+  SimulatorCatalog,
+  IosSimulator,
+} from "../../../src/shared/types.js";
 
 export interface Device {
   id: number;
@@ -46,24 +42,6 @@ export interface Device {
   hostUnreachable?: boolean;
 }
 
-// A phone advertising Wireless debugging over mDNS (issue #1378,
-// src/services/device-discovery.ts's own DiscoveredDevice) — returned by
-// GET /api/devices/discovered. `id` round-trips back to
-// POST /api/devices/pair-and-connect as `discoveryId`. Either address may be
-// missing: Android only advertises the pairing service while its "Pair device
-// with pairing code" screen is open.
-export interface DiscoveredDevice {
-  id: string;
-  name: string;
-  host: string;
-  pairingAddress?: string;
-  connectAddress?: string;
-  device?: string;
-  model?: string;
-  product?: string;
-  discoveredAt: string;
-}
-
 // POST /api/devices/pair-and-connect's body — either `discoveryId` (a cached
 // mDNS entry, `connectAddress` then an optional override) or the manual
 // `pairingAddress` + `connectAddress` pair. `pairingCode` is always required.
@@ -77,48 +55,9 @@ export interface PairAndConnectBody {
   hostId?: string;
 }
 
-// Mirrors src/routes/devices.ts's DeviceHostEntry 1:1 — one host that could
-// hold a device (`GET /api/devices/hosts`). "unsupported" is an agent that
-// predates the device routes; "unreachable" is one that did not answer.
-export interface DeviceHostEntry {
-  hostId: string;
-  name: string;
-  status: "ok" | "unsupported" | "unreachable";
-  deviceKinds: DeviceKind[];
-  platforms: DevicePlatform[];
-}
-
-export type IosSimulatorState = "Booted" | "Shutdown";
-
-export interface SimulatorDeviceType {
-  id: string;
-  name: string;
-}
-
-export interface SimulatorRuntime {
-  id: string;
-  name: string;
-}
-
-/** What `GET /api/simulators/catalog` offers a new simulator. */
-export interface SimulatorCatalog {
-  deviceTypes: SimulatorDeviceType[];
-  runtimes: SimulatorRuntime[];
-}
-
 export interface CreateSimulatorBody {
   name: string;
   deviceTypeId: string;
   runtimeId: string;
   hostId?: string;
-}
-
-export interface IosSimulator {
-  udid: string;
-  name: string;
-  runtime: string;
-  state: IosSimulatorState;
-  deviceTypeId?: string;
-  /** ISO 8601; absent until the simulator has booted. */
-  lastBootedAt?: string;
 }

@@ -15,6 +15,8 @@ import {
 } from "../services/bridge-registry.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
 import { requestScheme } from "../services/request-scheme.js";
+import type { BridgeSummary } from "../shared/types.js";
+export type { BridgeSummary } from "../shared/types.js";
 
 // Issue #820 — the primary-side half of the SSH-agent bridge's laptop-
 // facing surface (see the design plan). Five routes:
@@ -97,33 +99,6 @@ interface PairResponse {
    * wouldn't be worth the new config knob. */
   pairing_payload: string;
   expires_at: string;
-}
-
-interface BridgeListItem {
-  id: string;
-  name: string | null;
-  platform: string | null;
-  lastSeenAt: string | null;
-  createdAt: string;
-  /** A live, unexpired session exists on this row (bridge-registry.ts's own
-   * `hasLiveSession`) — "this bridge is paired and its credential hasn't
-   * expired," independent of whether a socket happens to be open RIGHT
-   * NOW. */
-  hasLiveSession: boolean;
-  /** `app.connectedBridges.has(id)` at request time — "a helper is
-   * actually connected right now." Reported alongside `hasLiveSession`
-   * rather than instead of it, same "DB row = intent, in-memory map = live
-   * state, route merges the two" split hosts.ts's own GET /api/hosts uses
-   * for heartbeat health: a bridge can be paired (`hasLiveSession: true`)
-   * with its helper process not currently running (`connected: false`),
-   * and Settings needs to tell those apart, not collapse them into one
-   * status. */
-  connected: boolean;
-  /** User-set tiebreak order among multiple enrolled bridges (issue
-   * #1313) — lower first. `GET /api/bridges` returns entries already
-   * sorted by this field (`listBridges`'s own `orderBy`), so the frontend
-   * never has to re-sort what it's handed. */
-  priority: number;
 }
 
 interface ReorderRequestBody {
@@ -283,7 +258,7 @@ export async function agentBridgeRoute(app: FastifyInstance) {
     },
   );
 
-  app.get("/api/bridges", async (): Promise<BridgeListItem[]> => {
+  app.get("/api/bridges", async (): Promise<BridgeSummary[]> => {
     // listBridges() already orders by priority — nothing to re-sort here.
     return listBridges(app).map((bridge) => ({
       id: bridge.id,

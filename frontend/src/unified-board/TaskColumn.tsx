@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from "react";
 import type { DragEvent } from "react";
 import type { Project, Session, Task, TaskStatus } from "../api/index.js";
-import type { Theme } from "../store/index.js";
+import type { ResolvedTheme } from "../store/index.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskCard } from "./TaskCard.js";
 import { columnItems } from "./taskLanes.js";
@@ -41,7 +41,7 @@ export function TaskColumn({
   tasks: Task[];
   projectsById: Map<number, Project>;
   sessionsById: Map<number, Session>;
-  theme: Theme;
+  theme: ResolvedTheme;
   taskMasterEnabled: boolean;
   acceptsDrop: boolean;
   onOpen: (task: Task) => void;

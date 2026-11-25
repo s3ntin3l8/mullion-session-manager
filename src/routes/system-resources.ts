@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { OrphanRemovalSnapshot } from "../shared/types.js";
 import os from "node:os";
 import path from "node:path";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
@@ -305,7 +306,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   // the server so another tab or a reloaded page can find it.
   const orphanRemoval = createOrphanRemovalJob();
   const orphanRegistryDir = path.join(app.config.SESSIONS_DIR, "orphan-recoveries");
-  app.get("/api/storage/worktrees/remove-orphan", async () => {
+  app.get("/api/storage/worktrees/remove-orphan", async (): Promise<OrphanRemovalSnapshot> => {
     // Do not expose an in-flight quarantine as a recovery if a job starts
     // while the persistent index is being read.
     for (let attempt = 0; attempt < 3; attempt++) {

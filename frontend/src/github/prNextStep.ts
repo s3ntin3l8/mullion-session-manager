@@ -1,4 +1,4 @@
-import type { GitHubPrPhase, Task } from "../api/types.js";
+import type { PrPhase, Task } from "../api/types.js";
 import { PHASE_LABEL } from "./prPhase.js";
 
 // What a PR needs next, read from its phase — the one labelled button in the
@@ -32,7 +32,7 @@ export interface StepTask {
 
 // A task PR's "handoff" must not start a second session on the task's branch —
 // that competes with the task's worker. Route it through Task Master instead.
-function taskHandoff(phase: GitHubPrPhase | undefined, { task, workerLive }: StepTask): NextStep {
+function taskHandoff(phase: PrPhase | undefined, { task, workerLive }: StepTask): NextStep {
   if (task.status === "reviewing") {
     return { kind: "sendBack", label: "Send back to worker", disabled: false };
   }
@@ -49,7 +49,7 @@ function taskHandoff(phase: GitHubPrPhase | undefined, { task, workerLive }: Ste
 }
 
 export function nextStep(
-  phase: GitHubPrPhase | undefined,
+  phase: PrPhase | undefined,
   unresolved: number,
   taskCtx?: StepTask | null,
 ): NextStep {

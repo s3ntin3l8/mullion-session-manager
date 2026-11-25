@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAvdHardware } from "../shared/avd-hardware.js";
 import { armKillEscalation } from "./session-process.js";
+import type { SystemImage, AvailableSystemImage } from "../shared/types.js";
+export type { SystemImage, AvailableSystemImage } from "../shared/types.js";
 
 export { normalizeAvdHardware };
 
@@ -140,16 +142,6 @@ export async function listDeviceProfiles(
     LIST_TIMEOUT_MS,
   );
   return [...stdout.matchAll(DEVICE_PROFILE_ID_LINE)].map((m) => m[1]);
-}
-
-export interface SystemImage {
-  // The `-k`/`--package` value `avdmanager create avd` accepts verbatim —
-  // also this image's stable identifier (used for the POST /api/avds
-  // allowlist check).
-  packagePath: string;
-  apiLevel: string | null;
-  tagDisplay: string | null;
-  abi: string | null;
 }
 
 // Parses a Java-properties-style `key=value` file (one entry per line, `#`
@@ -509,15 +501,6 @@ const ARCH_TO_ABI: Record<string, string> = {
   arm64: "arm64-v8a",
   arm: "armeabi-v7a",
 };
-
-export interface AvailableSystemImage {
-  packagePath: string;
-  apiLevel: string;
-  tag: string;
-  tagDisplay: string;
-  abi: string;
-  installed: boolean;
-}
 
 // Parses a single line from `sdkmanager --list`'s pipe-delimited table
 // (classic Java sdkmanager). Returns [path, version, description] or null

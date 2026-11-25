@@ -1,8 +1,8 @@
 import type { PathLike, Stats, StatsFs } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
-
-export type ResourceSeverity = "normal" | "warning" | "critical";
+import type { ResourceSeverity } from "../shared/types.js";
+export type { ResourceSeverity } from "../shared/types.js";
 
 export interface MonitoredPath {
   label: string;

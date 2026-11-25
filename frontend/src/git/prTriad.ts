@@ -1,8 +1,8 @@
-import type { GitHubPROrWithChecks } from "../api/types.js";
+import type { PROrWithChecks } from "../api/types.js";
 import type { TriadItem } from "../ui/sidebar/index.js";
 
 /** CI · Review · Merge for the branch's PR, in the kit's one tone vocabulary. */
-export function prTriad(pr: GitHubPROrWithChecks, onOpen: () => void): TriadItem[] {
+export function prTriad(pr: PROrWithChecks, onOpen: () => void): TriadItem[] {
   const ci: TriadItem =
     pr.ciStatus === "success"
       ? { key: "ci", tone: "success", label: "CI passing", short: "✓", title: "CI passing" }

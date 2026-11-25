@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 import { isPlainBranchName, listWorktrees } from "./git-refs.js";
+import type { DeleteBranchResult } from "../shared/types.js";
+export type { DeleteBranchReason, DeleteBranchResult } from "../shared/types.js";
 
 // Branch *deletion* (issue #442) — the mutating counterpart to git-refs.ts's
 // read-only listBranches(). git-refs.ts is read-only enumeration by design
@@ -91,22 +93,6 @@ function runGit(cwd: string, args: string[]): Promise<GitResult> {
       finish({ code, stdout, stderr });
     });
   });
-}
-
-export type DeleteBranchReason =
-  | "not-a-repo"
-  | "invalid-name"
-  | "no-such-branch"
-  | "current-branch"
-  | "checked-out"
-  | "unmerged"
-  | "delete-failed";
-
-export interface DeleteBranchResult {
-  deleted: boolean;
-  reason?: DeleteBranchReason;
-  /** For "checked-out": the worktree path holding it. */
-  detail?: string;
 }
 
 /** Rejects a name that's empty, starts with "-" (git would otherwise

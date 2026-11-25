@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { GitHubIssueListItem, GitHubPROrWithChecks } from "../api/types.js";
+import type { GitHubIssueListItem, PROrWithChecks } from "../api/types.js";
 import type { MullionLinkEntry, SessionLink } from "../hooks/useMullionLinks.js";
 import { issueOrigin, matchesOrigin, needsAttention, originClass, prOrigin } from "./rowOrigin.js";
 
-const pr = (o: Partial<GitHubPROrWithChecks> = {}) => ({ number: 1, ...o }) as GitHubPROrWithChecks;
+const pr = (o: Partial<PROrWithChecks> = {}) => ({ number: 1, ...o }) as PROrWithChecks;
 const issue = (o: Partial<GitHubIssueListItem> = {}) =>
   ({ number: 1, ...o }) as GitHubIssueListItem;
 const link = (o: Partial<MullionLinkEntry>) =>
@@ -63,6 +63,8 @@ describe("rowOrigin", () => {
     expect(originClass("none")).toBe("");
     expect(needsAttention({ prPhase: "ci_failing" })).toBe(true);
     expect(needsAttention({ prPhase: "ready_to_merge" })).toBe(false);
-    expect(needsAttention({})).toBe(false);
+    expect(needsAttention({ prPhase: "unknown" })).toBe(false);
+    // An older cached row may still lack the field the shared type requires.
+    expect(needsAttention({} as Pick<PROrWithChecks, "prPhase">)).toBe(false);
   });
 });

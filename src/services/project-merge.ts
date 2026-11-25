@@ -22,6 +22,20 @@ import { broadcastTaskEvent } from "./task-events.js";
 import { killSession } from "./session-lifecycle.js";
 import { cleanupTaskWorktree } from "./task-approve.js";
 import { replacedByMergeReason, supersededMergeReason } from "./task-supersede.js";
+import type {
+  MergeCounts,
+  DuplicateGroup,
+  DuplicateMember,
+  MergeRefusal,
+} from "../shared/types.js";
+export type {
+  MergeCounts,
+  DuplicateGroup,
+  DuplicateEntry,
+  DuplicateMember,
+  MergeRefusal,
+  MergeRefusalCode,
+} from "../shared/types.js";
 
 // Issue #2232 — merge a duplicate project into its same-repo survivor. The
 // duplicate's rows are re-pointed at the survivor in ONE synchronous
@@ -35,50 +49,6 @@ import { replacedByMergeReason, supersededMergeReason } from "./task-supersede.j
 // The duplicate's registration row is just dropped.
 
 type ProjectRow = typeof projects.$inferSelect;
-
-export type MergeRefusalCode =
-  | "NOT_FOUND"
-  | "SAME_PROJECT"
-  | "SAME_HOST"
-  | "HOST_PATH_CONFLICT"
-  | "HOST_CWDS_LIMIT"
-  | "STACK_IDENTITY_CONFLICT"
-  | "LIVE_TASK_CONFLICT";
-
-export interface MergeRefusal {
-  code: MergeRefusalCode;
-  message: string;
-}
-
-/** What a merge would move, for the confirm dialog and the result. */
-export interface MergeCounts {
-  tasks: number;
-  liveTasks: number;
-  sessions: number;
-  runningSessions: number;
-  previews: number;
-}
-
-export interface DuplicateMember {
-  id: number;
-  name: string;
-  hostId: string;
-  cwd: string;
-  createdAt: string;
-}
-
-export interface DuplicateEntry extends DuplicateMember {
-  counts: MergeCounts;
-  /** Why merging this project into the survivor would be refused right now. */
-  refusal: MergeRefusal | null;
-}
-
-export interface DuplicateGroup {
-  /** The group's shared origin key (the same key the create gate uses). */
-  origin: string;
-  survivor: DuplicateMember;
-  duplicates: DuplicateEntry[];
-}
 
 /** Task statuses that mean a worker is (or was just) on the task. */
 const LIVE_TASK_STATUSES = ["claimed", "in_progress", "reviewing"];

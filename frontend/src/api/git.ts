@@ -4,9 +4,9 @@
 import { request } from "./client.js";
 import type {
   GitBranchesResult,
-  GitBranchDetail,
+  GitBranchDrilldown,
   GitBranchPruneResult,
-  DeleteBranchResult,
+  DeleteBranchResponse,
   RemoveWorktreeResult,
   GitStatusesBatchResult,
   GitRefsBatchResult,
@@ -194,14 +194,14 @@ export const gitApi = {
   // `reason` is a normal 200 response (a git-level refusal), not a thrown
   // ApiError — only a genuine HTTP error (4xx/5xx) throws.
   deleteProjectGitBranch: (projectId: number, name: string, force?: boolean) =>
-    request<DeleteBranchResult>(`/api/projects/${projectId}/git-branch-delete`, {
+    request<DeleteBranchResponse>(`/api/projects/${projectId}/git-branch-delete`, {
       method: "POST",
       body: JSON.stringify({ name, force }),
     }),
 
   // A3 — one branch's drilldown. undefined (204) on a remote-host project.
   getProjectGitBranch: (projectId: number, name: string) =>
-    request<GitBranchDetail | undefined>(
+    request<GitBranchDrilldown | undefined>(
       `/api/projects/${projectId}/git-branch?name=${encodeURIComponent(name)}`,
     ),
 

@@ -4,7 +4,7 @@
 // swatch here only ever changes settings.terminal.colorScheme, never the
 // app chrome's own dark/light tokens.
 import type { CursorStyle } from "../api/index.js";
-import type { Theme } from "../store/index.js";
+import type { ResolvedTheme } from "../store/index.js";
 import { TERMINAL_SCHEMES, getTerminalScheme } from "../terminalSchemes.js";
 
 import { schemeLabel } from "./schemeLabel.js";
@@ -16,7 +16,7 @@ export function SwatchGrid({
 }: {
   value: string;
   onChange: (id: string) => void;
-  theme: Theme;
+  theme: ResolvedTheme;
 }) {
   return (
     <div className="settings-swatch-grid">
@@ -64,7 +64,7 @@ export function TerminalPreview({
   fontFamily: string;
   fontSize: number;
   cursorStyle: CursorStyle;
-  theme: Theme;
+  theme: ResolvedTheme;
 }) {
   const scheme = getTerminalScheme(schemeId);
   const vars = {

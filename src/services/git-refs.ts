@@ -6,7 +6,13 @@ import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
 // (hand-mirrored 1:1 on the frontend — see frontend/src/api.ts's own
 // re-export). Re-exported below so every existing backend importer of this
 // module keeps working unchanged.
-import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
+import type {
+  GitBranchInfo,
+  GitWorktreeInfo,
+  GitBranchCommit,
+  GitBranchDetail,
+} from "../shared/types.js";
+export type { GitBranchCommit, GitBranchDetail } from "../shared/types.js";
 
 export type { GitBranchInfo, GitWorktreeInfo };
 
@@ -470,32 +476,6 @@ export function isWithinAnyWorktree(candidate: string, worktreePaths: string[]):
 }
 
 const MAX_UNIQUE_COMMITS = 50;
-
-export interface GitBranchCommit {
-  sha: string;
-  subject: string;
-  author: string;
-  /** Unix seconds. */
-  time: number;
-}
-
-export interface GitBranchDetail {
-  name: string;
-  sha: string;
-  upstream?: string;
-  upstreamGone?: boolean;
-  /** Commits ahead of / behind the upstream (absent without one). */
-  upstreamAhead?: number;
-  upstreamBehind?: number;
-  /** The base ref the numbers below compare against (e.g. "origin/main"). */
-  base: string | null;
-  baseAhead?: number;
-  baseBehind?: number;
-  /** `base..branch`, newest first, capped at 50 (`uniqueTruncated` says so). */
-  uniqueCommits: GitBranchCommit[];
-  uniqueTruncated: boolean;
-  lastCommit: GitBranchCommit | null;
-}
 
 /** The one branch-name validator (also used by `deleteBranch`): no flags,
  * globs, revision syntax, whitespace, `..` or control bytes may reach a git

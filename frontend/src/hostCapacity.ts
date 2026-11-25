@@ -11,7 +11,7 @@
 //     older agent build without the route, or one that has not been polled
 //     yet) is `known: false`. A zero load would not just be a wrong number
 //     — it would read as "this machine is idle", which is the one thing a
-//     missing reading must never say. `HostCapacity.loadAverage1m`'s own
+//     missing reading must never say. `HostCapacityReport.loadAverage1m`'s own
 //     doc comment (src/services/host-capacity.ts) makes the same point
 //     about a zero load on a platform that does not report one.
 //   - **A READING IS NOT A FACT.** Capacity is cached in memory on the
@@ -22,7 +22,7 @@
 // Pure and React-free on purpose: the formatting is the part worth testing,
 // and it must be testable without a component tree.
 
-import type { Host, HostCapacity } from "./api/index.js";
+import type { Host, HostCapacityReport } from "./api/index.js";
 
 /**
  * How old a capacity reading may be before it is shown as stale.
@@ -122,7 +122,7 @@ export function formatHostCapacityNow(host: Host): HostCapacityDisplay {
  */
 export function formatHostCapacity(host: Host, nowMs: number): HostCapacityDisplay {
   const platform = formatHostPlatform(host);
-  const capacity: HostCapacity | null | undefined = host.capacity;
+  const capacity: HostCapacityReport | null | undefined = host.capacity;
 
   if (!capacity) {
     return {

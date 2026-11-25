@@ -1,3 +1,4 @@
+import type { ExitedMessage } from "../shared/ws-protocol.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
 import type { Page, Frame } from "playwright";
@@ -530,7 +531,8 @@ export async function attachSocketToBrowser(
   const onDisconnected = () => {
     if (announcedExit) return;
     announcedExit = true;
-    if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: "exited" }));
+    if (socket.readyState === socket.OPEN)
+      socket.send(JSON.stringify({ type: "exited" } satisfies ExitedMessage));
   };
   browser.once("disconnected", onDisconnected);
   const offClosed = managed.onClosed(onDisconnected);

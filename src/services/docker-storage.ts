@@ -1,5 +1,18 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import type {
+  DockerStorageStatus,
+  DockerPruneMode,
+  DockerUsageRow,
+  DockerVolumesSummary,
+} from "../shared/types.js";
+export type {
+  DockerStorageStatus,
+  DockerPruneMode,
+  DockerUsageRow,
+  DockerVolumesSummary,
+  DockerVolumeTotal,
+} from "../shared/types.js";
 
 const OUTPUT_LIMIT_BYTES = 1024 * 1024;
 const VERBOSE_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
@@ -39,8 +52,6 @@ const DOCKER_DANGLING_IMAGES_ARGS = [
   "{{.ID}}",
 ] as const;
 
-export type DockerPruneMode = "safe" | "aggressive";
-
 export interface DockerPruneResult {
   output: string;
   reclaimedBytes: number;
@@ -53,43 +64,6 @@ export interface DockerPruneResult {
 export interface PruneDockerOptions {
   /** Also run `docker volume prune --force` (aggressive only, Docker 23+ only). */
   pruneVolumes?: boolean;
-}
-
-export interface DockerUsageRow {
-  type: string;
-  totalCount: number;
-  activeCount: number;
-  sizeBytes: number;
-  reclaimableBytes: number;
-}
-
-export interface DockerVolumeTotal {
-  count: number;
-  bytes: number;
-}
-
-/**
- * Docker volumes split by what cleanup may ever consider. Anonymous means the
- * name is exactly 64 lowercase hex characters (what `docker run -v /path`
- * creates); named volumes are never candidates, in use or not.
- */
-export interface DockerVolumesSummary {
-  anonymousUnused: DockerVolumeTotal;
-  named: DockerVolumeTotal;
-  /** Anonymous volumes still linked to a container. */
-  inUse: DockerVolumeTotal;
-}
-
-export interface DockerStorageStatus {
-  available: boolean;
-  rows: DockerUsageRow[];
-  totalSizeBytes: number;
-  reclaimableBytes: number;
-  /** What each cleanup tier is expected to free; `safeBytes` is null if it couldn't be computed. */
-  estimates: { safeBytes: number | null; aggressiveBytes: number };
-  /** Omitted (not zeroed) when `docker system df -v` failed: "unknown", not "none". */
-  volumes?: DockerVolumesSummary;
-  error?: string;
 }
 
 export type SpawnDocker = (

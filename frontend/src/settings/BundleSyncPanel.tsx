@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { api, ApiError } from "../api/index.js";
-import type { BundleSyncCli, BundleSyncStatus, SyncStatus } from "../api/index.js";
+import type { BundleSyncCli, BundleSyncStatusReport, BundleSyncStatus } from "../api/index.js";
 import { resolveAgentLogo } from "../cliLogos.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { ErrorText } from "../ui/ErrorText.js";
@@ -53,7 +53,7 @@ const CLI_META: Record<BundleSyncCli, { label: string; logoBinary: string }> = {
   mcode: { label: "MiniMax Code", logoBinary: "mcode" },
 };
 
-function fieldDotClass(status: SyncStatus): "on" | "off" | "warn" | null {
+function fieldDotClass(status: BundleSyncStatus): "on" | "off" | "warn" | null {
   switch (status) {
     case "synced":
       return "on";
@@ -69,7 +69,7 @@ function fieldDotClass(status: SyncStatus): "on" | "off" | "warn" | null {
   }
 }
 
-function fieldStatusText(status: SyncStatus): string {
+function fieldStatusText(status: BundleSyncStatus): string {
   switch (status) {
     case "synced":
       return "Synced";
@@ -87,7 +87,7 @@ function fieldStatusText(status: SyncStatus): string {
 function fieldNote(
   cli: BundleSyncCli,
   kind: "skills" | "agents",
-  status: SyncStatus,
+  status: BundleSyncStatus,
 ): string | null {
   if (status === "stale") {
     return "Changed since the last sync. Click Re-sync now to restore it.";
@@ -109,7 +109,7 @@ function BundleSyncField({
   label: string;
   cli: BundleSyncCli;
   kind: "skills" | "agents";
-  field: { status: SyncStatus; root: string | null; count: number };
+  field: { status: BundleSyncStatus; root: string | null; count: number };
 }) {
   const isNA = field.status === "n-a";
   const dot = fieldDotClass(field.status);
@@ -144,7 +144,7 @@ export function BundleSyncPanel() {
   const theme = useDashboardStore((s) => s.theme);
   const s = settings.sessions;
 
-  const [status, setStatus] = useState<BundleSyncStatus | null>(null);
+  const [status, setStatus] = useState<BundleSyncStatusReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 

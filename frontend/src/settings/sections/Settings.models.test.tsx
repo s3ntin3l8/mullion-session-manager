@@ -195,7 +195,12 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: null, reviewerModel: null, smallModel: "haiku" },
+        claudeCode: {
+          defaultModel: null,
+          reviewerModel: null,
+          delegateModel: null,
+          smallModel: "haiku",
+        },
       },
       settingsLoaded: true,
     });
@@ -212,7 +217,7 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        codex: { defaultModel: "gpt-5.6-sol", reviewerModel: null },
+        codex: { defaultModel: "gpt-5.6-sol", reviewerModel: null, delegateModel: null },
       },
       settingsLoaded: true,
     });
@@ -285,7 +290,12 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
+        claudeCode: {
+          defaultModel: "claude-opus-4-5",
+          reviewerModel: null,
+          delegateModel: null,
+          smallModel: null,
+        },
       },
       settingsLoaded: true,
     });
@@ -302,7 +312,12 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
+        claudeCode: {
+          defaultModel: "claude-opus-4-5",
+          reviewerModel: null,
+          delegateModel: null,
+          smallModel: null,
+        },
       },
       settingsLoaded: true,
     });
@@ -402,7 +417,12 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: "opus", reviewerModel: null, smallModel: null },
+        claudeCode: {
+          defaultModel: "opus",
+          reviewerModel: null,
+          delegateModel: null,
+          smallModel: null,
+        },
       },
       settingsLoaded: true,
     });
@@ -426,7 +446,12 @@ describe("Settings -> Models", () => {
     useDashboardStore.setState({
       settings: {
         ...DEFAULT_SETTINGS,
-        claudeCode: { defaultModel: "claude-opus-4-5", reviewerModel: null, smallModel: null },
+        claudeCode: {
+          defaultModel: "claude-opus-4-5",
+          reviewerModel: null,
+          delegateModel: null,
+          smallModel: null,
+        },
       },
       settingsLoaded: true,
     });
@@ -438,7 +463,12 @@ describe("Settings -> Models", () => {
       useDashboardStore.setState({
         settings: {
           ...DEFAULT_SETTINGS,
-          claudeCode: { defaultModel: "claude-sonnet-4-6", reviewerModel: null, smallModel: null },
+          claudeCode: {
+            defaultModel: "claude-sonnet-4-6",
+            reviewerModel: null,
+            delegateModel: null,
+            smallModel: null,
+          },
         },
       });
     });
@@ -502,7 +532,12 @@ describe("Settings -> Models", () => {
     it("warns when the worker and the reviewer land on the same model", () => {
       useDashboardStore.setState({
         settings: withAgents("claude", "claude", {
-          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          claudeCode: {
+            defaultModel: "opusplan",
+            reviewerModel: null,
+            delegateModel: null,
+            smallModel: null,
+          },
         }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
@@ -523,7 +558,12 @@ describe("Settings -> Models", () => {
       // here the wrong one.
       useDashboardStore.setState({
         settings: withAgents("claude", "claude", {
-          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          claudeCode: {
+            defaultModel: "opusplan",
+            reviewerModel: null,
+            delegateModel: null,
+            smallModel: null,
+          },
         }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
@@ -571,8 +611,13 @@ describe("Settings -> Models", () => {
       // on opusplan — so there IS a second opinion and no warning.
       useDashboardStore.setState({
         settings: withAgents("claude", "codex", {
-          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
-          codex: { defaultModel: "gpt-5", reviewerModel: null },
+          claudeCode: {
+            defaultModel: "opusplan",
+            reviewerModel: null,
+            delegateModel: null,
+            smallModel: null,
+          },
+          codex: { defaultModel: "gpt-5", reviewerModel: null, delegateModel: null },
         }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
@@ -583,7 +628,12 @@ describe("Settings -> Models", () => {
     it("shows the note only under the review agent's CLI", () => {
       useDashboardStore.setState({
         settings: withAgents("claude", "claude", {
-          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          claudeCode: {
+            defaultModel: "opusplan",
+            reviewerModel: null,
+            delegateModel: null,
+            smallModel: null,
+          },
         }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
@@ -609,7 +659,12 @@ describe("Settings -> Models", () => {
     it("does not warn when neither role has a model configured", () => {
       useDashboardStore.setState({
         settings: withAgents("claude", "claude", {
-          claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },
+          claudeCode: {
+            defaultModel: null,
+            reviewerModel: null,
+            delegateModel: null,
+            smallModel: null,
+          },
         }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
@@ -656,7 +711,12 @@ describe("Settings -> Models", () => {
     it("does not warn when there is no review agent", () => {
       useDashboardStore.setState({
         settings: withAgents("claude", "none", {
-          claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+          claudeCode: {
+            defaultModel: "opusplan",
+            reviewerModel: null,
+            delegateModel: null,
+            smallModel: null,
+          },
         }) as typeof DEFAULT_SETTINGS,
         settingsLoaded: true,
       });
@@ -691,7 +751,12 @@ describe("Settings -> Models", () => {
       act(() => {
         useDashboardStore.setState({
           settings: withAgents("claude", "claude", {
-            claudeCode: { defaultModel: "opusplan", reviewerModel: null, smallModel: null },
+            claudeCode: {
+              defaultModel: "opusplan",
+              reviewerModel: null,
+              delegateModel: null,
+              smallModel: null,
+            },
           }) as typeof DEFAULT_SETTINGS,
           settingsLoaded: true,
         });
@@ -753,7 +818,7 @@ describe("Settings -> Models", () => {
       useDashboardStore.setState({
         settings: {
           ...DEFAULT_SETTINGS,
-          codex: { defaultModel: "gpt-5.6-sol", reviewerModel: null },
+          codex: { defaultModel: "gpt-5.6-sol", reviewerModel: null, delegateModel: null },
         },
         settingsLoaded: true,
       });

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
-import type { DuplicateGroup, DuplicateProjectEntry, Host } from "../../api/index.js";
+import type { DuplicateGroup, DuplicateEntry, Host } from "../../api/index.js";
 import { hostDisplayName } from "../../lib/hostBadge.js";
 import { useDashboardStore } from "../../store/index.js";
 import { GroupHeading, ListRow, Row, SecondaryButton, StyledList } from "../../ui/primitives.js";
@@ -13,7 +13,7 @@ function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-function impact(d: DuplicateProjectEntry): string {
+function impact(d: DuplicateEntry): string {
   const c = d.counts;
   return [
     plural(c.tasks, "task") + (c.liveTasks > 0 ? ` (${c.liveTasks} live)` : ""),
@@ -40,7 +40,7 @@ export function DuplicateProjectsBanner() {
   const [checkError, setCheckError] = useState(false);
   const [confirming, setConfirming] = useState<{
     group: DuplicateGroup;
-    dup: DuplicateProjectEntry;
+    dup: DuplicateEntry;
   } | null>(null);
   const [merging, setMerging] = useState(false);
   const [error, setError] = useState<string | null>(null);

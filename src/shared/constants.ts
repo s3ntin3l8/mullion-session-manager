@@ -257,3 +257,24 @@ export const PREVIEW_TTL_MS = 15 * 60 * 1000;
 /** How long it keeps an agent-generated one (and its finished job): it cost a
  * full agent turn and is easy to walk away from. */
 export const GENERATED_PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
+
+// ---------------------------------------------------------------------------
+// settings-types.ts — LOG_LEVELS / LogLevel (issue #2412)
+// ---------------------------------------------------------------------------
+//
+// The server log levels Settings > Runtime offers. The frontend iterates the
+// list (a runtime value), so it lives here rather than in a type-only file.
+export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
+export type LogLevel = (typeof LOG_LEVELS)[number];
+
+// ---------------------------------------------------------------------------
+// cleanup-opt-ins.ts — OPT_IN_IDS / OptInId (issue #2412)
+// ---------------------------------------------------------------------------
+//
+// Opt-ins for aggressive-cleanup sources that are not a directory under the
+// home folder (those are cache-storage.ts's allowlist). Same two-sided rule:
+// an id only runs when the request AND the stored settings
+// (AppSettings.diskCleanup.optIns) both carry it. Adding a source means adding
+// its id here and nothing else widens the set.
+export const OPT_IN_IDS = ["docker-volumes", "android-system-images"] as const;
+export type OptInId = (typeof OPT_IN_IDS)[number];

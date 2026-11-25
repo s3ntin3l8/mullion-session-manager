@@ -2,40 +2,8 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";
 import { clampToBytes } from "./marked-region.js";
-
-// Issue #937 — a small, finite set of well-known "how we work" policy
-// choices (branch-vs-direct-commit, merge strategy, review process, ...),
-// deterministically assembled into prose by buildWorkflowConventionsText
-// below. Same "pure function assembling structural output" posture as
-// mullion-scaffold.ts's computeScaffold — no agent, no network, fully
-// unit-testable — but this is a STARTER, not an ongoing mode: running it
-// fills settings.sessions.workflowConventionsText (settings.ts) with the
-// generated prose, which is then a normal, freely-editable textarea with no
-// distinction between wizard-written and hand-edited parts, and no answer
-// state kept around to reconcile against later edits. See routes/
-// workflow-conventions.ts for the two read-only endpoints (GET the question
-// set, POST answers -> text) the frontend's wizard drives.
-//
-// This is the issue's own explicit v1 question list — extend over time as
-// gaps are found, per the issue's own "not exhaustive" framing, but don't
-// silently narrow it: each axis below is named directly in issue #937's
-// "Starting question set."
-export interface WorkflowConventionOption {
-  id: string;
-  label: string;
-  /** The prose sentence(s) this option contributes when selected — joined
-   * with every other selected fragment, in question order, by
-   * buildWorkflowConventionsText below. Deliberately plain sentences, not a
-   * markdown list item each: the assembled result reads as ordinary prose a
-   * human would keep hand-editing afterward, not as a form dump. */
-  fragment: string;
-}
-
-export interface WorkflowConventionQuestion {
-  id: string;
-  question: string;
-  options: WorkflowConventionOption[];
-}
+import type { WorkflowConventionQuestion } from "../shared/types.js";
+export type { WorkflowConventionOption, WorkflowConventionQuestion } from "../shared/types.js";
 
 /**
  * The self-review half of the code-review policy, its own constant so the

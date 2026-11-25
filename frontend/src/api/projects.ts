@@ -17,23 +17,11 @@ import type {
   ProjectUrl,
   AgentRuleTarget,
 } from "./types.js";
-import type { Launcher } from "../../../src/shared/types.js";
-import type {
-  DropDisposition,
-  ExistingInstructionsMode,
-  PlacementMode,
-} from "../../../src/shared/constants.js";
+import type { Launcher, ScaffoldConflict } from "../../../src/shared/types.js";
+import type { ExistingInstructionsMode, PlacementMode } from "../../../src/shared/constants.js";
+export type { ScaffoldConflict } from "../../../src/shared/types.js";
 
 export type { ExistingInstructionsMode };
-
-export interface ScaffoldConflict {
-  file: string;
-  excerpt: string;
-  kind: string;
-  note: string;
-  /** A passage the agent dropped on purpose (#2934). Still shown before Apply. */
-  disposition?: DropDisposition;
-}
 
 /** The phases a background generation job moves through — mirrors
  * src/services/scaffold-generate-jobs.ts's GENERATE_JOB_PHASES 1:1. */

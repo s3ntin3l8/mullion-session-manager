@@ -7,7 +7,7 @@ import {
   formatHostPlatform,
 } from "./hostCapacity.js";
 import { makeHost } from "./test/fixtures.js";
-import type { HostCapacity } from "./api/index.js";
+import type { HostCapacityReport } from "./api/index.js";
 
 // Issue #1726 / roadmap 8.12 — the capacity display's rules. The two that
 // matter: a host that reported nothing is UNKNOWN (never zero), and a
@@ -15,7 +15,7 @@ import type { HostCapacity } from "./api/index.js";
 
 const NOW = Date.parse("2026-01-01T00:10:00.000Z");
 
-function capacity(overrides: Partial<HostCapacity> = {}): HostCapacity {
+function capacity(overrides: Partial<HostCapacityReport> = {}): HostCapacityReport {
   return {
     platform: "linux",
     logicalCores: 12,

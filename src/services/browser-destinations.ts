@@ -18,6 +18,12 @@ import { resolvePreviewTarget } from "./preview-upstream.js";
 import { resolveSessionHostId } from "./session-host.js";
 import { getStoredSettings } from "./settings.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../shared/constants.js";
+import type { BrowserDestination, BrowserDestinations } from "../shared/types.js";
+export type {
+  BrowserDestination,
+  BrowserDestinations,
+  BrowserDestinationKind,
+} from "../shared/types.js";
 
 // #3003 — "where this project can be opened right now": the Browser pane's
 // quick pick (its address bar's "▾", both modes). One list built from the
@@ -36,34 +42,6 @@ import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../shared/constants.js";
 // Read-only: listing never creates a preview row. Opening a running entry in
 // the preview goes through `openRunningDestinationPreview`, which re-derives
 // the port from live discovery, so a client names an entry, never a port.
-
-export type BrowserDestinationKind = "dev-server" | "dock" | "compose" | "target" | "branch";
-
-export interface BrowserDestination {
-  /** Stable id of the entry: `dev-server`, `dock:<sessionId>`,
-   * `compose:<stack>:<service>:<port>`, `target:<id>`, `branch:<slug>`. */
-  key: string;
-  group: "running" | "saved";
-  kind: BrowserDestinationKind;
-  label: string;
-  /** Secondary text: the port, the stack, the destination. */
-  detail: string | null;
-  /** The address as seen from `hostId` (a bare port is that host's
-   * `localhost`), or null when there is none to show. */
-  address: string | null;
-  /** The host the address is on: where `localhost` in it points. */
-  hostId: string;
-  /** A branch preview's slug. */
-  previewSlug: string | null;
-  /** A named target's id. */
-  targetId: string | null;
-}
-
-export interface BrowserDestinations {
-  destinations: BrowserDestination[];
-  /** Why the running group is empty or incomplete, or null. */
-  runningNote: string | null;
-}
 
 function localAddress(port: number): string {
   return `http://localhost:${port}/`;

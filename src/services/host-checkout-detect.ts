@@ -17,6 +17,8 @@ import { discoverCandidates, type DiscoveredCandidate } from "./project-config.j
 import { resolveProjectRoots } from "./project-roots.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { getStoredSettings } from "./settings.js";
+import type { HostCheckoutSuggestion, CheckoutCandidate } from "../shared/types.js";
+export type { HostCheckoutSuggestion, CheckoutCandidate, CheckoutMatch } from "../shared/types.js";
 
 // Issue #2090 — find a project's checkout on OTHER hosts, and (opt-in) record
 // it in `projects.hostCwds`. `hostCwds` is the operator's map of where a
@@ -35,27 +37,6 @@ export const MAX_AUTOFILL_PER_RUN = 20;
  * never stored and never allowed to throw into a whole run. */
 const MAX_DISCOVERED = 2000;
 const MAX_FIELD_LENGTH = 4096;
-
-export type CheckoutMatch = "origin" | "name";
-
-export interface CheckoutCandidate {
-  cwd: string;
-  /** `origin`: same normalised `origin` remote. `name`: only the directory
-   * name matches — a weaker suggestion that is NEVER auto-filled. */
-  match: CheckoutMatch;
-}
-
-export interface HostCheckoutSuggestion {
-  hostId: string;
-  hostName: string;
-  /** Origin matches first, then name matches. Never empty. */
-  candidates: CheckoutCandidate[];
-  /** More than one clone on the host has the project's origin. */
-  ambiguous: boolean;
-  /** The operator removed a mapping for this host earlier: it is still
-   * suggested, but auto-fill skips it. */
-  declined: boolean;
-}
 
 /** Discovery results per host for ONE run: a host is asked once, however
  * many projects are checked against it (the primary's discover route is

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { api, ApiError } from "./api/index.js";
 import type { Launcher } from "./api/index.js";
-import { makeHost, makeProject } from "./test/fixtures.js";
+import { makeHost, makeHostCwdsMeta, makeProject } from "./test/fixtures.js";
 import { useDashboardStore } from "./store/index.js";
 import type * as ApiModule from "./api/index.js";
 import {
@@ -385,7 +385,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       const user = userEvent.setup();
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
-        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+        initialHostCwdsMeta: makeHostCwdsMeta("mac-1"),
       });
 
       expect(screen.getByText("auto-detected")).toBeInTheDocument();
@@ -409,7 +409,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       const user = userEvent.setup();
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
-        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+        initialHostCwdsMeta: makeHostCwdsMeta("mac-1"),
       });
 
       await user.click(screen.getByRole("button", { name: "Save changes" }));
@@ -433,7 +433,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       const user = userEvent.setup();
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
-        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+        initialHostCwdsMeta: makeHostCwdsMeta("mac-1"),
       });
 
       await user.type(screen.getByRole("textbox", { name: "Path on builder" }), "/mine");
@@ -450,7 +450,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       const user = userEvent.setup();
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
-        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+        initialHostCwdsMeta: makeHostCwdsMeta("mac-1"),
       });
 
       await user.click(screen.getByRole("button", { name: "Save changes" }));
@@ -465,7 +465,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
         // "gone-9" was deleted (or the project moved off it): there is no row for it.
-        initialHostCwdsMeta: { auto: ["gone-9"], declined: [] },
+        initialHostCwdsMeta: makeHostCwdsMeta("gone-9"),
       });
 
       await user.click(screen.getByRole("button", { name: "Save changes" }));
@@ -474,7 +474,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     });
 
     it("shows no badge for a flagged host that has no path", () => {
-      renderEdit({ initialHostCwds: {}, initialHostCwdsMeta: { auto: ["mac-1"], declined: [] } });
+      renderEdit({ initialHostCwds: {}, initialHostCwdsMeta: makeHostCwdsMeta("mac-1") });
       expect(screen.queryByText("auto-detected")).toBeNull();
     });
 
@@ -482,7 +482,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       const user = userEvent.setup();
       renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion", "box-2": "/srv/mullion" },
-        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+        initialHostCwdsMeta: makeHostCwdsMeta("mac-1"),
       });
       expect(screen.getAllByText("auto-detected")).toHaveLength(1);
 
@@ -573,7 +573,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
   it("opens with the project's placement flags and sends them once changed", async () => {
     const user = userEvent.setup();
     const onCreate = renderEdit({
-      initialPlacementConstraints: { platform: ["darwin"], allowBurst: false },
+      initialPlacementConstraints: { platform: ["darwin"], allowBurst: false, capabilities: [] },
     });
     expect(screen.getByRole("checkbox", { name: "macOS" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Linux" })).not.toBeChecked();
@@ -602,7 +602,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
   it("sends an emptied platform list when the last platform is unticked", async () => {
     const user = userEvent.setup();
     const onCreate = renderEdit({
-      initialPlacementConstraints: { platform: ["win32"], allowBurst: false },
+      initialPlacementConstraints: { platform: ["win32"], allowBurst: false, capabilities: [] },
     });
     await user.click(screen.getByRole("checkbox", { name: "Windows" }));
     await user.click(screen.getByRole("button", { name: "Save changes" }));

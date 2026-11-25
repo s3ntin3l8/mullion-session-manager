@@ -21,14 +21,10 @@ import { resolveCommitSha } from "./git-refs.js";
 import { resolveHostGitLog } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import type { WorkflowChange } from "../shared/types.js";
+export type { WorkflowChange } from "../shared/types.js";
 
 type TaskRow = typeof tasks.$inferSelect;
-
-/** What `tasks.workflowChange` holds while a push waits on the operator. */
-export interface WorkflowChange {
-  sha: string;
-  files: string[];
-}
 
 export type WorkflowGate =
   /** Verified: nothing under `.github/workflows/` changed. */

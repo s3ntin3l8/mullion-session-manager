@@ -33,7 +33,7 @@ import {
 import { waitFor } from "@testing-library/react";
 import { act } from "react";
 import { useDashboardStore } from "./store/index.js";
-import type { Theme } from "./store/index.js";
+import type { ResolvedTheme } from "./store/index.js";
 import {
   renderPane,
   stubFakeWebSocket,
@@ -62,7 +62,7 @@ describe("TerminalPane OSC push", () => {
 
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
 
-    useDashboardStore.setState({ theme: "light" as Theme });
+    useDashboardStore.setState({ theme: "light" as ResolvedTheme });
 
     await waitFor(() => {
       expect(decodedOscSends().length).toBeGreaterThan(0);
@@ -79,7 +79,7 @@ describe("TerminalPane OSC push", () => {
     // the time the socket's "open" handler is fired manually below, so the
     // drain would find nothing queued and silently no-op.
     act(() => {
-      useDashboardStore.setState({ theme: "light" as Theme });
+      useDashboardStore.setState({ theme: "light" as ResolvedTheme });
     });
 
     expect(fakeWsSend).not.toHaveBeenCalled();
@@ -100,7 +100,7 @@ describe("TerminalPane OSC push", () => {
     // were stored, so this correctly detects a new change and sends again.
     fakeWsSend.mockClear();
     act(() => {
-      useDashboardStore.setState({ theme: "dark" as Theme });
+      useDashboardStore.setState({ theme: "dark" as ResolvedTheme });
     });
 
     await waitFor(() => {
@@ -129,13 +129,13 @@ describe("TerminalPane OSC push", () => {
 
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
 
-    useDashboardStore.setState({ theme: "light" as Theme });
+    useDashboardStore.setState({ theme: "light" as ResolvedTheme });
     await waitFor(() => {
       expect(decodedOscSends().some((s) => s.endsWith("\x1b[?997;2n"))).toBe(true);
     });
 
     fakeWsSend.mockClear();
-    useDashboardStore.setState({ theme: "dark" as Theme });
+    useDashboardStore.setState({ theme: "dark" as ResolvedTheme });
     await waitFor(() => {
       expect(decodedOscSends().some((s) => s.endsWith("\x1b[?997;1n"))).toBe(true);
     });

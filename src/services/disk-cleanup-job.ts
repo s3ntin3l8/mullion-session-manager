@@ -3,14 +3,20 @@
 // a reload, a second tab or a proxy timeout can't lose it, and each source's
 // progress is visible while it works. One job at a time per server.
 
-import type { DockerPruneMode } from "./docker-storage.js";
-import type { TempPruneMode } from "./temp-storage.js";
-
-// Both prune services take the same two tiers; the intersection fails to
-// compile if either of them ever diverges from what a job hands to it.
-export type CleanupMode = DockerPruneMode & TempPruneMode;
-export type CleanupSource =
-  "docker" | "temp" | "caches" | "opencode" | "worktrees" | "android-images";
+import type {
+  CleanupSource,
+  CleanupStepState,
+  CleanupJob,
+  CleanupStatus,
+  CleanupMode,
+} from "../shared/types.js";
+export type {
+  CleanupSource,
+  CleanupStepState,
+  CleanupJob,
+  CleanupStatus,
+  CleanupMode,
+} from "../shared/types.js";
 
 export interface CleanupStepResult {
   reclaimedBytes: number;
@@ -31,26 +37,6 @@ export interface CleanupStepPlan {
   skip: string | null;
   run: () => Promise<CleanupStepResult>;
 }
-
-export interface CleanupStepState {
-  source: CleanupSource;
-  label: string;
-  state: "pending" | "running" | "done" | "skipped" | "error";
-  reclaimedBytes: number;
-  /** Why it was skipped, or what went wrong. */
-  note?: string;
-}
-
-export interface CleanupJob {
-  id: string;
-  mode: CleanupMode;
-  state: "running" | "done";
-  startedAt: string;
-  finishedAt?: string;
-  steps: CleanupStepState[];
-}
-
-export type CleanupStatus = CleanupJob | { state: "idle" };
 
 export const CLEANUP_IN_PROGRESS = "CLEANUP_IN_PROGRESS";
 

@@ -264,7 +264,7 @@ describe("project placement flags in the host chip (#2241)", () => {
   const flagged = {
     hostId: "local",
     hostCwds: { lin: "/a", mac: "/b", new: "/c" },
-    placementConstraints: { platform: ["darwin" as const], allowBurst: false },
+    placementConstraints: { platform: ["darwin" as const], allowBurst: false, capabilities: [] },
   };
 
   it("disables a host the platform flag forbids, with the reason, and keeps the others", () => {
@@ -305,7 +305,7 @@ describe("project placement flags in the host chip (#2241)", () => {
     expect(buildHostTargetOptions(base, [LINUX])[1].disabled).toBe(false);
     expect(
       buildHostTargetOptions(
-        { ...base, placementConstraints: { platform: [], allowBurst: false } },
+        { ...base, placementConstraints: { platform: [], allowBurst: false, capabilities: [] } },
         [LINUX],
       )[1].disabled,
     ).toBe(false);

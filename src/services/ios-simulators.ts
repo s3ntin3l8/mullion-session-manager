@@ -1,18 +1,17 @@
 import { execSimctl, type SimctlRunner } from "./device-drivers/ios-simulator.js";
-
-export type IosSimulatorState = "Booted" | "Shutdown";
-
-export interface IosSimulator {
-  udid: string;
-  name: string;
-  runtime: string;
-  state: IosSimulatorState;
-  /** The simctl device type identifier, when it reports one. */
-  deviceTypeId?: string;
-  /** When the simulator last booted (ISO 8601), absent until it has. The only
-   * signal that tells a simulator someone uses from one Xcode provisioned. */
-  lastBootedAt?: string;
-}
+import type {
+  SimulatorDeviceType,
+  SimulatorRuntime,
+  SimulatorCatalog,
+  IosSimulator,
+} from "../shared/types.js";
+export type {
+  IosSimulatorState,
+  SimulatorDeviceType,
+  SimulatorRuntime,
+  SimulatorCatalog,
+  IosSimulator,
+} from "../shared/types.js";
 
 /** Raised when `xcrun simctl list` cannot be run, exits non-zero, or returns
  * unparsable JSON — callers turn this into a 502 rather than an empty list. */
@@ -102,21 +101,6 @@ export async function listIosSimulators(
     throw new SimctlError(err instanceof Error ? err.message : String(err));
   }
   return parseSimctlDevices(stdout.toString("utf8"));
-}
-
-export interface SimulatorDeviceType {
-  id: string;
-  name: string;
-}
-
-export interface SimulatorRuntime {
-  id: string;
-  name: string;
-}
-
-export interface SimulatorCatalog {
-  deviceTypes: SimulatorDeviceType[];
-  runtimes: SimulatorRuntime[];
 }
 
 /** Raised for a create request the catalog rejects (unknown id, bad name). The

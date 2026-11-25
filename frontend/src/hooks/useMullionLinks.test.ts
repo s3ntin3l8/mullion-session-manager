@@ -3,22 +3,23 @@ import { renderHook } from "@testing-library/react";
 import { useDashboardStore } from "../store/index.js";
 import { describe, expect, it } from "vitest";
 import { buildMullionLinks, isTaskBranch, useMullionLinks } from "./useMullionLinks.js";
-import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
-import type { GitHubPROrWithChecks } from "../api/types.js";
+import { makeProject, makeSession, makeTask, makePr } from "../test/fixtures.js";
+import type { PROrWithChecks } from "../api/types.js";
 
 const project = makeProject({ id: 1, devServerUrl: "http://localhost:5173" });
-const pr = (over: Partial<GitHubPROrWithChecks>): GitHubPROrWithChecks => ({
-  number: 10,
-  title: "t",
-  htmlUrl: "u",
-  author: null,
-  headSha: "a",
-  headBranch: "feat/x",
-  baseBranch: "main",
-  ciStatus: "success",
-  actionsRuns: [],
-  ...over,
-});
+const pr = (over: Partial<PROrWithChecks>): PROrWithChecks =>
+  makePr({
+    number: 10,
+    title: "t",
+    htmlUrl: "u",
+    author: null,
+    headSha: "a",
+    headBranch: "feat/x",
+    baseBranch: "main",
+    ciStatus: "success",
+    actionsRuns: [],
+    ...over,
+  });
 
 describe("buildMullionLinks", () => {
   it("joins sessions by branch and worktree path, with dev server", () => {

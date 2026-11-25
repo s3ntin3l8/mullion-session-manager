@@ -6,6 +6,7 @@ import { isMacPlatform, macChordPress } from "./browserKeyMap.js";
 import { TextInput } from "./ui/primitives.js";
 import { browserApi } from "./api/browser.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
+import type { ExitedMessage } from "../../src/shared/ws-protocol.js";
 
 export interface BrowserPaneParams {
   sessionId: number;
@@ -20,9 +21,6 @@ interface UrlMessage {
 interface TitleMessage {
   type: "title";
   title: string;
-}
-interface ExitedMessage {
-  type: "exited";
 }
 interface ErrorMessage {
   type: "error";
@@ -40,9 +38,10 @@ interface ClipboardMessage {
   type: "clipboard";
   text: string;
 }
-type ControlMessage = UrlMessage | TitleMessage | ExitedMessage | ErrorMessage | ClipboardMessage;
+type BrowserControlMessage =
+  UrlMessage | TitleMessage | ExitedMessage | ErrorMessage | ClipboardMessage;
 
-function parseControlMessage(raw: string): ControlMessage | null {
+function parseControlMessage(raw: string): BrowserControlMessage | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

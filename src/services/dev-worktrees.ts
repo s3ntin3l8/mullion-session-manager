@@ -19,7 +19,23 @@ import {
   containsMount,
   UnsupportedMountPlatformError,
 } from "./mount-boundaries.js";
-import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
+import type {
+  GitBranchInfo,
+  GitWorktreeInfo,
+  RemoveOrphanResult,
+  DevWorktreeKind,
+  DevWorktreeCandidate,
+  DevWorktreeStatus,
+  OrphanRecovery,
+} from "../shared/types.js";
+export type {
+  RemoveOrphanResult,
+  DevWorktreeKind,
+  DevWorktreeReason,
+  DevWorktreeCandidate,
+  DevWorktreeStatus,
+  OrphanRecovery,
+} from "../shared/types.js";
 
 // Developer worktrees (issue #1605): `.wt/<slug>`, this repo's own convention,
 // and `.claude/worktrees/agent-*`, which Claude Code's isolated sub-agents
@@ -46,62 +62,22 @@ const ROOTS = [
   // to put a worktree; treated like `.wt/`.
   { dir: ".worktrees", kind: "wt" },
   { dir: path.join(".claude", "worktrees"), kind: "claude-agent" },
-] as const;
+] as const satisfies ReadonlyArray<{ dir: string; kind: DevWorktreeKind }>;
+// The other direction: every shared DevWorktreeKind has a root here.
+const _everyDevWorktreeKindHasARoot: Exclude<
+  DevWorktreeKind,
+  (typeof ROOTS)[number]["kind"]
+> extends never
+  ? true
+  : never = true;
 
 /** Directories (relative to a project) that hold developer worktrees. */
 export const DEV_WORKTREE_DIRS: readonly string[] = ROOTS.map((root) => root.dir);
-
-export type DevWorktreeKind = (typeof ROOTS)[number]["kind"];
-
-/**
- * Why it is safe to remove:
- * - `gone`: its branch's upstream was deleted on the remote (a merged and
- *   auto-deleted PR, or an abandoned one), per the last fetch.
- * - `merged`: GitHub reports a merged PR whose head is exactly this commit, for
- *   repos that don't delete branches on merge. Commits added since don't count.
- * - `detached-merged`: a detached HEAD whose commit is already in the default
- *   branch.
- * - `in-default`: a hook-created `worktree-*` branch whose tip is already in the
- *   default branch, i.e. nothing was committed on it.
- *
- * And one that is removed only by explicit confirmation (issue #2045):
- * - `orphaned`: a directory under a worktree root that `git worktree list` does
- *   not know (its registration was pruned, or it was never a worktree). Nothing
- *   can tell whether it holds work, so it is never removed by cleanup; it is
- *   not counted in `totalBytes`.
- */
-export type DevWorktreeReason = "gone" | "merged" | "detached-merged" | "in-default" | "orphaned";
 
 export interface DevWorktreeProject {
   id: number;
   name: string;
   cwd: string;
-}
-
-export interface DevWorktreeCandidate {
-  projectId: number;
-  projectName: string;
-  /** The project's main checkout, which `git worktree` commands run against. */
-  repoCwd: string;
-  path: string;
-  /** Path under the worktree root, e.g. `fix-thing` or `feat/nested`. */
-  slug: string;
-  branch: string | null;
-  kind: DevWorktreeKind;
-  reason: DevWorktreeReason;
-  /** e.g. `#1234` for `merged`. */
-  detail?: string;
-  headSha: string;
-  bytes: number;
-}
-
-export interface DevWorktreeStatus {
-  available: boolean;
-  /** Includes `orphaned` directories, which cleanup never removes. */
-  candidates: DevWorktreeCandidate[];
-  /** What cleanup can free: every candidate but the `orphaned` ones. */
-  totalBytes: number;
-  error?: string;
 }
 
 export interface DevWorktreePruneResult {
@@ -336,14 +312,6 @@ async function findOrphans(
   return orphans;
 }
 
-export interface OrphanRecovery {
-  projectId: number;
-  originalPath: string;
-  recoveryPath: string;
-  mayBePartial: boolean;
-  unverified?: boolean;
-}
-
 /** Recovery records live outside project rows, so project moves/deletions and
  * server restarts do not hide quarantined work. */
 export async function inspectOrphanRecoveries(
@@ -444,23 +412,6 @@ export async function inspectOrphanRecoveries(
   }
   return { recoveries: found, warnings };
 }
-
-export type RemoveOrphanResult =
-  | { removed: true; reclaimedBytes: number }
-  | {
-      removed: false;
-      reason:
-        | "invalid-path"
-        | "not-orphan"
-        | "in-use"
-        | "unsupported-platform"
-        | "cross-device"
-        | "contains-mount"
-        | "unavailable"
-        | "changed"
-        | "remove-failed";
-      recoveryPath?: string;
-    };
 
 /** Remove one freshly verified orphan, never as part of the cleanup sweep. */
 export async function removeOrphanedDevWorktree(

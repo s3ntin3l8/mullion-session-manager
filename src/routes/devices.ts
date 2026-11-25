@@ -36,6 +36,8 @@ import { forwardHostRequestError, replyHostUnreachable } from "../services/host-
 import { isValidDeviceAddress, isValidPairingCode } from "../services/device-address.js";
 import type { DiscoveredDevice } from "../services/device-discovery.js";
 import type { FastifyReply } from "fastify";
+import type { DeviceHostEntry, CreateDeviceBody } from "../shared/types.js";
+export type { DeviceHostEntry, CreateDeviceBody } from "../shared/types.js";
 
 // CRUD + one-shot action execution for devices (the `devices` DB table's
 // own route — routes/device.ts, singular, is the separate live WS video/
@@ -79,14 +81,6 @@ interface DeviceListItem {
 export const DEVICE_HOSTS_CACHE_MS = 10_000;
 /** The longest one agent may take to answer before it counts as unreachable. */
 export const DEVICE_HOSTS_TIMEOUT_MS = 5_000;
-
-export interface DeviceHostEntry {
-  hostId: string;
-  name: string;
-  status: "ok" | "unsupported" | "unreachable";
-  deviceKinds: DeviceKind[];
-  platforms: DevicePlatform[];
-}
 
 type RemoteKindsAnswer = Pick<DeviceHostEntry, "status" | "deviceKinds" | "platforms">;
 
@@ -300,22 +294,6 @@ async function createIosDevice(
   }
   reply.code(201);
   return toListItem(getDeviceRow(app, row.id) ?? row, spawned.info);
-}
-
-interface CreateDeviceBody {
-  kind?: DeviceKind;
-  // Emulator form.
-  avdName?: string;
-  // Physical form — the adb connect address ("host:port").
-  address?: string;
-  projectId?: number;
-  name?: string;
-  /** The host to run the device on (#3200); defaults to the project's host. */
-  hostId?: string;
-  /** Which platform runs the device (#3202); defaults to "android". */
-  platform?: DevicePlatform;
-  /** An iOS Simulator's UDID; only for `platform: "ios"`. */
-  udid?: string;
 }
 
 export async function devicesRoute(app: FastifyInstance): Promise<void> {

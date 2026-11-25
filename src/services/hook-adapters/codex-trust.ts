@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { isCurrentMullionGroup, resolveCodexHome, type CodexHooksFile } from "./codex.js";
+import type { CodexHookTrust } from "../../shared/types.js";
+export type { CodexHookTrust } from "../../shared/types.js";
 
 // Issue #259: Codex silently skips Mullion's merged Stop/PostToolUse hooks
 // until the user grants a one-time interactive `/hooks` trust decision. This
 // module detects that pending state so the UI can surface it, instead of the
 // user discovering it by accident (as happened before this was written).
-
-export type CodexHookTrust = "trusted" | "pending" | "not-installed";
 
 // Issue: extend surfaced session statuses — PR #301 registered four more
 // Codex events (SessionStart, SessionEnd, PermissionRequest,

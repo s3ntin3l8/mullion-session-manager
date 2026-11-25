@@ -5,18 +5,8 @@
 // background. The TTL counts from when a run *finishes*, so a long run can't
 // expire its own result and trigger a second one alongside it.
 
-export interface ProbeMeta {
-  state: "measuring" | "ready" | "error";
-  /** ISO time the held value was measured; null until a first run lands. */
-  measuredAt: string | null;
-  /** ISO time the run in flight started; only while `measuring`. */
-  startedAt?: string;
-  /** How long the run that produced the held value took. */
-  durationMs?: number;
-  error?: string;
-}
-
-export type Measured<T> = (T & ProbeMeta) | ProbeMeta;
+import type { ProbeMeta, Measured } from "../shared/types.js";
+export type { ProbeMeta, Measured } from "../shared/types.js";
 
 export interface MeasuredProbe<T> {
   read(options?: { refresh?: boolean }): Promise<Measured<T>>;

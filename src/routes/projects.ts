@@ -73,7 +73,6 @@ import {
   buildOriginIndex,
   findProjectByRepoIdentity,
   projectHasPath,
-  type RepoMatchReason,
 } from "../services/repo-identity.js";
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { HERMES_REVIEW_AGENT, hermesReviewAgentRefusal } from "../services/task-agent-resolve.js";
@@ -85,9 +84,7 @@ import {
   PLACEMENT_MODES,
   PLACEMENT_CAPABILITIES,
   PLACEMENT_PLATFORMS,
-  type PlacementCapability,
   type PlacementMode,
-  type PlacementPlatform,
 } from "../shared/constants.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 
@@ -134,6 +131,8 @@ import {
   serializePlacementConstraints,
 } from "../services/placement.js";
 import { listHosts } from "../services/host-registry.js";
+import type { PlacementConstraintsBody, DiscoveredProject } from "../shared/types.js";
+export type { PlacementConstraintsBody, DiscoveredProject } from "../shared/types.js";
 
 /** Issues #2123 / #2124 — a list of project ids (an empty one is stored as null). */
 const PROJECT_ID_LIST_SCHEMA = {
@@ -158,13 +157,6 @@ const GIT_IDENTITY_SCHEMA = {
     email: { type: "string", minLength: 1, maxLength: GIT_IDENTITY_FIELD_MAX },
   },
 } as const;
-
-/** Issue #2241 — what the API accepts for `placementConstraints`. */
-interface PlacementConstraintsBody {
-  platform?: PlacementPlatform[];
-  allowBurst?: boolean;
-  capabilities?: PlacementCapability[];
-}
 
 /** Issue #2241 — a project's placement steering flags (see schema.ts). */
 const PLACEMENT_CONSTRAINTS_SCHEMA = {
@@ -332,15 +324,6 @@ interface UpdateProjectBody {
   gitInit?: boolean;
   // Same contract as CreateProjectBody.allowDuplicate.
   allowDuplicate?: boolean;
-}
-
-interface DiscoveredProject extends DiscoveredCandidate {
-  isRegistered: boolean;
-  // Issue #2231 — the existing project this candidate is a checkout of, when
-  // its path or git origin matches one. The UI offers "Add as checkout of".
-  // `hostId` is the project's own host: a candidate on that host is a second
-  // clone there, which cannot be attached (only created separately).
-  matchedProject?: { id: number; name: string; hostId: string; reason: RepoMatchReason };
 }
 
 /**

@@ -3,6 +3,8 @@ import type { GitIdentity } from "./git-env.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
 import type { HookMessageKind, BackgroundTask } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
+import type { SubagentInfo } from "../shared/types.js";
+export type { SubagentInfo } from "../shared/types.js";
 
 export interface CreateSessionOptions {
   id: string;
@@ -164,35 +166,6 @@ export interface CreateSessionOptions {
    * on the primary (session-github-auth.ts). getOrCreate keeps it in memory
    * (session-github-token.ts); only its `mode` reaches the launch plan. */
   githubAuth?: SessionGithubAuth;
-}
-
-/** Phase 5 (Track A) — one subagent's identity and activity, built from the
- * agentId-bearing hook messages (see hook-protocol.ts's agent-attribution
- * envelope). Purely additive to `subagentCount`/`subagentCountAt` above,
- * never a replacement: not every adapter can supply an `agentId` (OpenCode's
- * `session.subagent` carries none), and a `.state.json` written before this
- * registry existed restores a bare count with no entries at all — either
- * case means `subagents` may legitimately be shorter than `subagentCount`,
- * which is "count known, detail unavailable," not an inconsistency. */
-export interface SubagentInfo {
-  agentId: string;
-  agentType: string | null;
-  startedAt: number;
-  /** Set when a matching SubagentStop arrives, OR when the staleness sweep
-   * (clearStaleBlockedIfOlderThan) force-finalizes this still-open entry
-   * against its own `startedAt` — independent of subagentCount's own
-   * staleness, which only zeroes the aggregate count and never touches
-   * this field. That second (registry-side) case leaves `summary` null (no
-   * final message was ever recorded), distinguishing a genuine finish from
-   * a stale one. */
-  endedAt: number | null;
-  summary: string | null;
-  fileChanges: number;
-  toolFailures: number;
-  /** Count of `fileChanges` + `toolFailures` attributed to this subagent —
-   * NOT every hook message involving it (e.g. its own SubagentStart/Stop
-   * aren't counted here). */
-  eventCount: number;
 }
 
 export interface SessionInfo {

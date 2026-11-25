@@ -237,6 +237,8 @@ import {
   type DropDisposition,
   type ExistingInstructionsMode,
 } from "../shared/constants.js";
+import type { ScaffoldConflict } from "../shared/types.js";
+export type { ScaffoldConflict } from "../shared/types.js";
 export { DROP_DISPOSITIONS, isDropDisposition, type DropDisposition };
 
 export class UnsupportedGenerationAgentError extends Error {
@@ -280,18 +282,6 @@ export type { ExistingInstructionsMode };
 
 const CONFLICT_KINDS = ["contradicts", "duplicates", "misplaced"] as const;
 export type ConflictKind = (typeof CONFLICT_KINDS)[number];
-
-export interface ScaffoldConflict {
-  file: string;
-  excerpt: string;
-  /** Report mode only ever carries a `ConflictKind`; a restructure report keeps
-   * whatever kind the agent used ("stale-reference", "other", ...). */
-  kind: string;
-  note: string;
-  /** Set only for a passage the agent dropped on purpose (#2934). Any other
-   * value, including none, still blocks reducing CLAUDE.md. */
-  disposition?: DropDisposition;
-}
 
 export interface GeneratedScaffoldContent {
   /** Absent on an instructions-only pass (the skill and reviewer already exist

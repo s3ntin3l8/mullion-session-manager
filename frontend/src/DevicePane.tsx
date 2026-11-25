@@ -29,6 +29,7 @@ import { Spinner } from "./ui/Spinner.js";
 import { devicesApi } from "./api/device.js";
 import { keyboardEventToHidUsage } from "./deviceHidKeyMap.js";
 import { STORAGE_KEYS, readString, writeString } from "./lib/persistedState.js";
+import type { ExitedMessage } from "../../src/shared/ws-protocol.js";
 
 export interface DevicePaneParams {
   deviceId: number;
@@ -53,9 +54,6 @@ function decodeVideoFrame(data: ArrayBuffer): ScrcpyMediaStreamPacket | null {
   return { type: "data", keyframe: (flagsByte & 1) === 1, data: payload };
 }
 
-interface ExitedMessage {
-  type: "exited";
-}
 interface ErrorMessage {
   type: "error";
   message: string;
@@ -66,7 +64,7 @@ interface ClipboardMessage {
   type: "clipboard";
   text: string;
 }
-type ControlMessage = ExitedMessage | ErrorMessage | ClipboardMessage;
+type DeviceControlMessage = ExitedMessage | ErrorMessage | ClipboardMessage;
 
 // One size/weight for every toolbar glyph — see ui/icons.tsx's note on why
 // the old Unicode glyphs never lined up.
@@ -128,7 +126,7 @@ function canCopyImage(): boolean {
   );
 }
 
-function parseControlMessage(raw: string): ControlMessage | null {
+function parseControlMessage(raw: string): DeviceControlMessage | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);

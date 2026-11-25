@@ -4,20 +4,8 @@
 // and keeps Settings.tsx react-refresh-clean. See settings.ts's doc comment
 // on the backend's taskMaster field for the full sentinel rationale.
 import type { AppSettings, ServerInfo } from "./api/index.js";
-
-export interface ResolvedTaskMasterConfig {
-  enabled: boolean;
-  autoClaimPaused: boolean;
-  maxConcurrent: number;
-  budgetMinutes: number;
-  workerStartTimeoutMinutes: number;
-  progressCommentMinutes: number;
-  rateLimitGraceMinutes: number;
-  rateLimitMaxParkHours: number;
-  skipPermissions: boolean;
-  reviewCiWaitMinutes: number;
-  maxAutoReturnRounds: number;
-}
+import type { ResolvedTaskMasterConfig } from "../../src/shared/types.js";
+export type { ResolvedTaskMasterConfig } from "../../src/shared/types.js";
 
 export function resolveTaskMaster(
   taskMaster: AppSettings["taskMaster"],

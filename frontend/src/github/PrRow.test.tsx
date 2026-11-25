@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { PrRow } from "./PrRow.js";
 import { api } from "../api/index.js";
 import type * as ApiModule from "../api/index.js";
-import type { GitHubPROrWithChecks } from "../api/types.js";
+import type { PROrWithChecks } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useDashboardStore } from "../store/index.js";
 import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
@@ -25,7 +25,7 @@ const PR = {
   baseBranch: "main",
   ciStatus: "success",
   actionsRuns: [],
-} as unknown as GitHubPROrWithChecks;
+} as unknown as PROrWithChecks;
 
 const entry = (preview: MullionLinkEntry["preview"]): MullionLinkEntry => ({
   sessions: [],
@@ -150,7 +150,7 @@ describe("PrRow task quick actions", () => {
     approveTask: useDashboardStore.getState().approveTask,
   };
   afterEach(() => useDashboardStore.setState({ tasks: [], taskMasterEnabled: false, ...before }));
-  const taskPr = { ...PR, taskId: 9, taskStatus: "failed" } as GitHubPROrWithChecks;
+  const taskPr = { ...PR, taskId: 9, taskStatus: "failed" } as PROrWithChecks;
 
   it("Retry on a failed task's PR; its error shows on the row", async () => {
     const retryTask = vi.fn().mockRejectedValue(new Error("Host is offline"));

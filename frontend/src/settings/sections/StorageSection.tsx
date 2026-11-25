@@ -294,19 +294,19 @@ function DiskRow({ filesystem }: { filesystem: SystemStats["filesystems"][number
 }
 
 const RECOVERY_KEY = "mullion.orphanRecoveryPaths";
-type OrphanRecovery = {
+type StoredOrphanRecovery = {
   recoveryPath: string;
   originalPath: string;
   mayBePartial?: boolean;
   unverified?: boolean;
   dismissed?: boolean;
 };
-function readRecoveries(): OrphanRecovery[] {
+function readRecoveries(): StoredOrphanRecovery[] {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(RECOVERY_KEY) ?? "[]");
     return Array.isArray(value)
       ? value.filter(
-          (entry): entry is OrphanRecovery =>
+          (entry): entry is StoredOrphanRecovery =>
             typeof entry === "object" &&
             entry !== null &&
             typeof entry.recoveryPath === "string" &&
@@ -319,8 +319,8 @@ function readRecoveries(): OrphanRecovery[] {
 }
 
 export function StorageSection() {
-  const [recoveries, setRecoveries] = useState<OrphanRecovery[]>(readRecoveries);
-  const saveRecoveries = (next: OrphanRecovery[]) => {
+  const [recoveries, setRecoveries] = useState<StoredOrphanRecovery[]>(readRecoveries);
+  const saveRecoveries = (next: StoredOrphanRecovery[]) => {
     setRecoveries(next);
     try {
       localStorage.setItem(RECOVERY_KEY, JSON.stringify(next));
@@ -328,7 +328,7 @@ export function StorageSection() {
       /* The visible notice still works. */
     }
   };
-  const mergeRecoveries = (incoming: OrphanRecovery[]) => {
+  const mergeRecoveries = (incoming: StoredOrphanRecovery[]) => {
     setRecoveries((current) => {
       const next = [...current];
       let changed = false;

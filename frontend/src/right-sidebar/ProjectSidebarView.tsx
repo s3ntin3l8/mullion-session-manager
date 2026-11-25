@@ -8,7 +8,7 @@ import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
 
-interface ProjectRow {
+interface ProjectSidebarRow {
   key: "onOpenAgentRules" | "onOpenProjectBriefing" | "onOpenProjectSetup" | "onOpenDockConfig";
   title: string;
   subtitle: string;
@@ -18,7 +18,7 @@ interface ProjectRow {
 // Same entries (and copy) as the command palette's "Project ›" drill-in,
 // minus "Edit project files" — that is the Files view's job. The four editors
 // open the Project settings dialog on their section (#3406).
-const EDITOR_ROWS: ProjectRow[] = [
+const EDITOR_ROWS: ProjectSidebarRow[] = [
   {
     key: "onOpenAgentRules",
     title: "Agent Rules",
@@ -50,7 +50,7 @@ function Row({
   subtitle,
   icon: Icon,
   onClick,
-}: Omit<ProjectRow, "key"> & { onClick: () => void }) {
+}: Omit<ProjectSidebarRow, "key"> & { onClick: () => void }) {
   return (
     <button type="button" className="project-sidebar-row" onClick={onClick}>
       <Icon size={15} />

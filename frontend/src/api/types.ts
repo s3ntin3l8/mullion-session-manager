@@ -1,10 +1,12 @@
 // Local (frontend-only) API response/request shapes — split out of the
 // former flat frontend/src/api.ts (PR 22 of the refactoring roadmap). The
-// ~90 types that used to be hand-mirrored 1:1 copies of a backend
-// declaration already moved to src/shared/types.ts in an earlier PR (Wave
-// 2); this file holds only what's left: shapes with no backend twin,
-// response envelopes assembled ad hoc in route handlers, and request-only
-// input types. Domain modules (./projects.ts, ./sessions.ts, etc.) import
+// types that used to be hand-mirrored 1:1 copies of a backend declaration
+// moved to src/shared/types.ts in two waves (the second, #2412, took every
+// remaining same-named twin); this file holds only what's left: shapes with
+// no backend declaration of the same name, response envelopes assembled ad
+// hoc in route handlers, and request-only input types. Declaring a type here
+// with a backend type's name fails `npm run check:shared-type-twins`. Domain
+// modules (./projects.ts, ./sessions.ts, etc.) import
 // from here for their function signatures; api/index.ts re-exports every
 // name below unchanged so no call site anywhere in the frontend needs to
 // change its import.
@@ -35,27 +37,37 @@ import type {
   ReleaseMergeReason,
   ReleaseMergeResult,
   DockControl,
-  Theme,
-  CursorStyle,
-  SidebarDensity,
-  SoundName,
-  LayoutMode,
   IssueTriageState,
   RelayReviewState,
   ReviewSummary,
   ReviewSummaryEntry,
+  ResourceSeverity,
+  SpaceEntry,
+  HermesModelProvider,
+  SubagentInfo,
+  BackgroundTask,
+  SetupStatus,
+  StoredEventRow,
+  PreProvision,
+  GitHubIssueOrPr,
+  GitHubActionsRun,
+  GitHubJob,
+  PruneSkipReason,
+  SshAuthSockSource,
+  HostCwdsMeta,
+  GitHubPRsStatus,
+  PrPhase,
+  ReviewMarkerResult,
+  PlacementConstraints,
+  IssueComment,
+  GitHubAppStatus,
+  AppSettings,
 } from "../../../src/shared/types.js";
 import type { NeedsHumanReason } from "../needsHuman.js";
 import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
-import type { HostSettings } from "./host-types.js";
-import type { UpdateStatus } from "./update-types.js";
+import type { UpdateStatus } from "../../../src/shared/types.js";
 import type { DevicePlatform } from "./deviceTypes.js";
-import type {
-  PlacementCapability,
-  PlacementMode,
-  PlacementPlatform,
-  TaskStatus,
-} from "../../../src/shared/constants.js";
+import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 export type {
   HostRole,
   PlacementCapability,
@@ -64,7 +76,7 @@ export type {
 } from "../../../src/shared/constants.js";
 export type { HostProtocolStatus } from "../../../src/shared/agent-protocol.js";
 
-export type { UpdateCheckResult, UpdatePhase, UpdateStatus } from "./update-types.js";
+export type { UpdateCheckResult, UpdatePhase, UpdateStatus } from "../../../src/shared/types.js";
 export type { Agent, CodexHookTrust } from "./agent-types.js";
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
 export type { GitBranchOpReason, GitBranchOpResult };
@@ -93,8 +105,6 @@ export interface AuthStatus {
   logout: { kind: "gateway"; url: string } | { kind: "local" } | { kind: "unavailable" };
 }
 
-export type ResourceSeverity = "normal" | "warning" | "critical";
-
 export interface SystemStats {
   sampledAt: string;
   cpu: { logicalCores: number; loadAverage1m: number };
@@ -111,36 +121,6 @@ export interface SystemStats {
   }>;
 }
 
-/**
- * Every slow storage measurement (Docker, temp files, caches, opencode,
- * worktrees) runs in the background on the server. `measuring` means a run is
- * in progress; its last known figures, if any, ride along. A first run that has
- * not finished has no figures, only this metadata.
- */
-export interface ProbeMeta {
-  state: "measuring" | "ready" | "error";
-  /** ISO time of the figures below; null until a first run lands. */
-  measuredAt: string | null;
-  /** ISO time the run in progress started; only while `measuring`. */
-  startedAt?: string;
-  /** How long the run behind the figures took. */
-  durationMs?: number;
-  error?: string;
-}
-export type Measured<T> = (T & ProbeMeta) | ProbeMeta;
-
-/** One entry of the "where the space is" report (read-only; nothing here is deleted). */
-export interface SpaceEntry {
-  path: string;
-  bytes: number;
-  isDirectory: boolean;
-  /** The cleanup source that owns this path, e.g. "uv" or "npm cache". */
-  coveredBy?: string;
-  /** Why Mullion does not clean this; only set when `coveredBy` is not. */
-  notCovered?: string;
-  children?: SpaceEntry[];
-}
-
 export interface SpaceReportStatus {
   available: boolean;
   /** The home directory the entries are under. */
@@ -153,181 +133,6 @@ export interface SpaceReportStatus {
   unreadableEntries: number;
   /** The walk stopped at its entry cap, so every figure is a lower bound. */
   truncated?: boolean;
-  error?: string;
-}
-
-export interface DockerStorageStatus {
-  available: boolean;
-  rows: Array<{
-    type: string;
-    totalCount: number;
-    activeCount: number;
-    sizeBytes: number;
-    reclaimableBytes: number;
-  }>;
-  totalSizeBytes: number;
-  reclaimableBytes: number;
-  estimates: { safeBytes: number | null; aggressiveBytes: number };
-  /** Absent when Docker's verbose usage could not be read ("unknown", not "none"). */
-  volumes?: {
-    anonymousUnused: { count: number; bytes: number };
-    named: { count: number; bytes: number };
-    inUse: { count: number; bytes: number };
-  };
-  error?: string;
-}
-
-export interface CacheDirStatus {
-  id: string;
-  label: string;
-  bytes: number;
-  exists: boolean;
-  /** Emptying is irreversible: not rebuilt or re-downloaded afterwards. */
-  permanent?: boolean;
-}
-
-export interface CacheStorageStatus {
-  available: boolean;
-  root: string;
-  caches: CacheDirStatus[];
-}
-
-export type DockerPruneMode = "safe" | "aggressive";
-
-/** One source's part of a cleanup job. */
-export interface CleanupStepState {
-  source: CleanupSource;
-  label: string;
-  state: "pending" | "running" | "done" | "skipped" | "error";
-  reclaimedBytes: number;
-  /** Why it was skipped, what stopped it early, or what went wrong. */
-  note?: string;
-}
-
-/** A disk cleanup the server runs in the background; poll it until `done`. */
-export interface CleanupJob {
-  id: string;
-  mode: DockerPruneMode;
-  state: "running" | "done";
-  startedAt: string;
-  finishedAt?: string;
-  steps: CleanupStepState[];
-}
-
-export type CleanupStatus = CleanupJob | { state: "idle" };
-
-export interface TempStorageStatus {
-  available: boolean;
-  root: string;
-  estimates: {
-    safeBytes: number;
-    aggressiveBytes: number;
-    /** Part of `aggressiveBytes`: the npm cache, which aggressive cleanup also clears. */
-    npmCacheBytes: number;
-  };
-  candidates: { safe: number; aggressive: number };
-  claudeScratch: {
-    /** Why Claude's scratch is left alone entirely (running sessions couldn't be told apart). */
-    skipped?: string;
-    /** Session registry files that were skipped without stopping the rest. */
-    warnings: string[];
-  };
-  error?: string;
-}
-
-export interface OpencodeStorageStatus {
-  /** False when opencode has no database on this host (or it couldn't be read). */
-  available: boolean;
-  path: string;
-  /** The database plus its write-ahead log, as on disk. */
-  fileBytes: number;
-  /** Free pages a VACUUM would return; exact, not an estimate. */
-  reclaimableBytes: number;
-  liveBytes: number;
-  /** Another process has it open, so compacting it is skipped. */
-  inUse: boolean;
-  /** Who has it open, when `inUse`: what to stop to let the compaction run. */
-  holders?: Array<{ pid: number; command: string }>;
-  /** Couldn't tell who has it open; skipped just the same. */
-  holdersUnknown: boolean;
-  /** What couldn't be looked into, e.g. `cannot list /proc/1234/fd (EACCES)`. */
-  holdersUnknownReason?: string;
-  /** A compaction is running right now (it can take minutes). */
-  compacting: boolean;
-  /** How the last compaction since the server started ended. */
-  lastPrune?: {
-    output: string;
-    reclaimedBytes: number;
-    error?: string;
-    finishedAt: string;
-  };
-  error?: string;
-}
-
-export interface DevWorktreeCandidate {
-  projectId: number;
-  projectName: string;
-  path: string;
-  /** Path under the worktree root, e.g. `fix-thing`. */
-  slug: string;
-  branch: string | null;
-  /** `wt` is a `.wt/` (or `.worktrees/`) developer worktree; `claude-agent` one under `.claude/worktrees/`. */
-  kind: "wt" | "claude-agent";
-  /** `orphaned`: a directory git does not know; only explicit removal can delete it. */
-  reason: "gone" | "merged" | "detached-merged" | "in-default" | "orphaned";
-  /** e.g. `#1234` for `merged`. */
-  detail?: string;
-  bytes: number;
-}
-
-export type RemoveOrphanResult =
-  | { removed: true; reclaimedBytes: number }
-  | {
-      removed: false;
-      reason:
-        | "invalid-path"
-        | "not-orphan"
-        | "in-use"
-        | "unsupported-platform"
-        | "cross-device"
-        | "contains-mount"
-        | "unavailable"
-        | "changed"
-        | "remove-failed";
-      recoveryPath?: string;
-    };
-
-export type OrphanRemovalStatus =
-  | { state: "idle" }
-  | { id: string; projectId: number; path: string; state: "running"; startedAt: string }
-  | {
-      id: string;
-      projectId: number;
-      path: string;
-      state: "done";
-      startedAt: string;
-      finishedAt: string;
-      result: RemoveOrphanResult;
-    };
-
-export interface OrphanRecoveryInfo {
-  projectId: number;
-  originalPath: string;
-  recoveryPath: string;
-  mayBePartial: boolean;
-  unverified?: boolean;
-}
-export interface OrphanRemovalSnapshot {
-  job: OrphanRemovalStatus;
-  recoveries: OrphanRecoveryInfo[];
-  warnings?: string[];
-}
-
-export interface DevWorktreeStatus {
-  available: boolean;
-  candidates: DevWorktreeCandidate[];
-  /** Excludes the `orphaned` candidates, which cleanup never removes. */
-  totalBytes: number;
   error?: string;
 }
 
@@ -492,18 +297,10 @@ export type {
   HostHealthStatus,
   Host,
   HostChannelStatus,
-  HostCapacity,
+  HostCapacityReport,
   HostRecentIdentityReplacement,
   PlacementPreview,
 } from "./host-types.js";
-import type { CleanupSource } from "./storage-types.js";
-
-// Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
-// #820 PR7a/PR7c. Which of resolveSshAuthSock's three tiers is why
-// HostConfig.sshAuthSock.path has the value it does — "none" is never sent
-// over the wire (that tier reports the whole field as `null` instead, see
-// HostConfig's own comment).
-export type SshAuthSockSource = "configured" | "ambient" | "bridge";
 
 // Mirrors src/services/remote-host-client.ts's AgentConfig 1:1 — issue #247 /
 // roadmap 7.4. No idle timeout: that's a DB-backed Settings value on the
@@ -540,58 +337,8 @@ export interface HostConfig {
   sshAuthSock?: { path: string; present: boolean; source?: SshAuthSockSource } | null;
 }
 
-// Mirrors src/routes/agent-bridge.ts's BridgeListItem 1:1 — issue #820
-// PR7b/PR7c. GET /api/bridges's response shape: bridge-registry.ts's
-// already-sanitized DB-recorded intent merged with live connection state
-// (`connected`) at the route layer — same split as Host/HostHealthStatus
-// above.
-export interface BridgeSummary {
-  id: string;
-  name: string | null;
-  platform: string | null;
-  lastSeenAt: string | null;
-  createdAt: string;
-  /** A live, unexpired session exists on this row — "paired, and the
-   * credential hasn't expired" — independent of whether a helper is
-   * actually connected right now (see `connected`). */
-  hasLiveSession: boolean;
-  /** A helper is connected right now (`app.connectedBridges.has(id)` at
-   * request time on the primary). Can be `false` while `hasLiveSession` is
-   * `true` — a paired bridge whose helper process isn't currently running. */
-  connected: boolean;
-  /** User-set tiebreak order among multiple enrolled bridges (issue
-   * #1313) — lower first. The list this type describes (`GET
-   * /api/bridges`) already arrives sorted by this field. */
-  priority: number;
-}
-
 // The device panel types live in deviceTypes.ts.
 export * from "./deviceTypes.js";
-
-// An installed Android system image (src/services/avd-manager.ts's own
-// SystemImage) — `packagePath` is both the stable identifier and the exact
-// `-k`/`--package` value `avdmanager create avd` accepts; the rest is
-// enrichment-only display info that may be null if a host's
-// source.properties is missing/corrupt.
-export interface SystemImage {
-  packagePath: string;
-  apiLevel: string | null;
-  tagDisplay: string | null;
-  abi: string | null;
-}
-
-// An available (not necessarily installed) system image from Google's
-// repository — extends SystemImage with the `installed` flag and structured
-// tag/apiLevel fields (always non-null since they're parsed from the
-// packagePath, not from optional source.properties).
-export interface AvailableSystemImage {
-  packagePath: string;
-  apiLevel: string;
-  tag: string;
-  tagDisplay: string;
-  abi: string;
-  installed: boolean;
-}
 
 // Mirrors POST /api/bridges's response shape 1:1 (src/routes/agent-bridge.ts's
 // PairResponse) — snake_case field names, unlike every other type in this
@@ -606,8 +353,8 @@ export interface BridgePairingResponse {
 }
 
 // Mirrors GET /api/hosts/:id/update's response (src/routes/hosts.ts) —
-// issue #647 / roadmap 7.8. `status` reuses UpdateStatus below (defined
-// further down this file, the same shape self-update.sh's own
+// issue #647 / roadmap 7.8. `status` reuses the shared UpdateStatus (the
+// same shape self-update.sh's own
 // .update-status.json already produces on the primary), proxied from the
 // agent's own /internal/updates/status.
 export interface HostUpdateStatus {
@@ -623,42 +370,6 @@ export interface HostUpdateStatus {
   checksumUrl: string | null;
   status: UpdateStatus;
 }
-
-// Mirrors src/services/github-integration.ts's GitHubAppStatus 1:1 — never
-// carries the private key, only the public appId, a live installation
-// count (null when not configured, or when the live GitHub call failed),
-// and (#514) a fingerprint/rotation timestamp for the currently-stored
-// key so a rotation is verifiable from Settings.
-export interface GitHubAppStatus {
-  configured: boolean;
-  appId: string | null;
-  installationCount: number | null;
-  keyFingerprint: string | null;
-  keyRotatedAt: string | null;
-  // #1790 — the outcome of the last Hermes in-flight marker write through this
-  // App since the server started. Absent before the first review request.
-  checksMarker?: { state: string; owner: string; repo: string; at: number };
-  // #2104 — the last token-mint result per scope that did NOT come back clean:
-  // which App permission is missing and whether the operation fell back to the
-  // operator's PAT. Absent when every scope minted fine.
-  mintOutcomes?: MintOutcome[];
-}
-
-export interface MintOutcome {
-  scope: string;
-  /** The GitHub permission that scope needs, in the App settings' wording. */
-  permission: string;
-  state: "ok" | "denied" | "error";
-  status?: number;
-  owner: string;
-  repo: string;
-  fellBackToPat: boolean;
-  at: number;
-}
-
-/** Whether a Hermes review's in-flight marker was written, and why not (#1790). */
-export type ReviewMarker =
-  { written: true; checkRunId: number } | { written: false; reason: string; message: string };
 
 // #514 — PUT /api/integrations/github/app's response: it now verifies the
 // credential against GitHub (GET /app) before persisting, so a successful
@@ -683,14 +394,6 @@ export interface SetGitHubAppResult {
 export interface HermesIntegration {
   hasKey: boolean;
   updatedAt: string | null;
-}
-
-/** One provider's models from Hermes' picker inventory (issue #1775). */
-export interface HermesModelProvider {
-  /** Hermes provider slug — what a run's `provider` takes. */
-  provider: string;
-  name: string;
-  models: string[];
 }
 
 /** An unavailable Hermes is an answer (200), so the picker can fall back to free text. */
@@ -758,7 +461,7 @@ export interface ReviewRun {
   output?: string;
   error?: string;
   shuttingDown: boolean;
-  marker?: ReviewMarker;
+  marker?: ReviewMarkerResult;
 }
 
 export interface GitHubIntegration {
@@ -779,18 +482,6 @@ export interface GitHubIntegration {
   reviewerApp: GitHubAppStatus;
 }
 
-// Mirrors src/services/github-device-flow.ts's DeviceFlowSummary 1:1 — never
-// carries the device_code, only what the user needs to see (the
-// user_code/verification_uri) and the current status.
-export type DeviceFlowState = "pending" | "connected" | "expired" | "denied" | "error";
-
-export interface DeviceFlowStatus {
-  status: DeviceFlowState;
-  userCode: string;
-  verificationUri: string;
-  errorMessage?: string;
-}
-
 // Mirrors src/services/browser-cookies.ts's CookieProfileSummary 1:1 — never
 // carries the cookie values themselves, only a summary (see that file's own
 // comment on why).
@@ -803,34 +494,6 @@ export interface BrowserCookieProfile {
   importedAt: string;
 }
 
-// Phase 5 (Track A) — mirrors src/services/pty-manager.ts's SubagentInfo
-// 1:1. One named subagent, built from agentId-bearing hook messages.
-export interface SubagentInfo {
-  agentId: string;
-  agentType: string | null;
-  startedAt: number;
-  endedAt: number | null;
-  summary: string | null;
-  fileChanges: number;
-  toolFailures: number;
-  eventCount: number;
-}
-
-// Issue #428 — mirrors src/services/hook-protocol.ts's BackgroundTask 1:1.
-// Claude Code's own Stop/SubagentStop hook field — a bash job, MCP-backed
-// task, or background subagent still outstanding when the turn ended.
-export interface BackgroundTask {
-  id: string;
-  type: string;
-  status: string;
-  description: string;
-  command?: string;
-  agent_type?: string;
-  server?: string;
-  tool?: string;
-  name?: string;
-}
-
 // Mirrors src/services/session-worktree-reclaim.ts's KeptReason 1:1.
 export type WorktreeKeptReason =
   | "in-use"
@@ -840,8 +503,6 @@ export type WorktreeKeptReason =
   | "dirty"
   | "conflicts"
   | "remove-failed";
-
-export type SetupStatus = "running" | "ok" | "failed" | "timeout";
 
 export interface Session {
   id: number;
@@ -1097,27 +758,6 @@ export interface Session {
 // itself needs to know about the extra field.
 export type PromoteSessionResponse = Session & { warnings?: string[] };
 
-// Issue #213 (roadmap 4.7) — a row from the persisted `session_events` table
-// (src/db/schema.ts / src/services/event-history.ts's StoredEventRow),
-// deliberately NOT the same shape as NotificationEvent (src/shared/types.ts):
-//   - `sessionId` is nullable (the FK is `onDelete: "set null"` — a row
-//     outlives its session, by design, since that's the point of history).
-//   - `kind` is a plain string, not the 16-member union — the DB column has
-//     no enum constraint (schema.ts's own comment: 16+ kinds and growing),
-//     so an old row can carry a kind newer code no longer recognizes.
-//   - `payload` is nullable — `null` in the DB, or when the stored JSON
-//     failed to parse (src/services/event-history.ts's parsePayload).
-// See frontend/src/eventHistory.ts's adapter for how this becomes something
-// SessionTimeline.tsx can render.
-export interface StoredEventRow {
-  id: number;
-  sessionId: number | null;
-  seq: number;
-  kind: string;
-  ts: number;
-  payload: Record<string, unknown> | null;
-}
-
 export interface EventHistoryPage {
   // false when sessions.eventPersistence is off — a deliberate success
   // response, not an error, so a caller can tell "off" from "nothing
@@ -1158,33 +798,6 @@ export interface Group {
   createdAt: string;
 }
 
-export interface DiscoveredProject {
-  name: string;
-  cwd: string;
-  isGitRepo: boolean;
-  // Normalised-or-raw `origin` remote; absent from an agent too old to report one.
-  origin?: string | null;
-  isWorktree?: boolean;
-  isRegistered: boolean;
-  // Issue #2231 — the existing project this checkout belongs to (same path, or
-  // same git origin), so the UI offers "Add as checkout of <project>".
-  matchedProject?: { id: number; name: string; hostId: string; reason: "path" | "origin" };
-}
-
-// Issue #2090 — mirrors src/services/host-cwds-meta.ts's HostCwdsMeta: which
-// `hostCwds` entries were auto-detected (and not yet saved by an operator), and
-// which hosts the operator declined (auto-detect never re-adds those).
-// Issue #2241 — where Auto may place a project's work. `platform` is an
-// allow-list (empty = any platform); `allowBurst` lets "burst" hosts take Auto
-// work (they stay out by default). A task `Platform:`/`Host:` directive
-// overrides both. Issue #2306 — `capabilities` are host capabilities the
-// project REQUIRES; unlike the two above, a directive does not override them.
-export interface PlacementConstraints {
-  platform: PlacementPlatform[];
-  allowBurst: boolean;
-  capabilities?: PlacementCapability[];
-}
-
 // Lazy checkout materialization: what a clone job reports (GET
 // /api/projects/:id/host-checkouts/:hostId/materialize), and the 202 body of
 // POST /api/sessions when placement picked a host the project is not cloned on.
@@ -1197,63 +810,6 @@ export interface MaterializeStatus {
 export interface PreparingCheckoutResponse {
   preparingCheckout: { projectId: number; hostId: string };
 }
-// Hosts a project's checkout is cloned onto ahead of the first placement.
-export type PreProvision = "none" | "all" | string[];
-
-export interface HostCwdsMeta {
-  auto: string[];
-  declined: string[];
-  // Hosts whose entry is a Mullion-created clone. Optional so older responses
-  // and hand-built fixtures still type-check.
-  managed?: string[];
-}
-
-// Mirrors src/services/host-checkout-detect.ts: a clone of the project on
-// another host. `origin`: the same repository (matching `origin` remote);
-// `name`: only the directory name matches, a weaker suggestion.
-export interface HostCheckoutCandidate {
-  cwd: string;
-  match: "origin" | "name";
-}
-
-export interface HostCheckoutSuggestion {
-  hostId: string;
-  hostName: string;
-  candidates: HostCheckoutCandidate[];
-  // More than one clone on the host has the project's origin.
-  ambiguous: boolean;
-  // The operator removed this host's path earlier.
-  declined: boolean;
-}
-
-// Issue #2232 — projects that share one origin; the oldest is the survivor.
-export interface MergeCounts {
-  tasks: number;
-  liveTasks: number;
-  sessions: number;
-  runningSessions: number;
-  previews: number;
-}
-
-export interface DuplicateProject {
-  id: number;
-  name: string;
-  hostId: string;
-  cwd: string;
-  createdAt: string;
-}
-
-export interface DuplicateProjectEntry extends DuplicateProject {
-  counts: MergeCounts;
-  // Why merging this one into the survivor is refused right now, or null.
-  refusal: { code: string; message: string } | null;
-}
-
-export interface DuplicateGroup {
-  origin: string;
-  survivor: DuplicateProject;
-  duplicates: DuplicateProjectEntry[];
-}
 
 export interface DetectCheckoutsResult {
   // False while settings.autoDetectHostCheckouts is off: nothing was changed.
@@ -1264,75 +820,91 @@ export interface DetectCheckoutsResult {
   skipped?: "offline" | "drained";
 }
 
-// Mirrors src/services/github.ts's GitHubRepoStatus 1:1 (issue #27).
-// GET /api/projects/:id/github returns 204 (no body) for every
-// "not applicable" case (no github.com remote, no account connected, a
-// GitHub API error) — callers treat that identically to `null`, never as
-// an error to surface.
-export interface GitHubIssueOrPr {
-  number: number;
-  title: string;
-  htmlUrl: string;
-  author: string | null;
-}
-
-// Issue #27 phase 5 — the default branch's latest Actions run per workflow.
-export interface GitHubActionsRun {
-  name: string;
-  status: string;
-  conclusion: string | null;
-  htmlUrl: string;
-  headSha: string;
-}
-
 // The backend's declaration, shared rather than hand-mirrored (the two were
 // the same union spelled twice) — src/shared/types.ts.
-export type { GitHubCiStatus } from "../../../src/shared/types.js";
-
-// Per-PR CI status (issue #102) — mirrors src/services/github.ts's
-// PROrWithChecks 1:1.
-export interface GitHubPROrWithChecks {
-  number: number;
-  title: string;
-  htmlUrl: string;
-  author: string | null;
-  headSha: string;
-  headBranch: string;
-  baseBranch: string;
-  ciStatus: GitHubCiStatus;
-  actionsRuns: GitHubActionsRun[];
-  /**
-   * The review relay's state for this PR (issue #1630) — present only when a
-   * review was requested for it through Mullion's Hermes relay. Absent means
-   * "no relay run is known for this PR" — which is NOT "no review is
-   * pending" (the relay's run index is in-memory, so a restart loses it).
-   */
-  relayReview?: RelayReviewState;
-  /** Task Master task that opened this PR (joined on prNumber/branchName). */
-  taskId?: number;
-  taskStatus?: string;
-  // Review state (backend github-pr-reviews.ts). Optional: absent from a
-  // server that predates it, and from the many hand-built test fixtures.
-  isDraft?: boolean;
-  updatedAt?: string | null;
-  reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
-  mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
-  mergeStateStatus?: string | null;
-  reviewers?: { login: string; state: string; recovered?: boolean }[];
-  /** Server-computed review status, shared with the PR detail (epic #1965, A2). */
-  reviewSummary?: ReviewSummary;
-  requestedReviewers?: string[];
-  /** null = not fetched (yet), as opposed to a known zero. */
-  unresolvedThreads?: number | null;
-  commentCount?: number | null;
-  /** True once the poller fetched this PR's head runs (possibly none). */
-  ciFetched?: boolean;
-  /** Head commit's check rollup (includes non-Actions checks); already folded into `ciStatus`. */
-  checksRollup?: "success" | "failure" | "pending" | null;
-  /** Commits the head is behind its base; read only for a PR GitHub reports BEHIND. */
-  behindBy?: number | null;
-  prPhase?: GitHubPrPhase;
-}
+export type {
+  GitHubCiStatus,
+  ResourceSeverity,
+  ProbeMeta,
+  Measured,
+  SpaceEntry,
+  DockerStorageStatus,
+  DockerPruneMode,
+  CleanupStepState,
+  CleanupJob,
+  CleanupStatus,
+  TempStorageStatus,
+  OpencodeStorageStatus,
+  RemoveOrphanResult,
+  OrphanRemovalStatus,
+  SystemImage,
+  AvailableSystemImage,
+  MintOutcome,
+  HermesModelProvider,
+  SubagentInfo,
+  BackgroundTask,
+  SetupStatus,
+  StoredEventRow,
+  PreProvision,
+  HostCheckoutSuggestion,
+  MergeCounts,
+  GitHubIssueOrPr,
+  GitHubActionsRun,
+  GitHubJob,
+  GitHubStep,
+  GitBranchCommit,
+  PruneSkipReason,
+  AgentRuleAgent,
+  BundleSyncCli,
+  AgentRuleScope,
+  AgentRuleStatus,
+  AgentRuleTarget,
+  WorkflowConventionOption,
+  WorkflowConventionQuestion,
+  ProjectDirEntry,
+  ProjectFileStat,
+  ProjectDirListing,
+  ProjectFileContent,
+  ProjectFileWriteResult,
+  ProjectSearchResult,
+  ProjectSearchListing,
+  CacheDirStatus,
+  CacheStorageStatus,
+  DevWorktreeCandidate,
+  DevWorktreeStatus,
+  SshAuthSockSource,
+  HostCwdsMeta,
+  DuplicateGroup,
+  GitHubPRsStatus,
+  DeleteBranchReason,
+  DeleteBranchResult,
+  DeleteBranchResponse,
+  DuplicateMember,
+  DuplicateEntry,
+  MergeRefusal,
+  MergeRefusalCode,
+  DeviceFlowSummary,
+  BundleSyncStatusReport,
+  BundleSyncCliStatus,
+  GitBranchDrilldown,
+  PROrWithChecks,
+  PrPhase,
+  DeviceFlowStatus,
+  ReviewMarkerResult,
+  BundleSyncStatus,
+  CheckoutCandidate,
+  BundleSyncCliFieldStatus,
+  BundleSyncCliAgentsStatus,
+  PlacementConstraints,
+  IssueComment,
+  GitHubAppStatus,
+  BridgeSummary,
+  AppSettings,
+  OrphanRecovery,
+  OrphanRemovalSnapshot,
+  DiscoveredProject,
+  WebhookRegistrationResult,
+} from "../../../src/shared/types.js";
 
 /** A head-commit check that is not a GitHub Actions run. */
 export interface GitHubOtherCheck {
@@ -1341,19 +913,6 @@ export interface GitHubOtherCheck {
   url: string | null;
   source: "check_run" | "status";
 }
-
-export type GitHubPrPhase =
-  | "draft"
-  | "conflicts"
-  | "ci_failing"
-  | "changes_requested"
-  | "review_pending"
-  | "reviewed"
-  | "threads_unresolved"
-  | "behind"
-  | "ci_pending"
-  | "ready_to_merge"
-  | "unknown";
 
 export interface GitHubPrDetailComment {
   author: string | null;
@@ -1410,7 +969,7 @@ export interface GitHubPrDetail {
   /** False when there is no real CI answer yet — distinct from "no checks". */
   ciKnown: boolean;
   actionsRuns: GitHubActionsRun[];
-  prPhase: GitHubPrPhase;
+  prPhase: PrPhase;
   /**
    * Who a sidebar write posts as: the connected account (`user`) or, with none
    * connected, the GitHub App (`app`). Null when no token can write.
@@ -1422,13 +981,6 @@ export interface GitHubPrDetail {
   checksTruncated?: boolean;
   /** GraphQL was unavailable: reviews/threads/conversation are missing, not empty. */
   partial?: boolean;
-}
-
-export interface GitHubPRsStatus {
-  /** Served from a cache older than its TTL while a refresh is pending. */
-  stale?: boolean;
-  prs: GitHubPROrWithChecks[];
-  prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }
 
 export interface GitHubIssueLabel {
@@ -1469,15 +1021,6 @@ export interface GitHubIssuesResponse {
   taskLabel: string;
 }
 
-export interface GitHubIssueComment {
-  id: number;
-  author: string | null;
-  /** GitHub-rendered HTML — sanitize before inserting. */
-  bodyHtml: string;
-  createdAt: string;
-  htmlUrl: string;
-}
-
 /** Who a sidebar write posts as: the connected account, or the App's bot. */
 export interface GitHubWriteIdentity {
   kind: "user" | "app";
@@ -1494,7 +1037,7 @@ export interface GitHubIssueDetail extends GitHubIssueListItem {
   writeIdentity?: GitHubWriteIdentity | null;
   /** GitHub-rendered HTML — sanitize before inserting. */
   bodyHtml: string;
-  comments: GitHubIssueComment[];
+  comments: IssueComment[];
   /** Direct children (first 100); empty when none. */
   subIssues: GitHubIssueRef[];
   subIssuesSummary: { total: number; completed: number } | null;
@@ -1524,34 +1067,11 @@ export interface GitHubStatus {
   ciStatus: GitHubCiStatus;
 }
 
-export interface GitHubJob {
-  id: number;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  htmlUrl: string;
-  steps: GitHubStep[];
-}
-
-export interface GitHubStep {
-  name: string;
-  status: string;
-  conclusion: string | null;
-  number: number;
-}
-
 export interface GitHubLogResponse {
   log: string | null;
   job: GitHubJob | null;
   truncated: boolean;
   lineCount: number;
-}
-
-export interface WebhookRegistrationResult {
-  reposSucceeded: number;
-  reposFailed: number;
 }
 
 // GET /api/projects/:id/git-branches' response (issue #442's base-ref
@@ -1587,40 +1107,6 @@ export interface GitCommitDetail {
   files: { path: string; additions: number | null; deletions: number | null }[];
 }
 
-/** One commit of GET git-branch's `uniqueCommits`/`lastCommit`. */
-export interface GitBranchCommit {
-  sha: string;
-  /** Seconds since the epoch. */
-  time: number;
-  author: string;
-  subject: string;
-}
-
-/** GET /api/projects/:id/git-branch?name= (A3). */
-export interface GitBranchDetail {
-  name: string;
-  sha: string;
-  upstream?: string;
-  upstreamGone?: boolean;
-  upstreamAhead?: number;
-  upstreamBehind?: number;
-  /** The base ref the counts below compare against (e.g. "origin/main"). */
-  base: string | null;
-  baseAhead?: number;
-  baseBehind?: number;
-  uniqueCommits: GitBranchCommit[];
-  uniqueTruncated: boolean;
-  lastCommit: GitBranchCommit | null;
-  isCurrent: boolean;
-  mergeState: GitBranchMergeState | null;
-  pr: GitBranchPr | null;
-  worktreePath: string | null;
-  /** Id of the resumable task that holds this branch. */
-  taskId: number | null;
-}
-
-export type PruneSkipReason = "current" | "worktree" | "task-claimed" | "default";
-
 /** POST /api/projects/:id/git-branch-prune (A3). */
 export interface GitBranchPruneResult {
   dryRun: boolean;
@@ -1650,28 +1136,9 @@ export interface GitBranchesResult {
   defaultBranch?: string | null;
 }
 
-// Mirrors src/services/git-branch-delete.ts's DeleteBranchResult, plus the
-// "task-branch" reason routes/projects.ts's guard adds on top (the service
-// itself is DB-less and never produces it) — issue #442.
-export type DeleteBranchReason =
-  | "not-a-repo"
-  | "invalid-name"
-  | "no-such-branch"
-  | "current-branch"
-  | "checked-out"
-  | "unmerged"
-  | "delete-failed"
-  | "task-branch";
-
-export interface DeleteBranchResult {
-  deleted: boolean;
-  reason?: DeleteBranchReason;
-  detail?: string;
-}
-
 // Mirrors src/services/git-worktree.ts's RemoveListedWorktreeResult, plus
 // the "sessions-active" reason routes/projects.ts's guard adds on top
-// (same DB-less-service reasoning as DeleteBranchResult above) — issue #442.
+// (same DB-less-service reasoning as the shared DeleteBranchResponse) — issue #442.
 export type RemoveWorktreeReason =
   | "not-listed"
   | "is-main"
@@ -1689,83 +1156,6 @@ export interface RemoveWorktreeResult {
   removed: boolean;
   reason?: RemoveWorktreeReason;
   detail?: string;
-}
-
-// Mirrors src/services/agent-rules.ts's AgentRuleTarget 1:1 (issue #431).
-// `id` is the only thing PUT/DELETE ever send back — a fixed, server-owned
-// enum, never a filename or path (see resolveTarget()'s own doc comment on
-// why). `status` is null when the file doesn't exist; when it does,
-// "shadowed" means a higher-precedence file for the SAME agent already
-// wins (currently only Codex's AGENTS.override.md over AGENTS.md) — it says
-// nothing about another agent sharing the same absolutePath.
-// "claude-code" is the id the API uses (the backend's own AgentRuleAgent
-// enum, src/services/agent-rules.ts) — not the CLI binary.
-export type AgentRuleAgent = "claude-code" | "codex" | "opencode" | "agy";
-// Issue: mcode support — the CLIs the bundle sync can install skills into.
-// A SUPERSET of AgentRuleAgent: mcode gets the bundle's skills (into its own
-// `<dataDir>/skills`) but has no agent-rule concept, so it is deliberately
-// absent from AgentRuleAgent while present here.
-export type BundleSyncCli = "claude-code" | "codex" | "opencode" | "agy" | "mcode";
-export type AgentRuleScope = "project" | "global";
-export type AgentRuleStatus = "active" | "shadowed";
-
-export interface AgentRuleTarget {
-  id: string;
-  agent: AgentRuleAgent;
-  agentLabel: string;
-  scope: AgentRuleScope;
-  fileName: string;
-  absolutePath: string;
-  exists: boolean;
-  size: number | null;
-  mtimeMs: number | null;
-  status: AgentRuleStatus | null;
-  content: string | null;
-  truncated: boolean;
-  isSymlink: boolean;
-}
-
-// Mirrors S4's (#941) host-local bundle sync, surfaced by issues #944
-// (status/re-sync) and #945 (remove). "disabled" means the whole feature is
-// off (sessions.injectMullionBundle=false) — every CLI's skills/agents read
-// "disabled" in that case, not "not-synced"; render that as one top-level
-// state, not four rows implying breakage. "n-a" is codex's `agents` row
-// specifically — codex has no static per-agent file format. "not-synced"
-// means two different things depending on `cli`: for claude-code/opencode
-// it's "not yet using the more efficient global install, but this CLI still
-// gets the content via a per-session fallback" (not broken); for codex/agy
-// (no fallback) it means nothing is currently delivered. "stale" means a
-// synced file/dir drifted (hand-edited/deleted) since the last sync — Re-sync
-// now fixes it.
-export type SyncStatus = "synced" | "not-synced" | "stale" | "n-a" | "disabled";
-
-export interface BundleSyncCliFieldStatus {
-  status: SyncStatus;
-  root: string;
-  count: number;
-}
-
-export interface BundleSyncCliAgentsStatus {
-  status: SyncStatus;
-  // null for codex ("n-a" — no per-agent file format, so there's no root to
-  // report either).
-  root: string | null;
-  count: number;
-}
-
-export interface BundleSyncCliStatus {
-  cli: BundleSyncCli;
-  detected: boolean;
-  skills: BundleSyncCliFieldStatus;
-  agents: BundleSyncCliAgentsStatus;
-}
-
-export interface BundleSyncStatus {
-  enabled: boolean;
-  // null when enabled=false.
-  bundleHash: string | null;
-  manifestPath: string;
-  clis: BundleSyncCliStatus[];
 }
 
 export interface BundleSyncResyncResult {
@@ -2329,365 +1719,10 @@ export interface Task {
   archivedAt: string | null;
 }
 
-// AppSettings itself stays hand-mirrored rather than shared — its
-// notifications.notificationMatrix field is a real, deliberate type
-// divergence from the backend's settings.ts (see src/shared/types.ts's own
-// doc comment on Theme/CursorStyle/SidebarDensity/SoundName, which DO move,
-// for the full rationale). AppSettings is otherwise still a duplicate of
-// the backend's row shape, same pattern as Project/Session/etc. above.
-export const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace"] as const;
-export type LogLevel = (typeof LOG_LEVELS)[number];
-
-// `delegateModel` is optional: a settings blob from before it existed lacks it.
-type ModelSlots = Record<"defaultModel" | "reviewerModel", string | null> & {
-  delegateModel?: string | null;
-};
-
-export interface AppSettings {
-  theme: Theme;
-  terminal: {
-    fontFamily: string;
-    fontSize: number;
-    // Inner inset (px) between the dockview panel edge and the rendered
-    // terminal content, applied on all four sides — issue #91: xterm.js
-    // renders flush against the panel edge by default (unlike CLIs such as
-    // opencode that reserve their own internal margin), so this gives every
-    // CLI the same breathing room a real terminal emulator already provides.
-    padding: number;
-    colorScheme: string;
-    cursorStyle: CursorStyle;
-    cursorBlink: boolean;
-    scrollback: number;
-    copyOnSelect: boolean;
-    pasteOnRightClick: boolean;
-    // Mirrors settings.ts's DEFAULT_SETTINGS — honors OSC 52 clipboard-write
-    // requests from the foreground program (Claude Code / opencode both copy
-    // this way). See TerminalPane.tsx for the handler and the read-side
-    // security note (OSC 52 reads are never answered, regardless of this).
-    clipboardWrite: boolean;
-    reconnect: {
-      enabled: boolean;
-      maxAttempts: number;
-    };
-    keyCapture: {
-      ctrlR: boolean;
-      ctrlL: boolean;
-      ctrlK: boolean;
-    };
-    // Mirrors settings.ts's DEFAULT_SETTINGS — opt-in clipboard chords (issue
-    // #67 follow-up). See TerminalPane.tsx's attachKeyConflictHandler for the
-    // vim/readline Ctrl+V tradeoff and the Ctrl+C selection-vs-SIGINT logic.
-    clipboardKeys: {
-      ctrlV: boolean;
-      ctrlC: boolean;
-    };
-    // Mirrors settings.ts's DEFAULT_SETTINGS — voice dictation (push-to-talk).
-    // See voice/useVoiceDictation.ts and TerminalPane.tsx's VoiceMicButton.
-    voice: {
-      enabled: boolean;
-      hotkeyEnabled: boolean;
-      lang: string;
-      // A keyChord.ts-parseable chord string, e.g. "Ctrl+Shift+Space" (the
-      // default — see settings.ts's DEFAULT_SETTINGS for why it stays the
-      // default despite colliding with 1Password's Quick Access on
-      // Windows/Linux, #1119). Unvalidated here for the same reason
-      // `lang` above is: an unparseable value is keyChord.ts's own
-      // fallback-to-default problem, not this backend's to police.
-      hotkey: string;
-    };
-  };
-  sidebarDensity: SidebarDensity;
-  // Tablet tier plan (.claude/plans/another-thing-to-investigate-lively-
-  // kitten.md, PR 4) — see shared/types.ts's own doc comment on LayoutMode.
-  layoutMode: LayoutMode;
-  balancePanesOnDrop: boolean;
-  projectRoots: string[];
-  // Issue #2090 — opt-in (default off): map each project onto a host's
-  // matching clone automatically. Mirrors AppSettings.autoDetectHostCheckouts.
-  autoDetectHostCheckouts: boolean;
-  // Mirrors AppSettings.externalReadRoots: folders outside any project the
-  // file viewer may open read-only (absolute or `~/`).
-  externalReadRoots: string[];
-  // Mirrors src/services/settings.ts's AppSettings.diskCleanup: which
-  // allowlisted ~/.cache subtrees the aggressive cleanup may empty (ids from
-  // GET /api/storage/caches). Empty = none. `optIns` are the non-directory
-  // sources (currently only "docker-volumes").
-  diskCleanup: { cacheDirs: string[]; optIns: string[] };
-  launchers: {
-    defaultShell: string;
-    defaultAgent: string;
-    hiddenAgents: string[];
-    skipPermissionsAgents: string[];
-  };
-  notifications: {
-    channels: {
-      browser: boolean;
-      sound: boolean;
-      // #95 — web push delivery (pushClient.ts + public/push-sw.js), gated
-      // the same way browser/sound already are: per-status via
-      // notificationMatrix.notify below, this is the channel-level on/off on
-      // top of that. Mirrors src/services/settings.ts's own channels.push.
-      push: boolean;
-    };
-    soundName: SoundName;
-    idleThresholdSeconds: number;
-    // #98 item 4 — auto-bring-into-focus on an attention transition
-    // (App.tsx's autoFocusAttentionRef effect). Default false, per the
-    // issue's own "could be optional" framing — unlike a sound/desktop
-    // notification, this reaches into the grid and changes what's on
-    // screen, which is disruptive if the user is mid-task in a different
-    // pane. Combined with `notificationMatrix`'s own `autoFocus` column
-    // (both must be true for a given status to auto-focus) — see App.tsx.
-    autoFocusOnAttention: boolean;
-    /** Per-status notification matrix. Rows = status keys, columns =
-     * notify/sound/autoFocus. Seeded from DEFAULT_SETTINGS on first read;
-     * mirrors settings.ts 1:1. Replaces the old flat attentionAlerts/
-     * exitedAlerts/finishedAlerts toggles (issue #318) — see
-     * sessionStatus.ts's STATUS_PRESENTATION.defaultNotify for the
-     * per-status rationale these defaults mirror. */
-    notificationMatrix: Record<
-      SessionStatus,
-      { notify: boolean; sound: boolean; autoFocus: boolean }
-    >;
-  };
-  dock: {
-    defaultWorktreeRefresh: boolean;
-    // Issue #404 — mirrors src/services/settings.ts's AppSettings.dock.
-    // autoDetectDevServer 1:1. "ask" (default) surfaces a detected dev
-    // server in a plain session as a dev_server_detected notification the
-    // user can accept/dismiss; "off" disables the background scan.
-    autoDetectDevServer: "ask" | "off";
-    // Issue #73 — mirrors src/services/settings.ts's AppSettings.dock.
-    // dockerServices 1:1. Whether GET /api/projects/:id/dock merges in
-    // auto-discovered Docker Compose services; default true. A visibility
-    // kill-switch, not the safety gate — a discovered control still never
-    // auto-starts either way.
-    dockerServices: boolean;
-    // Mirrors src/services/settings.ts's AppSettings.dock.autoAttachDockerLogs
-    // 1:1. Default false — when on, a discovered Docker monitor with no
-    // matching session and docker.state === "running" starts its log stream
-    // automatically instead of waiting for a manual header click.
-    autoAttachDockerLogs: boolean;
-  };
-  sessions: {
-    namePattern: string;
-    confirmBeforeKill: boolean;
-    hideEndedSessions: boolean;
-    showTaskSessions: boolean;
-    reconcileIntervalSeconds: number;
-    // Rich statuses (fix: transient status clearing) — TTL backstop for a
-    // session's errorState; mirrors src/services/settings.ts 1:1. Surfaced
-    // in Settings.tsx as "Stale error timeout" (fix: status-clearing-
-    // semantics).
-    staleErrorSeconds: number;
-    // Issue #320 follow-up — separate, longer-default TTL backstop for the
-    // busy latches (compactState/subagentCount); mirrors
-    // src/services/settings.ts 1:1. Surfaced in Settings.tsx as "Stale busy
-    // timeout".
-    staleBusySeconds: number;
-    // How often the background git-fetcher runs for autoFetch-enabled projects
-    // (src/plugins/git-fetcher.ts). 0 disables auto-fetch entirely.
-    gitAutoFetchIntervalSeconds: number;
-    // Issue #213 (roadmap 4.7) — opt-in persistence of notification events to
-    // the session_events table. Default off, matching Phase 1's in-memory-only
-    // event model. Primary-local only: only sessions this process itself
-    // spawned are ever captured.
-    eventPersistence: boolean;
-    // Age (in days) past which persisted session_events rows are swept.
-    // 0 = unlimited/no sweep, same "0 disables" convention as
-    // gitAutoFetchIntervalSeconds above. Server clamps to [0, 3650].
-    eventRetentionDays: number;
-    // The "max events per session" bound issue #213's own body asked for,
-    // alongside eventRetentionDays above — independent settings, both swept
-    // on the same hourly tick. 0 = unlimited. Server clamps to [0, 100_000].
-    eventRetentionPerSession: number;
-    // Issue #405 — mirrors src/services/settings.ts 1:1. Gates only the
-    // SessionStart auto-inject pointer to the per-session agent guide copy
-    // (src/plugins/hooks.ts), never the per-session file write itself.
-    // Surfaced in Settings.tsx's Sessions section.
-    injectAgentGuide: boolean;
-    // agent-briefing follow-up to #405 — mirrors src/services/settings.ts
-    // 1:1. Gates the SessionStart injection of a PROJECT's own briefing,
-    // independently of injectAgentGuide above. Surfaced in Settings.tsx's
-    // Sessions section.
-    injectProjectBriefing: boolean;
-    // Issue — mirrors src/services/settings.ts 1:1. Gates whether Claude
-    // Code's launch command gets --plugin-dir pointed at Mullion's own
-    // tooling bundle, independently of injectAgentGuide/injectProjectBriefing
-    // above (a different mechanism entirely, not a SessionStart injection).
-    // Surfaced in Settings.tsx's Sessions section.
-    injectMullionBundle: boolean;
-    // Issue #937 — mirrors src/services/settings.ts 1:1. A single,
-    // install-wide, free-text "how we work" policy, injected into
-    // additionalContext for every session whose project hasn't opted out
-    // (projects.injectWorkflowConventions). Default "" (nothing configured
-    // yet) — surfaced in Settings.tsx's Sessions section, populated by the
-    // structured wizard (GET /api/workflow-conventions/questions, POST
-    // /api/workflow-conventions/preview) rather than hand-typed from a
-    // blank starter template.
-    workflowConventionsText: string;
-    // Issue #1201 (Phase 2 of the follow-up plan) — mirrors
-    // src/services/settings.ts 1:1, including the "every current question
-    // id mapped to \"\", never a bare {}" default rationale — see that
-    // field's own doc comment for why. WorkflowConventionsWizardModal.tsx
-    // reads this to pre-fill and to decide whether to open on the question
-    // flow or a review step.
-    workflowConventionAnswers: Record<string, string>;
-    workflowConventionsAppliedText?: string;
-    // Phase 5 (Track B, issue #193 5.3b) — mirrors src/services/settings.ts
-    // 1:1. Surfaced in Settings.tsx's Sessions section ("Max child sessions
-    // per parent").
-    maxChildSessionsPerParent: number;
-    // Phase 5 (Track B, issue #194 5.4) — mirrors src/services/settings.ts
-    // 1:1. Gates ONLY whether a spawned child's panel auto-opens
-    // (App.tsx); the child itself always appears in the sidebar regardless.
-    // Surfaced in Settings.tsx's Sessions section ("Auto-open child session
-    // panels").
-    autoOpenChildPanels: boolean;
-    // Mirrors src/services/settings.ts 1:1. The git identity stamped on
-    // Mullion session commits; either half blank = unset.
-    gitIdentity: { name: string; email: string };
-  };
-  // Mirrors src/services/settings.ts's AppSettings.taskMaster 1:1 — see its
-  // doc comment for the full sentinel rationale. enabled/maxConcurrent/
-  // budgetMinutes/progressCommentMinutes each override the matching
-  // MULLION_TASK_* env default at runtime; -1 / "inherit" means "no
-  // override, use the env default" (see taskConfig.ts's resolveTaskMaster,
-  // the frontend mirror of the backend's own resolver). Surfaced in
-  // Settings.tsx's Task Master section.
-  // Issue #957 — install-wide default opencode model per role, each a
-  // `provider/model` string (e.g. "openrouter/minimax-m3",
-  // "anthropic/claude-sonnet-4-5"). `null` means "no override; let opencode
-  // pick via its own priority chain".
-  // -1 / "inherit" = use the server's env default (see ServerInfo.runtimeEnv).
-  github: {
-    pollActiveSeconds: number;
-    pollQuietSeconds: number;
-    pollStaleThresholdSeconds: number;
-  };
-  hosts: HostSettings;
-  // Non-secret half of the Hermes review relay — the key itself is
-  // write-only via api.setHermesKey and never part of settings.
-  reviewRelay: {
-    provider: "none" | "hermes";
-    apiUrl: string;
-    model: string;
-    /** Hermes provider slug the model belongs to; empty = the bare model. */
-    modelProvider: string;
-    promptRepo: string;
-    promptPath: string;
-    /** The issue-triage relay's own prompt (issue #1629). */
-    triagePromptRepo: string;
-    triagePromptPath: string;
-    cooldownMinutes: number;
-    /**
-     * The GitHub login of the bot that posts the review. Only its landed
-     * reviews set the delta base of the next round — the shared workflow
-     * applies the same rule, and the two must agree or their idempotency
-     * keys diverge. It also decides which review, and which triage issue
-     * comment, shows as the relay's. Empty = any bot's counts in that
-     * status, but no delta base is derived (the workflow never accepts
-     * "any bot"), so the round reviews the whole diff.
-     */
-    reviewerBotLogin: string;
-    /**
-     * The name of the check run that records which commit a round covered
-     * (the ledger). Mirrors the shared workflow's `hermes-review-ledger-name`;
-     * EMPTY = ledger off, like `hermes-review-ledger: off`. The two must be set
-     * together or the relay and the workflow derive different bases.
-     */
-    ledgerName: string;
-    /**
-     * What `request_review` does when the review bot has already approved the
-     * PR: "refuse" (409 — apply its suggestions and push without another
-     * round) or "allow" (re-review every new head). `force` bypasses it.
-     */
-    reReviewAfterApproval: "refuse" | "allow";
-    /**
-     * Whether Task Master may use this Hermes connection as a review agent
-     * (`hermes` as a task's, project's or install-wide default review agent).
-     * Independent of `provider`, which turns on the GitHub-side relay. It also
-     * needs the API URL and key to count as usable.
-     */
-    taskMasterReviewer: boolean;
-  };
-  /**
-   * The Runway quota integration (issue #29) — the non-secret half. The
-   * admin key is write-only via api.setRunwayKey and never part of
-   * settings.
-   */
-  runway: {
-    /** Base URL of the Runway server. Empty = the feature is off. */
-    apiUrl: string;
-    /**
-     * Which Mullion agent each Runway provider id describes. Runway's
-     * provider ids name PROVIDERS (anthropic, opencode, chatgpt, …) and
-     * Mullion's agents are CLIs (claude, codex, opencode, agy) — the
-     * correspondence is per-install, and an agent that is not in the map is
-     * never quarantined.
-     */
-    providerMap: Record<string, string | string[]>;
-    /** How often to poll Runway for the quota. */
-    pollSeconds: number;
-  };
-  browser: {
-    // Read once at boot: a change needs a restart.
-    enabled: "inherit" | "on" | "off";
-    framerate: number;
-    // Read once at boot: a change needs a restart.
-    maxInstances: number;
-  };
-  devices: {
-    // Read once at boot: a change needs a restart.
-    discoveryEnabled: "inherit" | "on" | "off";
-    // Applied the next time an emulator starts. "on" is headless (-no-window).
-    emulatorHeadless: "inherit" | "on" | "off";
-    // null inherits DEVICE_EMULATOR_GPU.
-    emulatorGpu: string | null;
-  };
-  server: { logLevel: "inherit" | LogLevel };
-  // Install-wide default `--model` per non-opencode CLI; `null` means no
-  // flag (the CLI picks). Mirrors src/services/settings.ts.
-  // `delegateModel` (every CLI): a Task Master worker's delegation target.
-  claudeCode: ModelSlots & { smallModel: string | null };
-  codex: ModelSlots;
-  agy: ModelSlots;
-  // Issue: mcode support — mcode takes `-m <provider/model>`.
-  mcode: ModelSlots;
-  opencode: {
-    implementerModel: string | null;
-    reviewerModel: string | null;
-    // Issue #958 — opencode's `small_model` config key, used for
-    // lightweight tasks (title generation, summarization).
-    defaultSmallModel: string | null;
-    delegateModel?: string | null;
-  };
-  taskMaster: {
-    autoClaimPaused: boolean;
-    enabled: "inherit" | "on" | "off";
-    maxConcurrent: number;
-    budgetMinutes: number;
-    workerStartTimeoutMinutes: number;
-    progressCommentMinutes: number;
-    rateLimitGraceMinutes: number;
-    rateLimitMaxParkHours: number;
-    skipPermissions: "inherit" | "on" | "off";
-    // GitHub logins trusted in addition to repo owners/members/collaborators
-    // — mirrors settings.ts's AppSettings.taskMaster.trustedLogins.
-    trustedLogins: string[];
-    // #741 — Task Master's install-wide worker/review agent defaults,
-    // mirroring settings.ts's AppSettings.taskMaster 1:1. Independent of
-    // launchers.defaultAgent (which only drives the terminal launcher).
-    defaultAgent: string;
-    defaultReviewAgent: string;
-    // No sentinel, no env counterpart — settings.ts's own doc comment on
-    // this field explains why.
-    reviewCiWaitMinutes: number;
-    // Install-wide cap on automatic fix-up rounds; 0 = unlimited. A project's
-    // own maxAutoReturnRounds overrides it.
-    maxAutoReturnRounds: number;
-  };
-}
+// LOG_LEVELS is a runtime value, so it is shared through
+// src/shared/constants.ts rather than the type-only src/shared/types.ts.
+import type { LogLevel } from "../../../src/shared/constants.js";
+export { LOG_LEVELS, type LogLevel } from "../../../src/shared/constants.js";
 
 // A recursive partial — every level of AppSettings is independently
 // patchable (e.g. `{ terminal: { fontSize: 18 } }` without also sending
@@ -2698,23 +1733,6 @@ type DeepPartial<T> =
   T extends Array<unknown> ? T : T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T;
 
 export type SettingsPatch = DeepPartial<AppSettings>;
-
-// Issue #937 — mirrors src/services/workflow-conventions.ts's
-// WorkflowConventionOption/WorkflowConventionQuestion 1:1. Fetched via GET
-// /api/workflow-conventions/questions rather than duplicated by hand here,
-// so the frontend's wizard can never drift from the actual assembly table
-// buildWorkflowConventionsText reads server-side.
-export interface WorkflowConventionOption {
-  id: string;
-  label: string;
-  fragment: string;
-}
-
-export interface WorkflowConventionQuestion {
-  id: string;
-  question: string;
-  options: WorkflowConventionOption[];
-}
 
 // #95 — matches the standard PushSubscription.toJSON() shape and
 // src/routes/push.ts's subscribeSchema exactly (additionalProperties:
@@ -2753,54 +1771,6 @@ export interface CreateProjectPlacementOptions {
 // other GET /api/projects consumer doesn't inherit two fields that are
 // never present there.
 export type CreateProjectResult = Project & { dirCreated?: boolean; gitInitialized?: boolean };
-
-// Mirrors src/services/project-files.ts 1:1 (project file editor). `path` is
-// always project-relative. `symlinkTarget` is set only when the requested
-// path is (or passes through) an in-project symlink — the response's
-// `content`/`mtimeMs` are for that resolved target. `targetKind` on a
-// symlink listing entry is "outside" for both an out-of-project and a
-// dangling target (neither is openable).
-export interface ProjectDirEntry {
-  name: string;
-  kind: "file" | "dir" | "symlink";
-  size: number;
-  targetKind?: "file" | "dir" | "outside";
-}
-
-export interface ProjectFileStat {
-  path: string;
-  size: number;
-  mtimeMs: number;
-}
-
-export interface ProjectDirListing {
-  path: string;
-  entries: ProjectDirEntry[];
-  truncated: boolean;
-}
-
-export interface ProjectFileContent {
-  path: string;
-  content: string;
-  size: number;
-  mtimeMs: number;
-  symlinkTarget?: string;
-}
-
-export interface ProjectFileWriteResult {
-  size: number;
-  mtimeMs: number;
-}
-
-// Mirrors src/services/project-files.ts's ProjectSearchListing 1:1.
-export interface ProjectSearchResult {
-  path: string;
-}
-
-export interface ProjectSearchListing {
-  results: ProjectSearchResult[];
-  truncated: boolean;
-}
 
 export interface NamedPreviewTarget {
   id: string;

@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GitHubPROrWithChecks } from "../api/types.js";
+import type { PROrWithChecks } from "../api/types.js";
 import { prTriad } from "./prTriad.js";
 
-const pr = (over: Partial<GitHubPROrWithChecks>) =>
+const pr = (over: Partial<PROrWithChecks>) =>
   ({
     ciStatus: "success",
     mergeable: "MERGEABLE",
     isDraft: false,
     ...over,
-  }) as GitHubPROrWithChecks;
+  }) as PROrWithChecks;
 
 describe("prTriad merge chip", () => {
-  const merge = (over: Partial<GitHubPROrWithChecks>) =>
+  const merge = (over: Partial<PROrWithChecks>) =>
     prTriad(pr(over), vi.fn()).find((i) => i.key === "merge")!;
 
   it("names a strict-protection behind PR rather than calling it unknown", () => {

@@ -1,6 +1,7 @@
 // Detected shell/agent CLI shapes, split out of types.ts (re-exported from there).
 
-export type CodexHookTrust = "trusted" | "pending" | "not-installed";
+import type { CodexHookTrust } from "../../../src/shared/types.js";
+export type { CodexHookTrust } from "../../../src/shared/types.js";
 
 export interface Agent {
   id: string;

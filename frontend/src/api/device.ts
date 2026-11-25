@@ -12,10 +12,8 @@ import type {
   PairAndConnectBody,
   SimulatorCatalog,
 } from "./types.js";
-
-export type CreateDeviceBody =
-  | { platform?: "android"; avdName: string; projectId?: number; name?: string; hostId?: string }
-  | { platform: "ios"; udid: string; projectId?: number; name?: string; hostId?: string };
+import type { CreateDeviceBody } from "../../../src/shared/types.js";
+export type { CreateDeviceBody } from "../../../src/shared/types.js";
 
 export const devicesApi = {
   listDevices: () => request<Device[]>("/api/devices"),

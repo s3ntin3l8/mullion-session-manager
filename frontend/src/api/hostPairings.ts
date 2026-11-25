@@ -2,27 +2,12 @@
 // link for the desktop Helper, list pairing codes and their state, and cancel
 // a pending one. Mirrors src/routes/host-pairing.ts.
 import { request } from "./client.js";
-
-// Issue #2449 — one-time execution-host pairing (src/routes/host-pairing.ts).
-export type HostPairingState = "pending" | "paired" | "expired" | "revoked";
-
-export interface HostPairingCreated {
-  id: string;
-  /** `mullion://pair?url=…&code=…` — the primary URL and one-time code only. */
-  pairing_link: string;
-  url: string;
-  code: string;
-  expires_at: string;
-}
-
-export interface HostPairingSummary {
-  id: string;
-  label: string | null;
-  state: HostPairingState;
-  expires_at: string;
-  created_at: string;
-  host_id: string | null;
-}
+import type { HostPairingCreated, HostPairingSummary } from "../../../src/shared/types.js";
+export type {
+  HostPairingState,
+  HostPairingCreated,
+  HostPairingSummary,
+} from "../../../src/shared/types.js";
 
 export const hostPairingsApi = {
   createHostPairing: (opts: { label?: string; hostId?: string } = {}) =>

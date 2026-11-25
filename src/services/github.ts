@@ -7,13 +7,25 @@
 // independently testable).
 
 import { githubApiBase, githubApiFetch, GitHubApiError } from "./github-fetch.js";
-import type { GitHubCiStatus, RelayReviewState, ReviewSummary } from "../shared/types.js";
-import {
-  derivePrPhase,
-  type PrMergeable,
-  type PrPhase,
-  type PrReviewDecision,
-} from "./github-pr-phase.js";
+import type {
+  GitHubCiStatus,
+  GitHubIssueOrPr,
+  GitHubActionsRun,
+  GitHubJob,
+  GitHubPRsStatus,
+  PROrWithChecks,
+  ChecksRollupState,
+} from "../shared/types.js";
+import { derivePrPhase } from "./github-pr-phase.js";
+export type {
+  GitHubIssueOrPr,
+  GitHubActionsRun,
+  GitHubJob,
+  GitHubStep,
+  GitHubPRsStatus,
+  PROrWithChecks,
+  ChecksRollupState,
+} from "../shared/types.js";
 export { GitHubApiError };
 
 // GitHub repo/owner naming constraints: alphanumeric + hyphens for owners
@@ -47,39 +59,6 @@ const CACHE_TTL_MS = 60_000;
 // callers like the Task Master reconciler.
 const PRS_MAX_STALE_MS = 30 * 60_000;
 
-export interface GitHubIssueOrPr {
-  number: number;
-  title: string;
-  htmlUrl: string;
-  author: string | null;
-}
-
-export interface GitHubActionsRun {
-  name: string;
-  status: string;
-  conclusion: string | null;
-  htmlUrl: string;
-  headSha: string;
-}
-
-export interface GitHubJob {
-  id: number;
-  name: string;
-  status: string;
-  conclusion: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  htmlUrl: string;
-  steps: GitHubStep[];
-}
-
-export interface GitHubStep {
-  name: string;
-  status: string;
-  conclusion: string | null;
-  number: number;
-}
-
 // Aggregate read for the Dock widget's single CI dot — "in_progress" if any
 // latest run hasn't completed yet, "failure" if any completed run didn't
 // succeed, "success" only if every one did. `null` means no Actions data at
@@ -92,9 +71,6 @@ export interface GitHubStep {
 // (issue #2414). Re-exported, so every existing importer keeps its path.
 export type { GitHubCiStatus };
 
-/** GitHub's `statusCheckRollup.state` for a head commit, collapsed to three. */
-export type ChecksRollupState = "success" | "failure" | "pending" | null;
-
 /** A head-commit check that is not a GitHub Actions run (third-party check run or commit status). */
 export interface OtherCheck {
   name: string;
@@ -103,83 +79,12 @@ export interface OtherCheck {
   source: "check_run" | "status";
 }
 
-// Per-PR CI status with head SHA and runs (issue #102).
-export interface PROrWithChecks {
-  number: number;
-  title: string;
-  htmlUrl: string;
-  author: string | null;
-  headSha: string;
-  headBranch: string;
-  baseBranch: string;
-  ciStatus: GitHubCiStatus;
-  /**
-   * The review relay's state for this PR (issue #1630) — present only when a
-   * review was requested for it through Mullion's Hermes relay. Absent means
-   * "no relay run is known for this PR" — which is NOT "no review is
-   * pending" (the relay's run index is in-memory, so a restart loses it).
-   *
-   * Declared on BOTH sides (this type and the frontend's copy) so the
-   * compiler catches a drift between them.
-   */
-  relayReview?: RelayReviewState;
-  /** Task Master task that opened this PR, joined server-side (epic #1965, A6). */
-  taskId?: number;
-  taskStatus?: string;
-  actionsRuns: GitHubActionsRun[];
-  // Review state — filled by github-pr-reviews.ts's GraphQL enrichment in the
-  // background poller. Best-effort: when that fails (or the PR is past the
-  // enriched page) these keep their neutral defaults and `prPhase` is derived
-  // from what is known (CI only).
-  isDraft: boolean;
-  updatedAt: string | null;
-  reviewDecision: PrReviewDecision;
-  mergeable: PrMergeable;
-  mergeStateStatus: string | null;
-  /** Latest opinionated review per reviewer — merge gating's input (see `reviewSummary` for COMMENTED). */
-  reviewers: { login: string; state: string; recovered?: boolean }[];
-  /**
-   * The server-computed review status shared with the PR detail (epic #1965,
-   * A2). Absent until the GraphQL enrichment has run for the PR.
-   */
-  reviewSummary?: ReviewSummary;
-  requestedReviewers: string[];
-  /** null = not fetched (yet), as opposed to a known zero. */
-  unresolvedThreads: number | null;
-  commentCount: number | null;
-  /** True once the GraphQL enrichment filled this PR's review fields; false
-   *  while they are still the REST-side defaults. */
-  reviewStateKnown: boolean;
-  /** True once this PR's head-run lookup succeeded (runs may legitimately be empty). */
-  ciFetched: boolean;
-  /**
-   * The head commit's `statusCheckRollup` state (GraphQL enrichment) — covers
-   * checks that are not Actions runs. Folded into `ciStatus` by
-   * `combineCiStatus`; kept so the fold is idempotent across re-enrichment.
-   */
-  checksRollup?: ChecksRollupState;
-  /**
-   * Commits the head is behind its base, read (REST compare) only for a PR
-   * GitHub reports BEHIND; null/absent = not asked or unanswered.
-   */
-  behindBy?: number | null;
-  prPhase: PrPhase;
-}
-
 /** Recomputes `prPhase` from the PR's current CI + review fields, in place. */
 export function applyPrPhase(pr: PROrWithChecks): void {
   pr.prPhase = derivePrPhase({
     ...pr,
     hasCommentedReview: (pr.reviewSummary?.commented.length ?? 0) > 0,
   });
-}
-
-export interface GitHubPRsStatus {
-  /** Set by `getPRsStatus` when the entry is older than the TTL: served anyway, refresh pending. */
-  stale?: boolean;
-  prs: PROrWithChecks[];
-  // Summary counts for the dock widget: "3 PRs — 2✅ 1❌"
-  prSummary: { total: number; pass: number; fail: number; pending: number; unknown: number };
 }
 
 export interface GitHubRepoStatus {

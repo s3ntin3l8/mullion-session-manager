@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { GitHubPrPhase } from "../api/types.js";
+import type { PrPhase } from "../api/types.js";
 import { legacyDotClass, legacyPillClass, runStatusText, statusTone } from "./statusTone.js";
 
 describe("statusTone", () => {
-  it.each<[GitHubPrPhase, string]>([
+  it.each<[PrPhase, string]>([
     ["ci_failing", "danger"],
     ["changes_requested", "danger"],
     ["conflicts", "danger"],

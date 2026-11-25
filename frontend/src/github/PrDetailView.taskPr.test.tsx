@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { PrDetailView } from "./PrDetailView.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
-import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
+import { makeProject, makeSession, makeTask, makePr } from "../test/fixtures.js";
 import { PR, stub, summaryOf } from "./prDetailTestKit.js";
 
 // A task PR's action bar and pinned review: which session ▶ opens, and where
@@ -28,7 +28,7 @@ describe("a task PR", () => {
       prsByProject: {
         1: {
           prs: [
-            {
+            makePr({
               number: 12,
               title: "Add thing",
               htmlUrl: "u",
@@ -38,7 +38,7 @@ describe("a task PR", () => {
               baseBranch: "main",
               ciStatus: "success",
               actionsRuns: [],
-            },
+            }),
           ],
           prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
         },

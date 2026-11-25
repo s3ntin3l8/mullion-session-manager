@@ -8,6 +8,7 @@ import {
   makeProject,
   makeTaskMasterEnv,
   TASK_DERIVED_DEFAULTS,
+  makePr,
 } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
 import { ApiError } from "./api/index.js";
@@ -339,7 +340,7 @@ describe("TaskDetail", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 7,
             title: "fix: the thing",
             htmlUrl: "https://github.com/o/r/pull/7",
@@ -348,8 +349,7 @@ describe("TaskDetail", () => {
             headBranch: "mullion/task-1",
             baseBranch: "main",
             ciStatus: "failure",
-            actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
       },
@@ -393,7 +393,7 @@ describe("TaskDetail", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 9,
             title: "fix: the thing, round 2",
             htmlUrl: "https://github.com/o/r/pull/9",
@@ -402,8 +402,7 @@ describe("TaskDetail", () => {
             headBranch: "mullion/task-1",
             baseBranch: "main",
             ciStatus: "success",
-            actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },
@@ -437,7 +436,7 @@ describe("TaskDetail", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 9,
             title: "fix: the thing, round 2",
             htmlUrl: "https://github.com/o/r/pull/9",
@@ -446,8 +445,7 @@ describe("TaskDetail", () => {
             headBranch: "mullion/task-1",
             baseBranch: "main",
             ciStatus: "success",
-            actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },
@@ -2387,7 +2385,7 @@ describe("TaskDetail approval state, latest round and host (#2234 #2235 #2236)",
 });
 
 describe("TaskDetail fix-in-a-session action", () => {
-  const openPr = {
+  const openPr = makePr({
     number: 7,
     title: "fix: the thing",
     htmlUrl: "https://github.com/o/r/pull/7",
@@ -2396,8 +2394,7 @@ describe("TaskDetail fix-in-a-session action", () => {
     headBranch: "mullion/task-1",
     baseBranch: "main",
     ciStatus: "failure" as const,
-    actionsRuns: [],
-  };
+  });
   const withOpenPr = () => {
     tasks = [
       makeTask({

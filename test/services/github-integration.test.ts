@@ -1235,8 +1235,9 @@ describe("github-integration service", () => {
       const status = await getGitHubAppStatus(app);
 
       expect(status.keyFingerprint).toBe(computeKeyFingerprint(REAL_APP_PRIVATE_KEY));
-      expect(status.keyRotatedAt).toBeInstanceOf(Date);
-      expect((status.keyRotatedAt as Date).getTime()).toBeCloseTo(Date.now(), -4);
+      // An ISO string, what the route's JSON always carried (#2412).
+      expect(status.keyRotatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(Date.parse(status.keyRotatedAt!)).toBeCloseTo(Date.now(), -4);
       await app.close();
     });
 

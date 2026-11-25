@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import type { GitCommitDetail, GitHubPrPhase, GitLogCommit, HistoryScope } from "../api/types.js";
+import type { GitCommitDetail, PrPhase, GitLogCommit, HistoryScope } from "../api/types.js";
 import { parseUnifiedDiff, type DiffLine } from "../diffUtils.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
@@ -18,7 +18,7 @@ const PAGE = 100;
 /** Ref chips shown inline at normal density; the rest fold into "+N". */
 const MAX_INLINE_REFS = 2;
 
-type PrInfo = { number: number; phase: GitHubPrPhase | null | undefined };
+type PrInfo = { number: number; phase: PrPhase | null | undefined };
 
 function RefChipView({ chip, pr }: { chip: RefChip; pr: PrInfo | undefined }) {
   const title = [chip.raw.join(", "), chip.synced ? "in sync with the remote" : ""]

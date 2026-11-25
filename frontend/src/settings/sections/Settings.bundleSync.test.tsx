@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { Settings } from "../../Settings.js";
 import { useDashboardStore } from "../../store/index.js";
 import { DEFAULT_SETTINGS } from "../../api/index.js";
-import type { BundleSyncStatus } from "../../api/index.js";
+import type { BundleSyncStatusReport } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 
 // Issues #944 (status/re-sync) and #945 (remove) — BundleSyncPanel.tsx, the
@@ -14,7 +14,7 @@ import { jsonResponse } from "../../test/jsonResponse.js";
 // Settings.sessions.test.tsx's own suites: a fake server over global fetch,
 // not a mocked store, so the real fetch/PATCH wiring is what's under test.
 
-function makeStatus(overrides: Partial<BundleSyncStatus> = {}): BundleSyncStatus {
+function makeStatus(overrides: Partial<BundleSyncStatusReport> = {}): BundleSyncStatusReport {
   return {
     enabled: true,
     bundleHash: "abc123",
@@ -59,7 +59,7 @@ function makeStatus(overrides: Partial<BundleSyncStatus> = {}): BundleSyncStatus
 
 describe("Settings -> Sessions -> Bundle sync panel", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
-  let statusResponse: BundleSyncStatus;
+  let statusResponse: BundleSyncStatusReport;
   let statusCalls: number;
 
   beforeEach(() => {

@@ -6,6 +6,8 @@ import { getToken, GITHUB_PROVIDER } from "./github-integration.js";
 import { validateGitHubRepoRef } from "./github.js";
 import { resolveRepoRef } from "./host-git.js";
 import { githubApiFetch } from "./github-fetch.js";
+import type { WebhookRegistrationResult } from "../shared/types.js";
+export type { WebhookRegistrationResult } from "../shared/types.js";
 
 function generateSecret(): string {
   return crypto.randomBytes(32).toString("hex");
@@ -283,11 +285,6 @@ export async function registerProjectWebhook(
     });
     return "failed";
   }
-}
-
-interface WebhookRegistrationResult {
-  reposSucceeded: number;
-  reposFailed: number;
 }
 
 export async function enableWebhooks(app: FastifyInstance): Promise<WebhookRegistrationResult> {

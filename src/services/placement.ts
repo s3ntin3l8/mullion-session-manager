@@ -14,6 +14,8 @@ import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protoco
 import { appVersion } from "./app-version.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
 import { parseHostCwds, serializeHostCwds } from "./host-cwds.js";
+import type { PlacementConstraints } from "../shared/types.js";
+export type { PlacementConstraints } from "../shared/types.js";
 
 export { parseHostCwds, serializeHostCwds };
 
@@ -257,19 +259,6 @@ export interface PlacementDecision {
 function loadPerCore(capacity: HostCapacity): number {
   if (capacity.logicalCores <= 0) return capacity.loadAverage1m;
   return capacity.loadAverage1m / capacity.logicalCores;
-}
-
-/**
- * A project's placement steering flags (issue #2241), parsed.
- *
- * `platform` is an allow-list (empty = any platform); `allowBurst` lets
- * "burst" hosts take Auto work (false = they stay out, the default).
- */
-export interface PlacementConstraints {
-  platform: string[];
-  allowBurst: boolean;
-  /** Host capabilities (`PLACEMENT_CAPABILITIES`) the project needs (issue #2306). */
-  capabilities: string[];
 }
 
 /**

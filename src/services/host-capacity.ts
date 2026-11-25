@@ -1,57 +1,7 @@
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
-
-/**
- * The CAPACITY signal — how busy a host is, in numbers a placement policy
- * can compare across machines (issue #1721, roadmap 8.7).
- *
- * The fleet has a health signal today (online / degraded / offline) but no
- * capacity signal, so "put the work on the idle machine" is still a manual
- * decision. This module is the one place those numbers are produced, and
- * it is deliberately the ONLY place: the agent measures itself with it, and
- * the primary measures itself with it. One function, two callers — so the
- * local host's numbers and an agent's numbers are comparable by
- * construction, not by two implementations that happen to agree today.
- *
- * Deliberately NOT the same number as system-stats.ts's `logicalCores`:
- * that one counts `os.cpus().length` (what the box advertises) for the
- * System Resources page, while this one counts
- * `os.availableParallelism()` (what the box can actually run in parallel,
- * which accounts for a cgroup CPU limit and for UV thread-pool sizing).
- * Two different questions, two different numbers, both documented.
- */
-export interface HostCapacity {
-  /** `process.platform` of the host — "linux" | "darwin" | "win32" | … */
-  platform: string;
-  /** `os.availableParallelism()` — how many things can run at once here. */
-  logicalCores: number;
-  /**
-   * The 1-minute load average — `os.loadavg()[0]`.
-   *
-   * NOT comparable across platforms: it is permanently 0 on win32 (the
-   * platform does not report one), so a placement policy reading 0 as
-   * "idle" would read every Windows host as idle. Windows is out of
-   * Phase 8 (#1728) and the placement half targets Linux and macOS, but
-   * the contract is stated here so the policy that reads this field
-   * (#1723) inherits the caveat: treat `platform: "win32"` as "this host
-   * reports no load", never as "this host is idle".
-   */
-  loadAverage1m: number;
-  /** Total and free memory, in bytes. */
-  memory: { totalBytes: number; freeBytes: number };
-  /**
-   * The sessions THIS host is tracking: how many it knows about, and how
-   * many of them are still alive. Host-level numbers only — per-session
-   * capacity accounting is explicitly not attempted (issue #1721).
-   */
-  sessions: { tracked: number; alive: number };
-}
-
-/** The capacity report as it travels over the wire, with its age stamp. */
-export interface HostCapacityReport extends HostCapacity {
-  /** When these numbers were measured, ISO-8601. */
-  sampledAt: string;
-}
+import type { HostCapacity } from "../shared/types.js";
+export type { HostCapacity, HostCapacityReport } from "../shared/types.js";
 
 /**
  * The `os` primitives this module reads, injectable so a test can pin the

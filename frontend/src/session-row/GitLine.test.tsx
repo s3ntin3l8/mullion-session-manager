@@ -25,7 +25,7 @@ import {
   type Project,
   type Session,
 } from "../api/index.js";
-import { makeSession, makeProject } from "../test/fixtures.js";
+import { makeSession, makeProject, makePr } from "../test/fixtures.js";
 
 let events: Record<number, NotificationEvent[]>;
 let sessionGitStatuses: Record<number, GitStatus | null>;
@@ -308,7 +308,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 7,
             title: "Add feature x",
             htmlUrl: "https://github.com/o/r/pull/7",
@@ -318,8 +318,8 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             baseBranch: "main",
             ciStatus: "success",
             actionsRuns: [],
-          },
-          {
+          }),
+          makePr({
             number: 8,
             title: "Unrelated PR",
             htmlUrl: "https://github.com/o/r/pull/8",
@@ -329,7 +329,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             baseBranch: "main",
             ciStatus: "failure",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 2, pass: 1, fail: 1, pending: 0, unknown: 0 },
       },
@@ -352,7 +352,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 7,
             title: "Add feature x",
             htmlUrl: "https://github.com/o/r/pull/7",
@@ -364,7 +364,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             actionsRuns: [],
             prPhase: "changes_requested",
             unresolvedThreads: 2,
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },
@@ -391,7 +391,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 7,
             title: "Task PR",
             htmlUrl: "https://github.com/o/r/pull/7",
@@ -401,7 +401,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             baseBranch: "main",
             ciStatus: "success",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },
@@ -420,7 +420,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 8,
             title: "Unrelated PR",
             htmlUrl: "https://github.com/o/r/pull/8",
@@ -430,7 +430,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             baseBranch: "main",
             ciStatus: "failure",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
       },
@@ -499,7 +499,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
     prsByProject = {
       1: {
         prs: [
-          {
+          makePr({
             number: 9,
             title: "Feature x",
             htmlUrl: "https://github.com/o/r/pull/9",
@@ -509,7 +509,7 @@ describe("SessionRow row 3 — git details (issue #202)", () => {
             baseBranch: "main",
             ciStatus: "success",
             actionsRuns: [],
-          },
+          }),
         ],
         prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
       },

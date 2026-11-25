@@ -12,6 +12,9 @@
 // a message with no usable `kind` at all, or a *recognized* kind whose
 // payload doesn't match its required shape, is a parse error.
 
+import type { BackgroundTask } from "../shared/types.js";
+export type { BackgroundTask } from "../shared/types.js";
+
 export interface NotificationHookMessage {
   kind: "notification";
   title: string;
@@ -42,24 +45,6 @@ export interface ProgressHookMessage {
    * not be read as "there is a wakeup coming".
    */
   wakeupsPending?: boolean;
-}
-
-export interface BackgroundTask {
-  id: string;
-  type: string;
-  status: string;
-  description: string;
-  /** Optional passthrough fields Claude Code's own `BackgroundTaskSummary`
-   * carries (`command` for a background shell, `agent_type` for a
-   * background subagent, `server`/`tool` for an MCP-backed task, `name` as
-   * a generic label) — kept snake_case and untyped-beyond-string, same
-   * "opaque blob forwarded verbatim" posture this file already gives
-   * agent-authored payloads elsewhere (see the module header comment). */
-  command?: string;
-  agent_type?: string;
-  server?: string;
-  tool?: string;
-  name?: string;
 }
 
 export interface FileChangeHookMessage {

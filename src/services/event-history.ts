@@ -2,6 +2,8 @@ import { and, desc, eq, gte, isNotNull, lte, lt } from "drizzle-orm";
 import { sessionEvents } from "../db/schema.js";
 import type { getDb } from "../db/client.js";
 import type { NotificationEvent } from "./pty-manager.js";
+import type { StoredEventRow } from "../shared/types.js";
+export type { StoredEventRow } from "../shared/types.js";
 
 // Issue #213 (roadmap 4.7) — the query/insert/retention logic behind the
 // `session_events` table (src/db/schema.ts), shared by three callers:
@@ -18,15 +20,6 @@ import type { NotificationEvent } from "./pty-manager.js";
 // any browser tab being open. insertSessionEvents' onConflictDoNothing()
 // below is what lets a reconnecting subscription's replayed events land here
 // safely — see schema.ts's own doc comment on the dedupe index.
-
-export interface StoredEventRow {
-  id: number;
-  sessionId: number | null;
-  seq: number;
-  kind: string;
-  ts: number;
-  payload: Record<string, unknown> | null;
-}
 
 export interface EventQueryFilter {
   sessionId?: number;

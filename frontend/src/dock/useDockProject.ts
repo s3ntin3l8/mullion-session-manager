@@ -71,7 +71,7 @@ const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS + 5_000;
 
 // A control's state and actions, bound to it. What DockMonitor renders and
 // what the Dock view's action buttons call.
-export interface DockControlView {
+export interface DockControlCardView {
   control: DockControl;
   running: Session | undefined;
   showSelector: boolean;
@@ -591,7 +591,7 @@ export function useDockProject(
     }
   };
 
-  const controlView = (control: DockControl): DockControlView => {
+  const controlView = (control: DockControl): DockControlCardView => {
     const running = runningFor(control);
     const controlShowSelector = showSelector && control.source !== "docker";
     const effectiveWorktreeRefresh =

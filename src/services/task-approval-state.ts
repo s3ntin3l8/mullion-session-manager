@@ -1,7 +1,7 @@
 import { isApprovingVerdict } from "./task-prompt.js";
 import { hasIngestedCurrentReview } from "./task-review-handle.js";
-
-export type ApprovalState = "awaiting-human" | "auto-pending";
+import type { ApprovalState } from "../shared/types.js";
+export type { ApprovalState } from "../shared/types.js";
 
 export interface ApprovalStateRow {
   status: string;

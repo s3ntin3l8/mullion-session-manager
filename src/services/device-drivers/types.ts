@@ -10,21 +10,13 @@
 // driver whose lifecycle is not the manager's: it has its own `start()`/`stop()`
 // beyond this interface, which the manager calls once it is wired in.
 
-export type DevicePlatform = "android" | "ios";
-
-export type DeviceKind = "emulator" | "physical";
-
-export type DeviceLiveStatus = "starting" | "booting" | "streaming" | "exited" | "error";
-
-export interface DeviceInfo {
-  id: string;
-  kind: DeviceKind;
-  avdName: string | null;
-  label: string | null;
-  status: DeviceLiveStatus;
-  serial: string | null;
-  error: string | null;
-}
+import type { DeviceInfo, DevicePlatform } from "../../shared/types.js";
+export type {
+  DeviceLiveStatus,
+  DeviceKind,
+  DeviceInfo,
+  DevicePlatform,
+} from "../../shared/types.js";
 
 /** One encoded video packet. The shape `encodeVideoFrame` (routes/device.ts)
  * frames onto the WS wire: `configuration` carries SPS/PPS, `data` a coded

@@ -1,4 +1,4 @@
-import type { GitHubCiStatus, GitHubPrPhase } from "../api/types.js";
+import type { GitHubCiStatus, PrPhase } from "../api/types.js";
 
 /** The one status vocabulary; each maps to the `--status-<tone>-*` tokens. */
 export type Tone = "success" | "danger" | "warn" | "info" | "neutral" | "merged";
@@ -9,7 +9,7 @@ const SKIPPED_CONCLUSIONS = new Set(["skipped", "cancelled", "neutral"]);
 
 export type ToneInput =
   /** A PR's lifecycle phase. */
-  | { phase: GitHubPrPhase }
+  | { phase: PrPhase }
   /** The aggregate CI read; `null`/`undefined` = no Actions data. */
   | { ci: GitHubCiStatus | null | undefined }
   /** One check run / job / workflow run. */

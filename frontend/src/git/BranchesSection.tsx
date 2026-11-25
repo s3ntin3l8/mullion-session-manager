@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { api } from "../api/index.js";
-import type { GitBranchInfo, GitHubPROrWithChecks, GitWorktreeInfo } from "../api/types.js";
+import type { GitBranchInfo, PROrWithChecks, GitWorktreeInfo } from "../api/types.js";
 import { PHASE_LABEL } from "../github/prPhase.js";
 import { describeError } from "../lib/describeError.js";
 import { statusTone, type Tone } from "../lib/statusTone.js";
@@ -47,7 +47,7 @@ interface RowError {
 
 function branchTone(
   b: GitBranchInfo,
-  pr: GitHubPROrWithChecks | undefined,
+  pr: PROrWithChecks | undefined,
   prunable: boolean,
   taskOwned: boolean,
 ): Tone {

@@ -12,7 +12,7 @@ import type {
   ProjectReleaseStatus,
 } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
-import { makeProject, makeSession, makeTask } from "./test/fixtures.js";
+import { makeProject, makeSession, makeTask, makePr } from "./test/fixtures.js";
 import { useDashboardStore } from "./store/index.js";
 
 // Every test below that doesn't care about the Release section (the vast
@@ -59,7 +59,7 @@ const PRS_EMPTY: GitHubPRsStatus = {
 
 const PRS_LOADED: GitHubPRsStatus = {
   prs: [
-    {
+    makePr({
       number: 42,
       title: "Fix attention race",
       htmlUrl: "https://github.com/acme/widgets/pull/42",
@@ -69,7 +69,7 @@ const PRS_LOADED: GitHubPRsStatus = {
       baseBranch: "main",
       ciStatus: "success",
       actionsRuns: [],
-    },
+    }),
   ],
   prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
 };
@@ -131,7 +131,7 @@ function mockFetch(
 // than a bare link, so its jobs/logs accordion (JobRow) is reachable.
 const PRS_WITH_RUN: GitHubPRsStatus = {
   prs: [
-    {
+    makePr({
       number: 42,
       title: "Fix attention race",
       htmlUrl: "https://github.com/acme/widgets/pull/42",
@@ -149,7 +149,7 @@ const PRS_WITH_RUN: GitHubPRsStatus = {
           headSha: "abc123",
         },
       ],
-    },
+    }),
   ],
   prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
 };
@@ -706,7 +706,7 @@ describe("GitHubPanel", () => {
       latest: [],
       ...over,
     });
-    const failingPr = {
+    const failingPr = makePr({
       ...PRS_LOADED.prs[0],
       ciStatus: "failure" as const,
       prPhase: "ci_failing" as const,
@@ -727,7 +727,7 @@ describe("GitHubPanel", () => {
           headSha: "abc123",
         },
       ],
-    };
+    });
     const setup = (pr: unknown = failingPr) =>
       vi.stubGlobal(
         "fetch",

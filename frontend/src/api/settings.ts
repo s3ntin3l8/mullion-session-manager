@@ -13,6 +13,7 @@ import type {
   BrowserCookieProfile,
   WorkflowConventionQuestion,
 } from "./types.js";
+import type { SessionStatus } from "../../../src/shared/types.js";
 import { parseChord, type KeyChord } from "../lib/keyChord.js";
 
 export const settingsApi = {
@@ -197,14 +198,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
       working: { notify: false, sound: false, autoFocus: false },
       idle: { notify: false, sound: false, autoFocus: false },
       // No `as Record<SessionStatus, ...>` cast on this object (there used
-      // to be one) — it silently defeated the exhaustiveness check the
-      // outer `DEFAULT_SETTINGS: AppSettings` annotation would otherwise
-      // give this literal, which is exactly how this object went missing
-      // `awaiting_question` unnoticed (see #551). Letting AppSettings'
-      // `notificationMatrix: Record<SessionStatus, ...>` type check this
-      // literal directly means a newly-added SessionStatus with no entry
-      // here is now a compile error, not a silent runtime `?? false`.
-    },
+      // to be one) — it silently defeated the exhaustiveness check, which is
+      // exactly how this object went missing `awaiting_question` unnoticed
+      // (see #551). The shared AppSettings types the matrix as
+      // `Record<string, ...>` (the backend persists a possibly-stale blob,
+      // #2412), so the `satisfies` below is what makes a newly-added
+      // SessionStatus with no entry here a compile error, not a silent
+      // runtime `?? false`.
+    } satisfies Record<SessionStatus, { notify: boolean; sound: boolean; autoFocus: boolean }>,
   },
   dock: {
     defaultWorktreeRefresh: false,
@@ -236,6 +237,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     // this store-seed value never goes through a per-key deep-merge, so it
     // doesn't need every current question id pre-populated with "".
     workflowConventionAnswers: {},
+    // Server-owned (the backend strips it from every PATCH); seeded like the
+    // backend's own default. The hand-mirrored AppSettings never had it
+    // (#2412).
+    workflowConventionsAppliedText: "",
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
     gitIdentity: { name: "", email: "" },

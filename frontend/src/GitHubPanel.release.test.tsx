@@ -6,6 +6,7 @@ import { GitHubPanel } from "./GitHubPanel.js";
 import type { GitHubPRsStatus, GitHubStatus, ProjectReleaseStatus } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
+import { makePr } from "./test/fixtures.js";
 
 // The Release section's own tests (#744, #2920), split out of
 // GitHubPanel.test.tsx to keep that file under the line ceiling. The
@@ -49,7 +50,7 @@ const PRS_EMPTY: GitHubPRsStatus = {
 
 const PRS_LOADED: GitHubPRsStatus = {
   prs: [
-    {
+    makePr({
       number: 42,
       title: "Fix attention race",
       htmlUrl: "https://github.com/acme/widgets/pull/42",
@@ -59,7 +60,7 @@ const PRS_LOADED: GitHubPRsStatus = {
       baseBranch: "main",
       ciStatus: "success",
       actionsRuns: [],
-    },
+    }),
   ],
   prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
 };

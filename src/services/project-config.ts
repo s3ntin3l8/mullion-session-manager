@@ -9,10 +9,11 @@ import path from "node:path";
 // but this module never named that type itself (it was an inline object
 // literal here) — no back-compat re-export needed for a name nothing ever
 // imported.
-import type { Launcher, LauncherKind, DockControl } from "../shared/types.js";
+import type { Launcher, LauncherKind, DockControl, DiscoveredCandidate } from "../shared/types.js";
 import { isValidPort } from "./port-probe.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import { readOriginUrl } from "./git-remote.js";
+export type { DiscoveredCandidate } from "../shared/types.js";
 
 export type { Launcher, LauncherKind, DockControl };
 
@@ -84,26 +85,6 @@ export function parseProjectsRootsEnv(raw: string): string[] {
     .map((r) => r.trim())
     .filter((r) => r.length > 0)
     .map(expandHome);
-}
-
-export interface DiscoveredCandidate {
-  name: string;
-  cwd: string;
-  isGitRepo: boolean;
-  /**
-   * Issue #2090 — the checkout's raw `origin` URL (`null`: a git repo with no
-   * origin, or not a repo). OPTIONAL on the type because an agent build that
-   * predates the field simply omits it: `undefined` means "this host cannot
-   * say", which is not the same as `null` ("it has no origin") — the matcher
-   * never auto-fills on an unknown origin.
-   */
-  origin?: string | null;
-  /**
-   * Issue #2090 — `.git` is a FILE (a linked worktree or a submodule), not a
-   * clone of its own. Such a directory is never matched as "the project's
-   * checkout" on another host.
-   */
-  isWorktree?: boolean;
 }
 
 /**

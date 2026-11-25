@@ -1,3 +1,4 @@
+import type { ExitedMessage } from "../shared/ws-protocol.js";
 import type { FastifyInstance } from "fastify";
 import { parseDeviceInput } from "./device-drivers/input.js";
 import type {
@@ -194,7 +195,7 @@ export async function attachSocketToDevice(
 
   const unsubscribeExit = device.onExit(() => {
     if (socket.readyState === socket.OPEN) {
-      socket.send(JSON.stringify({ type: "exited" }));
+      socket.send(JSON.stringify({ type: "exited" } satisfies ExitedMessage));
       // Nothing more will ever be sent on this socket — close it rather
       // than leaving it dangling open. The client's own "close" handler
       // (DevicePane.tsx) is what unsubscribes this route's video/exit

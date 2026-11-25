@@ -1,17 +1,12 @@
 import { opendir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
+import type { DirectoryListing } from "../shared/types.js";
+export type { DirectoryListing } from "../shared/types.js";
 
 // Bound both the returned folders and the work done in file-heavy directories.
 const MAX_DIRECTORIES = 1000;
 const MAX_SCANNED_ENTRIES = 10000;
-
-export interface DirectoryListing {
-  path: string;
-  parent: string | null;
-  directories: { name: string; path: string }[];
-  truncated: boolean;
-}
 
 /** A listing failure with the HTTP status the route should answer with. */
 export class FsDirsError extends Error {

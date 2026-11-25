@@ -25,7 +25,46 @@ import type {
   Task,
   Workspace,
 } from "../api/index.js";
+import type {
+  DevWorktreeCandidate,
+  HostCwdsMeta,
+  PROrWithChecks,
+} from "../../../src/shared/types.js";
 import { FALLBACK_RUNTIME_ENV, FALLBACK_TASK_MASTER_ENV } from "../store/constants.js";
+
+/**
+ * A PR row as GET /api/projects/:id/github/prs sends it. The shared
+ * PROrWithChecks (#2412) marks every field the backend always sends as
+ * required; the defaults here are the "nothing known yet" values the
+ * frontend already reads an absent field as, so a fixture names only what
+ * its test is about.
+ */
+export function makePr(overrides: Partial<PROrWithChecks> = {}): PROrWithChecks {
+  return {
+    number: 1,
+    title: "PR",
+    htmlUrl: "https://github.com/o/r/pull/1",
+    author: null,
+    headSha: "abc123",
+    headBranch: "feature",
+    baseBranch: "main",
+    ciStatus: null,
+    actionsRuns: [],
+    isDraft: false,
+    updatedAt: null,
+    reviewDecision: null,
+    mergeable: null,
+    mergeStateStatus: null,
+    reviewers: [],
+    requestedReviewers: [],
+    unresolvedThreads: null,
+    commentCount: null,
+    reviewStateKnown: false,
+    ciFetched: false,
+    prPhase: "unknown",
+    ...overrides,
+  };
+}
 
 export function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -95,6 +134,30 @@ export function makeSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+/** A Settings > Storage worktree candidate: an orphaned `.wt/` checkout of project 1. */
+export function makeDevWorktreeCandidate(
+  overrides: Partial<DevWorktreeCandidate> = {},
+): DevWorktreeCandidate {
+  return {
+    projectId: 1,
+    projectName: "mullion",
+    repoCwd: "/p",
+    path: "/p/.wt/feat",
+    slug: "feat",
+    branch: null,
+    kind: "wt",
+    reason: "orphaned",
+    headSha: "abc123",
+    bytes: 0,
+    ...overrides,
+  };
+}
+
+/** A host-path meta with `auto` set and nothing declined or managed. */
+export function makeHostCwdsMeta(...auto: string[]): HostCwdsMeta {
+  return { auto, declined: [], managed: [] };
+}
+
 export function makeProject(overrides: Partial<Project> = {}): Project {
   return {
     id: 1,
@@ -105,7 +168,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     // Issue #1724 — no per-host paths by default: the project lives on its
     // own host and nowhere else.
     hostCwds: {},
-    placementConstraints: { platform: [], allowBurst: false },
+    placementConstraints: { platform: [], allowBurst: false, capabilities: [] },
     devServerUrl: null,
     detectedDevServerPort: null,
     currentBranch: null,

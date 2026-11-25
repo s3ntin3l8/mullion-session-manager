@@ -8,7 +8,7 @@
 // refactoring roadmap).
 import { request } from "./client.js";
 import type { Preview, ProjectPreviewConfig } from "./types.js";
-import type { BrowserDestinations } from "./browserDestinationTypes.js";
+import type { BrowserDestinations } from "../../../src/shared/types.js";
 
 /** Which preview shows a page of the agent's browser (#3373). */
 export type PreviewForAgentAddress =
