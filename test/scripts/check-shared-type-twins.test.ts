@@ -57,8 +57,14 @@ describe("check-shared-type-twins.mjs", () => {
     fs.writeFileSync(full, contents);
   }
 
-  function writeAllowlist(allowed: Record<string, string>): void {
-    write("scripts/shared-type-twins.allowlist.json", JSON.stringify({ allowed }, null, 2));
+  function writeAllowlist(
+    allowed: Record<string, string>,
+    mirrors: Record<string, string> = {},
+  ): void {
+    write(
+      "scripts/shared-type-twins.allowlist.json",
+      JSON.stringify({ allowed, mirrors }, null, 2),
+    );
   }
 
   async function run(dir = root): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -156,6 +162,30 @@ describe("check-shared-type-twins.mjs", () => {
     );
     expect((usage as { code: number }).code).toBe(2);
     expect((usage as { stderr: string }).stderr).toContain("usage:");
+  });
+
+  it("fails on a renamed copy that says it mirrors a backend shape, unless allowlisted", async () => {
+    write(
+      "frontend/src/api/types.ts",
+      "// Mirrors src/services/disk-cleanup-job.ts's CleanupOptions 1:1.\n" +
+        "export interface CleanupFlags {\n  dryRun: boolean;\n}\n" +
+        "// Mirrors GET /api/storage's response (not a file path).\n" +
+        "export interface StorageView {\n  open: boolean;\n}\n",
+    );
+    const result = await run();
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "CleanupFlags  frontend/src/api/types.ts:2  (mirrors src/services/disk-cleanup-job.ts)",
+    );
+    expect(result.stderr).not.toContain("StorageView");
+
+    writeAllowlist({}, { CleanupFlags: "fixture: known copy" });
+    expect((await run()).code).toBe(0);
+
+    writeAllowlist({}, { CleanupFlags: "fixture: known copy", Gone: "matches nothing" });
+    const stale = await run();
+    expect(stale.code).toBe(1);
+    expect(stale.stderr).toContain("Gone");
   });
 
   it("passes on this repository as it stands", async () => {

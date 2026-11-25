@@ -30,17 +30,20 @@
 // src/shared/ first if it is not there yet — or, when the two really are
 // different things that only happen to share a name, to rename one of them.
 //
-// What it does NOT catch: a copy under a different name (a frontend
-// `PlacementPreview` that mirrors the backend's `PlacementDecision`). Those
-// are still annotated "Mirrors src/..." where they exist; matching shapes
-// rather than names would flag every pair of small look-alike unions.
+// A copy under a DIFFERENT name (a frontend `PlacementPreview` that mirrors
+// the backend's `PlacementDecision`) has no name to match, so the second rule
+// looks for the annotation such copies carry: a frontend type whose leading
+// comment says "Mirrors src/services/x.ts" (or routes/, plugins/) fails too.
+// An unannotated renamed copy is still invisible; matching shapes instead of
+// names would flag every pair of small look-alike unions.
 //
 // THE ALLOWLIST
 //
-// `scripts/shared-type-twins.allowlist.json` maps a name to the reason it may
-// stay duplicated. It is empty: every twin found when this check landed was
-// either moved or renamed. An entry that no longer matches a duplicate fails
-// the check too, so the list can only shrink.
+// `scripts/shared-type-twins.allowlist.json` has two maps of name -> reason:
+// `allowed` for same-name twins (empty: every twin found when this check
+// landed was moved or renamed) and `mirrors` for the annotated renamed
+// copies that predate it. An entry that no longer matches fails the check
+// too, so both lists can only shrink.
 //
 // USAGE
 //
@@ -75,7 +78,8 @@ function parseArgs(argv) {
 
 /**
  * Top-level type declarations of one file.
- * @returns {{name: string, exported: boolean, line: number}[]}
+ * `mirrors` is the backend file a leading "Mirrors src/…" comment names, if any.
+ * @returns {{name: string, exported: boolean, line: number, mirrors: string | null}[]}
  */
 function typeDeclarations(absPath) {
   const text = readFileSync(absPath, "utf8");
@@ -90,7 +94,14 @@ function typeDeclarations(absPath) {
     ) {
       continue;
     }
+    const comments = (ts.getLeadingCommentRanges(text, statement.getFullStart()) ?? [])
+      .map((r) => text.slice(r.pos, r.end))
+      .join("\n")
+      .replace(/^\s*(\/\/|\/\*+|\*\/?)\s?/gm, "")
+      .replace(/\s+/g, " ");
+    const marker = MIRROR_MARKER.exec(comments);
     out.push({
+      mirrors: marker ? `src/${marker[1]}` : null,
       name: statement.name.text,
       exported: (statement.modifiers ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword),
       line: sf.getLineAndCharacterOfPosition(statement.getStart(sf)).line + 1,
@@ -99,10 +110,15 @@ function typeDeclarations(absPath) {
   return out;
 }
 
+// "Mirrors src/services/x.ts's Y 1:1" — the annotation every hand copy of a
+// backend shape carries. A copy under a different name is invisible to the
+// name rule; this marker is how one is spotted instead.
+const MIRROR_MARKER = /\bmirrors (?:src\/)?((?:services|routes|plugins)\/[\w./-]+\.ts)\b/i;
+
 const isTestFile = (rel) => /\.test\.tsx?$/.test(rel) || rel.startsWith("frontend/src/test/");
 
 function readAllowlist(file) {
-  if (!existsSync(file)) return {};
+  if (!existsSync(file)) return { allowed: {}, mirrors: {} };
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(file, "utf8"));
@@ -110,12 +126,14 @@ function readAllowlist(file) {
     console.error(`The allowlist is not valid JSON: ${file}`);
     process.exit(1);
   }
-  const allowed = parsed?.allowed ?? {};
-  if (typeof allowed !== "object" || allowed === null || Array.isArray(allowed)) {
-    console.error(`The allowlist's "allowed" must be an object of name -> reason: ${file}`);
-    process.exit(1);
+  for (const key of ["allowed", "mirrors"]) {
+    const value = parsed?.[key] ?? {};
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      console.error(`The allowlist's "${key}" must be an object of name -> reason: ${file}`);
+      process.exit(1);
+    }
   }
-  return allowed;
+  return { allowed: parsed?.allowed ?? {}, mirrors: parsed?.mirrors ?? {} };
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -135,21 +153,29 @@ for (const rel of collectSourceFiles(root, ["src"])) {
 
 /** name -> [{frontend location, backend locations}] */
 const twins = new Map();
+/** name -> [{frontend location, the backend file it says it mirrors}] */
+const marked = new Map();
 for (const rel of collectSourceFiles(root, ["frontend/src"])) {
   if (!/\.tsx?$/.test(rel) || rel.endsWith(".d.ts") || isTestFile(rel)) continue;
   for (const decl of typeDeclarations(path.join(root, rel))) {
     const theirs = backend.get(decl.name);
-    if (!theirs) continue;
-    if (!twins.has(decl.name)) twins.set(decl.name, []);
-    twins.get(decl.name).push({ at: `${rel}:${decl.line}`, backend: theirs });
+    if (theirs) {
+      if (!twins.has(decl.name)) twins.set(decl.name, []);
+      twins.get(decl.name).push({ at: `${rel}:${decl.line}`, backend: theirs });
+    } else if (decl.mirrors) {
+      if (!marked.has(decl.name)) marked.set(decl.name, []);
+      marked.get(decl.name).push({ at: `${rel}:${decl.line}`, mirrors: decl.mirrors });
+    }
   }
 }
 
-const allowed = readAllowlist(options.allowlist);
+const { allowed, mirrors } = readAllowlist(options.allowlist);
 const failures = [...twins.keys()].filter((name) => !Object.hasOwn(allowed, name)).sort();
-const stale = Object.keys(allowed)
-  .filter((name) => !twins.has(name))
-  .sort();
+const mirrorFailures = [...marked.keys()].filter((name) => !Object.hasOwn(mirrors, name)).sort();
+const stale = [
+  ...Object.keys(allowed).filter((name) => !twins.has(name)),
+  ...Object.keys(mirrors).filter((name) => !marked.has(name)),
+].sort();
 
 if (failures.length > 0) {
   console.error(
@@ -165,13 +191,25 @@ if (failures.length > 0) {
     }
   }
 }
+if (mirrorFailures.length > 0) {
+  console.error(
+    '\nThese frontend types say they mirror a backend shape (a "Mirrors src/..."\n' +
+      "comment) under a different name. Share the backend's declaration\n" +
+      "through src/shared/types.ts and import it instead of copying it.\n",
+  );
+  for (const name of mirrorFailures) {
+    for (const copy of marked.get(name)) {
+      console.error(`  ${name}  ${copy.at}  (mirrors ${copy.mirrors})`);
+    }
+  }
+}
 if (stale.length > 0) {
   console.error(
-    `\n${path.relative(root, options.allowlist)} lists names that no longer have a twin; ` +
-      "remove them:\n",
+    `\n${path.relative(root, options.allowlist)} lists names that no longer have a twin ` +
+      "or a mirror; remove them:\n",
   );
   for (const name of stale) console.error(`  ${name}`);
 }
-if (failures.length > 0 || stale.length > 0) process.exit(1);
+if (failures.length > 0 || mirrorFailures.length > 0 || stale.length > 0) process.exit(1);
 
-console.log(`check-shared-type-twins: no frontend type duplicates a backend type by name.`);
+console.log("check-shared-type-twins: no frontend type duplicates a backend type.");

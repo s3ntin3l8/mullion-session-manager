@@ -1,4 +1,16 @@
 {
-  "note": "Frontend type names allowed to duplicate a backend type name, each with the reason (scripts/check-shared-type-twins.mjs). Empty since #2412: every twin found then was moved to src/shared/ or renamed. An entry that no longer matches a duplicate fails the check, so this list can only shrink.",
-  "allowed": {}
+  "note": "Frontend type names allowed to stay duplicated, each with the reason (scripts/check-shared-type-twins.mjs). `allowed`: same-name twins of a backend type, empty since #2412. `mirrors`: frontend types whose \"Mirrors src/...\" comment names a backend shape they copy under another name. An entry that no longer matches fails the check, so both lists can only shrink.",
+  "allowed": {},
+  "mirrors": {
+    "BrowserCookieProfile": "Copies browser-cookies.ts's CookieProfileSummary. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "DockConfigResult": "Copies dock-config.ts's DockConfigReadResult. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "HermesIntegration": "Copies github-integration.ts's Hermes summary. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "HostConfig": "Copies remote-host-client.ts's AgentConfig. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "PlacementPreview": "Copies placement.ts's PlacementDecision, plus the mode. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "Preview": "Copies preview-registry.ts's PreviewSummary. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "RemoveWorktreeReason": "Copies git-worktree.ts's RemoveListedWorktreeResult reasons, plus the route's sessions-active. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "ScaffoldGenerateJobPhase": "Copies scaffold-generate-jobs.ts's job phases. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "Task": "Copies routes/tasks.ts's TASK_ROW_COLUMNS row. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry.",
+    "WorktreeKeptReason": "Copies session-worktree-reclaim.ts's KeptReason. A renamed hand copy that predates the check (#2412 settled same-name twins). Share the backend shape through src/shared/types.ts, then delete this entry."
+  }
 }

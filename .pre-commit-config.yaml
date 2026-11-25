@@ -79,13 +79,14 @@ repos:
 
       # Issue #2412 — no frontend type may duplicate a backend type by name:
       # an API shape is declared once, in src/shared/, and imported by both
-      # workspaces. `npm run lint` runs it for a backend change; this is the
-      # frontend half, for the same reason as import-boundaries above.
+      # workspaces. A change on either side can create a twin (a new exported
+      # backend type can match an existing frontend name), so it runs for
+      # both; `npm run lint` runs it too.
       - id: shared-type-twins
         name: shared API types (no frontend copy of a backend type)
         entry: node scripts/check-shared-type-twins.mjs
         language: system
-        files: '^frontend/src/.*\.(ts|tsx)$'
+        files: '^(frontend/src|src)/.*\.(ts|tsx)$'
         pass_filenames: false
         stages: [pre-commit]
 
