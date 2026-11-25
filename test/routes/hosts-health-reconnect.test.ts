@@ -12,6 +12,8 @@ import type { HostProbeResult } from "../../src/services/host-heartbeat.js";
 
 type Probe = () => Promise<HostProbeResult>;
 const probes = vi.hoisted(() => new Map<string, Probe>());
+const probeCalls = vi.hoisted(() => new Map<string, number>());
+const capacityHangs = vi.hoisted(() => new Set<string>());
 
 vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof RemoteHostClientModule>();
@@ -21,9 +23,12 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
       const probe = probes.get(id);
       if (!probe) return actual.getRemoteHostClient(app, id);
       return {
-        probe,
-        ping: async () => (await probe()) !== "down",
-        resolveCapacity: async () => null,
+        probe: () => {
+          probeCalls.set(id, (probeCalls.get(id) ?? 0) + 1);
+          return probe();
+        },
+        resolveCapacity: () =>
+          capacityHangs.has(id) ? new Promise(() => undefined) : Promise.resolve(null),
       } as unknown as ReturnType<typeof actual.getRemoteHostClient>;
     },
   };
@@ -31,7 +36,8 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { heartbeatProbeDeadlineMs } = await import("../../src/services/remote-host-client-core.js");
+const { heartbeatCapacityDeadlineMs, heartbeatProbeDeadlineMs } =
+  await import("../../src/services/remote-host-client-core.js");
 
 const tmpDb = path.join(os.tmpdir(), `hosts-health-reconnect-${process.pid}.db`);
 const SECRET = "reconnect-secret"; // pragma: allowlist secret
@@ -59,6 +65,8 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
     vi.useRealTimers();
     for (const id of probes.keys()) app.agentChannels.delete(id);
     probes.clear();
+    probeCalls.clear();
+    capacityHangs.clear();
   });
 
   /** An outbound-only agent: a machine identity and no address. */
@@ -168,6 +176,11 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
     expect(res.json()).toEqual({ online: false });
     expect(await healthOf(hostId)).toBe("degraded");
 
+    // More failed clicks are not more sweep ticks: they never escalate it.
+    await app.inject({ method: "POST", url: `/api/hosts/${hostId}/ping` });
+    await app.inject({ method: "POST", url: `/api/hosts/${hostId}/ping` });
+    expect(await healthOf(hostId)).toBe("degraded");
+
     // Busy keeps the previous verdict, and Test answers with that verdict
     // rather than "online": the two never disagree.
     app.hostHeartbeatTracker!.markOffline(hostId);
@@ -175,6 +188,46 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
     res = await app.inject({ method: "POST", url: `/api/hosts/${hostId}/ping` });
     expect(res.json()).toEqual({ online: false });
     expect(await healthOf(hostId)).toBe("offline");
+  });
+
+  it("drops a sweep answer that is older than a verdict Test recorded meanwhile", async () => {
+    const { host_id: hostId } = await registerOutboundAgent("raced");
+    let answer!: (r: HostProbeResult) => void;
+    let sweepProbe = true;
+    probes.set(hostId, () =>
+      sweepProbe ? new Promise<HostProbeResult>((r) => (answer = r)) : Promise.resolve("ok"),
+    );
+    startSweepOnFakeTimers();
+    await vi.advanceTimersByTimeAsync(0);
+
+    // While the sweep's probe is out, Test reaches the host.
+    sweepProbe = false;
+    // Test's verdict must be strictly newer than the probe's start (ms clock).
+    const sweepStarted = Date.now();
+    while (Date.now() <= sweepStarted) {
+      // spin a millisecond
+    }
+    const res = await app.inject({ method: "POST", url: `/api/hosts/${hostId}/ping` });
+    expect(res.json()).toEqual({ online: true });
+
+    // The sweep's probe then fails: an answer from before Test's, so dropped.
+    answer("down");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await healthOf(hostId)).toBe("online");
+  });
+
+  it("bounds a capacity read that never settles without touching the verdict", async () => {
+    const { host_id: hostId } = await registerOutboundAgent("slow-capacity");
+    probes.set(hostId, async () => "ok");
+    capacityHangs.add(hostId);
+    startSweepOnFakeTimers();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await healthOf(hostId)).toBe("online");
+    // Past the capacity deadline the turn ends, and the next tick probes again.
+    const calls = probeCalls.get(hostId) ?? 0;
+    await vi.advanceTimersByTimeAsync(heartbeatCapacityDeadlineMs() + 30_000);
+    expect(probeCalls.get(hostId)).toBeGreaterThan(calls);
+    expect(await healthOf(hostId)).toBe("online");
   });
 
   it("records nothing from Test while the heartbeat is off", async () => {

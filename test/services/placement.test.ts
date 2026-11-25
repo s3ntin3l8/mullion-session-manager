@@ -720,6 +720,14 @@ describe("notOnlineReason (#3515)", () => {
         candidate({ online: false, health: { status: "pending", lastSeenAt: null } }),
       ),
     ).toBe("a matching host is pending (not reached yet)");
+    expect(
+      notOnlineReason(
+        candidate({
+          online: false,
+          health: { status: "degraded", lastSeenAt, reason: "channel saturated" },
+        }),
+      ),
+    ).toBe("a matching host is degraded (channel saturated, last seen 2026-11-25T12:16:35Z)");
     // A candidate built without the heartbeat's verdict reads as offline.
     expect(notOnlineReason(candidate({ online: false }))).toBe(
       "a matching host is offline (never reached)",

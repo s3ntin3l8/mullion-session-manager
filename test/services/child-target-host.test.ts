@@ -642,21 +642,21 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       expect(res.statusCode).toBe(400);
     });
 
-    it("answers 409 when no eligible host matches the target", async () => {
-      const { projectId } = await setup();
-      const res = await app.inject({
+    it("answers 409 when no eligible host matches the target, naming the matching host's state (#3515)", async () => {
+      const { projectId, hostId } = await setup();
+      const win32 = await app.inject({
         method: "POST",
         url: "/api/sessions",
         payload: { projectId, command: "bash", targetPlatform: "win32" },
       });
-      expect(res.statusCode).toBe(409);
-      expect(res.json().message).toBe(
+      expect(win32.statusCode).toBe(409);
+      expect(win32.json().message).toBe(
         "no eligible host matches platform win32 (no host has reported platform win32)",
       );
-    });
 
-    it("names the matching host's state and last contact in the refusal (#3515)", async () => {
-      const { projectId, hostId } = await setup();
+      // Issue #3515 — a refusal names the matching host's state and last
+      // contact. Kept in this test rather than its own: this file's app is
+      // shared, and POST /api/projects (setup) is rate limited per minute.
       const lastSeenAt = app.hostHeartbeatTracker!.getHealth(hostId).lastSeenAt!;
       const seen = new Date(lastSeenAt).toISOString().replace(/\.\d{3}Z$/, "Z");
       const create = () =>
@@ -683,6 +683,13 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       res = await create();
       expect(res.statusCode).toBe(409);
       expect(res.json().message).toContain("a matching host is pending (not reached yet)");
+
+      // After a primary restart the tracker has no last contact: the
+      // persisted one (hosts.last_seen_at, whole seconds) is named instead.
+      app.hostHeartbeatTracker?.markOffline(hostId);
+      res = await create();
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain(`a matching host is offline (last seen ${seen})`);
     });
 
     it("creates the session on the targeted host and reads its status from THAT host", async () => {

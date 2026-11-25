@@ -57,7 +57,7 @@ export interface PlacementCandidate {
    * "offline") and when the host was last reached. Optional: a candidate
    * built without them is reported as plain "offline".
    */
-  health?: { status: HostHealthStatus; lastSeenAt: number | null };
+  health?: { status: HostHealthStatus; lastSeenAt: number | null; reason?: string };
   /**
    * Drained/parked: the host takes no new work.
    *
@@ -581,7 +581,11 @@ export function notOnlineReason(candidate: PlacementCandidate): string {
     lastSeenAt === null
       ? "never reached"
       : `last seen ${new Date(lastSeenAt).toISOString().replace(/\.\d{3}Z$/, "Z")}`;
-  return `a matching host is ${status === "degraded" ? "degraded" : "offline"} (${seen})`;
+  if (status === "degraded") {
+    const reason = candidate.health?.reason;
+    return `a matching host is degraded (${reason ? `${reason}, ` : ""}${seen})`;
+  }
+  return `a matching host is offline (${seen})`;
 }
 
 /**
@@ -788,7 +792,13 @@ function collectCandidates(
       // construction (host-heartbeat.ts says so explicitly); a remote host
       // that has never been reached reads as "pending".
       online: health?.status === "online",
-      health: { status: health?.status ?? "pending", lastSeenAt: health?.lastSeenAt ?? null },
+      // The tracker's last contact, else the persisted one (written at most
+      // hourly, and the only one left after a primary restart).
+      health: {
+        status: health?.status ?? "pending",
+        lastSeenAt: health?.lastSeenAt ?? host.lastSeenAt?.getTime() ?? null,
+        ...(health?.reason ? { reason: health.reason } : {}),
+      },
       // Issue #1725 / roadmap 8.11 — the host's own drain flag: a parked
       // host takes no new work, so it is not a candidate. The flag is an
       // intent, not a teardown: nothing about the host is stopped, and it

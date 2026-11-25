@@ -41,10 +41,11 @@ describe("an exchange on a channel the peer closed in the same read (#3515)", ()
     const outcome = await Promise.race([
       channelFetch(entry, { method: "GET", path: "/internal/protocol", timeoutMs: 200 }).then(
         () => "resolved",
-        () => "rejected",
+        (err: Error) => err.message,
       ),
       new Promise((r) => setTimeout(() => r("hung"), 1500)),
     ]);
-    expect(outcome).toBe("rejected");
+    // Fails on the closed channel itself, not by waiting out its timeout.
+    expect(outcome).toBe("outbound channel closed before the request was sent");
   });
 });
