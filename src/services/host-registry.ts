@@ -453,6 +453,8 @@ export function deleteHost(app: FastifyInstance, id: string, opts: { cascade?: b
   // The unreachable-host log throttle keys by host id; a removed host never
   // recovers, so nothing else would ever clear its entries.
   forgetHostWarnings(id);
+  // Same for the once-per-process claim refusal notice: the id is gone.
+  liveIdentityClaimRefused.delete(id);
 }
 
 // Issue #245 / roadmap 7.1 — agent-initiated registration & rotation.
@@ -527,6 +529,34 @@ function noteLegacyAgent(app: FastifyInstance, hostId: string): void {
   app.log.warn({ hostId }, LEGACY_AGENT_NOTICE);
 }
 
+// Issue #3439 — a per-host token presented for a row that already holds a
+// live machine identity is refused (see claimHost). The refusal is reported
+// once per host per process, the same shape as the legacy-agent notice
+// above: a leaked token that keeps being presented must not fill the log,
+// and the host id is all an operator needs — the token itself is never
+// logged.
+const liveIdentityClaimRefused = new Set<string>();
+
+function noteLiveIdentityClaimRefused(app: FastifyInstance, hostId: string): void {
+  if (liveIdentityClaimRefused.has(hostId)) return;
+  liveIdentityClaimRefused.add(hostId);
+  app.log.warn(
+    { hostId },
+    "a registration was refused: the host has a live machine identity; re-pair it from Settings → Hosts",
+  );
+}
+
+/**
+ * Test-only reset: both notice sets are module-scope state, so a test that
+ * asserts on a warning must not depend on what an earlier test in the same
+ * file already logged (the same reason test/setup.ts resets the unreachable
+ * host throttle before every test).
+ */
+export function resetHostRegistryNotices(): void {
+  legacyAgentNoticed.clear();
+  liveIdentityClaimRefused.clear();
+}
+
 // Both halves of a session credential are generated with real entropy and
 // stored encrypted, same rigor as authTokenEnc — see schema.ts's own
 // comment on why sessionIdEnc in particular can't be a plain
@@ -559,6 +589,17 @@ function issueSession(app: FastifyInstance, hostId: string): HostRegistration {
  * agent's self-report and issues a fresh session. Returns null if no row
  * matches — every candidate row is checked via timingSafeTokenMatch (not a
  * naive ===) so a per-byte oracle can't be built against any single row.
+ *
+ * Issue #3439 — a row that already holds a LIVE machine identity is not
+ * claimable. A per-host token never expires and is never cleared, so before
+ * this rule a leaked one handed any peer that reached the register route the
+ * host's session and a fresh machine credential, and displaced the real
+ * agent into the 24 h grace slot. Now such a row is skipped: the claim
+ * falls through to the route's other branches and answers the same 401 as an
+ * unknown token, so nothing about the host is disclosed and no state changes.
+ * Replacing a live identity is an operator action (Re-pair, issue #3438).
+ * A row WITHOUT a live identity stays claimable — it never registered, it
+ * is a legacy agent that claims on every boot, or its identity expired.
  */
 // Finding AS13: this used to `continue` past the rest of the loop body the
 // moment a row matched — early-exiting the loop itself (via `return` inside
@@ -618,7 +659,16 @@ export function claimHost(
         "claimHost: failed to decrypt a candidate host's token; treating it as a non-match",
       );
     }
-    if (isMatch && matchedRow === undefined) matchedRow = row;
+    if (!isMatch || matchedRow !== undefined) continue;
+    // Issue #3439 — the row matched but holds a live machine identity, so it
+    // is not claimable. Skip it and keep looking: another row may still
+    // legitimately match, and a refused claim must be indistinguishable from
+    // an unknown token (the same work, the same 401, no state touched).
+    if (hasLiveMachineIdentity(row)) {
+      noteLiveIdentityClaimRefused(app, row.id);
+      continue;
+    }
+    matchedRow = row;
   }
   if (matchedRow === undefined) return null;
   app.db
@@ -882,11 +932,15 @@ function issueMachineCredential(
   opts: { noGrace?: boolean } = {},
 ): string {
   const credential = crypto.randomBytes(32).toString("hex");
-  // A claim cannot tell a deliberate re-enroll from a second agent sharing the
-  // same per-host token. Keep a still-live credential in the grace slot so a
-  // displaced agent converges onto the new one at its next renewal instead of
-  // being 401-ed permanently. Re-pairing (noGrace) is an explicit operator
-  // action that must disconnect the old agent immediately.
+  // A still-live credential keeps its grace slot, so an agent whose
+  // credential was replaced converges onto the new one at its next renewal
+  // instead of being 401-ed permanently. Re-pairing (noGrace) is an explicit
+  // operator action that must disconnect the old agent immediately.
+  //
+  // Issue #3439: a claim can no longer land on a row that holds a live
+  // identity (claimHost refuses it), so this is a safety net for any path
+  // that still issues a credential over a live one — never a takeover
+  // window.
   const existing = getHostRow(app, hostId);
   const prevEnc =
     !opts.noGrace && existing && hasLiveMachineIdentity(existing)

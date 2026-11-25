@@ -149,6 +149,26 @@ in `machine_credential`.
   transit does not lock the agent out: it retries with the credential
   it still holds and is handed the already-issued current one. A credential also expires after 90 days
   without use (the expiry slides on every use).
+- **A per-host token cannot take over a live identity** (issue #3439). A
+  pre-provisioned host row's own bootstrap token is what its agent presents to
+  claim the row. That token never expires and is never cleared after the first
+  registration, so a leaked one used to be enough to take the host over: the
+  claimant received the host's session and a fresh machine credential, and the
+  real agent was displaced into the 24 h grace slot. A row that holds a
+  **live** machine identity (a credential that is present, not revoked and not
+  expired) now refuses such a claim. The registration is answered with the
+  same `401 invalid registration credential` as an unknown token — nothing
+  about the host is disclosed, and no state changes (the credential, the grace
+  copy, the session, the address and the agent self-report are all left
+  exactly as they were). The server logs one warning per host: "a
+  registration was refused: the host has a live machine identity; re-pair it
+  from Settings → Hosts". Replacing a live identity is an operator action:
+  _Re-pair_ the host (below). A row **without** a live identity stays
+  claimable — a host that never registered, a legacy agent that claims on
+  every boot, and a row whose identity expired.
+  **The expired identity is the one remaining takeover window**: a credential
+  unused for 90 days expires, and the row's token can claim the row again
+  then. Revoke or re-pair such a row instead of leaving it idle.
 - **Revocation is final.** `POST /api/hosts/:id/revoke` (Settings → Hosts →
   the row's menu → _Revoke identity_) drops the credential, its grace copy
   and the live session. The agent's next registration gets `401`, and it
@@ -172,12 +192,15 @@ in `machine_credential`.
   nothing short of a restart re-reads either file; `install.sh` restarts a
   unit that was running when it rewrote the `.env`). The legacy recipe is
   tested through the real boot path
-  (`test/plugins/agent-restart-reenroll.test.ts`). Do this at repair time, not
-  at rotation time: rotating to retire a leaked token (rotate and discard) does
-  not need it, but it leaves the `.env` token dead, so a later re-pairing via
-  that legacy recipe needs a second, fresh rotation. A credential unused for 90 days is rejected
-  the same way as a revoked one, so the agent log's "revoked or unknown" can
-  also mean expiry.
+  (`test/plugins/agent-restart-reenroll.test.ts`). It only works while the row
+  holds **no** live identity (a revoked or expired one): since issue #3439 a
+  row with a live identity refuses a claim, so rotating the token and pasting
+  it in cannot replace a live identity — that needs a re-pair. Do this at
+  repair time, not at rotation time: rotating to retire a leaked token (rotate
+  and discard) does not need it, but it leaves the `.env` token dead, so a
+  later re-pairing via that legacy recipe needs a second, fresh rotation. A
+  credential unused for 90 days is rejected the same way as a revoked one, so
+  the agent log's "revoked or unknown" can also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
   credential is compared, so a caller who guesses an id can tell a revoked host
@@ -410,15 +433,21 @@ specific address.
   - **Live machine identity** (the agent registered itself): the running agent is
     unaffected. It renews with its `{hostId, machineCredential}` and never
     presents the bootstrap token again. Two cases:
-    - **Leak:** a per-host token is never cleared after first registration, and
-      `claimHost` does not check for a live identity, so anyone holding it can
-      take the row over. Rotate it now with **Rotate token and discard it**: the
-      old value dies, the running agent is untouched, the new token is never
-      shown. The token left in the agent's `.env` is now dead.
+    - **Leak:** a per-host token is never cleared after first registration, so
+      retire it now with **Rotate token and discard it**: the old value dies, the
+      running agent is untouched, the new token is never shown. The token left in
+      the agent's `.env` is now dead. Since issue #3439 a leaked token can no
+      longer take the row over either — a host with a live identity refuses a
+      claim — but retire the leaked value anyway.
     - **Repair** (state file lost, identity revoked, or expired after 90 days
-      unused): rotate again (the leak rotation's token was discarded), paste the
-      new value into `.env`, delete `agent-identity.json`, restart. Do this at
-      repair time, not at rotation time.
+      unused): **Re-pair** the host — the row's `…` menu → _Re-pair_, or
+      `POST /api/host-pairings` with `{"hostId": "<id>"}` — and redeem the
+      one-time code on the agent. It issues a fresh session and machine
+      credential in place and rejects the displaced credential immediately.
+      Rotating the token is no longer enough: a row with a live identity
+      refuses a claim (issue #3439), so "rotate, paste into `.env`, delete
+      `agent-identity.json`, restart" only works for a row whose identity is
+      gone (revoked or expired).
       An agent without an identity whose bootstrap token was rotated logs a one-time
       warning and picks up the new `.env` value without a restart.
 - Tick **Use my own token** to supply a token yourself instead (the manual

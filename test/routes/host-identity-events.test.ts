@@ -37,7 +37,10 @@ describe("host identity events (issue #3435)", () => {
     delete process.env.MULLION_ENROLLMENT_SECRET;
   });
 
-  it("records a single `replaced` event with peer on live-identity claim and surfaces recentIdentityReplacement until acknowledged", async () => {
+  // Issue #3439 — a per-host token can no longer claim a host that holds a
+  // live machine identity, so a registration can no longer REPLACE that
+  // identity: the claim is refused and no event is written for it.
+  it("refuses a live-identity claim and writes no event for it", async () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/hosts",
@@ -46,7 +49,7 @@ describe("host identity events (issue #3435)", () => {
     expect(created.statusCode).toBe(201);
     const { id: hostId, token: perHostToken } = created.json() as { id: string; token: string };
 
-    // First claim: establishes the live machine identity (`claimed` event, no `replaced`).
+    // First claim: establishes the live machine identity (`claimed` event).
     const firstClaim = await app.inject({
       method: "POST",
       url: "/api/internal/register",
@@ -61,7 +64,9 @@ describe("host identity events (issue #3435)", () => {
     expect(firstClaim.statusCode).toBe(200);
     const firstCred = firstClaim.json().machine_credential as string;
 
-    // Second claim while the first identity is still live: writes `replaced` with peer.
+    // Second claim while the first identity is still live: refused, and it
+    // writes nothing — the identity it would have replaced is still the one
+    // in place.
     const secondClaim = await app.inject({
       method: "POST",
       url: "/api/internal/register",
@@ -73,10 +78,7 @@ describe("host identity events (issue #3435)", () => {
         wantsMachineCredential: true,
       },
     });
-    expect(secondClaim.statusCode).toBe(200);
-    const secondCred = secondClaim.json().machine_credential as string;
-    const secondSessionId = secondClaim.json().session_id as string;
-    const secondSessionSecret = secondClaim.json().session_secret as string;
+    expect(secondClaim.statusCode).toBe(401);
 
     const eventsRes = await app.inject({
       method: "GET",
@@ -91,24 +93,50 @@ describe("host identity events (issue #3435)", () => {
       peer: string | null;
       acknowledgedAt: string | null;
     }>;
+    expect(events.map((e) => e.kind)).toEqual(["claimed"]);
+    expect(events.filter((e) => e.kind === "replaced")).toHaveLength(0);
+
+    // Verify no credential, token, or secret appears anywhere in the serialized event rows.
+    const serialized = JSON.stringify(events);
+    for (const secret of [perHostToken, firstCred]) {
+      expect(serialized).not.toContain(secret);
+    }
+
+    // And nothing is flagged as a replaced identity.
+    const listBefore = await app.inject({ method: "GET", url: "/api/hosts" });
+    expect(listBefore.statusCode).toBe(200);
+    const itemBefore = (listBefore.json() as Array<Record<string, unknown>>).find(
+      (h) => h.id === hostId,
+    );
+    expect(itemBefore?.recentIdentityReplacement).toBeNull();
+  });
+
+  it("surfaces a `replaced` event on /api/hosts until it is acknowledged", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "replaced-box", baseUrl: "http://10.2.0.2:4000" },
+    });
+    expect(created.statusCode).toBe(201);
+    const { id: hostId } = created.json() as { id: string };
+    recordHostIdentityEvent(app, hostId, "replaced", "10.2.0.99");
+
+    const eventsRes = await app.inject({
+      method: "GET",
+      url: `/api/hosts/${hostId}/identity-events`,
+    });
+    expect(eventsRes.statusCode).toBe(200);
+    const events = eventsRes.json() as Array<{
+      id: number;
+      kind: string;
+      peer: string | null;
+      acknowledgedAt: string | null;
+    }>;
     const replacedEvents = events.filter((e) => e.kind === "replaced");
     expect(replacedEvents).toHaveLength(1);
     expect(replacedEvents[0].peer).toBe("10.2.0.99");
     expect(replacedEvents[0].acknowledgedAt).toBeNull();
 
-    // Verify no credential, token, or secret appears anywhere in the serialized event rows.
-    const serialized = JSON.stringify(events);
-    for (const secret of [
-      perHostToken,
-      firstCred,
-      secondCred,
-      secondSessionId,
-      secondSessionSecret,
-    ]) {
-      expect(serialized).not.toContain(secret);
-    }
-
-    // /api/hosts includes recentIdentityReplacement until acknowledged.
     const listBefore = await app.inject({ method: "GET", url: "/api/hosts" });
     expect(listBefore.statusCode).toBe(200);
     const itemBefore = (listBefore.json() as Array<Record<string, unknown>>).find(

@@ -234,7 +234,11 @@ describe("host-registry", () => {
 
   // Issue #245 / roadmap 7.1 — agent-initiated registration & rotation.
   describe("claimHost / enrollHost / rotateSession", () => {
-    it("a second claim with the same per-host token keeps the incumbent's credential in the grace slot", async () => {
+    // Issue #3439 — a per-host token cannot claim a host that already holds
+    // a live machine identity. The second agent is refused, the incumbent's
+    // credential is untouched, and the incumbent keeps renewing (a renewal
+    // rotates the credential into the grace slot, exactly as before).
+    it("refuses a second claim with the same per-host token while the identity is live", async () => {
       const app = await buildApp();
       const created = createHost(app, {
         name: "shared-token",
@@ -247,35 +251,27 @@ describe("host-registry", () => {
         wantsMachineCredential: true,
       };
       const a = claimHost(app, "shared-per-host", input)!;
-      const b = claimHost(app, "shared-per-host", { ...input, baseUrl: "http://b:4000" })!;
       expect(a.machineCredential).toBeTruthy();
-      expect(b.machineCredential).toBeTruthy();
-      expect(b.machineCredential).not.toBe(a.machineCredential);
+      const credentialEnc = getHostRow(app, created.id)!.machineCredentialEnc;
 
-      // The displaced agent's renewal is still accepted and converges; the
-      // grace window slides on use, so a stale holder that keeps presenting
-      // survives past 24 h from the replacement.
-      vi.useFakeTimers({ toFake: ["Date"] });
-      try {
-        const t0 = Date.now();
-        vi.setSystemTime(new Date(t0 + 12 * 3600_000));
-        const renewed = renewMachineCredential(app, created.id, a.machineCredential!, input);
-        expect(renewed).not.toBeNull();
-        // Converges onto the already-issued current credential; does not rotate.
-        expect(renewed!.machineCredential).toBe(b.machineCredential);
+      const b = claimHost(app, "shared-per-host", { ...input, baseUrl: "http://b:4000" });
+      expect(b).toBeNull();
+      // Nothing of the incumbent's moved: no new credential, no grace copy,
+      // no rotation stamp.
+      const row = getHostRow(app, created.id)!;
+      expect(row.machineCredentialEnc).toBe(credentialEnc);
+      expect(row.machineCredentialPrevEnc).toBeNull();
+      expect(row.machineCredentialRotatedAt).toBeNull();
 
-        // +24 h from the replacement, but only 12 h since last presented.
-        vi.setSystemTime(new Date(t0 + 24 * 3600_000));
-        expect(
-          renewMachineCredential(app, created.id, a.machineCredential!, input)?.machineCredential,
-        ).toBe(b.machineCredential);
+      // The incumbent still renews, and its renewal rotates the credential
+      // into the grace slot: a renewal whose response was lost converges
+      // onto the already-issued current one instead of being locked out.
+      const renewed = renewMachineCredential(app, created.id, a.machineCredential!, input);
+      expect(renewed).not.toBeNull();
+      expect(renewed!.machineCredential).not.toBe(a.machineCredential);
+      const retry = renewMachineCredential(app, created.id, a.machineCredential!, input);
+      expect(retry!.machineCredential).toBe(renewed!.machineCredential);
 
-        // 25 h with no presentation: the grace has lapsed.
-        vi.setSystemTime(new Date(t0 + 49 * 3600_000));
-        expect(renewMachineCredential(app, created.id, a.machineCredential!, input)).toBeNull();
-      } finally {
-        vi.useRealTimers();
-      }
       await app.close();
     });
 
