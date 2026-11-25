@@ -30,6 +30,13 @@ export type IdbCompanionSpawn = (
 
 export type IdbCompanionExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
 
+/** Per-call overrides for start()/restart(). */
+export interface IdbCompanionStartOptions {
+  /** Readiness bound for this start in ms (defaults to the instance's
+   * startTimeoutMs). */
+  timeoutMs?: number;
+}
+
 export interface IdbCompanionOptions {
   udid: string;
   executablePath: string;
@@ -366,7 +373,7 @@ export class IdbCompanion {
     };
   }
 
-  async start(): Promise<void> {
+  async start(options: IdbCompanionStartOptions = {}): Promise<void> {
     if (this.starting) {
       throw new Error(`idb_companion for ${this.udid} is already starting`);
     }
@@ -374,6 +381,7 @@ export class IdbCompanion {
       return;
     }
 
+    const timeoutMs = options.timeoutMs ?? this.startTimeoutMs;
     this.starting = true;
     this.stopping = false;
     this.stderrBuffer.clear();
@@ -436,7 +444,7 @@ export class IdbCompanion {
       const client = this.createClientFn(port);
       this.currentClient = client;
 
-      const deadline = Date.now() + this.startTimeoutMs;
+      const deadline = Date.now() + timeoutMs;
       let lastDescribeError: Error | null = null;
       while (Date.now() < deadline) {
         if (earlyExitError) {
@@ -482,7 +490,7 @@ export class IdbCompanion {
       await this.killChildAndWait(child);
       const causeSuffix = lastDescribeError ? ` (${lastDescribeError.message})` : "";
       throw new Error(
-        `idb_companion for ${this.udid} failed to become ready within ${this.startTimeoutMs}ms${causeSuffix}${this.formatStderrSuffix()}`,
+        `idb_companion for ${this.udid} failed to become ready within ${timeoutMs}ms${causeSuffix}${this.formatStderrSuffix()}`,
       );
     } catch (err) {
       if (this.child) {
@@ -505,9 +513,9 @@ export class IdbCompanion {
     await this.killChildAndWait(child);
   }
 
-  async restart(): Promise<void> {
+  async restart(options: IdbCompanionStartOptions = {}): Promise<void> {
     await this.stop();
-    await this.start();
+    await this.start(options);
   }
 
   private async killChildAndWait(child: ChildProcess): Promise<void> {

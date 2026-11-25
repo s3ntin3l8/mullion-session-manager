@@ -52,7 +52,7 @@ export interface IdbCompanionHandle {
   readonly client: IdbGrpcClient | null;
   readonly isRunning: boolean;
   start(): Promise<void>;
-  restart(): Promise<void>;
+  restart(options?: { timeoutMs?: number }): Promise<void>;
   onExit(listener: () => void): () => void;
 }
 
@@ -64,6 +64,10 @@ const MAX_STREAM_REOPEN_FAILURES = 5;
 const DESCRIBE_TIMEOUT_MS = 5000;
 const HID_ONCE_TIMEOUT_MS = 5000;
 const HID_STREAM_CLOSE_TIMEOUT_MS = 2000;
+/** Readiness bound for a companion restarted to recover stale HID. The
+ * simulator is already up, so this is a warm start: input must not stall for
+ * the companion's 60 s cold-start bound (#3527). */
+const HID_RESTART_READY_TIMEOUT_MS = 15_000;
 const RECENT_LIVE_BATCH_WINDOW_MS = 50;
 const RECENT_LIVE_BATCH_MAX = 64;
 const LAST_LIVE_BATCH_MAX_AGE_MS = 5000;
@@ -905,7 +909,7 @@ export class IosSimulatorDriver implements DeviceDriver {
       this.resetCompanionSession();
       this.offCompanionExit?.();
       this.offCompanionExit = null;
-      await companion.restart();
+      await companion.restart({ timeoutMs: HID_RESTART_READY_TIMEOUT_MS });
       if (this.alive) {
         this.offCompanionExit = companion.onExit(() => this.scheduleReopen());
       }

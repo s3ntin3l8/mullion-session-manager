@@ -513,7 +513,8 @@ describe("IosSimulatorDriver idb_companion cold start (#3527)", () => {
     expect(info.error).toContain("14 UNAVAILABLE");
     expect(streams).toHaveLength(0);
     // The never-ready companion was killed, not leaked.
-    expect(spawned.every((c) => c.signalCode !== null)).toBe(true);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]!.signalCode).not.toBeNull();
     await driver.stop();
     await companion.stop();
   });

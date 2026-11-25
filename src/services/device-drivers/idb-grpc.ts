@@ -164,7 +164,7 @@ type CompanionServiceConstructor = grpc.ServiceClientConstructor & {
  * between fails with UNAVAILABLE without dialing: a companion that comes up
  * late in a cold start would go unseen for tens of seconds (#3527). The peer
  * is a local process, so redialing every second at most costs nothing. */
-const IDB_CHANNEL_OPTIONS: grpc.ChannelOptions = {
+export const IDB_CHANNEL_OPTIONS: grpc.ChannelOptions = {
   "grpc.initial_reconnect_backoff_ms": 250,
   "grpc.max_reconnect_backoff_ms": 1_000,
 };
