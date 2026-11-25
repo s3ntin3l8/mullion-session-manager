@@ -365,6 +365,41 @@ describe("Settings -> Devices iOS Simulator", () => {
     expect(screen.getByRole("textbox", { name: "Name" })).toHaveAttribute("placeholder", "");
   });
 
+  it("shows no Name placeholder when every simulator is already added", async () => {
+    deviceHostsDb = [
+      {
+        hostId: "local",
+        name: "Primary",
+        status: "ok",
+        deviceKinds: ["emulator"],
+        platforms: ["ios"],
+      },
+    ];
+    simulatorsByHostDb = { local: [IOS_SIMS_LOCAL[1]] };
+    devicesDb = [
+      {
+        id: 1,
+        hostId: "local",
+        projectId: null,
+        name: null,
+        platform: "ios",
+        kind: "emulator",
+        avdName: null,
+        serial: null,
+        udid: "SIM-UDID-2",
+        status: "active",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        live: null,
+      },
+    ];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByText("Add a simulator"));
+    await screen.findByRole("radiogroup", { name: "Simulator" });
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveAttribute("placeholder", "");
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+  });
+
   it("shows the selected AVD's name as the Android Name placeholder", async () => {
     deviceHostsDb = [
       {
