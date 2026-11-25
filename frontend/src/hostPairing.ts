@@ -1,7 +1,7 @@
 import type { Host, HostPairingSummary } from "./api/index.js";
 
 // Issue #2597 — GET /api/hosts reports `unclaimed: true` for a paired host whose
-// Helper never took delivery of its identity (retry window passed, credential
+// agent never took delivery of its identity (retry window passed, credential
 // never renewed, no channel ever connected). Absent from an older primary.
 // Declared here rather than inline in api/types.ts, whose size ceiling is a
 // ratchet (scripts/check-max-file-lines.mjs).

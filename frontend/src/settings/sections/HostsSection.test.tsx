@@ -493,6 +493,13 @@ describe("HostsSection", () => {
     expect(panel).not.toHaveTextContent("MULLION_AGENT_PAIRING_FORCE=1");
     await user.click(within(panel).getByRole("button", { name: "Copy Pairing code" }));
     expect(await navigator.clipboard.readText()).toBe(code);
+    await user.click(
+      within(panel).getByRole("button", { name: "Copy Install command (Linux / macOS)" }),
+    );
+    const command = await navigator.clipboard.readText();
+    const stdin = `<<'MULLION_PAIRING_CODE'\n${code}\nMULLION_PAIRING_CODE`;
+    expect(command.endsWith(stdin)).toBe(true);
+    expect(command.slice(0, -stdin.length)).not.toContain(code);
   });
 
   it("keeps the pending pairing dialog open and sends only one request", async () => {

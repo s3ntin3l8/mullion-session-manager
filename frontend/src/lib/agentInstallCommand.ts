@@ -65,10 +65,13 @@ export function pairingInstallCommand(primaryUrl: string, code: string, rePair: 
     ...(rePair ? ["MULLION_AGENT_PAIRING_FORCE=1"] : []),
   ];
   const download = `curl -fsSL -o mullion-install.sh ${RELEASE_BASE}/mullion-install.sh`;
+  // The primary generates codes as 64 lowercase hex characters.
   return [
     `${download} &&`,
-    `printf '%s\\n' ${sh(code)} | ${env.join(" ")} \\
-  sh mullion-install.sh --role agent "$HOME/mullion"`,
+    `${env.join(" ")} \\
+  sh mullion-install.sh --role agent "$HOME/mullion" <<'MULLION_PAIRING_CODE'`,
+    code,
+    "MULLION_PAIRING_CODE",
   ].join("\n");
 }
 
