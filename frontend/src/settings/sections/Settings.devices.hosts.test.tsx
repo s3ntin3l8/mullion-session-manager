@@ -180,17 +180,15 @@ describe("Settings -> Devices host picker", () => {
       expect(hints).not.toHaveTextContent("Linux box");
     });
 
-    it("shows no iOS section for a Linux host alone", async () => {
-      hostsDb = [FOUR_HOSTS[0]!];
+    it("lists a Mac's reason beside another Mac that can run iOS, keeping Add", async () => {
+      hostsDb = [{ ...macbook, hostId: "h-mini", name: "Mac mini", platforms: ["ios"] }, macbook];
       render(<Settings onClose={vi.fn()} initialSection="devices" />);
-      await screen.findByText("Create an emulator");
-      await waitFor(() =>
-        expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes("/devices/hosts"))).toBe(
-          true,
-        ),
-      );
-      expect(screen.queryByRole("region", { name: "iOS Simulator" })).toBeNull();
-      expect(screen.queryByTestId("devices-ios-unavailable")).toBeNull();
+      const ios = await screen.findByRole("region", { name: "iOS Simulator" });
+      expect(await within(ios).findByText("Add a simulator")).toBeInTheDocument();
+      const hints = within(ios).getByTestId("devices-ios-unavailable");
+      expect(within(hints).getAllByRole("listitem")).toHaveLength(1);
+      expect(hints).toHaveTextContent(`Mac (Macbook): ${IOS_OFF}`);
+      expect(within(ios).getByText(/No simulators added yet/)).toBeInTheDocument();
     });
 
     it("shows no reason when the host can run iOS", async () => {

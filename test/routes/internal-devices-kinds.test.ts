@@ -76,7 +76,11 @@ describe("GET /internal/devices/kinds — why iOS is unavailable", () => {
     // The platform is read per request, so it stays stubbed for the inject.
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
     try {
-      const res = await app.inject({ method: "GET", url: "/internal/devices/kinds", headers: auth });
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/devices/kinds",
+        headers: auth,
+      });
       expect(res.statusCode).toBe(200);
       return res.json();
     } finally {
@@ -127,6 +131,23 @@ describe("GET /internal/devices/kinds — why iOS is unavailable", () => {
     expect((await kinds("darwin")).unavailable).toEqual({
       ios: IOS_COMPANION_NOT_EXECUTABLE_REASON,
     });
+  });
+
+  it("puts a darwin primary's own reason on its entry in GET /api/devices/hosts", async () => {
+    delete process.env.MULLION_ROLE;
+    process.env.DEVICE_IOS_ENABLED = "false";
+    const app = await buildTestAppOnPlatform("darwin");
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const res = await app.inject({ method: "GET", url: "/api/devices/hosts" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()[0]).toMatchObject({
+        hostId: "local",
+        unavailable: { ios: IOS_DISABLED_REASON },
+      });
+    } finally {
+      await app.close();
+    }
   });
 
   it("reports no reason on Linux, with the panel on or off", async () => {
