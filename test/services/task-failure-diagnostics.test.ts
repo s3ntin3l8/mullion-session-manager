@@ -4,6 +4,7 @@ import {
   FAILURE_DIAGNOSTICS_MAX_CHARS,
   capDiagnostics,
   formatFailureDiagnostics,
+  joinHostPath,
   sanitizeDiagnosticText,
   trimDiagnosticsForComment,
 } from "../../src/services/task-failure-diagnostics.js";
@@ -85,5 +86,13 @@ describe("task failure diagnostics", () => {
     const comment = trimDiagnosticsForComment("```\n" + "y".repeat(10_000));
     expect(comment.length).toBeLessThan(FAILURE_DIAGNOSTICS_COMMENT_MAX_CHARS + 200);
     expect(comment.match(/```/g)).toHaveLength(2);
+  });
+});
+
+describe("joinHostPath", () => {
+  it("joins a POSIX PATH with ':' and a Windows one with ';'", () => {
+    expect(joinHostPath(["/usr/bin", "/bin"])).toBe("/usr/bin:/bin");
+    expect(joinHostPath(["C:\\Windows", "C:\\Git\\cmd"])).toBe("C:\\Windows;C:\\Git\\cmd");
+    expect(joinHostPath([])).toBe("");
   });
 });

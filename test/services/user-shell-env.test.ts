@@ -77,13 +77,13 @@ describe("parseUserShellPath", () => {
 
 describe("mergePaths", () => {
   it("prepends missing entries, keeps base order, drops duplicates", () => {
-    expect(mergePaths("/usr/bin:/bin", "/home/u/.mcode/bin:/usr/bin")).toBe(
+    expect(mergePaths("/usr/bin:/bin", "/home/u/.mcode/bin:/usr/bin", ":")).toBe(
       "/home/u/.mcode/bin:/usr/bin:/bin",
     );
   });
 
   it("handles an unset base", () => {
-    expect(mergePaths(undefined, "/a:/b")).toBe("/a:/b");
+    expect(mergePaths(undefined, "/a:/b", ":")).toBe("/a:/b");
   });
 
   // A Windows PATH is `;`-separated and every entry carries a `C:` drive, so
@@ -211,7 +211,8 @@ describe("resolveUserShellEnv", () => {
         "C:\\Program Files\\Git\\cmd",
       ]);
     } finally {
-      process.env.PATH = savedPath;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
       Object.defineProperty(process, "platform", { value: original, configurable: true });
     }
   });

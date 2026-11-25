@@ -5,6 +5,12 @@ import { sessionEvents, type tasks } from "../db/schema.js";
 import type { SessionBackend } from "./session-backend.js";
 import { redactSecrets } from "./scaffold-generate.js";
 
+/** A remote host's PATH entries, joined with that host's delimiter: `;` when
+ * any entry is a Windows drive path (a `:` join would be ambiguous), else `:`. */
+export function joinHostPath(entries: readonly string[]): string {
+  return entries.join(entries.some((e) => /^[A-Za-z]:[\\/]/.test(e)) ? ";" : ":");
+}
+
 /**
  * Diagnostic snapshot for a task failed by the "agent ended its turn with no
  * commits" gate (`failReviewingGate`, task-reconciler.ts). By the time a human
@@ -144,7 +150,7 @@ export function formatFailureDiagnostics(
   if (parts.sessionEnv) {
     const env = parts.sessionEnv;
     lines.push(
-      `Host session env: interactive resolve ${env.interactiveResolve}${env.reason ? ` (${env.reason})` : ""}; shell ${env.shell ?? "none"}; PATH ${env.path.join(":") || "empty"}${env.recoveredKeys.length > 0 ? `; recovered: ${env.recoveredKeys.join(", ")}` : ""}`,
+      `Host session env: interactive resolve ${env.interactiveResolve}${env.reason ? ` (${env.reason})` : ""}; shell ${env.shell ?? "none"}; PATH ${joinHostPath(env.path) || "empty"}${env.recoveredKeys.length > 0 ? `; recovered: ${env.recoveredKeys.join(", ")}` : ""}`,
     );
   }
 

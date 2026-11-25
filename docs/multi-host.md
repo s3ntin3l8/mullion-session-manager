@@ -1728,10 +1728,13 @@ re-running the shell, and never with a variable's value:
 }
 ```
 
-`interactiveResolve` is `ok` or `fallback`; the `reason` for a fallback is one of
+`interactiveResolve` is `ok`, `fallback` or `not-applicable`. A Windows host
+always reports `not-applicable` (with `reason: null`): it never resolves an
+interactive PATH, by design (#1728), so the panel shows no warning for it. The
+`reason` for a fallback is one of
 `disabled` (`MULLION_RESOLVE_INTERACTIVE_ENV=0`), `unsupported-shell`, `timeout`,
 `spawn-failed`, `unparseable` or `pending` (not resolved yet). `path` is the PATH
-a new session gets. `recoveredKeys` lists the recovered variable names (never
+a new session gets, already split on the host's own delimiter (`;` on Windows). `recoveredKeys` lists the recovered variable names (never
 their values) configured by `SESSION_ENV_RECOVER_KEYS`.
 
 The primary reads it beside the capabilities (same TTL) and `GET /api/hosts`
