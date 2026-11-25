@@ -66,6 +66,7 @@ function fakeSimctl(initial = "Shutdown") {
     inputs.push(options?.input);
     const verb = args[0]!;
     if (verb === "io") shotDirModes.push(statSync(dirname(args.at(-1)!)).mode & 0o777);
+    if (verb === "io" && res.fail.io && res.shot.file) writeFileSync(args.at(-1)!, res.shot.file);
     if (res.fail[verb]) throw res.fail[verb];
     if (verb === "list") return listing(res.state);
     if (verb === "boot") res.state = "Booted";
@@ -337,6 +338,23 @@ describe("IosSimulatorDriver", () => {
       res.fail.io = new Error("exit 1: no such device");
       await expect(driver.screenshot()).rejects.toThrow("exit 1: no such device");
       expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("removes a partly written file when simctl fails after writing", async () => {
+      const { driver, calls, res } = make();
+      res.shot.file = png().subarray(0, 10);
+      res.fail.io = new Error("timed out");
+      await expect(driver.screenshot()).rejects.toThrow("timed out");
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("quotes both what simctl printed and what it wrote", async () => {
+      const { driver, res } = make();
+      res.shot = { file: Buffer.from("garbage"), stderr: Buffer.from("Wrote screenshot to: /x\n") };
+      await expect(driver.screenshot()).rejects.toMatchObject({
+        statusCode: 502,
+        message: "screencap did not return a PNG: Wrote screenshot to: /x | garbage",
+      });
     });
 
     it("502s on a PNG with no readable header", async () => {

@@ -164,7 +164,7 @@ literally named `-` into its working directory, prints `Wrote screenshot to:
 <cwd>/-` on stderr and nothing on stdout, so every screenshot failed with
 `screencap did not return a PNG` and left a stray `-` behind. When no PNG comes
 back, the 502 quotes the first 200 bytes of what `simctl` printed (stderr, then
-stdout), or else of the file it wrote. No other `simctl` call writes output to a
+stdout) and of the file it wrote, whichever are non-empty. No other `simctl` call writes output to a
 path: `pbcopy`/`pbpaste` use stdin/stdout and there is no `recordVideo`.
 
 **What the Preview menu opens (#3429, #3491).** One set of rows per running iOS

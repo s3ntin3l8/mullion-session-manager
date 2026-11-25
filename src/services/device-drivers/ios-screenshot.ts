@@ -25,9 +25,13 @@ export async function simctlScreenshot(simctl: SimctlRunner, udid: string): Prom
         stderr = b;
       },
     });
+    // No file at all reads as empty; any other stat failure is a real error.
     const size = await stat(file).then(
       (st) => st.size,
-      () => 0,
+      (err: NodeJS.ErrnoException) => {
+        if (err.code === "ENOENT") return 0;
+        throw err;
+      },
     );
     if (size > SCREENSHOT_MAX_BYTES) {
       throw new DeviceActionError(
@@ -37,14 +41,18 @@ export async function simctlScreenshot(simctl: SimctlRunner, udid: string): Prom
     }
     const out = size > 0 ? await readFile(file) : Buffer.alloc(0);
     if (!PNG_SIGNATURE.equals(out.subarray(0, 8))) {
-      // What simctl said, or else what it wrote: the first 200 bytes, scrubbed.
-      const said = Buffer.concat([stderr, stdout]);
-      const head = (said.length > 0 ? said : out)
-        .subarray(0, 200)
-        .toString("utf8")
-        .trim()
-        // eslint-disable-next-line no-control-regex
-        .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
+      // What simctl said, then what it wrote: the first 200 bytes of each, scrubbed.
+      const head = [Buffer.concat([stderr, stdout]), out]
+        .map((b) =>
+          b
+            .subarray(0, 200)
+            .toString("utf8")
+            .trim()
+            // eslint-disable-next-line no-control-regex
+            .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?"),
+        )
+        .filter((text) => text.length > 0)
+        .join(" | ");
       throw new DeviceActionError(502, `screencap did not return a PNG: ${head}`);
     }
     const png = new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
