@@ -2264,6 +2264,9 @@ export class Session {
       set permissionState(v) {
         self.permissionState = v;
       },
+      get now() {
+        return self.hookNow;
+      },
       get permissionAt() {
         return self.permissionAt;
       },

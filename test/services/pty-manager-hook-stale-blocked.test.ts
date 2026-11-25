@@ -115,6 +115,27 @@ describe("PtyManager", () => {
         expect(session.toInfo().attention).toBe(false);
       });
 
+      // The handlers used to stamp `permissionAt` with a fresh Date.now()
+      // instead of emitHookEvent's `now`, so the sweep above flaked whenever
+      // CI's clock moved >1ms between the two reads. Pinning `now` well in
+      // the past makes that drift deterministic.
+      it("stamps latches with emitHookEvent's pinned now, not a fresh Date.now()", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "ls" }, now);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().permissionState).toBe("idle");
+      });
+
       it("fix: sticky needs_input (D4) — the stale sweep does NOT drop a hookNotification-confirmed flag with no dedicated latch behind it (deliberately left to keystroke/notification_resolved only)", async () => {
         const session = manager.getOrCreate({
           id: "1",

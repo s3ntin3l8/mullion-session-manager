@@ -75,6 +75,11 @@ import { randomUUID } from "node:crypto";
  * nothing is included "just in case."
  */
 export interface SessionHookContext {
+  /** The clock of the emitHookEvent() call being dispatched (its `now`
+   * argument, `Date.now()` by default). Handlers stamp latches (`*At`) with
+   * this, never a fresh Date.now(), so a caller that pins `now` gets latch
+   * ages measured against the same clock it sweeps with. */
+  readonly now: number;
   readonly id: string;
   readonly cwd: string;
   liveCwd: string | null;
@@ -303,7 +308,7 @@ const RECENT_STRUCTURED_ASK_MS = 2_000;
 // symptom would then reappear for just that one ask kind. Update this
 // alongside any new `*State: "pending"`/`*At` pair.
 function hasRecentStructuredAsk(ctx: SessionHookContext): boolean {
-  const now = Date.now();
+  const now = ctx.now;
   const recent = (at: number | null) => at !== null && now - at < RECENT_STRUCTURED_ASK_MS;
   return (
     (ctx.questionState === "pending" && recent(ctx.questionAt)) ||
@@ -424,7 +429,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         // `workFinishedAt` one below: whether that turn end means the
         // agent's WORK is done, which is the only thing the reconciler's
         // `in_progress -> reviewing` gate cares about.
-        ctx.lastTurnEndedAt = Date.now();
+        ctx.lastTurnEndedAt = ctx.now;
         // A fresh latch is a NEW turn-end occurrence that deserves its
         // own single ping, even if a PRIOR latch's ping already fired and
         // the user hasn't typed anything since (Hermes review, PR #453 —
@@ -612,7 +617,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // ever produces a real PromoteRequestHookMessage for this kind.
       const promote = message as PromoteRequestHookMessage;
       ctx.promoteState = "pending";
-      ctx.promoteAt = Date.now();
+      ctx.promoteAt = ctx.now;
       ctx.promoteSummary = promote.summary;
       ctx.promoteSuggestedBaseRef = promote.suggestedBaseRef ?? null;
       ctx.emitEvent("promote_request", {
@@ -668,7 +673,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // stays truthful the moment the agent is actually blocked, even while
       // the NOTIFICATION for it is still settling below.
       ctx.permissionState = "pending";
-      ctx.permissionAt = Date.now();
+      ctx.permissionAt = ctx.now;
       ctx.pendingPermissionTool = pr.tool;
       // The settle window below means ctx.emitEvent() won't run for
       // possibly 2s — normally the thing that dirties the state file (see
@@ -698,7 +703,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
     (ctx, message) => {
       const sf = message as StopFailureHookMessage;
       ctx.errorState = "api_error";
-      ctx.errorAt = Date.now();
+      ctx.errorAt = ctx.now;
       // Rich statuses — the short, stable label (see errorType's doc
       // comment in hook-protocol.ts), falling back to the free-text detail
       // when the adapter couldn't classify the failure.
@@ -787,7 +792,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
     (ctx, message) => {
       const tf = message as ToolFailureHookMessage;
       ctx.errorState = "tool_failure";
-      ctx.errorAt = Date.now();
+      ctx.errorAt = ctx.now;
       // Rich statuses — prefer the adapter's own summary; fall back to
       // just naming the failing tool.
       ctx.errorDetail = tf.summary ?? tf.tool;
@@ -836,7 +841,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
         ctx.clearIfConfirmedKind("permissionRequest");
       }
       ctx.planState = "pending";
-      ctx.planAt = Date.now();
+      ctx.planAt = ctx.now;
       ctx.emitEvent("plan_ready", {
         plan: plan.plan,
         filePath: plan.filePath ?? null,
@@ -967,7 +972,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       const compact = message as CompactHookMessage;
       ctx.compactState = compact.state === "started" ? "compacting" : "idle";
       if (compact.state === "started") {
-        ctx.compactAt = Date.now();
+        ctx.compactAt = ctx.now;
       } else {
         ctx.compactAt = null;
       }
@@ -986,7 +991,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // process restarted) must not drive the count negative.
       ctx.subagentCount = Math.max(0, ctx.subagentCount + (subagent.state === "started" ? 1 : -1));
       if (subagent.state === "started" && ctx.subagentCount > 0) {
-        ctx.subagentCountAt = Date.now();
+        ctx.subagentCountAt = ctx.now;
       } else if (subagent.state !== "started" && ctx.subagentCount === 0) {
         ctx.subagentCountAt = null;
       }
@@ -996,9 +1001,9 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // authoritative running count regardless of registry coverage.
       if (subagent.agentId !== undefined) {
         if (subagent.state === "started") {
-          ctx.recordSubagentStart(subagent.agentId, subagent.agentType ?? null, Date.now());
+          ctx.recordSubagentStart(subagent.agentId, subagent.agentType ?? null, ctx.now);
         } else {
-          ctx.recordSubagentStop(subagent.agentId, subagent.summary ?? null, Date.now());
+          ctx.recordSubagentStop(subagent.agentId, subagent.summary ?? null, ctx.now);
         }
       }
       const subagentExtras: Record<string, unknown> = {
@@ -1041,7 +1046,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       const elicitation = message as ElicitationHookMessage;
       if (elicitation.state === "started") {
         ctx.elicitationState = "pending";
-        ctx.elicitationAt = Date.now();
+        ctx.elicitationAt = ctx.now;
         ctx.elicitationServer = elicitation.server ?? null;
         ctx.emitEvent("elicitation", { state: "started", server: elicitation.server ?? null });
         ctx.emitAttentionSignalWithExtras("elicitation", { server: elicitation.server ?? null });
@@ -1064,7 +1069,7 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       if (q.state === "started") {
         ctx.questionState = "pending";
         ctx.questionHeader = q.header ?? null;
-        ctx.questionAt = Date.now();
+        ctx.questionAt = ctx.now;
         ctx.emitEvent("question", {
           state: "started",
           header: q.header ?? null,

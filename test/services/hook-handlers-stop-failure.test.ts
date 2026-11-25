@@ -23,6 +23,7 @@ import { isRateLimitGraceActive } from "../../src/services/task-rate-limit-grace
  */
 function fakeContext() {
   return {
+    now: Date.now(),
     errorState: "idle",
     errorAt: null,
     errorDetail: null,
