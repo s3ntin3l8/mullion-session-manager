@@ -112,4 +112,39 @@ describe("HostStatusLabel (issue #1892)", () => {
     expect(screen.getByText("not registered")).toBeInTheDocument();
     expect(screen.queryByText("outdated agent")).toBeNull();
   });
+
+  // Issue #3476 — the deprecation qualifier.
+  it("qualifies the legacy agent's chip as deprecated and says what replaces it", () => {
+    render(
+      <HostStatusLabel
+        host={makeHost({
+          health: "online",
+          legacyAgent: true,
+          deprecatedKind: "legacy-agent",
+          mullionVersion: "0.3.50",
+        })}
+      />,
+    );
+    expect(screen.getByText("online")).toBeInTheDocument();
+    const chip = screen.getByText("outdated agent (deprecated)");
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/Deprecated/));
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/Re-pair/));
+  });
+
+  it("gives a manual-token host a deprecated chip of its own", () => {
+    render(
+      <HostStatusLabel host={makeHost({ health: "online", deprecatedKind: "manual-token" })} />,
+    );
+    const chip = screen.getByText("manual token (deprecated)");
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/MULLION_AGENT_TOKEN/));
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/Re-pair/));
+  });
+
+  it("shows no deprecated chip for a host on the current path", () => {
+    const { container } = render(
+      <HostStatusLabel host={makeHost({ health: "online", deprecatedKind: null })} />,
+    );
+    expect(screen.queryByText(/deprecated/)).toBeNull();
+    expect(container.textContent).not.toMatch(/deprecated/);
+  });
 });

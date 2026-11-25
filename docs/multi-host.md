@@ -576,6 +576,30 @@ For automated fleets that want to avoid a standing fleet-wide `MULLION_ENROLLMEN
 - **Lifecycle & narrowing:** tokens default to 90 days (max 365), can be revoked (`DELETE /api/automation-tokens/:id`), optionally restrict caller source IP via `allowedCidrs` (evaluated against the raw TCP peer `request.raw.socket.remoteAddress`, never `X-Forwarded-For`), can set `requireApproval`, and are rate-limited per token ID. Each mint updates `lastUsedAt` and records a `code_minted` row in `host_identity_events` with the token label and peer address (never the secret).
 - **Controller reachability:** the automation controller (e.g. an Ansible `delegate_to: localhost` task) must reach the primary directly (for example over a private/VPN address) or through the dedicated agent hostname if `/api/host-pairings` is routed there — **never** through a browser-SSO gateway (`forwardAuth`), which would intercept `POST /api/host-pairings` with a login redirect. See [`deploy/README.md`](../deploy/README.md) for the full Ansible task example.
 
+## Deprecated host kinds
+
+Three ways of putting a host on a primary are deprecated (issue #3476, decision
+[#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)). The
+setup paths described above still work — the primary accepts all three exactly
+as before — but each one is on its way out:
+
+| Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **legacy agent**                                          | an agent without a machine identity, so the primary has to dial it at the address it stored (`hosts.base_url`) — unreachable off the primary's network | **Re-pair** the host (Settings → Hosts → _Re-pair_) or add a new host with a pairing code, so the agent holds a machine identity and opens the outbound channel |
+| **manual-token host** (`MULLION_AGENT_TOKEN`)             | a host whose agent authenticates with the row's own static token — a credential that never expires                                                     | **Re-pair** the host, or add a new host with a pairing code                                                                                                     |
+| **fleet-secret enrollment** (`MULLION_ENROLLMENT_SECRET`) | a host that enrolled with the fleet-wide secret on the primary                                                                                         | **Automation tokens** (see "Automation tokens" above), which mint one-off pairing codes                                                                         |
+
+`GET /api/hosts` carries the signal as `deprecatedKind` (`"legacy-agent"`,
+`"manual-token"`, or `null` for a host that is on the current path). The host's
+status chip — the one beside a host name in a session row or a pane tab —
+carries a "(deprecated)" qualifier for the first two kinds, and the primary
+logs a warning at startup while `MULLION_ENROLLMENT_SECRET` is set.
+
+**Schedule.** In the next minor release after this one, all three kinds are
+**gated behind `MULLION_ALLOW_LEGACY_HOSTS`** — without it the primary stops
+accepting them. In the minor release after that, they are **removed**. Nothing
+stops working before the gate; the gate is what to plan for.
+
 ## Automatic placement
 
 A project's host is picked **by hand, once**, when the project is created or

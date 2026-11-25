@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { CHANNEL_SATURATED_REASON } from "../../src/shared/constants.js";
 import {
+  deprecatedKindLabel,
+  deprecatedKindTitle,
   deriveHostStatus,
   legacyAgentFix,
   legacyAgentLabels,
@@ -198,5 +200,56 @@ describe("deriveHostStatus (issue #246)", () => {
     expect(legacyAgentLabels(current).long).toBe("Not registered — set primary URL");
     expect(legacyAgentTitle(old)).toMatch(/Upgrade the agent/);
     expect(legacyAgentTitle(current)).toMatch(/MULLION_PRIMARY_URL/);
+  });
+});
+
+// Issue #3476 — the deprecation qualifier for a host that is still on a
+// legacy path. It says the setup is going away and what replaces it; it
+// refuses nothing.
+describe("the deprecation qualifier (issue #3476)", () => {
+  it("adds the qualifier to the legacy agent's own chip", () => {
+    const old = makeHost({
+      legacyAgent: true,
+      deprecatedKind: "legacy-agent",
+      mullionVersion: "0.3.50",
+    });
+    expect(deprecatedKindLabel(old)).toBe("outdated agent (deprecated)");
+    const current = makeHost({
+      legacyAgent: true,
+      deprecatedKind: "legacy-agent",
+      mullionVersion: "0.3.62",
+    });
+    expect(deprecatedKindLabel(current)).toBe("not registered (deprecated)");
+  });
+
+  it("names the legacy agent plainly when the host is not flagged as one", () => {
+    // A primary that reported the kind without the legacyAgent flag (an
+    // older primary, a row the route cleared) still gets a truthful chip.
+    const host = makeHost({ deprecatedKind: "legacy-agent" });
+    expect(deprecatedKindLabel(host)).toBe("legacy agent (deprecated)");
+  });
+
+  it("gives a manual-token host a chip of its own", () => {
+    const host = makeHost({ deprecatedKind: "manual-token" });
+    expect(deprecatedKindLabel(host)).toBe("manual token (deprecated)");
+  });
+
+  it("has no qualifier for a host that is not deprecated", () => {
+    expect(deprecatedKindLabel(makeHost())).toBeNull();
+    expect(deprecatedKindLabel(makeHost({ deprecatedKind: null }))).toBeNull();
+    expect(deprecatedKindTitle(makeHost())).toBeNull();
+    expect(deprecatedKindTitle(makeHost({ deprecatedKind: null }))).toBeNull();
+  });
+
+  it("points at Re-pair or Add host as the migration", () => {
+    for (const kind of ["legacy-agent", "manual-token"] as const) {
+      const title = deprecatedKindTitle(makeHost({ deprecatedKind: kind }));
+      expect(title).toMatch(/Deprecated/);
+      expect(title).toMatch(/Re-pair/);
+      expect(title).toMatch(/add a new host/);
+    }
+    expect(deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }))).toMatch(
+      /MULLION_AGENT_TOKEN/,
+    );
   });
 });

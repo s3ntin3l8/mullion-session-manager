@@ -97,6 +97,59 @@ export function legacyAgentTitle(host: Host, primaryVersion?: string | null): st
         "connects out from anywhere.";
 }
 
+/**
+ * Issue #3476 — the word that marks a host as being on a legacy path. One
+ * literal, so the chip text, the hover title and the accessible name cannot
+ * drift apart.
+ */
+export const DEPRECATED_WORD = "deprecated";
+
+/**
+ * Issue #3476 — the chip text for a host that is still on a legacy path, or
+ * null when it is on the current one.
+ *
+ * For a legacy agent this is the EXISTING chip plus the qualifier ("outdated
+ * agent (deprecated)"), so the chip still says what is wrong with the agent
+ * itself; for a manual-token host there is no such chip, so it gets one of
+ * its own.
+ */
+export function deprecatedKindLabel(host: Host): string | null {
+  switch (host.deprecatedKind) {
+    case "legacy-agent":
+      return host.legacyAgent === true
+        ? `${legacyAgentLabels(host).short} (${DEPRECATED_WORD})`
+        : `legacy agent (${DEPRECATED_WORD})`;
+    case "manual-token":
+      return `manual token (${DEPRECATED_WORD})`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Issue #3476 — the hover text for a host that is still on a legacy path, or
+ * null when it is on the current one. It says what is deprecated and what
+ * replaces it: Re-pair the host, or add a new one (Settings → Hosts).
+ */
+export function deprecatedKindTitle(host: Host): string | null {
+  switch (host.deprecatedKind) {
+    case "legacy-agent":
+      return (
+        "Deprecated: this agent has no machine identity, so the primary has to reach it at " +
+        "the address it stored — which only works from the primary's own network. Re-pair it " +
+        "from Settings → Hosts, or add a new host there, to give it a machine identity."
+      );
+    case "manual-token":
+      return (
+        "Deprecated: this host's agent still authenticates with the row's own static token " +
+        "(MULLION_AGENT_TOKEN), which never expires. Re-pair it from Settings → Hosts, or add " +
+        "a new host there, to give it a machine identity."
+      );
+    default:
+      return null;
+  }
+}
+
 // Issue #246 — the primary's background heartbeat sweep (host.health) is
 // the preferred source of truth once it has swept a host at least once;
 // the click-driven "Test" button (click) is the fallback for a host the

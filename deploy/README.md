@@ -1401,6 +1401,29 @@ Cleanup: use _Remove stale host_ on the offline rows (nothing is merged or
 removed automatically). See
 [`docs/multi-host.md`](../docs/multi-host.md#machine-identity-and-machine-credentials).
 
+## Deprecated host kinds
+
+Three ways of putting an agent on a primary are deprecated (issue #3476,
+decision [#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)).
+**Everything still works** — the primary accepts all three exactly as before —
+but each one is on its way out:
+
+| Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **legacy agent**                                          | an agent without a machine identity, so the primary has to dial it at the address it stored (`hosts.base_url`) — unreachable off the primary's network | **Re-pair** the host (Settings → Hosts → _Re-pair_) or add a new host with a pairing code, so the agent holds a machine identity and opens the outbound channel |
+| **manual-token host** (`MULLION_AGENT_TOKEN`)             | a host whose agent authenticates with the row's own static token — a credential that never expires                                                     | **Re-pair** the host, or add a new host with a pairing code                                                                                                     |
+| **fleet-secret enrollment** (`MULLION_ENROLLMENT_SECRET`) | a host that enrolled with the fleet-wide secret on the primary                                                                                         | **Automation tokens** (Settings → Hosts → _Automation tokens_), which mint one-off pairing codes                                                                |
+
+The host's status chip — the one beside a host name in a session row or a pane
+tab — carries a "(deprecated)" qualifier for the first two kinds, and the
+primary logs a warning at startup while `MULLION_ENROLLMENT_SECRET` is set.
+
+**Schedule.** In the next minor release after this one, all three kinds are
+**gated behind `MULLION_ALLOW_LEGACY_HOSTS`** — without it the primary stops
+accepting them. In the minor release after that, they are **removed**. Plan
+the move to pairing codes and automation tokens now; nothing breaks before
+the gate, but the gate is coming.
+
 ## What still needs a real, live check
 
 Milestones 1–3 were each verified end-to-end against the real running app.

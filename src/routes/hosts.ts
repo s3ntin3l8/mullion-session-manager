@@ -257,6 +257,14 @@ export async function hostsRoute(app: FastifyInstance) {
       return {
         ...host,
         legacyAgent: host.legacyAgent && !superseded.has(host.id),
+        // Issue #3476 — the same reasoning as the legacyAgent override above:
+        // a superseded leftover is not a live legacy host (its successor
+        // already holds a machine identity), so it carries no deprecation
+        // flag either.
+        deprecatedKind:
+          host.deprecatedKind === "legacy-agent" && superseded.has(host.id)
+            ? null
+            : host.deprecatedKind,
         agents: agentEntry?.agents ?? null,
         capabilities: agentEntry?.capabilities ?? null,
         // Issue #3156 — null = not reported (an older agent, or nothing read yet).
