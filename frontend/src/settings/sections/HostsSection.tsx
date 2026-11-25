@@ -111,9 +111,14 @@ function HostSessionEnvDetail({ host }: { host: Host }) {
           <span
             data-testid={`host-session-env-warning-${host.id}`}
             style={{ color: "var(--y)", marginLeft: 6 }}
-            title="The interactive shell's PATH could not be recovered, so sessions on this host get only the service PATH."
+            title={
+              env.retryAt
+                ? "The interactive shell's PATH could not be recovered yet, so sessions on this host get only the service PATH until the agent's automatic retry succeeds."
+                : "The interactive shell's PATH could not be recovered, so sessions on this host get only the service PATH."
+            }
           >
             ⚠ PATH recovery fell back{env.reason ? `: ${env.reason}` : ""}
+            {env.retryAt ? " — will retry" : ""}
           </span>
         )}
       </summary>
