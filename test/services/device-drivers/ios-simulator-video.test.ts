@@ -436,7 +436,9 @@ function coldStartCompanion(readyAfterMs: number) {
     describe: async () => {
       probes++;
       if (Date.now() - t0 < readyAfterMs) {
-        throw new Error("14 UNAVAILABLE: No connection established. Last error: connect ECONNREFUSED");
+        throw new Error(
+          "14 UNAVAILABLE: No connection established. Last error: connect ECONNREFUSED",
+        );
       }
       return { target_description: { udid: UDID } };
     },
