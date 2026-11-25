@@ -149,10 +149,40 @@ export const hostPairings = sqliteTable("host_pairings", {
   redeemRequestHash: text("redeem_request_hash"),
   // Operator cancelled the code (or it was superseded); final.
   revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  // Issue #3440 — automation token that minted this pairing code (nullable:
+  // operator-issued links have none). Not a FK so token pruning never breaks
+  // the pairing audit trail.
+  mintedByTokenId: text("minted_by_token_id"),
+  // Copy of the minting token's requireApproval flag at mint time (read by
+  // the approval gate in issue #3441).
+  requireApproval: integer("require_approval", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
 });
+
+// Issue #3440 — scoped bearer tokens (`mat_<64 hex>`) held by an automation
+// controller (e.g. Ansible vault) to mint one-off pairing codes on
+// POST /api/host-pairings. Never stored in plaintext (SHA-256 hex only).
+export const automationTokens = sqliteTable(
+  "automation_tokens",
+  {
+    id: text("id").primaryKey(),
+    label: text("label").notNull(),
+    secretHash: text("secret_hash").notNull(),
+    // JSON-encoded array of AutomationTokenScope ("enroll" | "repair").
+    scopes: text("scopes").notNull(),
+    expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+    allowedCidrs: text("allowed_cidrs"),
+    requireApproval: integer("require_approval", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+    revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  },
+  (table) => [uniqueIndex("automation_tokens_secret_hash_idx").on(table.secretHash)],
+);
 
 // Issue #3435 — audit trail for host identity lifecycle events (enrollment,
 // claim, pairing, replacement of a live machine identity, revocation, and
@@ -161,14 +191,17 @@ export const hostIdentityEvents = sqliteTable(
   "host_identity_events",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    hostId: text("host_id")
-      .notNull()
-      .references(() => hosts.id, { onDelete: "cascade" }),
+    // Nullable for pre-host events such as `code_minted` without a target
+    // hostId (issue #3440).
+    hostId: text("host_id").references(() => hosts.id, { onDelete: "cascade" }),
     kind: text("kind", { enum: HOST_IDENTITY_EVENT_KINDS }).notNull(),
     at: integer("at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
     peer: text("peer"),
+    // Informational label (e.g. automation token label on `code_minted`),
+    // never a secret.
+    label: text("label"),
     acknowledgedAt: integer("acknowledged_at", { mode: "timestamp" }),
   },
   (table) => [

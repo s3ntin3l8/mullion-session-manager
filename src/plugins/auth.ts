@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import fastifyCookie from "@fastify/cookie";
 import { buildPreviewHostPattern, isPreviewHost } from "../services/preview-host.js";
 import { hasValidBearerToken, hasValidSessionCookie, isAuthEnabled } from "../services/auth.js";
+import { extractAutomationBearer } from "../services/automation-tokens.js";
 import { requestOrigin } from "../services/request-scheme.js";
 
 // request.url includes the query string, and onRequest fires before
@@ -273,6 +274,17 @@ export const authPlugin = fp(async (app: FastifyInstance) => {
     if (isPreviewBypass(request)) return;
     const pathname = requestPathname(request.url);
     if (!isProtectedPath(pathname)) return;
+    // Issue #3440 — POST /api/host-pairings accepts `Authorization: Bearer mat_...`
+    // in addition to normal operator auth. Defer ONLY when a `mat_` bearer is
+    // presented on POST /api/host-pairings; GET/DELETE and any unauthenticated
+    // or non-`mat_` request still go through the normal gate below.
+    if (
+      pathname === "/api/host-pairings" &&
+      request.method === "POST" &&
+      extractAutomationBearer(request.headers.authorization) !== null
+    ) {
+      return;
+    }
 
     // Checked separately, not via isRequestAuthenticated's single boolean,
     // because the CSRF gate below applies only when the cookie is what

@@ -528,6 +528,15 @@ the unauthenticated agent endpoints isolated on their own dedicated hostname
 instead of adding a `/api/internal/*` bypass to the dashboard's `forwardAuth`
 configuration or main Traefik router.
 
+### Automation tokens (minting pairing codes from Ansible or CI)
+
+For automated fleets that want to avoid a standing fleet-wide `MULLION_ENROLLMENT_SECRET` on every agent, operators can mint **automation tokens** (`mat_<64 hex>`) in Settings → Hosts → _Automation tokens_ (or `POST /api/automation-tokens`):
+
+- **Single capability:** an automation token is accepted **only** on `POST /api/host-pairings` to mint one-off pairing codes (`POST /api/internal/pair` still redeems every code). It is rejected with `401` on every other route, including `GET /api/hosts` and `/api/automation-tokens`.
+- **Scopes:** `enroll` allows minting a code without `hostId` (new hosts); `repair` allows minting a host-bound code with `hostId` (rebuilding/re-pairing an existing host). Calling with the wrong scope returns `403`.
+- **Lifecycle & narrowing:** tokens default to 90 days (max 365), can be revoked (`DELETE /api/automation-tokens/:id`), optionally restrict caller source IP via `allowedCidrs` (evaluated against the raw TCP peer `request.raw.socket.remoteAddress`, never `X-Forwarded-For`), can set `requireApproval`, and are rate-limited per token ID. Each mint updates `lastUsedAt` and records a `code_minted` row in `host_identity_events` with the token label and peer address (never the secret).
+- **Controller reachability:** the automation controller (e.g. an Ansible `delegate_to: localhost` task) must reach the primary directly (for example over a private/VPN address) or through the dedicated agent hostname if `/api/host-pairings` is routed there — **never** through a browser-SSO gateway (`forwardAuth`), which would intercept `POST /api/host-pairings` with a login redirect. See [`deploy/README.md`](../deploy/README.md) for the full Ansible task example.
+
 ## Automatic placement
 
 A project's host is picked **by hand, once**, when the project is created or

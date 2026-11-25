@@ -52,6 +52,7 @@ describe("Settings -> Hosts outbound channel status & unbind", () => {
       "GET /api/sessions": () => jsonResponse(200, []),
       "GET /api/bridges": () => jsonResponse(200, []),
       "GET /api/host-pairings": () => jsonResponse(200, []),
+      "GET /api/automation-tokens": () => jsonResponse(200, []),
       "GET /api/hosts/:id/update": () =>
         jsonResponse(200, { upToDate: true, status: { phase: "idle" } }),
       "POST /api/hosts/:id/unbind": ({ params }) => {

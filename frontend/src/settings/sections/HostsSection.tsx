@@ -27,6 +27,7 @@ import {
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
 import { PairDesktopSection } from "./PairDesktopSection.js";
+import { AutomationTokensSection } from "./AutomationTokensSection.js";
 import { HostHeartbeatSetting, HostStaleAfterSetting } from "../RuntimeSettings.js";
 import { Presence } from "../../ui/Presence.js";
 
@@ -1136,6 +1137,10 @@ export function HostsSection() {
 
       <div style={{ marginTop: 28 }}>
         <PairDesktopSection created={pairingCreated} onCreatedChange={setPairingCreated} />
+      </div>
+
+      <div style={{ marginTop: 28 }}>
+        <AutomationTokensSection />
       </div>
 
       <div style={{ marginTop: 28 }}>

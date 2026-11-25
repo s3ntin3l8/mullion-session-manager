@@ -85,7 +85,12 @@ function cleanupHostPairings(app: FastifyInstance): void {
 
 export function issueHostPairingCode(
   app: FastifyInstance,
-  opts: { label?: string; hostId?: string } = {},
+  opts: {
+    label?: string;
+    hostId?: string;
+    mintedByTokenId?: string | null;
+    requireApproval?: boolean;
+  } = {},
 ): IssuedHostPairing {
   cleanupHostPairings(app);
   const id = crypto.randomUUID();
@@ -99,6 +104,8 @@ export function issueHostPairingCode(
       expiresAt,
       label: opts.label?.trim() || null,
       targetHostId: opts.hostId ?? null,
+      mintedByTokenId: opts.mintedByTokenId ?? null,
+      requireApproval: opts.requireApproval ?? false,
     })
     .run();
   return { id, code, expiresAt };

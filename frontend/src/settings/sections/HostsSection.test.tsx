@@ -29,6 +29,9 @@ function stubFetch(opts: {
       if (url === "/api/host-pairings" && method === "GET") {
         return Promise.resolve(jsonResponse(200, []));
       }
+      if (url === "/api/automation-tokens" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, []));
+      }
       if (url === "/api/host-pairings" && method === "POST" && opts.createPairing) {
         const body = init?.body ? JSON.parse(String(init.body)) : {};
         return Promise.resolve(opts.createPairing(body));

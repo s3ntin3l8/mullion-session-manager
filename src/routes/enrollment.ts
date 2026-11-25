@@ -14,6 +14,7 @@ import { refreshHostProtocolSoon } from "../services/host-agents.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
+import { isIpAllowed } from "../services/cidr.js";
 
 // Issue #245 / roadmap 7.1 — the primary-side half of agent-initiated
 // registration — plus, below, issue #248 / roadmap 7.3's graceful
@@ -121,40 +122,6 @@ function respond(result: HostRegistration) {
     // agent's response is byte-for-byte what it was.
     ...(result.machineCredential ? { machine_credential: result.machineCredential } : {}),
   };
-}
-
-// IPv4-only, deliberately — this is an optional, additional narrowing on
-// top of MULLION_ENROLLMENT_SECRET (the actual security boundary), not a
-// second independent one, so keeping it simple and failing closed on
-// anything it can't parse (including a real IPv6 peer address) is the
-// right tradeoff over supporting every address form.
-function parseIpv4(ip: string): number | null {
-  const match = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!match) return null;
-  const octets = match.slice(1, 5).map(Number);
-  if (octets.some((o) => o > 255)) return null;
-  return ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
-}
-
-function isIpAllowed(ip: string, cidrsCsv: string): boolean {
-  const value = parseIpv4(ip);
-  if (value === null) return false;
-  for (const range of cidrsCsv
-    .split(",")
-    .map((r) => r.trim())
-    .filter(Boolean)) {
-    const [base, bitsStr] = range.split("/");
-    const baseValue = parseIpv4(base);
-    // bitsStr must be present and purely digits — Number("") is 0, which
-    // would otherwise turn a trailing-slash typo like "10.0.0.0/" into a
-    // /0 mask that matches every IP, exactly the opposite of fail-closed.
-    if (!bitsStr || !/^\d{1,2}$/.test(bitsStr)) continue;
-    const bits = Number(bitsStr);
-    if (baseValue === null || bits > 32) continue;
-    const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
-    if ((value & mask) === (baseValue & mask)) return true;
-  }
-  return false;
 }
 
 export async function enrollmentRoute(app: FastifyInstance) {

@@ -217,8 +217,13 @@ export const HOST_IDENTITY_EVENT_KINDS = [
   "replaced",
   "revoked",
   "token_rotated",
+  "code_minted",
 ] as const;
 export type HostIdentityEventKind = (typeof HOST_IDENTITY_EVENT_KINDS)[number];
+
+// db/schema.ts — AUTOMATION_TOKEN_SCOPES / AutomationTokenScope (issue #3440)
+export const AUTOMATION_TOKEN_SCOPES = ["enroll", "repair"] as const;
+export type AutomationTokenScope = (typeof AUTOMATION_TOKEN_SCOPES)[number];
 
 /** Content-Type of a streamed file body on the primary->agent hop of the file
  * browser's upload (routes/internal.ts registers the parser for it). Not

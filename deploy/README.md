@@ -1256,6 +1256,44 @@ code via stdin — no bootstrap secret in `.env`; for a zero-touch fleet, swap
   no_log: true # this task carries a real secret
 ```
 
+**Automation-token Ansible role (recommended for fleets without a shared enrollment secret, issue #3440):**
+Create a scoped automation token (`mat_...`) in Settings → Hosts → _Automation tokens_ (or `POST /api/automation-tokens`), store it in `ansible-vault` as `mullion_automation_token`, and mint a one-off pairing code from the controller (`delegate_to: localhost`) before running `install.sh` on the target host:
+
+```yaml
+# roles/mullion_agent/tasks/main.yml (automation token -> one-off pairing code)
+- name: Mint a one-off pairing code on the primary (controller-side)
+  delegate_to: localhost
+  become: false
+  ansible.builtin.uri:
+    url: "{{ mullion_primary_api_url }}/api/host-pairings"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ mullion_automation_token }}"
+    body_format: json
+    # Omit hostId to enroll a new host (requires `enroll` scope);
+    # pass hostId: "{{ mullion_host_id }}" to re-pair a rebuilt host (requires `repair` scope).
+    body: "{{ ({'label': inventory_hostname} | combine({'hostId': mullion_host_id} if mullion_host_id is defined else {})) }}"
+    status_code: 200
+  register: minted_pairing
+  no_log: true
+
+- name: Install and pair the agent with the minted one-time code
+  ansible.builtin.command:
+    cmd: ./deploy/install.sh --role agent /home/{{ ansible_user }}/opt/mullion
+    chdir: /home/{{ ansible_user }}/mullion-src
+  environment:
+    PATH: "/usr/bin:/usr/local/bin:{{ ansible_env.PATH }}"
+    MULLION_AGENT_PROJECTS_ROOTS: "/home/{{ ansible_user }}/projects"
+    MULLION_AGENT_PRIMARY_URL: "{{ mullion_primary_url }}"
+    MULLION_AGENT_PAIRING_CODE_STDIN: "1"
+    # When rebuilding / re-pairing an existing host (with hostId above), also set:
+    # MULLION_AGENT_PAIRING_FORCE: "1"
+  stdin: "{{ minted_pairing.json.code }}"
+  no_log: true
+```
+
+Note that `mullion_primary_api_url` must reach the primary directly (or via a dedicated non-SSO agent hostname), not through a browser-SSO gateway (`forwardAuth`), which would redirect the controller's `POST /api/host-pairings` call instead of passing the `Authorization: Bearer mat_...` header.
+
 ### Reruns, upgrades and changing credentials (issue #2452)
 
 The role above is safe to run on every converge. What a rerun does and does
