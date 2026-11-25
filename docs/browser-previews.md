@@ -546,10 +546,12 @@ is stopped.
 **A branch preview runs on the project's own host.** That host's checkout is
 where the branch is fetched and the `dock-preview-*` worktree is cut, so the
 port is picked and the dev server started there too; the dock session is
-_targeted_ at the project's host (`target: {hostId}`), never placed elsewhere
-by the placement policy, and is refused (`502 start_failed`) when that host
-can't take it. The steps above run unchanged; for a project on an agent host,
-the ones that touch its checkout or its ports go to the agent:
+_pinned_ to the project's host (`hostId`, bypassing the placement policy), so
+an Auto project's preview is never placed on another machine and a parked host
+still serves a pinned project's previews, as its dock always did. A host that
+can't take the session answers `502 start_failed` with the reason. The steps
+above run unchanged; for a project on an agent host, the ones that touch its
+checkout or its ports go to the agent:
 
 | Step                                     | Agent route                                                                 |
 | ---------------------------------------- | --------------------------------------------------------------------------- |
@@ -559,19 +561,27 @@ the ones that touch its checkout or its ports go to the agent:
 | Pick a free loopback port                | `POST /internal/preview-port {taken}` (read-only: probes, reserves nothing) |
 
 What only the primary knows stays on the primary: whether a live session
-still runs in the worktree (checked before the agent is asked to clear it),
-and the ports already bound to branch previews on that host plus the
-in-flight reservations, which it sends as `taken`. The agent re-runs the
-worktree path guard on its own resolved checkout — `path` must name a
-`dock-preview-*` directory directly under `cwd`'s `.mullion-worktrees`, else
-`400` — so a forged path can't reach a task worktree or anything outside it.
-Every path also goes through the agent's `PROJECTS_ROOTS` containment.
+still runs in the worktree (checked before the agent is asked to clear it, for
+every session on that host in that checkout, whichever project row started
+it), and the ports already bound to branch previews on that host plus the
+in-flight reservations, which it sends as `taken`.
+
+The primary sends `path` as the worktree directory's _name_: a remote
+project's cwd may be stored as `~/…`, which only the agent can expand, so the
+agent resolves it under its own checkout and answers with the absolute path
+(`{outcome: "absent" | "removed", worktreePath}`, or `"not-removed"`). It
+re-runs the worktree path guard there — `path` must name a `dock-preview-*`
+directory directly under `cwd`'s `.mullion-worktrees`, else the 200 outcome
+`invalid-path` — so a forged path can't reach a task worktree or anything
+outside it, and the guarded path must also be inside the agent's
+`PROJECTS_ROOTS` once symlinks are followed (`400` otherwise).
 
 A host that can't be asked is refused with its own code instead of reading as
 "no such branch": `503 host_unavailable` (unreachable, busy, or the connection
-dropped mid-request — the next start re-checks), and `409 host_unsupported`
-for an agent build without these routes, whose message says to update that
-host. The proxy then reaches the bound port through the session's host, as
+dropped mid-request — the next start re-checks), `409 host_refused` when the
+agent answered but rejected the request (for example the project's path is
+outside its `PROJECTS_ROOTS`), and `409 host_unsupported` for an agent build
+without these routes, whose message says to update that host. The proxy then reaches the bound port through the session's host, as
 described under "Multi-host previews" below.
 
 Not yet supported, refused with a code the UI explains:

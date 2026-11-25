@@ -66,7 +66,9 @@ export async function removeCheckoutForced(
 
 /** A branch preview's leftover dock-preview worktree, cleared on the host
  * that owns the checkout (issue #3428) so it can be recut; `parentCwd` is the
- * project checkout it belongs to. Its browsers go when it was removed. */
+ * project checkout it belongs to, and `worktreePath` may be the directory's
+ * name alone (resolved under its `.mullion-worktrees` on that host). Its
+ * browsers go when it was removed, keyed by the path the host resolved. */
 export async function clearStalePreviewCheckout(
   app: FastifyInstance,
   ref: CheckoutRemovalRef & { parentCwd: string },
@@ -77,7 +79,9 @@ export async function clearStalePreviewCheckout(
     ref.parentCwd,
     ref.worktreePath,
   );
-  if (result.ok && result.value.outcome === "removed") await releaseBrowsers(app, ref);
+  if (result.ok && result.value.outcome === "removed") {
+    await releaseBrowsers(app, { ...ref, worktreePath: result.value.worktreePath });
+  }
   return result;
 }
 

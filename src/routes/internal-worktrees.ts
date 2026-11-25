@@ -11,6 +11,7 @@ import {
   clearOrphanedTaskWorktree,
   clearStalePreviewWorktree,
   ensureLocalBranch,
+  previewWorktreePathWithin,
   commitWipChanges,
   resyncStaleWorktree,
   createWorktree,
@@ -627,8 +628,11 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
   );
 
   // The worktree path guard runs here too, against the RESOLVED cwd: `path`
-  // must be a dock-preview directory directly under its .mullion-worktrees,
-  // so this force-removal can never reach a task worktree or anything else.
+  // (the directory's name, or a path) must be a dock-preview directory
+  // directly under its .mullion-worktrees, so this force-removal can never
+  // reach a task worktree or anything else — refused as the 200 outcome
+  // `invalid-path`, like any git-level "no". The guarded path must also be
+  // inside PROJECTS_ROOTS once symlinks are followed.
   app.post<{ Body: WorktreeClearStaleBody }>(
     "/internal/worktree-clear-stale",
     { ...INTERNAL_RATE_LIMIT, schema: worktreeClearStaleSchema },
@@ -636,11 +640,10 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       const { cwd, path: candidate } = request.body;
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      const result = await clearStalePreviewWorktree(resolvedCwd, candidate);
-      if (result.outcome === "invalid-path") {
-        return reply.badRequest("path must name a dock-preview worktree of cwd");
-      }
-      return result;
+      const guarded = previewWorktreePathWithin(resolvedCwd, candidate);
+      if (guarded === null) return { outcome: "invalid-path" };
+      if (requireWithinRoots(app, reply, guarded, "path") === null) return;
+      return await clearStalePreviewWorktree(resolvedCwd, guarded);
     },
   );
 

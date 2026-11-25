@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import { and, eq, ne } from "drizzle-orm";
+import path from "node:path";
+import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
 import {
@@ -9,6 +10,7 @@ import {
   previewWorktreePathWithin as worktreePathWithin,
 } from "./git-worktree.js";
 import { clearStalePreviewCheckout } from "./checkout-removal.js";
+import { listActiveSessionsWithProject } from "./project-records.js";
 import { configuredControls } from "./dock-control.js";
 import { allocateHostPreviewPort, ensureHostBranch, type HostGitResult } from "./host-git.js";
 import {
@@ -41,7 +43,7 @@ import { getStoredSettings } from "./settings.js";
  *
  * A branch preview runs on the project's own host (#3428): its checkout is
  * where the branch is fetched, the worktree is cut and the dev server binds
- * its port, so the session is targeted there rather than placed. For a
+ * its port, so the session is pinned there rather than placed. For a
  * remote project each step that touches the checkout or picks a port runs on
  * its agent (`host-git.ts`: `/internal/git-ensure-branch`,
  * `/internal/worktree-clear-stale`, `/internal/preview-port`), while what only
@@ -60,6 +62,9 @@ export type BranchPreviewErrorCode =
   // #3428 — the project's host runs an agent build without the branch-preview
   // routes: updating it fixes this, retrying does not.
   | "host_unsupported"
+  // #3428 — the project's host answered but rejected the request (e.g. the
+  // project's path is outside its PROJECTS_ROOTS): a configuration problem.
+  | "host_refused"
   // #3428 — the project's host could not be reached (or was busy, or lost the
   // connection mid-request): retryable.
   | "host_unavailable";
@@ -74,6 +79,7 @@ const STATUS: Record<BranchPreviewErrorCode, BranchPreviewStatus> = {
   worktree_busy: 409,
   start_failed: 502,
   host_unsupported: 409,
+  host_refused: 409,
   host_unavailable: 503,
 };
 
@@ -153,10 +159,44 @@ function hostFailure(
   result: Exclude<HostGitResult<unknown>, { ok: true }>,
   what: string,
 ): BranchPreviewError {
-  return new BranchPreviewError(
-    result.reason === "unsupported" ? "host_unsupported" : "host_unavailable",
-    `Could not ${what} on the project's host: ${result.detail}`,
-  );
+  // The agent answered but rejected the request (a 4xx other than a missing
+  // route — e.g. the project's cwd outside its PROJECTS_ROOTS): retrying
+  // won't help, so it is not reported as an unavailable host.
+  const rejected =
+    result.reason === "unreachable" &&
+    result.status !== undefined &&
+    result.status >= 400 &&
+    result.status < 500;
+  const code: BranchPreviewErrorCode =
+    result.reason === "unsupported"
+      ? "host_unsupported"
+      : rejected
+        ? "host_refused"
+        : "host_unavailable";
+  return new BranchPreviewError(code, `Could not ${what} on the project's host: ${result.detail}`);
+}
+
+/**
+ * Whether `sessionCwd` (as its host recorded it: absolute, `~` expanded) is
+ * the `name` dock-preview worktree of the checkout at `projectCwd`. A remote
+ * project's cwd may be stored as `~/…`, which only its host can expand, so a
+ * `~` path matches by its home-relative tail; a cwd this cannot place at all
+ * matches, so a live session in it refuses rather than loses its worktree.
+ */
+function isPreviewWorktreeOf(sessionCwd: string, projectCwd: string, name: string): boolean {
+  const posix = path.posix;
+  const cwd = sessionCwd.replace(/\\/g, "/");
+  if (posix.basename(cwd) !== name) return false;
+  const root = posix.dirname(cwd);
+  if (posix.basename(root) !== ".mullion-worktrees") return false;
+  const checkout = posix.dirname(root);
+  const project = projectCwd.replace(/\\/g, "/");
+  if (posix.isAbsolute(project)) return posix.resolve(project) === checkout;
+  if (project === "~" || project.startsWith("~/")) {
+    const tail = posix.normalize(project.slice(1)).replace(/\/+$/, "");
+    return tail === "" || checkout.endsWith(tail);
+  }
+  return true;
 }
 
 /**
@@ -176,18 +216,20 @@ async function clearStaleWorktree(
   projectCwd: string,
   candidate: string,
 ): Promise<void> {
-  const worktreePath = previewWorktreePathWithin(projectCwd, candidate);
-  const occupants = app.db
-    .select({ id: sessions.id })
-    .from(sessions)
-    .where(
-      and(
-        eq(sessions.projectId, projectId),
-        eq(sessions.cwd, worktreePath),
-        ne(sessions.status, "killed"),
-      ),
-    )
-    .all();
+  // The directory's name: held to `.mullion-worktrees` here, and resolved
+  // (and guarded again) against the checkout on its own host, whose absolute
+  // path only that host may know.
+  const name = path.basename(candidate);
+  if (worktreePathWithin("/checkout", name) === null) {
+    throw new BranchPreviewError("invalid_branch", INVALID_WORKTREE_MESSAGE);
+  }
+  // Every active session on this host whose cwd is that worktree, whatever
+  // project row it was started from: two rows on one checkout share it
+  // (the checkout-scoped guard of the git routes, not a projectId lookup).
+  const occupants = listActiveSessionsWithProject(app.db).filter((row) => {
+    const owner = row.hostId ?? row.projectHostId;
+    return owner === hostId && row.cwd !== null && isPreviewWorktreeOf(row.cwd, projectCwd, name);
+  });
   for (const { id } of occupants) {
     if (await isServing(app, id)) {
       throw new BranchPreviewError(
@@ -196,22 +238,23 @@ async function clearStaleWorktree(
       );
     }
   }
-  // Untrack the dead session's worktree first: its entry would otherwise
-  // have the reconciler (or the sync tick's pending-removal retry) remove
-  // this same path again — from under the new session about to be cut there.
-  const tracked = findPreviewWorktreeSessionId(worktreePath);
-  if (tracked !== undefined) deletePreviewWorktree(tracked);
   const cleared = await clearStalePreviewCheckout(app, {
     projectId,
     hostId,
-    worktreePath,
+    worktreePath: name,
     parentCwd: projectCwd,
   });
   if (!cleared.ok) throw hostFailure(cleared, "clear the branch's preview worktree");
   switch (cleared.value.outcome) {
     case "absent":
-    case "removed":
+    case "removed": {
+      // Untrack a dead session's entry for it, before the new session is cut
+      // there: the reconciler (or the sync tick's pending-removal retry)
+      // would otherwise remove this same path again, from under it.
+      const tracked = findPreviewWorktreeSessionId(cleared.value.worktreePath);
+      if (tracked !== undefined) deletePreviewWorktree(tracked);
       return;
+    }
     case "invalid-path":
       throw new BranchPreviewError("invalid_branch", INVALID_WORKTREE_MESSAGE);
     case "not-removed":
@@ -361,9 +404,12 @@ async function startOnPort(
 ): Promise<PreviewSummary> {
   const result = await createSessionRecord(app, {
     projectId,
-    // Where the port was picked and the branch prepared: refused, not placed
-    // elsewhere, when that host can't take it.
-    target: { hostId },
+    // Pinned to the host where the port was picked and the branch prepared,
+    // bypassing the placement policy: never placed elsewhere (an Auto
+    // project), and not refused by eligibility rules (a parked host) that a
+    // pinned project's dock session never answered to.
+    hostId,
+    placementReason: `a branch preview runs on its project's host (${hostId})`,
     command: control.command,
     kind: "dock",
     name: control.title,
@@ -384,7 +430,9 @@ async function startOnPort(
   if (!result.ok) {
     throw new BranchPreviewError(
       "start_failed",
-      `Could not start the preview session (${result.reason})`,
+      `Could not start the preview session (${result.reason}${
+        "detail" in result && result.detail ? `: ${result.detail}` : ""
+      })`,
     );
   }
 

@@ -100,10 +100,13 @@ describe("agent routes for a remote branch preview (#3428)", () => {
       const wt = dockPreviewWorktreePath(cwd, "feat/x");
       expect((await post("/internal/worktree-clear-stale", { cwd, path: wt })).json()).toEqual({
         outcome: "absent",
+        worktreePath: wt,
       });
       git(cwd, "worktree", "add", "--quiet", "--detach", wt, "feat/x");
       fs.writeFileSync(path.join(wt, "dirty.txt"), "hmr output\n");
-      const res = await post("/internal/worktree-clear-stale", { cwd, path: wt });
+      // The primary sends the directory's name: the agent resolves it under
+      // its own checkout (a remote cwd may be stored as `~/…`).
+      const res = await post("/internal/worktree-clear-stale", { cwd, path: path.basename(wt) });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ outcome: "removed", worktreePath: wt });
       expect(fs.existsSync(wt)).toBe(false);
@@ -119,6 +122,39 @@ describe("agent routes for a remote branch preview (#3428)", () => {
       expect(fs.existsSync(wt)).toBe(true);
     });
 
+    it("resolves a ~ cwd and answers with the absolute path", async () => {
+      const home = process.env.HOME;
+      process.env.HOME = root;
+      try {
+        const res = await post("/internal/worktree-clear-stale", {
+          cwd: "~/repo",
+          path: path.basename(dockPreviewWorktreePath(cwd, "feat/tilde")),
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({
+          outcome: "absent",
+          worktreePath: dockPreviewWorktreePath(cwd, "feat/tilde"),
+        });
+      } finally {
+        process.env.HOME = home;
+      }
+    });
+
+    it("refuses a dock-preview entry that is a symlink out of the roots", async () => {
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "internal-bp-link-"));
+      const link = dockPreviewWorktreePath(cwd, "feat/link");
+      fs.mkdirSync(path.dirname(link), { recursive: true });
+      fs.symlinkSync(outside, link);
+      try {
+        const res = await post("/internal/worktree-clear-stale", { cwd, path: link });
+        expect(res.statusCode).toBe(400);
+        expect(fs.existsSync(outside)).toBe(true);
+      } finally {
+        fs.rmSync(link, { force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
     it("runs the path guard agent-side: only a dock-preview dir under cwd's .mullion-worktrees", async () => {
       const base = path.join(cwd, ".mullion-worktrees");
       const task = path.join(base, "mullion-task-7-thing");
@@ -132,7 +168,9 @@ describe("agent routes for a remote branch preview (#3428)", () => {
         "../outside",
       ]) {
         const res = await post("/internal/worktree-clear-stale", { cwd, path: p });
-        expect(res.statusCode, p).toBe(400);
+        // A refusal is an outcome (200), like any git-level "no".
+        expect(res.statusCode, p).toBe(200);
+        expect(res.json(), p).toEqual({ outcome: "invalid-path" });
       }
       expect(fs.existsSync(task)).toBe(true);
     });

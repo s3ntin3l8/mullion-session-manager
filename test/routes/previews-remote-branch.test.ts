@@ -26,7 +26,11 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
         async (...args: unknown[]) => {
           agent.calls.push({ method, args });
           const fn = agent.scripted[method];
-          if (!fn) throw new actual.HostUnreachableError("scripted-agent", new Error(`${method} not scripted`));
+          if (!fn)
+            throw new actual.HostUnreachableError(
+              "scripted-agent",
+              new Error(`${method} not scripted`),
+            );
           return fn(...args);
         },
     },
@@ -90,7 +94,10 @@ describe("branch previews on a remote host (#3428)", () => {
     agent.scripted = {
       resolveDock: () => [{ id: "web", title: "Web", command: "vite --port $PORT" }],
       ensureGitBranch: () => true,
-      resolveClearStalePreviewWorktree: () => ({ outcome: "absent" }),
+      resolveClearStalePreviewWorktree: (_cwd: unknown, name: unknown) => ({
+        outcome: "absent",
+        worktreePath: `${REMOTE_CWD}/.mullion-worktrees/${String(name)}`,
+      }),
       allocatePreviewPort: () => port,
     };
   }
@@ -141,15 +148,17 @@ describe("branch previews on a remote host (#3428)", () => {
     expect(res.json()).toMatchObject({ branch: "feat/x", upstreamPort: 41234 });
     expect(calls("resolveDock")[0].args).toEqual([REMOTE_CWD]);
     expect(calls("ensureGitBranch")[0].args).toEqual([REMOTE_CWD, "feat/x", {}]);
+    // The directory's name: the agent resolves it under its own checkout.
     expect(calls("resolveClearStalePreviewWorktree")[0].args).toEqual([
       REMOTE_CWD,
-      dockPreviewWorktreePath(REMOTE_CWD, "feat/x"),
+      path.basename(dockPreviewWorktreePath(REMOTE_CWD, "feat/x")),
     ]);
     expect([...(calls("allocatePreviewPort")[0].args[0] as Set<number>)]).toContain(40001);
     const params = create.mock.calls[0][1];
+    expect(params.target).toBeUndefined();
     expect(params).toMatchObject({
       projectId,
-      target: { hostId },
+      hostId,
       kind: "dock",
       command: "vite --port $PORT",
       worktree: { branch: "feat/x" },
@@ -201,6 +210,66 @@ describe("branch previews on a remote host (#3428)", () => {
     expect(res.json().message).toMatch(/update/i);
   });
 
+  it("answers an agent that rejects the request as host_refused, not as a retryable outage", async () => {
+    const { projectId, hostId } = await remoteProject();
+    scriptAgent();
+    agent.scripted.ensureGitBranch = () => {
+      throw new HostRequestError(hostId, 400, "cwd must be within this agent's PROJECTS_ROOTS");
+    };
+    fakeCreate(hostId);
+    const res = await start(projectId);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "host_refused" });
+    expect(res.json().message).toMatch(/PROJECTS_ROOTS/);
+  });
+
+  it("says why the session could not start on the project's host", async () => {
+    const { projectId } = await remoteProject();
+    scriptAgent();
+    vi.spyOn(lifecycle, "createSessionRecord").mockResolvedValue({
+      ok: false,
+      reason: "spawn-failed",
+      detail: "cwd does not exist",
+    } as never);
+    const res = await start(projectId);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ code: "start_failed" });
+    expect(res.json().message).toContain("spawn-failed: cwd does not exist");
+  });
+
+  it("works for a remote project whose cwd is stored as ~/…", async () => {
+    const { projectId, hostId } = await remoteProject();
+    app.db.update(projects).set({ cwd: "~/code/repo" }).where(eq(projects.id, projectId)).run();
+    const agentPath = `/home/agent/code/repo/.mullion-worktrees/${path.basename(
+      dockPreviewWorktreePath("~/code/repo", "feat/x"),
+    )}`;
+    // A live session the agent recorded at its own expanded path refuses ...
+    const live = app.db
+      .insert(sessions)
+      .values({
+        projectId,
+        command: "vite",
+        kind: "dock",
+        cwd: agentPath,
+        hostId,
+        status: "active",
+      })
+      .returning()
+      .get();
+    vi.spyOn(sessionBackend, "resolveBackend").mockReturnValue({
+      liveness: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, "alive"])),
+    } as unknown as ReturnType<typeof sessionBackend.resolveBackend>);
+    scriptAgent();
+    const create = fakeCreate(hostId);
+    expect((await start(projectId)).json()).toMatchObject({ code: "worktree_busy" });
+    expect(create).not.toHaveBeenCalled();
+    // ... and once it is gone the preview starts, the agent naming the path.
+    app.db.update(sessions).set({ status: "killed" }).where(eq(sessions.id, live.id)).run();
+    const res = await start(projectId);
+    expect(res.statusCode).toBe(201);
+    expect(calls("resolveClearStalePreviewWorktree").at(-1)!.args[0]).toBe("~/code/repo");
+  });
+
   it("answers an unreadable dock config as host_unavailable", async () => {
     const { projectId, hostId } = await remoteProject();
     scriptAgent();
@@ -240,9 +309,24 @@ describe("branch previews on a remote host (#3428)", () => {
         outcome: "removed",
         worktreePath: wt,
       });
+      const lifecycleWorktree = await import("../../src/services/git-worktree.js");
+      // A dead session's tracked entry for the path goes too.
+      const deadTracked = app.db
+        .insert(sessions)
+        .values({ projectId, command: "vite", kind: "dock", cwd: wt, hostId, status: "exited" })
+        .returning()
+        .get();
+      lifecycleWorktree.trackPreviewWorktree(deadTracked.id, {
+        worktreePath: wt,
+        branch: "feat/x",
+        worktreeRefresh: false,
+        parentCwd: REMOTE_CWD,
+        projectId,
+      } as never);
       fakeCreate(hostId);
       expect((await start(projectId)).statusCode).toBe(201);
       expect(release.mock.calls.map((c) => c.slice(1))).toEqual([[projectId, hostId, wt]]);
+      expect(lifecycleWorktree.getPreviewWorktree(deadTracked.id)).toBeUndefined();
     });
 
     it("is refused, and not touched, while a live session runs in it", async () => {
@@ -264,6 +348,28 @@ describe("branch previews on a remote host (#3428)", () => {
       expect(create).not.toHaveBeenCalled();
     });
 
+    it("is refused while a live session of ANOTHER project row on this checkout runs in it", async () => {
+      const { projectId, hostId } = await remoteProject();
+      const [twin] = app.db
+        .insert(projects)
+        .values({ name: `twin-${projectId}`, cwd: REMOTE_CWD, hostId })
+        .returning()
+        .all();
+      const wt = dockPreviewWorktreePath(REMOTE_CWD, "feat/x");
+      app.db
+        .insert(sessions)
+        .values({ projectId: twin.id, command: "vite", kind: "dock", cwd: wt, status: "active" })
+        .run();
+      vi.spyOn(sessionBackend, "resolveBackend").mockReturnValue({
+        liveness: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, "alive"])),
+      } as unknown as ReturnType<typeof sessionBackend.resolveBackend>);
+      scriptAgent();
+      const create = fakeCreate(hostId);
+      expect((await start(projectId)).json()).toMatchObject({ code: "worktree_busy" });
+      expect(calls("resolveClearStalePreviewWorktree")).toHaveLength(0);
+      expect(create).not.toHaveBeenCalled();
+    });
+
     it("is refused when the agent could not remove it", async () => {
       const { projectId, hostId } = await remoteProject();
       scriptAgent();
@@ -274,7 +380,7 @@ describe("branch previews on a remote host (#3428)", () => {
       expect(create).not.toHaveBeenCalled();
     });
 
-    it("maps an agent refusing the path as an invalid branch", async () => {
+    it("maps the agent's invalid-path outcome (a 200) to an invalid branch", async () => {
       const { projectId, hostId } = await remoteProject();
       scriptAgent();
       agent.scripted.resolveClearStalePreviewWorktree = () => ({ outcome: "invalid-path" });

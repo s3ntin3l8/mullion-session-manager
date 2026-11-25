@@ -528,8 +528,9 @@ export function previewWorktreePathWithin(projectCwd: string, candidate: string)
 export type ClearStalePreviewWorktreeResult =
   /** The path is outside the project's `.mullion-worktrees`, or not a dock-preview directory. */
   | { outcome: "invalid-path" }
-  /** Nothing on disk there: nothing to clear. */
-  | { outcome: "absent" }
+  /** Nothing on disk there: nothing to clear. `worktreePath` is the path as
+   * this host resolved it (a remote project's cwd may be stored as `~/…`). */
+  | { outcome: "absent"; worktreePath: string }
   | { outcome: "removed"; worktreePath: string }
   /** It is on disk, but `git worktree remove --force` failed (e.g. a plain
    * directory git does not know as a worktree). */
@@ -541,7 +542,10 @@ export type ClearStalePreviewWorktreeResult =
  * Only the filesystem half: whether a live session still runs in it is the
  * primary's call (its DB knows the sessions), made before this runs. Shared
  * by the local branch-preview path and the agent's
- * `/internal/worktree-clear-stale`.
+ * `/internal/worktree-clear-stale`. `candidate` may be the directory's name
+ * alone: it resolves against `<projectCwd>/.mullion-worktrees`, which is how
+ * the primary names it for a checkout whose absolute path only its own host
+ * knows.
  */
 export async function clearStalePreviewWorktree(
   projectCwd: string,
@@ -549,7 +553,7 @@ export async function clearStalePreviewWorktree(
 ): Promise<ClearStalePreviewWorktreeResult> {
   const worktreePath = previewWorktreePathWithin(projectCwd, candidate);
   if (worktreePath === null) return { outcome: "invalid-path" };
-  if (!existsSync(worktreePath)) return { outcome: "absent" };
+  if (!existsSync(worktreePath)) return { outcome: "absent", worktreePath };
   return (await removeWorktree(worktreePath, projectCwd))
     ? { outcome: "removed", worktreePath }
     : { outcome: "not-removed" };
