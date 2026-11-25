@@ -66,6 +66,33 @@ describe("remote-host-devices", () => {
     });
   });
 
+  it("passes an agent's iOS unavailable reason on, and drops a malformed or missing one (#3510)", async () => {
+    const request = vi.fn();
+    const devices = createDevicesClient({
+      request,
+      openInbound: unusedOpenInbound,
+      openChannel: unusedOpenChannel,
+    });
+    request.mockResolvedValueOnce({
+      deviceKinds: [],
+      platforms: [],
+      unavailable: { ios: "iOS Simulator is off — set DEVICE_IOS_ENABLED=true." },
+    });
+    await expect(devices.kinds()).resolves.toEqual({
+      deviceKinds: [],
+      platforms: [],
+      unavailable: { ios: "iOS Simulator is off — set DEVICE_IOS_ENABLED=true." },
+    });
+    // An older agent omits the field.
+    request.mockResolvedValueOnce({ deviceKinds: ["physical"], platforms: ["android"] });
+    await expect(devices.kinds()).resolves.toEqual({
+      deviceKinds: ["physical"],
+      platforms: ["android"],
+    });
+    request.mockResolvedValueOnce({ deviceKinds: [], platforms: [], unavailable: { ios: 42 } });
+    await expect(devices.kinds()).resolves.not.toHaveProperty("unavailable");
+  });
+
   it("leaves the cheap reads on the default timeout", async () => {
     const discoveredDevice = {
       id: "Android.local",

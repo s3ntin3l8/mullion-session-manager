@@ -29,6 +29,8 @@ import {
   physicalDeviceEnabled,
   physicalDeviceUnavailableMessage,
   localDevicePlatforms,
+  localDeviceUnavailable,
+  withUnavailable,
 } from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
 import { HostRequestError } from "../services/remote-host-client.js";
@@ -82,7 +84,10 @@ export const DEVICE_HOSTS_CACHE_MS = 10_000;
 /** The longest one agent may take to answer before it counts as unreachable. */
 export const DEVICE_HOSTS_TIMEOUT_MS = 5_000;
 
-type RemoteKindsAnswer = Pick<DeviceHostEntry, "status" | "deviceKinds" | "platforms">;
+type RemoteKindsAnswer = Pick<
+  DeviceHostEntry,
+  "status" | "deviceKinds" | "platforms" | "unavailable"
+>;
 
 // Per app instance, so two apps in one process (tests) never share an answer.
 // The cached value is the in-flight promise: concurrent callers share one
@@ -105,6 +110,7 @@ async function askRemoteKinds(app: FastifyInstance, hostId: string): Promise<Rem
           status: "ok",
           deviceKinds: support.deviceKinds,
           platforms: support.platforms,
+          ...withUnavailable(support.unavailable),
         };
   } catch {
     return { status: "unreachable", deviceKinds: [], platforms: [] };
@@ -152,6 +158,7 @@ async function listDeviceHosts(app: FastifyInstance): Promise<DeviceHostEntry[]>
       status: "ok",
       deviceKinds: localDeviceKinds(app),
       platforms: await localDevicePlatforms(app),
+      ...withUnavailable(await localDeviceUnavailable(app)),
     },
     ...remoteEntries,
   ];

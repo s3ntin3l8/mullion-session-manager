@@ -9,7 +9,12 @@ import {
   type DeviceInfo,
   type DeviceKind,
 } from "./device-drivers/types.js";
-import { localDeviceKinds, localDevicePlatforms } from "./device-kinds.js";
+import {
+  localDeviceKinds,
+  localDevicePlatforms,
+  localDeviceUnavailable,
+  withUnavailable,
+} from "./device-kinds.js";
 import type { HostDeviceSupport } from "./remote-host-devices.js";
 import { performDeviceAction } from "./device-drivers/actions.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -93,6 +98,7 @@ class LocalDeviceHost implements DeviceHost {
     return {
       deviceKinds: localDeviceKinds(this.app),
       platforms: await localDevicePlatforms(this.app),
+      ...withUnavailable(await localDeviceUnavailable(this.app)),
     };
   }
 

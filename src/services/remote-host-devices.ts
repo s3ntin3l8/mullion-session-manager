@@ -21,6 +21,7 @@ import type {
 } from "./device-wire.js";
 import type { DiscoveredDevice } from "./device-discovery.js";
 import type { IosSimulator, SimulatorCatalog } from "./ios-simulators.js";
+import type { DeviceUnavailable } from "../shared/types.js";
 
 // RemoteHostClient facet convention (issue #3289 / #3301):
 // - Each domain lives in `src/services/remote-host-<domain>.ts` and exports a
@@ -37,6 +38,8 @@ import type { IosSimulator, SimulatorCatalog } from "./ios-simulators.js";
 export interface HostDeviceSupport {
   deviceKinds: DeviceKind[];
   platforms: DevicePlatform[];
+  /** Absent when the host reports no reason (or predates the field, #3510). */
+  unavailable?: DeviceUnavailable;
 }
 
 /** The client's `request`, bound. An omitted timeout means the client default. */
@@ -105,9 +108,12 @@ export function createDevicesClient({ request, openInbound, openChannel }: Devic
     async kinds(): Promise<HostDeviceSupport | null> {
       try {
         const res = await request<DeviceKindsResponse>("/internal/devices/kinds");
+        const ios = res.unavailable?.ios;
         return {
           deviceKinds: res.deviceKinds,
           platforms: res.platforms ?? (res.deviceKinds.length > 0 ? ["android"] : []),
+          // Only a string is passed on: an agent's answer is not trusted to be well formed.
+          ...(typeof ios === "string" && ios !== "" ? { unavailable: { ios } } : {}),
         };
       } catch (err) {
         if (err instanceof HostRequestError && err.statusCode === 404) return null;

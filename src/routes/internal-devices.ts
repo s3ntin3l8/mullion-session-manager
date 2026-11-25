@@ -16,6 +16,8 @@ import {
   physicalDeviceEnabled,
   physicalDeviceUnavailableMessage,
   localDevicePlatforms,
+  localDeviceUnavailable,
+  withUnavailable,
 } from "../services/device-kinds.js";
 import {
   createIosSimulator,
@@ -70,6 +72,7 @@ export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: 
   app.get<{ Reply: DeviceKindsResponse }>("/internal/devices/kinds", rateLimit, async () => ({
     deviceKinds: localDeviceKinds(app),
     platforms: await localDevicePlatforms(app),
+    ...withUnavailable(await localDeviceUnavailable(app)),
   }));
 
   app.get<{ Reply: SimulatorsResponse }>(
