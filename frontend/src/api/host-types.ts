@@ -19,7 +19,8 @@ export type {
 
 export interface HostSessionEnv {
   shell: string | null;
-  interactiveResolve: "ok" | "fallback";
+  /** `not-applicable`: a Windows host, which never resolves (by design). */
+  interactiveResolve: "ok" | "fallback" | "not-applicable";
   reason: string | null;
   path: string[];
   recoveredKeys: string[];

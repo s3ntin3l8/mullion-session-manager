@@ -1,3 +1,4 @@
+import { delimiter as PATH_DELIMITER } from "node:path";
 import { runShellCapture } from "./shell-spawn.js";
 
 // Resolves the PATH an *interactive* shell of the user's would have.
@@ -76,7 +77,8 @@ export type SessionEnvFallbackReason =
 export interface UserShellEnvStatus {
   /** The `$SHELL` the resolver used (null when unset or not applicable). */
   shell: string | null;
-  interactiveResolve: "ok" | "fallback";
+  /** `not-applicable` on Windows, which never resolves (issue #1728). */
+  interactiveResolve: "ok" | "fallback" | "not-applicable";
   /** A short reason when `interactiveResolve` is `fallback`, else null. */
   reason: SessionEnvFallbackReason | null;
 }
@@ -122,18 +124,24 @@ export function parseUserShellPath(stdout: string): string | null {
   return stdout.slice(from, end) || null;
 }
 
-/** Pure: `base`'s PATH with any `extra` entries it lacks prepended, de-duped, order kept. */
-export function mergePaths(base: string | undefined, extra: string): string {
-  const baseEntries = (base ?? "").split(":").filter(Boolean);
+/** Pure: `base`'s PATH with any `extra` entries it lacks prepended, de-duped,
+ * order kept. `delimiter` is the platform's PATH separator (`;` on Windows,
+ * whose entries carry a `C:` drive). */
+export function mergePaths(
+  base: string | undefined,
+  extra: string,
+  delimiter: string = PATH_DELIMITER,
+): string {
+  const baseEntries = (base ?? "").split(delimiter).filter(Boolean);
   const seen = new Set(baseEntries);
   const added: string[] = [];
-  for (const entry of extra.split(":")) {
+  for (const entry of extra.split(delimiter)) {
     if (entry && !seen.has(entry)) {
       seen.add(entry);
       added.push(entry);
     }
   }
-  return [...added, ...baseEntries].join(":");
+  return [...added, ...baseEntries].join(delimiter);
 }
 
 function isDisabled(): boolean {
@@ -253,21 +261,26 @@ export function getUserShellPath(): string | null {
  */
 export function getUserShellEnvStatus(): UserShellEnvStatus {
   const shell = process.env.SHELL || null;
+  // Windows never resolves (see resolveUserShellEnv): that is by design, not a
+  // fallback worth a warning.
+  if (process.platform === "win32") {
+    return { shell, interactiveResolve: "not-applicable", reason: null };
+  }
   if (isDisabled()) return { shell, interactiveResolve: "fallback", reason: "disabled" };
   if (resolved) return { shell, interactiveResolve: "ok", reason: null };
   return { shell, interactiveResolve: "fallback", reason: lastFailure ?? "pending" };
 }
 
 /** The PATH entries a new session on this host starts with (no values of any other variable). */
-export function getSessionPathEntries(): string[] {
-  const merged = mergePaths(process.env.PATH, getUserShellPath() ?? "");
-  return merged.split(":").filter(Boolean);
+export function getSessionPathEntries(delimiter: string = PATH_DELIMITER): string[] {
+  const merged = mergePaths(process.env.PATH, getUserShellPath() ?? "", delimiter);
+  return merged.split(delimiter).filter(Boolean);
 }
 
 /** What `GET /internal/session-env` answers; also the primary's per-host reading. */
 export interface SessionEnvInfo {
   shell: string | null;
-  interactiveResolve: "ok" | "fallback";
+  interactiveResolve: UserShellEnvStatus["interactiveResolve"];
   reason: SessionEnvFallbackReason | null;
   path: string[];
   /** Names (never values) of variables recovered from the user's shell. */

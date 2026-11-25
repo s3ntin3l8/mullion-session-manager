@@ -383,6 +383,7 @@ jobs:
           test/services/scope-windows.test.ts
           test/services/msys-socket.test.ts
           test/services/ssh-agent-msys-gitbash.test.ts
+          test/services/user-shell-env-win32.test.ts
       # A separate run, not more files in the one above: the ConPTY tests spawn
       # real terminals, and node-pty's console helper intermittently dies with
       # "AttachConsole failed" under load, taking a vitest worker down with it
