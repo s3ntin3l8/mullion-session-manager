@@ -299,7 +299,7 @@ credential, token, or code):
 - `enrolled` — a host enrolled via `MULLION_ENROLLMENT_SECRET`.
 - `claimed` — an existing manual host row was claimed with its per-host token.
 - `paired` — a host was paired (or had its pairing response reissued on retry) via a one-time pairing code.
-- `replaced` — a registration replaced an already-live machine identity (moving the prior credential to the grace slot). **No longer produced since issue #3439**: a claim on a row that holds a live identity is refused, so no registration replaces an identity in place any more. The `replaced` rows still in the table are historic; #3507 restores the event on the re-pair path.
+- `replaced` — a registration replaced an already-live machine identity (moving the prior credential to the grace slot). **No longer produced since issue #3439**: a claim on a row that holds a live identity is refused, so no registration takes a live identity over on its own any more; a re-pair does, deliberately: it replaces the credential in place (no grace period) and records a `paired` event. #3507 restores the `replaced` event on that path. The `replaced` rows still in the table are historic.
 - `revoked` — an operator revoked the host's machine identity (`POST /api/hosts/:id/revoke`).
 - `token_rotated` — an operator rotated the host's per-host token (`POST /api/hosts/:id/rotate-token`).
 
@@ -314,10 +314,9 @@ host has an unacknowledged `replaced` event within the last 30 days (queried via
 (`POST /api/hosts/:id/identity-events/acknowledge`).
 
 **Since issue #3439 no new `replaced` event is written**, so the badge can only
-ever show a historic event from before that change: a registration no longer
-replaces a live identity (a claim on such a row is refused instead, and
-re-pairing writes a `paired` event). #3507 restores the event on the re-pair
-path.
+ever show a historic event from before that change: a claim no longer replaces
+a live identity (such a row refuses the claim, and re-pairing writes a
+`paired` event). #3507 restores the event on the re-pair path.
 
 ### Pairing a desktop Helper (one-time code)
 

@@ -318,8 +318,10 @@ describe("host-registry", () => {
         ).toBeNull();
       } finally {
         vi.useRealTimers();
+        // Closed here too, so an assertion that throws does not leave the app
+        // open for the rest of the file (every test here opens its own).
+        await app.close();
       }
-      await app.close();
     });
 
     it("claimHost does not revive an expired credential into the grace slot", async () => {
