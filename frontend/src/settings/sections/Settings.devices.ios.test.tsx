@@ -54,6 +54,7 @@ describe("Settings -> Devices iOS Simulator", () => {
   let longDeviceTypeName: boolean;
   let devicesFail: boolean;
   let hostsFail: boolean;
+  let avdsList: string[];
 
   beforeEach(() => {
     devicesDb = [];
@@ -69,6 +70,7 @@ describe("Settings -> Devices iOS Simulator", () => {
     longDeviceTypeName = false;
     devicesFail = false;
     hostsFail = false;
+    avdsList = ["pixel_7"];
 
     const { fetchMock, unexpectedCalls: unexpected } = mockFetch({
       "GET /api/server-info": () => jsonResponse(200, SERVER_INFO_FIXTURE),
@@ -80,7 +82,7 @@ describe("Settings -> Devices iOS Simulator", () => {
       "GET /api/devices/hosts": () =>
         hostsFail ? jsonResponse(500, { message: "boom" }) : jsonResponse(200, deviceHostsDb),
       "GET /api/devices/discovered": () => jsonResponse(200, []),
-      "GET /api/avds": () => jsonResponse(200, { avds: ["pixel_7"] }),
+      "GET /api/avds": () => jsonResponse(200, { avds: avdsList }),
       "GET /api/simulators": ({ url }) => {
         const parsed = new URL(url, "http://localhost");
         const hostId = parsed.searchParams.get("hostId") || "local";
@@ -313,6 +315,78 @@ describe("Settings -> Devices iOS Simulator", () => {
     });
   });
 
+  // #3516: the Name placeholder is the name an empty field falls back to.
+  it("shows the selected simulator's name as the Name placeholder and creates with it when left empty", async () => {
+    deviceHostsDb = [
+      {
+        hostId: "local",
+        name: "Primary",
+        status: "ok",
+        deviceKinds: ["emulator"],
+        platforms: ["ios"],
+      },
+    ];
+    // Both booted, so the picker lists both without "show all".
+    simulatorsByHostDb = { local: IOS_SIMS_LOCAL.map((sim) => ({ ...sim, state: "Booted" })) };
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByText("Add a simulator"));
+    const simPicker = await screen.findByRole("radiogroup", { name: "Simulator" });
+
+    const nameInput = screen.getByRole("textbox", { name: "Name" });
+    // The newest runtime's is preselected; never a fixed example like "iPhone 16".
+    expect(within(simPicker).getByRole("radio", { name: /iPhone 16 Pro/ })).toBeChecked();
+    expect(nameInput).toHaveAttribute("placeholder", "iPhone 16 Pro");
+
+    await user.click(within(simPicker).getByRole("radio", { name: /iPhone 15/ }));
+    expect(nameInput).toHaveAttribute("placeholder", "iPhone 15");
+
+    // Left empty, no name is sent: the server names the device after the
+    // simulator the placeholder showed.
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(createBodies).toEqual([{ platform: "ios", udid: "SIM-UDID-2" }]));
+  });
+
+  it("shows no Name placeholder when no simulator can be selected", async () => {
+    deviceHostsDb = [
+      {
+        hostId: "local",
+        name: "Primary",
+        status: "ok",
+        deviceKinds: ["emulator"],
+        platforms: ["ios"],
+      },
+    ];
+    simulatorsByHostDb = { local: [] };
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByText("Add a simulator"));
+    await screen.findByText("No iOS simulators available on this machine.");
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveAttribute("placeholder", "");
+  });
+
+  it("shows the selected AVD's name as the Android Name placeholder", async () => {
+    deviceHostsDb = [
+      {
+        hostId: "local",
+        name: "Primary",
+        status: "ok",
+        deviceKinds: ["emulator"],
+        platforms: ["android"],
+      },
+    ];
+    avdsList = ["pixel_7", "pixel_9_pro"];
+    const user = userEvent.setup();
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    await user.click(await screen.findByText("Create an emulator"));
+    const avdPicker = await dd.findDropdownByLabel("pixel_7");
+
+    const nameInput = screen.getByRole("textbox", { name: "Name" });
+    expect(nameInput).toHaveAttribute("placeholder", "pixel_7");
+    dd.pickDropdownOption(avdPicker, "pixel_9_pro");
+    await waitFor(() => expect(nameInput).toHaveAttribute("placeholder", "pixel_9_pro"));
+  });
+
   it("shows server 409 conflict message verbatim on submit", async () => {
     deviceHostsDb = [
       {
@@ -417,6 +491,13 @@ describe("Settings -> Devices iOS Simulator", () => {
     expect(create).toBeEnabled();
 
     const nameInput = screen.getByRole("textbox", { name: "New simulator name" });
+    // The placeholder follows the device type and runtime it would be named after.
+    dd.pickDropdownOption(screen.getByRole("combobox", { name: "Runtime" }), "rt-17");
+    await waitFor(() => expect(nameInput).toHaveAttribute("placeholder", "iPhone 16 (iOS 17.5)"));
+    await user.click(screen.getByRole("button", { name: "Device type" }));
+    await user.click(await screen.findByRole("option", { name: "iPad Air" }));
+    await waitFor(() => expect(nameInput).toHaveAttribute("placeholder", "iPad Air (iOS 17.5)"));
+
     await user.type(nameInput, "-bad");
     expect(await screen.findByText(/starting with a letter or digit/)).toBeInTheDocument();
     expect(create).toBeDisabled();
@@ -429,7 +510,7 @@ describe("Settings -> Devices iOS Simulator", () => {
 
     await waitFor(() => {
       expect(simulatorCreateBodies).toEqual([
-        { name: "QA phone", deviceTypeId: "type-ipad", runtimeId: "rt-18" },
+        { name: "QA phone", deviceTypeId: "type-ipad", runtimeId: "rt-17" },
       ]);
     });
     await waitFor(() => {
