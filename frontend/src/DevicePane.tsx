@@ -464,11 +464,14 @@ export function DevicePane(props: {
             // one-bad-packet decode error.
             setLastError(message.message);
             setStatus("failed");
-            // Detaching `ws` first makes this socket's own "close" a no-op:
-            // a reconnect would reset the error on its "open" and put the
-            // panel back on "Waiting for video…" (#3526). Retry starts over.
-            ws = null;
+            // A held finger is released on this socket while it is still
+            // open (with `ws` detached, the touchUp would wait for the next
+            // connection). Then detaching `ws` makes this socket's own
+            // "close" a no-op: a reconnect would reset the error on its
+            // "open" and put the panel back on "Waiting for video…" (#3526).
+            // Retry starts over.
             releaseActivePointer();
+            ws = null;
             socket.close();
           }
           return;

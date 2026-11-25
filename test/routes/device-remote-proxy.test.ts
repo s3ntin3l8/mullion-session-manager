@@ -630,9 +630,15 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
     it("keeps a booting device's panel waiting, within the boot grace", async () => {
       vi.useFakeTimers();
       deviceInfo.mockResolvedValue({ id: "7", status: "booting", error: null });
-      await start();
+      const app = fakeApp();
+      await proxyToRemoteDevice(app, browser as unknown as WebSocket, ROW);
+      upstream.open();
       await vi.advanceTimersByTimeAsync(REMOTE_DEVICE_VIDEO_TIMEOUT_MS * 3);
       expect(deviceInfo).toHaveBeenCalledTimes(3);
+      // Warned once; the rechecks are info.
+      const booting = "remote device still starting; its panel keeps waiting for video";
+      expect(vi.mocked(app.log.warn).mock.calls.filter(([, m]) => m === booting)).toHaveLength(1);
+      expect(vi.mocked(app.log.info).mock.calls.filter(([, m]) => m === booting)).toHaveLength(2);
       expect(browser.closeSpy).not.toHaveBeenCalled();
       // Video arrives: no further checks.
       upstream.emit("message", frame(1, true), true);

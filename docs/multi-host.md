@@ -1561,7 +1561,7 @@ does not report simulator support — update its agent."`. For `platform: "ios"`
   the state ("reports device 3 streaming but sent this panel no video",
   "failed: …", "is not running …"), within 20 s of the open. A device the agent
   reports as `starting` or `booting` keeps the panel waiting, rechecked every
-  6 s, for up to 3 minutes. An upstream the agent closes before any
+  6 s, for up to 3 minutes from the panel's socket arriving. An upstream the agent closes before any
   video is reported too. The panel shows the reason and stops reconnecting,
   so the reason stays on screen until Retry.
 - **When the host is offline.** `GET /api/devices` still succeeds when an agent

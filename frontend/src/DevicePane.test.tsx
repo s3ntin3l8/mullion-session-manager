@@ -576,6 +576,41 @@ describe("DevicePane (issue #1326)", () => {
     });
   });
 
+  it("releases a held touch on the failing socket when the server reports an error (#3526)", () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    const canvas = document.querySelector("canvas")!;
+    Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+    Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 600,
+      width: 300,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+    Object.assign(down, {
+      pointerId: 5,
+      pointerType: "touch",
+      button: 0,
+      clientX: 90,
+      clientY: 480,
+    });
+    act(() => canvas.dispatchEvent(down));
+
+    act(() =>
+      socket.emit("message", { data: JSON.stringify({ type: "error", message: "no video" }) }),
+    );
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp" });
+  });
+
   it("releases a held touch at its last point when the pane unmounts", () => {
     resetStore({ devices: [makeDevice()], devicesLoaded: true });
     const { unmount } = render(<DevicePane params={{ deviceId: 7 }} />);

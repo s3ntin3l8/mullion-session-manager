@@ -319,6 +319,7 @@ export async function proxyToRemoteDevice(
   let opened = false;
   let sawKeyframe = false;
   let secondChance = false;
+  let bootChecks = 0;
   let videoTimer: ReturnType<typeof setTimeout> | null = null;
   const stopVideoWatchdog = () => {
     if (videoTimer) clearTimeout(videoTimer);
@@ -352,7 +353,9 @@ export async function proxyToRemoteDevice(
       (status === "starting" || status === "booting") &&
       Date.now() - startedAt < REMOTE_DEVICE_BOOT_GRACE_MS
     ) {
-      app.log.warn(
+      // Warned once; the rechecks every few seconds of a cold boot are info.
+      const level = bootChecks++ === 0 ? "warn" : "info";
+      app.log[level](
         { hostId, deviceId, status },
         "remote device still starting; its panel keeps waiting for video",
       );
