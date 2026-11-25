@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.68](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.67...v0.3.68) (2026-11-25)
+
+
+### Features
+
+* **devices:** say why a macOS host offers no iOS Simulator in Settings → Devices ([#3514](https://github.com/s3ntin3l8/mullion-session-manager/issues/3514)) ([cd806ae](https://github.com/s3ntin3l8/mullion-session-manager/commit/cd806aefbdd2989226f2338e9bd4852db74d4725))
+* **hosts:** automation tokens that mint one-off pairing codes ([42da8e8](https://github.com/s3ntin3l8/mullion-session-manager/commit/42da8e897d5f6902bc31b5b3a2ed6da14b11d610))
+
+
+### Bug Fixes
+
+* **devices:** iOS screenshots go through a temp file, not simctl's "-" (Xcode 27) ([#3520](https://github.com/s3ntin3l8/mullion-session-manager/issues/3520)) ([c0f298f](https://github.com/s3ntin3l8/mullion-session-manager/commit/c0f298f6e4d3da104029621cadd374bd99874b4b))
+* **devices:** the add form's Name placeholder shows the name an empty field falls back to ([#3518](https://github.com/s3ntin3l8/mullion-session-manager/issues/3518)) ([32b6bde](https://github.com/s3ntin3l8/mullion-session-manager/commit/32b6bde0039235e10a6ed8eaf9a67d0fb12b31bb))
+* **devices:** the Xcode capability probe tolerates a slow Mac instead of reading as no iOS support ([#3513](https://github.com/s3ntin3l8/mullion-session-manager/issues/3513)) ([fc7ed29](https://github.com/s3ntin3l8/mullion-session-manager/commit/fc7ed29d30590b8af4aa9452b973f4d89dbe715d))
+* **hosts:** a per-host token cannot claim a host that already has a live identity ([67d9186](https://github.com/s3ntin3l8/mullion-session-manager/commit/67d9186528d4692659d794cf62999eb5aeeacb8d))
+* **hosts:** an outbound-only host stays offline after it reconnects ([#3521](https://github.com/s3ntin3l8/mullion-session-manager/issues/3521)) ([4a538a1](https://github.com/s3ntin3l8/mullion-session-manager/commit/4a538a1116cbef22770696747a2fa943c850fe75))
+
 ## [0.3.67](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.66...v0.3.67) (2026-11-25)
 
 
