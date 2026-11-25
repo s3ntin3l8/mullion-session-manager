@@ -99,7 +99,7 @@ export const browserApi = {
   // Issues #2016/#2018 — starts (or reuses) the preview of a branch: the
   // project's preview dock control running in a worktree of that branch.
   // Idempotent per (project, branch). Refusals carry an ApiError `code`
-  // (no_preview_control, remote_unsupported, unknown_branch, …).
+  // (no_preview_control, unknown_branch, host_unavailable, …).
   createBranchPreview: (projectId: number, branch: string) =>
     request<Preview>("/api/previews", {
       method: "POST",

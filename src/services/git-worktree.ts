@@ -498,6 +498,67 @@ export async function ensureLocalBranch(
   return fetched.code === 0 || local.code === 0;
 }
 
+/**
+ * The branch's `dock-preview-*` worktree path, resolved and held to
+ * `<projectCwd>/.mullion-worktrees`, or null when `candidate` would resolve
+ * anywhere else (or to a directory that is not a dock-preview one). The name
+ * is derived from a request's branch: `dockPreviewWorktreePath` sanitizes it,
+ * but the path is checked again before any filesystem or git call touches it,
+ * on the primary and again on the agent that owns the checkout (#3428), so a
+ * name that slipped past the sanitizer can never reach outside the worktree
+ * root, nor name a task worktree beside it.
+ */
+export function previewWorktreePathWithin(projectCwd: string, candidate: string): string | null {
+  const base = path.resolve(projectCwd, ".mullion-worktrees");
+  const resolved = path.resolve(base, candidate);
+  const relative = path.relative(base, resolved);
+  if (
+    !relative ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative) ||
+    !resolved.startsWith(base + path.sep) ||
+    path.dirname(resolved) !== base ||
+    !isDockPreviewWorktree(resolved)
+  ) {
+    return null;
+  }
+  return resolved;
+}
+
+export type ClearStalePreviewWorktreeResult =
+  /** The path is outside the project's `.mullion-worktrees`, or not a dock-preview directory. */
+  | { outcome: "invalid-path" }
+  /** Nothing on disk there: nothing to clear. `worktreePath` is the path as
+   * this host resolved it (a remote project's cwd may be stored as `~/…`). */
+  | { outcome: "absent"; worktreePath: string }
+  | { outcome: "removed"; worktreePath: string }
+  /** It is on disk, but `git worktree remove --force` failed (e.g. a plain
+   * directory git does not know as a worktree). */
+  | { outcome: "not-removed" };
+
+/**
+ * Issue #3428 — clears a branch preview's leftover `dock-preview-*` worktree
+ * on THIS host's own filesystem, so `git worktree add` can recut it fresh.
+ * Only the filesystem half: whether a live session still runs in it is the
+ * primary's call (its DB knows the sessions), made before this runs. Shared
+ * by the local branch-preview path and the agent's
+ * `/internal/worktree-clear-stale`. `candidate` may be the directory's name
+ * alone: it resolves against `<projectCwd>/.mullion-worktrees`, which is how
+ * the primary names it for a checkout whose absolute path only its own host
+ * knows.
+ */
+export async function clearStalePreviewWorktree(
+  projectCwd: string,
+  candidate: string,
+): Promise<ClearStalePreviewWorktreeResult> {
+  const worktreePath = previewWorktreePathWithin(projectCwd, candidate);
+  if (worktreePath === null) return { outcome: "invalid-path" };
+  if (!existsSync(worktreePath)) return { outcome: "absent", worktreePath };
+  return (await removeWorktree(worktreePath, projectCwd))
+    ? { outcome: "removed", worktreePath }
+    : { outcome: "not-removed" };
+}
+
 // ── Per-path serialization ────────────────────────────────────────────────
 // The 5s sync tick (below) and every removal path (killSession,
 // cleanupPreviewWorktree, session-lifecycle.ts's spawn-failure rollback) can

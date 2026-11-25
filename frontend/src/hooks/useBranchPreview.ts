@@ -28,7 +28,6 @@ export type BranchPreviewTarget =
 const REFUSALS: Record<string, string> = {
   no_preview_control:
     "No dock control serves branch previews — mark one in Dock config (it must listen on $PORT)",
-  remote_unsupported: "Branch previews aren't available yet for a project on a remote host",
   fork_unsupported: "Previewing a pull request from a fork isn't supported yet",
   unknown_branch: "That branch isn't here or on origin",
   worktree_busy: "Another session is already running in this branch's preview worktree",

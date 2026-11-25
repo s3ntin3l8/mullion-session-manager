@@ -70,6 +70,10 @@ const MUTATING_INTERNAL_POSTS = [
   "/internal/git-branch-delete",
   "/internal/git-worktree/remove-listed",
   "/internal/git-worktree/prune-metadata",
+  // A branch preview's prep (#3428): ensure-branch may fetch a ref into the
+  // repo, clear-stale force-removes a worktree. (preview-port only probes.)
+  "/internal/git-ensure-branch",
+  "/internal/worktree-clear-stale",
   // Restart/stop/start change containers and check-update pulls an image.
   "/internal/docker-compose-action",
   "/internal/sessions",

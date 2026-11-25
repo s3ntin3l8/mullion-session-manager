@@ -24,11 +24,17 @@ import { resolveGitHubToken } from "./github-integration.js";
 import { getFileDiff } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import {
+  clearStalePreviewWorktree,
   commitWipChanges,
+  ensureLocalBranch,
   resyncStaleWorktree,
+  type ClearStalePreviewWorktreeResult,
   type CommitWipChangesResult,
   type ResyncStaleWorktreeResult,
 } from "./git-worktree.js";
+import { allocatePreviewPort } from "./preview-port.js";
+import { resolveProjectDock } from "./project-config.js";
+import type { DockControl } from "../shared/types.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
@@ -387,6 +393,102 @@ export async function resyncHostStaleWorktree(
     return { ok: true, value: await resyncStaleWorktree(cwd, branch) };
   }
   return viaGit(app, hostId, (client) => client.resolveResyncStaleWorktree(cwd, branch));
+}
+
+/**
+ * Whether a failed host step was the agent ANSWERING with a rejection — a 4xx
+ * other than a missing route (that one is `"unsupported"`), e.g. a cwd outside
+ * its PROJECTS_ROOTS: not retryable, and not an unreachable host. The one
+ * place callers that surface HostGitResult failures classify it (#3428).
+ */
+export function isHostRejection(result: HostGitResult<unknown>): boolean {
+  return (
+    !result.ok &&
+    result.reason === "unreachable" &&
+    result.status !== undefined &&
+    result.status >= 400 &&
+    result.status < 500
+  );
+}
+
+/**
+ * Issue #3428 — the project's configured dock controls (`.crs/dock.json` +
+ * the global default) read from its checkout on whichever host owns it, with
+ * HostGitResult's failure taxonomy, so an agent that answered but rejected
+ * the read stays distinguishable from one that is down
+ * (`configuredControls` and branch previews both read through it).
+ */
+export async function resolveHostDockControls(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+): Promise<HostGitResult<DockControl[]>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: resolveProjectDock(cwd, app.config.CRS_CONFIG_DIR) };
+  }
+  return viaRemote(app, hostId, (client) => client.resolveDock(cwd), "dock");
+}
+
+/**
+ * Issue #3428 — makes `refs/heads/<branch>` exist in `cwd` on whichever host
+ * owns it, for a branch preview (`ensureLocalBranch` locally, the agent's
+ * `/internal/git-ensure-branch` remotely). `value: false` is the git-level
+ * "no such branch here or on origin"; `ok: false` is "could not ask".
+ */
+export async function ensureHostBranch(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  branch: string,
+  opts: { fastForward?: boolean } = {},
+): Promise<HostGitResult<boolean>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await ensureLocalBranch(cwd, branch, opts) };
+  }
+  return viaGit(app, hostId, (client) => client.ensureGitBranch(cwd, branch, opts));
+}
+
+/**
+ * Issue #3428 — clears a branch preview's leftover dock-preview worktree on
+ * whichever host owns the checkout (`clearStalePreviewWorktree` locally, the
+ * agent's `/internal/worktree-clear-stale` remotely, which re-runs the path
+ * guard there). The caller decides first that no live session occupies it.
+ */
+export async function clearHostStalePreviewWorktree(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  worktreePath: string,
+): Promise<HostGitResult<ClearStalePreviewWorktreeResult>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await clearStalePreviewWorktree(cwd, worktreePath) };
+  }
+  return viaRemote(
+    app,
+    hostId,
+    (client) => client.resolveClearStalePreviewWorktree(cwd, worktreePath),
+    "git-worktrees",
+  );
+}
+
+/**
+ * Issue #3428 — a free loopback port for a branch preview's dev server on the
+ * host it runs on, outside `taken` (the primary's inventory for that host).
+ * `value: null`: the host found no free port.
+ */
+export async function allocateHostPreviewPort(
+  app: FastifyInstance,
+  hostId: string,
+  taken: ReadonlySet<number>,
+): Promise<HostGitResult<number | null>> {
+  if (hostId === LOCAL_HOST_ID) {
+    try {
+      return { ok: true, value: await allocatePreviewPort(taken) };
+    } catch {
+      return { ok: true, value: null };
+    }
+  }
+  return viaRemote(app, hostId, (client) => client.allocatePreviewPort(taken), "previews");
 }
 
 /**

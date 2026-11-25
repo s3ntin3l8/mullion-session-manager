@@ -59,17 +59,29 @@ describe("check-checkout-removal guard", () => {
     expect(found).toEqual([expect.objectContaining({ line: 2 })]);
   });
 
-  it("pins the agent endpoints at exactly five uses: a sixth is found, and so is a deleted one", () => {
+  it("pins the agent endpoints at exactly six uses: a seventh is found, and so is a deleted one", () => {
     const route = (n: number) =>
       "async function registerWorktreeRoutes() {\n" +
       Array.from({ length: n }, () => "  await removeWorktree(p);").join("\n") +
       "\n}\n";
-    expect(scanForBypass("src/routes/internal-worktrees.ts", route(5))).toEqual([]);
-    expect(scanForBypass("src/routes/internal-worktrees.ts", route(6))).toHaveLength(1);
-    // Four: an endpoint was removed, the entry is stale and would leave headroom.
-    const stale = scanForBypass("src/routes/internal-worktrees.ts", route(4));
+    expect(scanForBypass("src/routes/internal-worktrees.ts", route(6))).toEqual([]);
+    expect(scanForBypass("src/routes/internal-worktrees.ts", route(7))).toHaveLength(1);
+    // Five: an endpoint was removed, the entry is stale and would leave headroom.
+    const stale = scanForBypass("src/routes/internal-worktrees.ts", route(5));
     expect(stale).toEqual([expect.objectContaining({ line: 1 })]);
-    expect(stale[0].text).toContain("now holds 4 uses");
+    expect(stale[0].text).toContain("now holds 5 uses");
+  });
+
+  it("finds a branch preview's stale-worktree clear outside its sanctioned scopes (#3428)", () => {
+    expect(
+      scanForBypass("src/services/branch-preview.ts", "await clearStalePreviewWorktree(cwd, p);\n"),
+    ).toHaveLength(1);
+    expect(
+      scanForBypass(
+        "src/services/branch-preview.ts",
+        "await clearHostStalePreviewWorktree(app, h, cwd, p);\n",
+      ),
+    ).toHaveLength(1);
   });
 
   it("gives every allowlist entry a reason", () => {

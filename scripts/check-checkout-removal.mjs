@@ -32,6 +32,8 @@ export const NAMES = new Set([
   "removeListedWorktree",
   "pruneWorktrees",
   "clearOrphanedTaskWorktree",
+  "clearStalePreviewWorktree",
+  "clearHostStalePreviewWorktree",
 ]);
 
 // Scopes that may use them, and why. `scope` is `file` or `file#function`; a
@@ -52,6 +54,15 @@ export const ALLOWLIST = [
     why: "the local implementation",
   },
   { scope: "src/services/git-worktree.ts#pruneWorktrees", why: "the local implementation" },
+  {
+    scope: "src/services/git-worktree.ts#clearStalePreviewWorktree",
+    why: "the local implementation: a branch preview's leftover worktree (#3428)",
+  },
+  { scope: "src/services/host-git.ts#import", why: "the host dispatch's import" },
+  {
+    scope: "src/services/host-git.ts#clearHostStalePreviewWorktree",
+    why: "the host dispatch checkout-removal's clearStalePreviewCheckout calls",
+  },
   { scope: "src/services/session-backend.ts#import", why: "the backends' imports" },
   { scope: "src/services/session-backend.ts#interface SessionBackend", why: "the seam" },
   { scope: "src/services/session-backend.ts#LocalBackend", why: "the local backend" },
@@ -59,8 +70,8 @@ export const ALLOWLIST = [
   { scope: "src/routes/internal-worktrees.ts#import", why: "the agent endpoints' imports" },
   {
     scope: "src/routes/internal-worktrees.ts#registerWorktreeRoutes",
-    why: "the five agent-side endpoints the remote backend calls",
-    count: 5,
+    why: "the six agent-side endpoints the remote backend and host-git.ts call",
+    count: 6,
   },
   { scope: "src/hooks/worktree-hook.mjs", why: "a hook's own throwaway worktree, not a checkout" },
   {

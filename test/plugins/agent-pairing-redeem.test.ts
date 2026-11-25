@@ -225,6 +225,135 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
     expect(primary.db.select().from(hosts).all()).toHaveLength(hostsBefore + 1);
   });
 
+  // Issue #3499 — a redirect, a stale request file and a transient failure.
+  it("explains a redirect from a login gateway without leaking the code or the Location", async () => {
+    newSessionsDir();
+    const requestPath = path.join(sessionsDir, "pairing-request.json");
+    const code = "ab".repeat(32); // pragma: allowlist secret
+    const location = "https://login.example.com/?token=super-secret";
+    vi.stubGlobal("fetch", async () => new Response(null, { status: 302, headers: { location } }));
+
+    let message = "";
+    try {
+      await redeemPairingCode({
+        primaryUrl: "http://primary.invalid",
+        code,
+        sessionsDir,
+      });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toMatch(/redirect/i);
+    expect(message).toContain("302");
+    // Both spellings must be named: `install.sh` reads the pairing primary
+    // from MULLION_AGENT_PRIMARY_URL and only falls back to MULLION_PRIMARY_URL
+    // in an existing `.env`, so naming just one of them leaves a dead end.
+    expect(message).toContain("MULLION_AGENT_PRIMARY_URL");
+    expect(message).toContain("MULLION_PRIMARY_URL");
+    // Neither the gateway's address nor the code may appear in the message.
+    expect(message).not.toContain("login.example.com");
+    expect(message).not.toContain("super-secret");
+    expect(message).not.toContain(code);
+    expect(loadAgentIdentity(statePath)).toBeNull();
+    // A redirect is not a definitive rejection: the primary never processed
+    // the body, so the request file stays and the retry reuses the requestId.
+    expect(fs.existsSync(requestPath)).toBe(true);
+  });
+
+  it.each([400, 401])(
+    "removes the stale pairing-request.json after a definitive rejection (HTTP %i)",
+    async (status) => {
+      newSessionsDir();
+      const requestPath = path.join(sessionsDir, "pairing-request.json");
+      const code = "cd".repeat(32); // pragma: allowlist secret
+      vi.stubGlobal("fetch", async () => new Response("{}", { status }));
+
+      await expect(
+        redeemPairingCode({ primaryUrl: "http://primary.invalid", code, sessionsDir }),
+      ).rejects.toThrow(new RegExp(`HTTP ${status}`));
+
+      expect(fs.existsSync(requestPath)).toBe(false);
+      expect(loadAgentIdentity(statePath)).toBeNull();
+    },
+  );
+
+  it("keeps the request file after a transient 503 so the retry reuses the same requestId", async () => {
+    newSessionsDir();
+    const requestPath = path.join(sessionsDir, "pairing-request.json");
+    const code = "ef".repeat(32); // pragma: allowlist secret
+    const seenRequestIds: string[] = [];
+
+    vi.stubGlobal("fetch", async (_url: string | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { requestId: string };
+      seenRequestIds.push(body.requestId);
+      if (seenRequestIds.length === 1) {
+        return new Response("{}", { status: 503 });
+      }
+      return new Response(
+        JSON.stringify({ host_id: "host-after-503", machine_credential: "12".repeat(32) }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    await expect(
+      redeemPairingCode({ primaryUrl: "http://primary.invalid", code, sessionsDir }),
+    ).rejects.toThrow(/HTTP 503/);
+    // Transient: the request file survives, so the retry converges on the
+    // same requestId.
+    expect(fs.existsSync(requestPath)).toBe(true);
+
+    await redeemPairingCode({ primaryUrl: "http://primary.invalid", code, sessionsDir });
+    expect(seenRequestIds).toHaveLength(2);
+    expect(seenRequestIds[1]).toBe(seenRequestIds[0]);
+    expect(loadAgentIdentity(statePath)?.hostId).toBe("host-after-503");
+  });
+
+  it("keeps the request file after a timeout so the retry reuses the same requestId", async () => {
+    newSessionsDir();
+    const requestPath = path.join(sessionsDir, "pairing-request.json");
+    const code = "34".repeat(32); // pragma: allowlist secret
+    const seenRequestIds: string[] = [];
+
+    vi.stubGlobal("fetch", async (_url: string | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { requestId: string };
+      seenRequestIds.push(body.requestId);
+      if (seenRequestIds.length === 1) {
+        // The primary never answers: the timeout aborts the request.
+        const signal = init?.signal;
+        return await new Promise<Response>((_resolve, reject) => {
+          const fail = () => reject(signal?.reason ?? new Error("aborted"));
+          if (signal?.aborted) fail();
+          else signal?.addEventListener("abort", fail, { once: true });
+        });
+      }
+      return new Response(
+        JSON.stringify({ host_id: "host-after-timeout", machine_credential: "56".repeat(32) }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+
+    await expect(
+      redeemPairingCode({
+        primaryUrl: "http://primary.invalid",
+        code,
+        sessionsDir,
+        timeoutMs: 50,
+      }),
+    ).rejects.toThrow();
+    expect(fs.existsSync(requestPath)).toBe(true);
+
+    await redeemPairingCode({
+      primaryUrl: "http://primary.invalid",
+      code,
+      sessionsDir,
+      timeoutMs: 50,
+    });
+    expect(seenRequestIds).toHaveLength(2);
+    expect(seenRequestIds[1]).toBe(seenRequestIds[0]);
+    expect(loadAgentIdentity(statePath)?.hostId).toBe("host-after-timeout");
+  });
+
   it("ignores non-UUID requestId values in pairing-request.json and generates a fresh UUID", async () => {
     newSessionsDir();
     const code = await issueCode("malformed-request-id");

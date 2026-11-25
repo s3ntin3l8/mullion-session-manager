@@ -57,6 +57,7 @@ import { RemoteHostTransport, type HostCredentials } from "./remote-host-transpo
 import type { PromoteDecision } from "../shared/promote-decision.js";
 import type {
   ClearOrphanedTaskWorktreeResult,
+  ClearStalePreviewWorktreeResult,
   CommitWipChangesResult,
   ResyncStaleWorktreeResult,
   CreateWorktreeResult,
@@ -244,6 +245,11 @@ const WORKTREE_PATH_COMPARE_TIMEOUT_MS = 30_000;
 // covers the browser dev-server proxy, an unrelated "preview" — dock-preview
 // worktrees are a different feature despite the name collision).
 const GIT_WORKTREE_REQUEST_TIMEOUT_MS = 45_000;
+
+// Issue #3428 — ensure-branch runs check-ref-format, rev-parse and a `git
+// fetch` from origin (git-worktree.ts's runGit allows 15 s each): a slow
+// remote needs more than the default, so the same budget as a branch op.
+const GIT_ENSURE_BRANCH_REQUEST_TIMEOUT_MS = 60_000;
 
 // Issue #1951 follow-up — the agent validates every root with a few stat/realpath
 // calls on its own disk; a network share or a sleeping disk makes that slower
@@ -1262,6 +1268,58 @@ export class RemoteHostClient {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, branch }),
     });
+  }
+
+  /** Issue #3428 — makes `branch` exist locally in `cwd` on this agent's
+   * checkout, fetching it from origin when needed — mirrors
+   * /internal/git-ensure-branch's `{cwd, branch, fastForward?}` -> `{ok}`.
+   * A fetch: the branch-op timeout, not the 5 s default. */
+  async ensureGitBranch(
+    cwd: string,
+    branch: string,
+    opts: { fastForward?: boolean } = {},
+  ): Promise<boolean> {
+    const result = await this.request<{ ok: boolean }>(
+      "/internal/git-ensure-branch",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, branch, fastForward: opts.fastForward === true }),
+      },
+      GIT_ENSURE_BRANCH_REQUEST_TIMEOUT_MS,
+    );
+    return result.ok;
+  }
+
+  /** Issue #3428 — clears a branch preview's leftover dock-preview worktree
+   * on this agent's checkout — mirrors /internal/worktree-clear-stale's
+   * `{cwd, path}` -> ClearStalePreviewWorktreeResult. A force-remove (two
+   * git calls): the dock-preview worktree timeout. */
+  resolveClearStalePreviewWorktree(
+    cwd: string,
+    worktreePath: string,
+  ): Promise<ClearStalePreviewWorktreeResult> {
+    return this.request(
+      "/internal/worktree-clear-stale",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, path: worktreePath }),
+      },
+      GIT_WORKTREE_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /** Issue #3428 — a free loopback port on this agent for a branch preview's
+   * dev server, outside `taken` — mirrors /internal/preview-port's
+   * `{taken}` -> `{port}` (null: none free). Read-only. */
+  async allocatePreviewPort(taken: Iterable<number>): Promise<number | null> {
+    const result = await this.request<{ port: number | null }>("/internal/preview-port", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ taken: [...taken] }),
+    });
+    return result.port;
   }
 
   /** Runs one non-interactive generation-agent CLI turn end-to-end

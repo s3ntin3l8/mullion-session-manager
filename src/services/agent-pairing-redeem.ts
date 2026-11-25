@@ -83,6 +83,12 @@ function loadExistingRequestId(requestPath: string, codeHash: string): string | 
  * 3. Persists `{hostId, machineCredential}` via `saveAgentIdentity` (overwriting
  *    any existing identity file) and removes the temporary request file.
  *
+ * A definitive rejection (HTTP 400/401 — the code is invalid, expired, already
+ * used, or the request itself was refused) also removes the request file: the
+ * primary will never accept that code, so a later attempt must start with a
+ * fresh `requestId`. A transient failure (a timeout, a 5xx, a 429) keeps it, so
+ * the retry reuses the same `requestId` and converges on the same host.
+ *
  * Never echoes the pairing code or machine credential in errors or return values.
  */
 export async function redeemPairingCode(
@@ -126,12 +132,38 @@ export async function redeemPairingCode(
 
   if (!res.ok) {
     if (res.status === 401) {
+      // Definitive: the primary refused the code, so the persisted requestId
+      // is stale and must not be reused by a later attempt.
+      fs.rmSync(requestPath, { force: true });
       throw new Error(
         "Pairing failed: the pairing code is invalid, expired, or already used (HTTP 401)",
       );
     }
+    if (res.status === 400) {
+      // Definitive too: the request was refused, not lost.
+      fs.rmSync(requestPath, { force: true });
+      throw new Error(`Pairing failed with HTTP ${res.status}`);
+    }
     if (res.status === 429) {
+      // Transient: the rate limiter blocks the address for a while, and the
+      // same requestId must be reused once the block passes.
       throw new Error("Pairing failed: too many failed pairing attempts (HTTP 429)");
+    }
+    if (res.status >= 300 && res.status < 400) {
+      // A login gateway in front of the primary (an Authentik forwardAuth, a
+      // proxy that demands a session) answers with a redirect instead of the
+      // API. The `Location` header is deliberately NOT included: it can carry
+      // a session token, and the error must not echo anything the caller did
+      // not ask for. The pairing code is not in the message either.
+      //
+      // Both spellings of the primary's address are named: `install.sh` takes
+      // the pairing primary from `MULLION_AGENT_PRIMARY_URL` and only falls
+      // back to `MULLION_PRIMARY_URL` read out of an existing `.env`, so an
+      // operator who only sets the latter in their shell would hit the same
+      // redirect again. The `.env` spelling is what the agent itself reads.
+      throw new Error(
+        `Pairing failed: the primary answered with a redirect (HTTP ${res.status}), which usually means a login gateway sits in front of it. Use the primary's direct address as MULLION_AGENT_PRIMARY_URL (MULLION_PRIMARY_URL in .env); see docs/multi-host.md`,
+      );
     }
     throw new Error(`Pairing failed with HTTP ${res.status}`);
   }
