@@ -275,6 +275,53 @@ describe("host-registry", () => {
       await app.close();
     });
 
+    // Issue #3439 — the claim takeover closed, so the grace slot is written
+    // by a renewal only (a claim refuses a row that holds a live identity).
+    // The window slides on use: the holder of the displaced credential stays
+    // valid as long as it keeps presenting it, and it lapses 24 h after its
+    // last presentation.
+    it("slides the grace window on use and lapses it 24 h after the last presentation", async () => {
+      const app = await buildApp();
+      const token = `grace-slide-${crypto.randomUUID()}`;
+      const created = createHost(app, {
+        name: "grace-slide",
+        baseUrl: "http://placeholder:0",
+        token,
+      });
+      const input = { baseUrl: "http://a:4000", hostname: "a", wantsMachineCredential: true };
+      const claimed = claimHost(app, token, input)!;
+      // A renewal with the current credential rotates it: the credential the
+      // agent holds becomes the grace copy.
+      const rotated = renewMachineCredential(app, created.id, claimed.machineCredential!, input)!;
+      expect(rotated.machineCredential).not.toBe(claimed.machineCredential);
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const t0 = Date.now();
+        vi.setSystemTime(new Date(t0 + 12 * 3600_000));
+        const graced = renewMachineCredential(app, created.id, claimed.machineCredential!, input);
+        expect(graced).not.toBeNull();
+        // Converges onto the already-issued current credential; it does not
+        // rotate further.
+        expect(graced!.machineCredential).toBe(rotated.machineCredential);
+        // +24 h from the rotation, but only 12 h since the last presentation:
+        // the window slid on that presentation, so it is still accepted.
+        vi.setSystemTime(new Date(t0 + 24 * 3600_000));
+        expect(
+          renewMachineCredential(app, created.id, claimed.machineCredential!, input)
+            ?.machineCredential,
+        ).toBe(rotated.machineCredential);
+        // 25 h with no presentation: the grace has lapsed.
+        vi.setSystemTime(new Date(t0 + 49 * 3600_000));
+        expect(
+          renewMachineCredential(app, created.id, claimed.machineCredential!, input),
+        ).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+      await app.close();
+    });
+
     it("claimHost does not revive an expired credential into the grace slot", async () => {
       const app = await buildApp();
       const created = createHost(app, {

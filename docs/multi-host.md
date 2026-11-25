@@ -208,12 +208,12 @@ in `machine_credential`.
   of hammering a dead identity. Host ids are server-issued random UUIDs and the
   route is rate-limited, so the leak is only existence-and-revoked-state of an
   already-unguessable id; it is documented, not redesigned.
-  Because the grace credential slides on use, a replaced credential (a
-  displaced agent, or a leaked copy of the state file) stays valid while
-  its holder keeps presenting it, and each acceptance hands it the live
-  current credential; revocation (or re-pairing the host with a host-bound
-  pairing code, which drops the displaced credential without a grace period)
-  ends its life.
+  Because the grace credential slides on use, a replaced credential (the
+  agent whose renewal response was lost, or a leaked copy of the state file)
+  stays valid while its holder keeps presenting it, and each acceptance hands
+  it the live current credential; revocation (or re-pairing the host with a
+  host-bound pairing code, which drops the displaced credential without a grace
+  period) ends its life.
 - **`SESSIONS_DIR` must be persistent.** The identity lives in
   `agent-identity.json` under the agent's `SESSIONS_DIR`. A container or
   image-based agent whose data dir does not survive a restart (an ephemeral
@@ -256,12 +256,14 @@ in `machine_credential`.
   using the normal delete flow. A host that owns projects still shows the
   existing confirmation to delete the host and its projects. Nothing is deleted,
   parked or hidden automatically; the local host is never offered for removal.
-- **Shared per-host token.** If a second agent claims a row with the same
-  per-host token, the incumbent's credential moves to the grace slot and
-  the primary logs a warning; the displaced agent converges onto the new
-  credential at its next renewal, provided that renewal lands within
-  the 24 h grace window; after that it gets `401` and must be
-  re-enrolled. Give each agent its own host.
+- **Shared per-host token.** Give each agent its own host. If two rows carry the
+  same per-host token, a claim lands on the first row that has **no** live
+  identity and is refused for the one that has: since issue #3439 a token never
+  displaces a live identity, so the incumbent's credential does not move to the
+  grace slot and no agent is displaced. The primary logs one warning per host
+  when a claim is refused this way. The grace slot itself is still used by a
+  **renewal**: every renewal rotates the credential and keeps the previous one
+  valid for 24 h, sliding on use.
 - **Legacy agents.** An agent without the state file (an older release, or
   one that predates this feature) registers exactly as before — claim or
   enroll with the bootstrap token, with the `baseUrl` dedupe — and is issued
@@ -297,7 +299,7 @@ credential, token, or code):
 - `enrolled` — a host enrolled via `MULLION_ENROLLMENT_SECRET`.
 - `claimed` — an existing manual host row was claimed with its per-host token.
 - `paired` — a host was paired (or had its pairing response reissued on retry) via a one-time pairing code.
-- `replaced` — a registration replaced an already-live machine identity (moving the prior credential to the grace slot).
+- `replaced` — a registration replaced an already-live machine identity (moving the prior credential to the grace slot). **No longer produced since issue #3439**: a claim on a row that holds a live identity is refused, so no registration replaces an identity in place any more. The `replaced` rows still in the table are historic; #3507 restores the event on the re-pair path.
 - `revoked` — an operator revoked the host's machine identity (`POST /api/hosts/:id/revoke`).
 - `token_rotated` — an operator rotated the host's per-host token (`POST /api/hosts/:id/rotate-token`).
 
@@ -310,6 +312,12 @@ host has an unacknowledged `replaced` event within the last 30 days (queried via
 `recentIdentityReplacement` and Settings → Hosts shows an **Identity replaced
 \<relative time\>** badge with the peer address and an **Acknowledge** action
 (`POST /api/hosts/:id/identity-events/acknowledge`).
+
+**Since issue #3439 no new `replaced` event is written**, so the badge can only
+ever show a historic event from before that change: a registration no longer
+replaces a live identity (a claim on such a row is refused instead, and
+re-pairing writes a `paired` event). #3507 restores the event on the re-pair
+path.
 
 ### Pairing a desktop Helper (one-time code)
 

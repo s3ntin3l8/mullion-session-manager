@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../../src/app.js";
@@ -61,6 +62,13 @@ describe("a per-host token cannot claim a host with a live identity (issue #3439
     (await app.inject({ method: "POST", url: "/api/hosts", payload: { name } })).json() as {
       id: string;
       token: string;
+    };
+
+  // Two rows can carry the same token (Settings -> Add host -> "Use my own
+  // token"), so the custom-token variant of the same call.
+  const createHostRowWithToken = async (name: string, token: string) =>
+    (await app.inject({ method: "POST", url: "/api/hosts", payload: { name, token } })).json() as {
+      id: string;
     };
 
   const hostRowCount = () => app.db.select().from(hosts).all().length;
@@ -199,6 +207,45 @@ describe("a per-host token cannot claim a host with a live identity (issue #3439
     expect(refusals[0]![0]).toEqual({ hostId: created.id });
     // The token is never part of the line — only the host id is.
     expect(JSON.stringify(refusals)).not.toContain(created.token);
+  });
+
+  it("logs a refusal only when the claim really fails, not when a shared token still matches a pending row", async () => {
+    const token = `shared-token-3439-${crypto.randomUUID()}`;
+    const live = await createHostRowWithToken("shared-live", token);
+    const claim = await register({ token, wantsMachineCredential: true, hostname: "first-agent" });
+    expect(claim.statusCode).toBe(200);
+    expect(claim.json().host_id).toBe(live.id);
+
+    // A second row with the same token, without an identity yet.
+    const pending = await createHostRowWithToken("shared-pending", token);
+
+    const warn = vi.spyOn(app.log, "warn");
+    const second = await register({
+      token,
+      wantsMachineCredential: true,
+      hostname: "second-agent",
+    });
+    // The live row is skipped and the pending one is claimed: that
+    // registration was NOT refused, so nothing may be logged as a refusal.
+    expect(second.statusCode).toBe(200);
+    expect(second.json().host_id).toBe(pending.id);
+    const refusals = warn.mock.calls.filter(([, msg]) =>
+      String(msg).includes("live machine identity"),
+    );
+    expect(refusals).toHaveLength(0);
+
+    // Now both rows hold a live identity, so the claim really is refused —
+    // and that is what the notice reports.
+    const refused = await register({
+      token,
+      wantsMachineCredential: true,
+      hostname: "third-agent",
+    });
+    expect(refused.statusCode).toBe(401);
+    const after = warn.mock.calls.filter(([, msg]) =>
+      String(msg).includes("live machine identity"),
+    );
+    expect(after.map(([, msg]) => msg)).toEqual([REFUSAL_MESSAGE, REFUSAL_MESSAGE]);
   });
 
   it("answers a refused claim exactly like an unknown token", async () => {

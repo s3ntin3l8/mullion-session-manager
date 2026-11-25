@@ -600,6 +600,9 @@ function issueSession(app: FastifyInstance, hostId: string): HostRegistration {
  * Replacing a live identity is an operator action (Re-pair, issue #3438).
  * A row WITHOUT a live identity stays claimable — it never registered, it
  * is a legacy agent that claims on every boot, or its identity expired.
+ * A skipped row is reported once per host per process — and only when the
+ * claim as a whole was refused, so a token that another row still matches is
+ * not logged as a refusal.
  */
 // Finding AS13: this used to `continue` past the rest of the loop body the
 // moment a row matched — early-exiting the loop itself (via `return` inside
@@ -644,6 +647,12 @@ export function claimHost(
     )
     .all();
   let matchedRow: HostRow | undefined;
+  // Issue #3439 — the rows this claim skipped because they hold a live
+  // machine identity. The refusal notice is emitted after the loop and only
+  // when no row could be claimed at all: a token that two rows share (one
+  // live, one not) is refused for the live row and accepted for the other,
+  // and that registration was not refused — it must not be logged as one.
+  const skippedLiveHostIds: string[] = [];
   for (const row of candidates) {
     let isMatch = false;
     try {
@@ -665,12 +674,17 @@ export function claimHost(
     // legitimately match, and a refused claim must be indistinguishable from
     // an unknown token (the same work, the same 401, no state touched).
     if (hasLiveMachineIdentity(row)) {
-      noteLiveIdentityClaimRefused(app, row.id);
+      skippedLiveHostIds.push(row.id);
       continue;
     }
     matchedRow = row;
   }
-  if (matchedRow === undefined) return null;
+  if (matchedRow === undefined) {
+    // The claim was refused: report it once per host, naming the host id
+    // only — never the token.
+    for (const hostId of skippedLiveHostIds) noteLiveIdentityClaimRefused(app, hostId);
+    return null;
+  }
   app.db
     .update(hosts)
     .set({
@@ -937,10 +951,15 @@ function issueMachineCredential(
   // instead of being 401-ed permanently. Re-pairing (noGrace) is an explicit
   // operator action that must disconnect the old agent immediately.
   //
-  // Issue #3439: a claim can no longer land on a row that holds a live
-  // identity (claimHost refuses it), so this is a safety net for any path
-  // that still issues a credential over a live one — never a takeover
-  // window.
+  // Issue #3439: since a claim refuses a row that holds a live identity, no
+  // path reaches here with a live credential any more — a claim matches only
+  // a row without a live identity, an enrollment creates a fresh row and a
+  // re-pair passes noGrace. So the grace copy and the rotation stamp below
+  // are always written empty from here, and with them the `replaced` identity
+  // event has no producer: the `replaced` rows still in the table are
+  // historic. #3507 restores the event on the re-pair path. The grace slot
+  // itself is untouched by this — a renewal rotates the credential and keeps
+  // the previous one valid (see renewMachineCredential).
   const existing = getHostRow(app, hostId);
   const prevEnc =
     !opts.noGrace && existing && hasLiveMachineIdentity(existing)
