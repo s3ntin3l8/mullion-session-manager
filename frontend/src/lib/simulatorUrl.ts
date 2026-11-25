@@ -100,6 +100,14 @@ export function simulatorDevServerRoute(
 ): SimulatorRoute {
   const url = simulatorOpenUrl(address, device, devServerHostId);
   if (url) return { kind: "direct", url };
+  // Same host but no loopback URL: the address itself is unusable, and the
+  // preview would proxy to the same unusable address.
+  if (device.hostId === devServerHostId) {
+    return {
+      kind: "unavailable",
+      reason: `The dev server's address (${address}) is not an http(s) URL`,
+    };
+  }
   return previewRoute(device.hostId, previews);
 }
 

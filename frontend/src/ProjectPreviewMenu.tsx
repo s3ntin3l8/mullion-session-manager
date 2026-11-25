@@ -185,7 +185,9 @@ function simulatorItems(
         route.kind === "preview"
           ? " (via preview)"
           : route.kind === "unavailable"
-            ? " (on another host)"
+            ? d.hostId === devServer.hostId
+              ? " (unavailable)"
+              : " (on another host)"
             : "";
       rows.push(
         simulatorRow(`simulator-${d.id}`, `Open in simulator — ${name}${suffix}`, route, () =>

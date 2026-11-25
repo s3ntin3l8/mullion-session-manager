@@ -54,6 +54,11 @@ describe("simulator route selection (#3491)", () => {
     ).toEqual({ kind: "preview" });
   });
 
+  it("same host with an unusable address: unavailable, never the preview", () => {
+    const route = simulatorDevServerRoute("ftp://localhost/x", { hostId: "mac" }, "mac", on);
+    expect(route.kind === "unavailable" && route.reason).toMatch(/not an http\(s\) URL/);
+  });
+
   it("other host, previews off: unavailable, with the reason", () => {
     const route = simulatorDevServerRoute(
       "http://localhost:3005/",
