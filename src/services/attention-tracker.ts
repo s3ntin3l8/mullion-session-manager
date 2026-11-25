@@ -395,11 +395,12 @@ export class AttentionTracker {
       | "apiError"
     >,
     extras: Record<string, unknown>,
+    now: number = Date.now(),
   ): void {
     const transition = advanceAttention(this.state, {
       type: "signal",
       kind,
-      now: Date.now(),
+      now,
     });
     this.state = transition.next;
     this.host.emitEvent("attention", { attention: true, signal: kind, ...extras });
@@ -491,9 +492,9 @@ export class AttentionTracker {
    * re-stamp-on-every-start (not just the initial idle -> busy transition)
    * precedent — the staleness sweep's silence window should reset on each
    * fresh report, not just the first. */
-  setBackgroundTasks(tasks: BackgroundTask[]): void {
+  setBackgroundTasks(tasks: BackgroundTask[], now: number = Date.now()): void {
     this.backgroundTasks = tasks;
-    this.backgroundTasksAt = filterOutstandingBackgroundTasks(tasks).length > 0 ? Date.now() : null;
+    this.backgroundTasksAt = filterOutstandingBackgroundTasks(tasks).length > 0 ? now : null;
   }
 
   /** Issue #428 — fires the deferred "turn really is over" attention ping.

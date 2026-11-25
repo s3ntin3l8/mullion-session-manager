@@ -2435,7 +2435,7 @@ export class Session {
       },
       emitEvent: (kind, payload) => self.emitEvent(kind, payload),
       emitAttentionSignalWithExtras: (kind, extras) =>
-        self.attention.emitAttentionSignalWithExtras(kind, extras),
+        self.attention.emitAttentionSignalWithExtras(kind, extras, self.hookNow),
       emitAttentionSignalDeferred: (kind, extras, alsoEmit) =>
         self.attention.emitAttentionSignalDeferred(kind, extras, alsoEmit, self.hookNow),
       cancelDeferred: (kind) => self.attention.cancelDeferred(kind),
@@ -2443,7 +2443,7 @@ export class Session {
       clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
       clearAttention: () => self.attention.clearAttention(),
       resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(),
-      setBackgroundTasks: (tasks) => self.attention.setBackgroundTasks(tasks),
+      setBackgroundTasks: (tasks) => self.attention.setBackgroundTasks(tasks, self.hookNow),
       bumpSubagentActivity: (agentId, kind) => self.bumpSubagentActivity(agentId, kind),
       recordSubagentStart: (agentId, agentType, now) =>
         self.recordSubagentStart(agentId, agentType, now),

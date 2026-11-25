@@ -78,7 +78,13 @@ export interface SessionHookContext {
   /** The clock of the emitHookEvent() call being dispatched (its `now`
    * argument, `Date.now()` by default). Handlers stamp latches (`*At`) with
    * this, never a fresh Date.now(), so a caller that pins `now` gets latch
-   * ages measured against the same clock it sweeps with. */
+   * ages measured against the same clock it sweeps with (the facade passes it
+   * on to the tracker's setBackgroundTasks/emitAttentionSignal* too).
+   *
+   * SYNCHRONOUS ONLY: emitHookEvent restores the previous clock (0 outside
+   * any dispatch) in its `finally`, so a read inside a promise or timer
+   * callback gets a stale value and a latch stamped with it is stale on
+   * sight. Capture `const now = ctx.now` before going async. */
   readonly now: number;
   readonly id: string;
   readonly cwd: string;

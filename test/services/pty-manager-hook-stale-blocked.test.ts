@@ -136,6 +136,34 @@ describe("PtyManager", () => {
         expect(session.toInfo().permissionState).toBe("idle");
       });
 
+      // Hermes review, PR #3528 — the busy tier's backgroundTasksAt is stamped
+      // by the tracker's setBackgroundTasks, reached through the facade.
+      it("stamps backgroundTasksAt with emitHookEvent's pinned now, too", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent(
+          {
+            kind: "progress",
+            phase: "done",
+            backgroundTasks: [
+              { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+            ],
+          },
+          now,
+        );
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(0);
+      });
+
       it("fix: sticky needs_input (D4) — the stale sweep does NOT drop a hookNotification-confirmed flag with no dedicated latch behind it (deliberately left to keystroke/notification_resolved only)", async () => {
         const session = manager.getOrCreate({
           id: "1",
