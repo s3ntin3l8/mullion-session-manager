@@ -1,3 +1,4 @@
+import type * as HostCapabilities from "../../src/services/host-capabilities.js";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { DetectedAgent } from "../../src/services/agent-detect.js";
@@ -6,7 +7,8 @@ import type { DetectedAgent } from "../../src/services/agent-detect.js";
 // network), the way test/services/agent-detect.test.ts stubs child_process.
 const getCachedAgents = vi.fn();
 const getCachedCapabilities = vi.fn();
-vi.mock("../../src/services/host-capabilities.js", () => ({
+vi.mock("../../src/services/host-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof HostCapabilities>()),
   warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
 }));
