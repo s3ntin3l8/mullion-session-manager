@@ -1107,6 +1107,10 @@ export function revokeMachineIdentity(
 
 const IDENTITY_REPLACEMENT_WINDOW_MS = 30 * 86_400_000;
 const IDENTITY_EVENTS_MAX = 100;
+// Null-host events (pre-host `code_minted` audit rows) are shared fleet-wide
+// rather than per-host, so a single automation run over >100 hosts would evict
+// its own audit trail under the per-host 100 cap.
+const NULL_HOST_IDENTITY_EVENTS_MAX = 1000;
 
 export interface HostIdentityEventSummary {
   id: number;
@@ -1145,7 +1149,7 @@ export function recordHostIdentityEvent(
       .from(hostIdentityEvents)
       .where(isNull(hostIdentityEvents.hostId))
       .orderBy(desc(hostIdentityEvents.at), desc(hostIdentityEvents.id))
-      .limit(IDENTITY_EVENTS_MAX);
+      .limit(NULL_HOST_IDENTITY_EVENTS_MAX);
     app.db
       .delete(hostIdentityEvents)
       .where(

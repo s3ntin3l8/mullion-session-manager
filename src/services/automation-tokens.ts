@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
-import { automationTokens } from "../db/schema.js";
+import { automationTokens, hostPairings } from "../db/schema.js";
 import { AUTOMATION_TOKEN_SCOPES, type AutomationTokenScope } from "../shared/constants.js";
 import type {
   AutomationTokenCreated,
@@ -118,13 +118,29 @@ export function listAutomationTokens(app: FastifyInstance): AutomationTokenSumma
 }
 
 export function revokeAutomationToken(app: FastifyInstance, id: string): boolean {
-  const updated = app.db
-    .update(automationTokens)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(automationTokens.id, id), isNull(automationTokens.revokedAt)))
-    .returning({ id: automationTokens.id })
-    .all();
-  return updated.length > 0;
+  const now = new Date();
+  return app.db.transaction((tx) => {
+    const updated = tx
+      .update(automationTokens)
+      .set({ revokedAt: now })
+      .where(and(eq(automationTokens.id, id), isNull(automationTokens.revokedAt)))
+      .returning({ id: automationTokens.id })
+      .all();
+    if (updated.length === 0) return false;
+    // Invalidate any pending pairing codes minted by this token so a leaked
+    // token's already-minted codes cannot still enroll or re-pair a host.
+    tx.update(hostPairings)
+      .set({ revokedAt: now, codeHash: null })
+      .where(
+        and(
+          eq(hostPairings.mintedByTokenId, id),
+          isNull(hostPairings.redeemedAt),
+          isNull(hostPairings.revokedAt),
+        ),
+      )
+      .run();
+    return true;
+  });
 }
 
 /**
@@ -141,9 +157,8 @@ export function extractAutomationBearer(authorizationHeader: string | undefined)
 /**
  * Looks up a live (unrevoked, unexpired) automation token by its plaintext
  * `mat_...` secret. The token is 256 random bits, so its SHA-256 hash is
- * uniformly distributed and an indexed hash lookup reveals no secret prefix;
- * `timingSafeTokenMatch` is still applied to the matched hash as defense in
- * depth. Returns null for malformed, unknown, revoked, or expired tokens.
+ * uniformly distributed and an indexed hash lookup reveals no secret prefix.
+ * Returns null for malformed, unknown, revoked, or expired tokens.
  */
 export function findLiveAutomationTokenBySecret(
   app: FastifyInstance,

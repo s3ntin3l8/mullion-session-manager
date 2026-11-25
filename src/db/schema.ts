@@ -192,7 +192,8 @@ export const hostIdentityEvents = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     // Nullable for pre-host events such as `code_minted` without a target
-    // hostId (issue #3440).
+    // hostId (issue #3440). Null-host rows are audit-only in SQLite (not
+    // returned by GET /api/hosts/:id/identity-events) and capped globally.
     hostId: text("host_id").references(() => hosts.id, { onDelete: "cascade" }),
     kind: text("kind", { enum: HOST_IDENTITY_EVENT_KINDS }).notNull(),
     at: integer("at", { mode: "timestamp" })

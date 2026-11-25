@@ -149,6 +149,7 @@ export interface HostPairingSummary {
   expires_at: string;
   created_at: string;
   host_id: string | null;
+  minted_by_token_id: string | null;
 }
 
 // GET/POST /api/automation-tokens (src/routes/automation-tokens.ts, issue #3440)

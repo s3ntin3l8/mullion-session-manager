@@ -277,10 +277,13 @@ credential, token, or code):
 - `replaced` — a registration replaced an already-live machine identity (moving the prior credential to the grace slot).
 - `revoked` — an operator revoked the host's machine identity (`POST /api/hosts/:id/revoke`).
 - `token_rotated` — an operator rotated the host's per-host token (`POST /api/hosts/:id/rotate-token`).
+- `code_minted` — an automation token minted a one-off pairing code on `POST /api/host-pairings` (`hostId` is `null` for `enroll` mints and set for `repair` mints; records the token label and raw TCP peer, never the token or code).
 
 Normal machine-credential renewals write no event. `host_identity_events` retains at
 most the newest 100 rows per host (older rows are deleted as new events arrive, except
-unacknowledged `replaced` events which are preserved until acknowledged), and
+unacknowledged `replaced` events which are preserved until acknowledged), while
+null-host `code_minted` rows are retained in SQLite up to the newest 1,000 rows
+globally as an audit log (not exposed by `GET /api/hosts/:id/identity-events`), and
 `GET /api/hosts/:id/identity-events` caps its response at the newest 100 events. When a
 host has an unacknowledged `replaced` event within the last 30 days (queried via the
 `(acknowledged_at, kind, at)` index), `GET /api/hosts` includes

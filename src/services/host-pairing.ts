@@ -46,6 +46,7 @@ export interface HostPairingRecord {
   expiresAt: Date;
   createdAt: Date;
   hostId: string | null;
+  mintedByTokenId: string | null;
 }
 
 export type PairingRow = typeof hostPairings.$inferSelect;
@@ -132,6 +133,7 @@ export function listHostPairings(app: FastifyInstance): HostPairingRecord[] {
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
       hostId: row.redeemedHostId ?? row.targetHostId,
+      mintedByTokenId: row.mintedByTokenId,
     }));
 }
 

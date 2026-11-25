@@ -7,6 +7,7 @@ import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { automationTokens, hostIdentityEvents, hostPairings, hosts } from "../../src/db/schema.js";
+import { recordHostIdentityEvent } from "../../src/services/host-registry.js";
 
 // Issue #3440 — automation tokens that mint one-off pairing codes.
 const tmpDb = path.join(os.tmpdir(), `automation-tokens-test-${process.pid}.db`);
@@ -381,5 +382,92 @@ describe("automation tokens (issue #3440)", () => {
       payload: { label: "too-long", scopes: ["enroll"], expiresInDays: 366 },
     });
     expect(overMaxDays.statusCode).toBe(400);
+  });
+
+  it("revoking an automation token also revokes pending pairing codes it minted and exposes minted_by_token_id", async () => {
+    const tok = await createToken({ label: "leaked-tok", scopes: ["enroll"] });
+
+    const redeemedMint = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      headers: {
+        host: "primary.test:4000",
+        authorization: `Bearer ${tok.token}`,
+      },
+      payload: { label: "already-redeemed" },
+    });
+    expect(redeemedMint.statusCode).toBe(200);
+    const redeemedCode = (redeemedMint.json() as { code: string }).code;
+
+    const pairRes = await app.inject({
+      method: "POST",
+      url: "/api/internal/pair",
+      payload: {
+        code: redeemedCode,
+        requestId: "req-already-paired-1",
+        hostname: "host-already-paired",
+      },
+    });
+    expect(pairRes.statusCode).toBe(200);
+
+    const pendingMint = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      headers: {
+        host: "primary.test:4000",
+        authorization: `Bearer ${tok.token}`,
+      },
+      payload: { label: "still-pending" },
+    });
+    expect(pendingMint.statusCode).toBe(200);
+    const pendingBody = pendingMint.json() as { id: string; code: string };
+
+    const revokeRes = await app.inject({
+      method: "DELETE",
+      url: `/api/automation-tokens/${tok.id}`,
+      headers: operatorHeaders,
+    });
+    expect(revokeRes.statusCode).toBe(204);
+
+    // The pending code minted before revocation can no longer be redeemed.
+    const latePair = await app.inject({
+      method: "POST",
+      url: "/api/internal/pair",
+      payload: {
+        code: pendingBody.code,
+        requestId: "req-after-token-revoke-1",
+        hostname: "host-after-revoke",
+      },
+    });
+    expect(latePair.statusCode).toBe(401);
+
+    // GET /api/host-pairings exposes minted_by_token_id and shows the pending
+    // code as revoked while leaving the already-redeemed code as paired.
+    const listPairingsRes = await app.inject({
+      method: "GET",
+      url: "/api/host-pairings",
+      headers: operatorHeaders,
+    });
+    expect(listPairingsRes.statusCode).toBe(200);
+    const pairings = listPairingsRes.json() as Array<{
+      id: string;
+      label: string | null;
+      state: string;
+      minted_by_token_id: string | null;
+    }>;
+    const pendingRow = pairings.find((p) => p.id === pendingBody.id);
+    const redeemedRow = pairings.find(
+      (p) => p.label === "already-redeemed" || p.state === "paired",
+    );
+    expect(pendingRow).toMatchObject({ state: "revoked", minted_by_token_id: tok.id });
+    expect(redeemedRow).toMatchObject({ state: "paired", minted_by_token_id: tok.id });
+  });
+
+  it("retains >100 fleet-wide null-host code_minted audit events without dropping early rows", () => {
+    for (let i = 0; i < 120; i++) {
+      recordHostIdentityEvent(app, null, "code_minted", "10.0.0.5", "bulk-ansible");
+    }
+    const rows = app.db.select().from(hostIdentityEvents).all();
+    expect(rows.filter((r) => r.kind === "code_minted" && r.hostId === null)).toHaveLength(120);
   });
 });

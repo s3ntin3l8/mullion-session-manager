@@ -210,6 +210,7 @@ export async function hostPairingRoute(app: FastifyInstance) {
       expires_at: p.expiresAt.toISOString(),
       created_at: p.createdAt.toISOString(),
       host_id: p.hostId,
+      minted_by_token_id: p.mintedByTokenId,
     })),
   );
 
