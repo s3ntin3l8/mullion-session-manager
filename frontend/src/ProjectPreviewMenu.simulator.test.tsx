@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "./api/index.js";
-import type { Device } from "./api/index.js";
+import type { Device, NamedPreviewTarget, Preview, ServerInfo } from "./api/index.js";
 import { ProjectPreviewMenu } from "./ProjectPreviewMenu.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeProject, makeSession } from "./test/fixtures.js";
@@ -49,8 +49,29 @@ function destinations(hostId: string) {
   };
 }
 
-async function openMenu(devices: Device[], stubApi = true, devServerHost = "local") {
+const PREVIEWS_OFF = { previewsEnabled: false, previewBaseHost: "", previewAuthRequired: false };
+const PREVIEWS_ON = {
+  previewsEnabled: true,
+  previewBaseHost: "mullion.example.com",
+  previewAuthRequired: false,
+};
+
+const STAGING: NamedPreviewTarget = {
+  id: "t1",
+  name: "Staging",
+  destination: "https://staging.example",
+  connectionOrigin: "project",
+};
+
+async function openMenu(
+  devices: Device[],
+  stubApi = true,
+  devServerHost = "local",
+  previews: Partial<ServerInfo> = PREVIEWS_OFF,
+  targets: NamedPreviewTarget[] = [],
+) {
   vi.spyOn(api, "getBrowserDestinations").mockResolvedValue(destinations(devServerHost));
+  vi.spyOn(api, "getServerInfo").mockResolvedValue(previews as ServerInfo);
   if (stubApi) vi.spyOn(api, "openUrlOnDevice").mockResolvedValue({ ok: true });
   resetStore({
     projects: [makeProject({ id: 1, hostId: "local", devServerUrl: "3005" })],
@@ -58,13 +79,14 @@ async function openMenu(devices: Device[], stubApi = true, devServerHost = "loca
   });
   vi.spyOn(api, "getProjectPreviewTargets").mockResolvedValue({
     devServerUrl: "3005",
-    targets: [],
+    targets,
   });
   const user = userEvent.setup();
   render(<ProjectPreviewMenu projectId={1} onOpenDefault={vi.fn()} onManage={vi.fn()} />);
   await waitFor(() => expect(useDashboardStore.getState().projectPreviewConfigs[1]).toBeTruthy());
   if (devices.some((d) => d.platform === "ios" && d.status === "active" && d.live)) {
     await waitFor(() => expect(api.getBrowserDestinations).toHaveBeenCalled());
+    await waitFor(() => expect(api.getServerInfo).toHaveBeenCalled());
   }
   await user.click(screen.getByRole("button", { name: "Preview" }));
   return user;
@@ -79,27 +101,107 @@ describe("Preview menu: Open in simulator", () => {
     expect(api.openUrlOnDevice).toHaveBeenCalledWith(7, "http://127.0.0.1:3005/");
   });
 
-  it("lists a simulator on another host disabled and never calls the API", async () => {
+  it("lists a simulator on another host disabled, with the reason, when previews are off", async () => {
     const user = await openMenu([sim({ hostId: "mac-1" })]);
-    const item = screen.getByRole("menuitem", {
+    const item = await screen.findByRole("menuitem", {
       name: "Open in simulator — iPhone 16 (on another host)",
     });
     expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item.getAttribute("title")).toMatch(/Previews are not enabled/);
     await user.click(item);
+    expect(api.openUrlOnDevice).not.toHaveBeenCalled();
+  });
+
+  it("opens the dev server's preview URL in a simulator on another host", async () => {
+    vi.spyOn(api, "createProjectPreview").mockResolvedValue({ slug: "abc" } as Preview);
+    vi.spyOn(api, "mintPreviewToken");
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON);
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in simulator — iPhone 16 (via preview)" }),
+    );
+    await waitFor(() =>
+      expect(api.openUrlOnDevice).toHaveBeenCalledWith(
+        7,
+        `${window.location.protocol}//preview-abc.mullion.example.com/`,
+      ),
+    );
+    expect(api.createProjectPreview).toHaveBeenCalledWith(1);
+    // Preview auth off: no token is minted or appended.
+    expect(api.mintPreviewToken).not.toHaveBeenCalled();
+  });
+
+  it("appends a freshly minted bootstrap token when preview auth is required", async () => {
+    vi.spyOn(api, "createProjectPreview").mockResolvedValue({ slug: "abc" } as Preview);
+    vi.spyOn(api, "mintPreviewToken").mockResolvedValue({ token: "t/k+n" });
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", {
+      ...PREVIEWS_ON,
+      previewAuthRequired: true,
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in simulator — iPhone 16 (via preview)" }),
+    );
+    await waitFor(() =>
+      expect(api.openUrlOnDevice).toHaveBeenCalledWith(
+        7,
+        `${window.location.protocol}//preview-abc.mullion.example.com/?__mullion_preview=t%2Fk%2Bn`,
+      ),
+    );
+    expect(api.mintPreviewToken).toHaveBeenCalledWith("abc");
+  });
+
+  it("opens a named preview target through its preview, even on the dev server's host", async () => {
+    vi.spyOn(api, "createTargetPreview").mockResolvedValue({ slug: "tgt" } as Preview);
+    const user = await openMenu([sim({})], true, "local", PREVIEWS_ON, [
+      {
+        id: "t1",
+        name: "Staging",
+        destination: "https://staging.example",
+        connectionOrigin: "project",
+      },
+    ]);
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
+    );
+    await waitFor(() =>
+      expect(api.openUrlOnDevice).toHaveBeenCalledWith(
+        7,
+        `${window.location.protocol}//preview-tgt.mullion.example.com/`,
+      ),
+    );
+    expect(api.createTargetPreview).toHaveBeenCalledWith(1, "t1");
+  });
+
+  it("lists a named target disabled, with the reason, when previews are off", async () => {
+    vi.spyOn(api, "createTargetPreview");
+    const user = await openMenu([sim({})], true, "local", PREVIEWS_OFF, [
+      {
+        id: "t1",
+        name: "Staging",
+        destination: "https://staging.example",
+        connectionOrigin: "project",
+      },
+    ]);
+    const item = await screen.findByRole("menuitem", {
+      name: "Open Staging in simulator — iPhone 16 (unavailable)",
+    });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+    expect(item.getAttribute("title")).toMatch(/Previews are not enabled/);
+    await user.click(item);
+    expect(api.createTargetPreview).not.toHaveBeenCalled();
     expect(api.openUrlOnDevice).not.toHaveBeenCalled();
   });
 
   it("follows the dev server's own host, not the project's", async () => {
     // The project is on "local" but its dock control runs on mac-1.
+    vi.spyOn(api, "createProjectPreview");
     const user = await openMenu(
       [sim({ hostId: "mac-1" }), sim({ id: 8, name: "Local sim" })],
       true,
       "mac-1",
     );
-    expect(screen.getByRole("menuitem", { name: /Local sim .*another host/ })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(
+      await screen.findByRole("menuitem", { name: /Local sim .*another host/ }),
+    ).toHaveAttribute("aria-disabled", "true");
     await user.click(screen.getByRole("menuitem", { name: "Open in simulator — iPhone 16" }));
     expect(api.openUrlOnDevice).toHaveBeenCalledWith(7, "http://127.0.0.1:3005/");
   });
@@ -120,6 +222,85 @@ describe("Preview menu: Open in simulator", () => {
       sessions: [makeSession({ id: 91, projectId: 1, kind: "dock", status: "active" })],
     });
     await waitFor(() => expect(api.getBrowserDestinations).toHaveBeenCalledTimes(2));
+  });
+
+  it("reports a failed preview read as such, not as previews off, and retries it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.spyOn(api, "getBrowserDestinations").mockResolvedValue(destinations("local"));
+      const info = vi
+        .spyOn(api, "getServerInfo")
+        .mockRejectedValueOnce(new Error("rate limited"))
+        .mockResolvedValue(PREVIEWS_ON as ServerInfo);
+      resetStore({
+        projects: [makeProject({ id: 1, hostId: "local", devServerUrl: "3005" })],
+        devices: [sim({ hostId: "mac-1" })],
+      });
+      vi.spyOn(api, "getProjectPreviewTargets").mockResolvedValue({
+        devServerUrl: "3005",
+        targets: [STAGING],
+      });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<ProjectPreviewMenu projectId={1} onOpenDefault={vi.fn()} onManage={vi.fn()} />);
+      await waitFor(() => expect(info).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole("button", { name: "Preview" }));
+      const row = await screen.findByRole("menuitem", {
+        name: "Open Staging in simulator — iPhone 16 (unavailable)",
+      });
+      expect(row.getAttribute("title")).toMatch(/Could not read the server's preview settings/);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await waitFor(() => expect(info).toHaveBeenCalledTimes(2));
+      expect(
+        await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
+      ).not.toHaveAttribute("aria-disabled", "true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens a named target from a simulator on another host", async () => {
+    vi.spyOn(api, "createTargetPreview").mockResolvedValue({ slug: "tgt" } as Preview);
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON, [STAGING]);
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
+    );
+    await waitFor(() =>
+      expect(api.openUrlOnDevice).toHaveBeenCalledWith(
+        7,
+        `${window.location.protocol}//preview-tgt.mullion.example.com/`,
+      ),
+    );
+  });
+
+  it("lists a simulator on another host disabled when the preview host is loopback", async () => {
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", {
+      ...PREVIEWS_ON,
+      previewBaseHost: "localhost:3000",
+    });
+    const item = await screen.findByRole("menuitem", {
+      name: "Open in simulator — iPhone 16 (on another host)",
+    });
+    expect(item.getAttribute("title")).toMatch(/loopback/);
+    await user.click(item);
+    expect(api.openUrlOnDevice).not.toHaveBeenCalled();
+  });
+
+  it("reports a preview that could not be created", async () => {
+    const { fetchMock } = mockFetch({
+      "POST /api/previews": () => jsonResponse(409, { message: "no dev server" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const reportError = vi.fn(() => 1);
+    const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON);
+    useDashboardStore.setState({ reportError });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in simulator — iPhone 16 (via preview)" }),
+    );
+    await waitFor(() =>
+      expect(reportError).toHaveBeenCalledWith("Could not open in simulator", "no dev server"),
+    );
+    expect(api.openUrlOnDevice).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 
   it("reports a failed open instead of swallowing it", async () => {

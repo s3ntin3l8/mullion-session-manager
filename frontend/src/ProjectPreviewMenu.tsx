@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "./api/index.js";
-import type { Device, ProjectPreviewConfig } from "./api/index.js";
-import { simulatorOpenUrl } from "./lib/simulatorUrl.js";
+import type { Device, NamedPreviewTarget, ProjectPreviewConfig, ServerInfo } from "./api/index.js";
+import { buildPreviewSrc, mintPreviewTokenIfRequired } from "./lib/previewSrc.js";
+import { simulatorDevServerRoute, simulatorTargetRoute } from "./lib/simulatorUrl.js";
+import type { SimulatorRoute } from "./lib/simulatorUrl.js";
 import { useDashboardStore } from "./store/index.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
 import type { KebabMenuItem } from "./ui/KebabMenu.js";
@@ -50,7 +52,7 @@ function useDevServerDestination(
   devices: Device[],
   devServerUrl: string | null | undefined,
 ): { address: string; hostId: string } | null {
-  const hasSimulator = devices.some((d) => d.platform === "ios" && d.status === "active" && d.live);
+  const hasSimulator = devices.some(isRunningSimulator);
   const [found, setFound] = useState<{ key: string; address: string; hostId: string } | null>(null);
   // The dev-server host follows the running Dock control, so starting or
   // stopping one re-resolves it. A primitive, so it only changes with the set.
@@ -81,40 +83,133 @@ function useDevServerDestination(
   return found && found.key === key ? found : null;
 }
 
-/** One "Open in simulator" row per running iOS Simulator, for the project's
- * dev server. Manual only; a simulator that cannot reach the URL is listed
- * disabled with the reason, not hidden. */
+function isRunningSimulator(d: Device): boolean {
+  return d.platform === "ios" && d.status === "active" && d.live != null;
+}
+
+/** How long a failed server-info read waits before it is retried. */
+const SERVER_INFO_RETRY_MS = 10_000;
+
+/** The preview proxy's settings, fetched once a running iOS Simulator exists:
+ * a simulator that cannot reach the dev server's loopback, and every named
+ * target, open through the Mullion preview URL. "loading" until the first
+ * answer; a failed read reports "failed" (not "previews off") and is retried. */
+function usePreviewServerInfo(devices: Device[]): ServerInfo | "loading" | "failed" {
+  const hasSimulator = devices.some(isRunningSimulator);
+  const [info, setInfo] = useState<ServerInfo | "loading" | "failed">("loading");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!hasSimulator) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    void api
+      .getServerInfo()
+      .then((res) => {
+        if (!cancelled) setInfo(res);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setInfo("failed");
+        retry = setTimeout(() => setAttempt((n) => n + 1), SERVER_INFO_RETRY_MS);
+      });
+    return () => {
+      cancelled = true;
+      if (retry) clearTimeout(retry);
+    };
+  }, [hasSimulator, attempt]);
+  return info;
+}
+
+/** Hands a simulator the entry's Mullion preview URL. With preview auth on it
+ * carries a fresh 60-second bootstrap token, minted at click time: the
+ * simulator's Safari has no dashboard session, and the proxy trades the token
+ * for its own preview cookie on that first load (docs/device-panel.md). */
+async function openPreviewInSimulator(
+  projectId: number,
+  deviceId: number,
+  targetId: string | null,
+  info: ServerInfo | "loading" | "failed",
+): Promise<void> {
+  // A "preview" route is only offered once the info is known; never reached.
+  if (typeof info === "string") throw new Error("Previews are not enabled on this server");
+  const { slug } =
+    targetId === null
+      ? await api.createProjectPreview(projectId)
+      : await api.createTargetPreview(projectId, targetId);
+  const token = await mintPreviewTokenIfRequired(info, slug);
+  const url = buildPreviewSrc(window.location.protocol, slug, info.previewBaseHost, token);
+  await api.openUrlOnDevice(deviceId, url);
+}
+
+function simulatorRow(
+  key: string,
+  label: string,
+  route: SimulatorRoute,
+  open: () => Promise<unknown>,
+): KebabMenuItem {
+  if (route.kind === "unavailable") {
+    return { key, label, disabled: true, title: route.reason, onClick: () => {} };
+  }
+  return {
+    key,
+    label,
+    onClick: () => {
+      void open().catch((err: unknown) =>
+        useDashboardStore
+          .getState()
+          .reportError(
+            "Could not open in simulator",
+            err instanceof Error ? err.message : String(err),
+          ),
+      );
+    },
+  };
+}
+
+/** "Open in simulator" rows per running iOS Simulator: the project's dev
+ * server, then each named preview target. Manual only; a row the simulator
+ * cannot open is listed disabled with the reason, not hidden. */
 function simulatorItems(
+  projectId: number,
   devServer: { address: string; hostId: string } | null,
+  targets: NamedPreviewTarget[],
   devices: Device[],
+  info: ServerInfo | "loading" | "failed",
 ): KebabMenuItem[] {
-  if (!devServer) return [];
-  return devices
-    .filter((d) => d.platform === "ios" && d.status === "active" && d.live)
-    .map((d) => {
-      const url = simulatorOpenUrl(devServer.address, d, devServer.hostId);
-      const name = d.name ?? `Simulator ${d.id}`;
-      return {
-        key: `simulator-${d.id}`,
-        label: url
-          ? `Open in simulator — ${name}`
-          : `Open in simulator — ${name} (on another host)`,
-        disabled: url === null,
-        onClick: () => {
-          if (!url) return;
-          void api
-            .openUrlOnDevice(d.id, url)
-            .catch((err: unknown) =>
-              useDashboardStore
-                .getState()
-                .reportError(
-                  "Could not open in simulator",
-                  err instanceof Error ? err.message : String(err),
-                ),
-            );
-        },
-      };
-    });
+  return devices.filter(isRunningSimulator).flatMap((d) => {
+    const name = d.name ?? `Simulator ${d.id}`;
+    const rows: KebabMenuItem[] = [];
+    if (devServer) {
+      const route = simulatorDevServerRoute(devServer.address, d, devServer.hostId, info);
+      const suffix =
+        route.kind === "preview"
+          ? " (via preview)"
+          : route.kind === "unavailable"
+            ? d.hostId === devServer.hostId
+              ? " (unavailable)"
+              : " (on another host)"
+            : "";
+      rows.push(
+        simulatorRow(`simulator-${d.id}`, `Open in simulator — ${name}${suffix}`, route, () =>
+          route.kind === "direct"
+            ? api.openUrlOnDevice(d.id, route.url)
+            : openPreviewInSimulator(projectId, d.id, null, info),
+        ),
+      );
+    }
+    for (const target of targets) {
+      const route = simulatorTargetRoute(d, info);
+      rows.push(
+        simulatorRow(
+          `simulator-${d.id}-${target.id}`,
+          `Open ${target.name} in simulator — ${name}${route.kind === "unavailable" ? " (unavailable)" : ""}`,
+          route,
+          () => openPreviewInSimulator(projectId, d.id, target.id, info),
+        ),
+      );
+    }
+    return rows;
+  });
 }
 
 function choices(
@@ -178,9 +273,10 @@ export function ProjectPreviewMenu({
   const { config, error, retry } = usePreviewConfig(projectId);
   const devices = useDashboardStore((s) => s.devices);
   const devServer = useDevServerDestination(projectId, devices, config?.devServerUrl);
+  const serverInfo = usePreviewServerInfo(devices);
   const items = [
     ...choices(projectId, config, onOpenDefault),
-    ...simulatorItems(devServer, devices),
+    ...simulatorItems(projectId, devServer, config?.targets ?? [], devices, serverInfo),
   ];
   if (!config)
     items.push({
