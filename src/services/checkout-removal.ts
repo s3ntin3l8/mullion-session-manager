@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type {
   ClearOrphanedTaskWorktreeResult,
+  ClearStalePreviewWorktreeResult,
   PruneWorktreesResult,
   RemoveIfCleanResult,
   RemoveListedWorktreeResult,
 } from "./git-worktree.js";
+import { clearHostStalePreviewWorktree, type HostGitResult } from "./host-git.js";
 import { resolveBackend } from "./session-backend.js";
 import { closeCheckoutBrowsers } from "./session-browsers.js";
 
@@ -60,6 +62,23 @@ export async function removeCheckoutForced(
   );
   if (removed) await releaseBrowsers(app, ref);
   return removed;
+}
+
+/** A branch preview's leftover dock-preview worktree, cleared on the host
+ * that owns the checkout (issue #3428) so it can be recut; `parentCwd` is the
+ * project checkout it belongs to. Its browsers go when it was removed. */
+export async function clearStalePreviewCheckout(
+  app: FastifyInstance,
+  ref: CheckoutRemovalRef & { parentCwd: string },
+): Promise<HostGitResult<ClearStalePreviewWorktreeResult>> {
+  const result = await clearHostStalePreviewWorktree(
+    app,
+    ref.hostId,
+    ref.parentCwd,
+    ref.worktreePath,
+  );
+  if (result.ok && result.value.outcome === "removed") await releaseBrowsers(app, ref);
+  return result;
 }
 
 /** A listed worktree removed through `removeListedWorktree` (the reclaim and

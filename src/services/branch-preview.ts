@@ -1,18 +1,16 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
-import fs from "node:fs";
-import net from "node:net";
-import path from "node:path";
 import { and, eq, ne } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
-import { LOCAL_HOST_ID } from "./host-registry.js";
 import {
   deletePreviewWorktree,
   dockPreviewWorktreePath,
-  ensureLocalBranch,
   findPreviewWorktreeSessionId,
+  previewWorktreePathWithin as worktreePathWithin,
 } from "./git-worktree.js";
-import { removeCheckoutForced } from "./checkout-removal.js";
+import { clearStalePreviewCheckout } from "./checkout-removal.js";
+import { configuredControls } from "./dock-control.js";
+import { allocateHostPreviewPort, ensureHostBranch, type HostGitResult } from "./host-git.js";
 import {
   bindBranchPreview,
   findBranchPreview,
@@ -21,7 +19,6 @@ import {
   upsertBranchPreview,
   type PreviewSummary,
 } from "./preview-registry.js";
-import { resolveProjectDock } from "./project-config.js";
 import { resolveBackend } from "./session-backend.js";
 import { createSessionRecord } from "./session-lifecycle.js";
 import { resolveSessionHostId } from "./session-live-info.js";
@@ -42,32 +39,46 @@ import { getStoredSettings } from "./settings.js";
  * session is checked against the host's live state (the session-model
  * invariant: the DB row records intent, liveness lives on the host).
  *
- * Local-host projects only. A remote host would need its own port allocator
- * (and the proxy to reach the bound port through the owning agent); until
- * then a remote project gets a 409 `remote_unsupported`.
+ * A branch preview runs on the project's own host (#3428): its checkout is
+ * where the branch is fetched, the worktree is cut and the dev server binds
+ * its port, so the session is targeted there rather than placed. For a
+ * remote project each step that touches the checkout or picks a port runs on
+ * its agent (`host-git.ts`: `/internal/git-ensure-branch`,
+ * `/internal/worktree-clear-stale`, `/internal/preview-port`), while what only
+ * the primary knows stays here: which sessions occupy a worktree, and which
+ * ports are bound or reserved on that host. The preview proxy already reaches
+ * the bound port through the session's host (`preview-upstream.ts`).
  */
 
 export type BranchPreviewErrorCode =
   | "unknown_project"
-  | "remote_unsupported"
   | "no_preview_control"
   | "unknown_branch"
   | "invalid_branch"
   | "worktree_busy"
-  | "start_failed";
+  | "start_failed"
+  // #3428 — the project's host runs an agent build without the branch-preview
+  // routes: updating it fixes this, retrying does not.
+  | "host_unsupported"
+  // #3428 — the project's host could not be reached (or was busy, or lost the
+  // connection mid-request): retryable.
+  | "host_unavailable";
 
-const STATUS: Record<BranchPreviewErrorCode, 400 | 404 | 409 | 502> = {
+type BranchPreviewStatus = 400 | 404 | 409 | 502 | 503;
+
+const STATUS: Record<BranchPreviewErrorCode, BranchPreviewStatus> = {
   unknown_project: 404,
-  remote_unsupported: 409,
   no_preview_control: 409,
   unknown_branch: 404,
   invalid_branch: 400,
   worktree_busy: 409,
   start_failed: 502,
+  host_unsupported: 409,
+  host_unavailable: 503,
 };
 
 export class BranchPreviewError extends Error {
-  readonly statusCode: 400 | 404 | 409 | 502;
+  readonly statusCode: BranchPreviewStatus;
   constructor(
     readonly code: BranchPreviewErrorCode,
     message: string,
@@ -118,66 +129,54 @@ async function isServing(app: FastifyInstance, sessionId: number): Promise<boole
   }
 }
 
-/** A free loopback port no other branch preview holds. The OS picks it
- * (listen on 0), so it is free at the time of asking; the dev server binds it
- * moments later. */
-export async function allocatePreviewPort(taken: ReadonlySet<number>): Promise<number> {
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const port = await new Promise<number>((resolve, reject) => {
-      const server = net.createServer();
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        const chosen = typeof address === "object" && address ? address.port : 0;
-        server.close(() => resolve(chosen));
-      });
-    });
-    if (port > 0 && !taken.has(port)) return port;
-  }
-  throw new Error("no free port for a branch preview");
-}
+export { allocatePreviewPort } from "./preview-port.js";
+
+const INVALID_WORKTREE_MESSAGE = "That branch name can't name a preview worktree";
 
 /**
- * The branch's `dock-preview-*` worktree path, resolved and held to
- * `<projectCwd>/.mullion-worktrees`. The name is derived from the request's
- * branch: `dockPreviewWorktreePath` sanitizes it, but the path is checked
- * again here, before any filesystem or git call touches it, so a name that
- * slipped past the sanitizer can never reach outside the worktree root.
+ * The branch's `dock-preview-*` worktree path, held to
+ * `<projectCwd>/.mullion-worktrees` (git-worktree.ts's guard, which the
+ * owning agent runs again for a remote checkout). Throws `invalid_branch`
+ * for anything else.
  */
 export function previewWorktreePathWithin(projectCwd: string, candidate: string): string {
-  const base = path.resolve(projectCwd, ".mullion-worktrees");
-  const resolved = path.resolve(base, candidate);
-  const relative = path.relative(base, resolved);
-  if (
-    !relative ||
-    relative.startsWith("..") ||
-    path.isAbsolute(relative) ||
-    !resolved.startsWith(base + path.sep)
-  ) {
-    throw new BranchPreviewError(
-      "invalid_branch",
-      "That branch name can't name a preview worktree",
-    );
-  }
+  const resolved = worktreePathWithin(projectCwd, candidate);
+  if (resolved === null) throw new BranchPreviewError("invalid_branch", INVALID_WORKTREE_MESSAGE);
   return resolved;
 }
 
+/** A host-side step that could not run, as the refusal a caller surfaces: an
+ * agent build without the route is `host_unsupported` (its detail carries the
+ * update hint); anything else, including a mutation whose outcome is unknown,
+ * is `host_unavailable` — never retried here, the next request re-runs it. */
+function hostFailure(
+  result: Exclude<HostGitResult<unknown>, { ok: true }>,
+  what: string,
+): BranchPreviewError {
+  return new BranchPreviewError(
+    result.reason === "unsupported" ? "host_unsupported" : "host_unavailable",
+    `Could not ${what} on the project's host: ${result.detail}`,
+  );
+}
+
 /**
- * A `dock-preview-*` directory for the branch already exists. If a live
- * session still runs in it — a dock monitor started on the same branch from
- * the dock — it is that session's, and starting a second dev server in it is
- * refused. Otherwise it is what a dead preview session left behind:
- * `git worktree add` would refuse the existing path, so it is removed first
- * and recut fresh from the branch's current tip.
+ * Makes way for the branch's `dock-preview-*` worktree. If a live session
+ * still runs in it — a dock monitor started on the same branch from the dock
+ * — it is that session's, and starting a second dev server in it is refused.
+ * Otherwise anything on disk there is what a dead preview session left
+ * behind: `git worktree add` would refuse the existing path, so it is removed
+ * on the checkout's host and recut fresh from the branch's current tip. The
+ * occupancy check comes first and always runs, because only the owning host
+ * can see whether the directory exists.
  */
 async function clearStaleWorktree(
   app: FastifyInstance,
   projectId: number,
+  hostId: string,
   projectCwd: string,
   candidate: string,
 ): Promise<void> {
   const worktreePath = previewWorktreePathWithin(projectCwd, candidate);
-  if (!fs.existsSync(worktreePath)) return;
   const occupants = app.db
     .select({ id: sessions.id })
     .from(sessions)
@@ -202,19 +201,39 @@ async function clearStaleWorktree(
   // this same path again — from under the new session about to be cut there.
   const tracked = findPreviewWorktreeSessionId(worktreePath);
   if (tracked !== undefined) deletePreviewWorktree(tracked);
-  if (
-    !(await removeCheckoutForced(app, {
-      projectId,
-      hostId: LOCAL_HOST_ID,
-      worktreePath,
-      parentCwd: projectCwd,
-    }))
-  ) {
-    throw new BranchPreviewError(
-      "worktree_busy",
-      "a stale preview worktree for this branch could not be removed",
-    );
+  const cleared = await clearStalePreviewCheckout(app, {
+    projectId,
+    hostId,
+    worktreePath,
+    parentCwd: projectCwd,
+  });
+  if (!cleared.ok) throw hostFailure(cleared, "clear the branch's preview worktree");
+  switch (cleared.value.outcome) {
+    case "absent":
+    case "removed":
+      return;
+    case "invalid-path":
+      throw new BranchPreviewError("invalid_branch", INVALID_WORKTREE_MESSAGE);
+    case "not-removed":
+      throw new BranchPreviewError(
+        "worktree_busy",
+        "a stale preview worktree for this branch could not be removed",
+      );
   }
+}
+
+/** `ensureHostBranch`, with a host that could not be asked as a refusal: a
+ * host failure must not read as "no such branch". */
+async function ensureBranch(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  branch: string,
+  opts: { fastForward?: boolean } = {},
+): Promise<boolean> {
+  const result = await ensureHostBranch(app, hostId, cwd, branch, opts);
+  if (!result.ok) throw hostFailure(result, `prepare branch ${branch}`);
+  return result.value;
 }
 
 // Ports handed out to a create that hasn't bound its row yet, per host: the
@@ -256,17 +275,16 @@ async function createBranchPreview(
 ): Promise<PreviewSummary> {
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) throw new BranchPreviewError("unknown_project", `Unknown project ${projectId}`);
-  if (project.hostId !== LOCAL_HOST_ID) {
-    throw new BranchPreviewError(
-      "remote_unsupported",
-      "Branch previews are not available yet for a project on a remote host",
-    );
-  }
+  // The project's own host (#3428): the checkout, the worktree, the port and
+  // the dev server all live there.
+  const hostId = project.hostId;
 
   // A PR's head branch is brought up to origin first (best effort), so a
   // stale local copy doesn't serve old code — a live preview with
   // worktreeRefresh then follows it too.
-  if (opts.fastForward) await ensureLocalBranch(project.cwd, branch, { fastForward: true });
+  if (opts.fastForward) {
+    await ensureBranch(app, hostId, project.cwd, branch, { fastForward: true });
+  }
 
   // #3003 — `port:<n>` keys a running service's port preview, never a branch
   // (a colon cannot appear in a ref name): the lookup below must not hand
@@ -277,7 +295,15 @@ async function createBranchPreview(
   const existing = findBranchPreview(app, projectId, branch);
   if (existing?.sessionId != null && (await isServing(app, existing.sessionId))) return existing;
 
-  const control = pickPreviewControl(resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR));
+  // Read from the checkout on the project's host (its agent for a remote one).
+  const controls = await configuredControls(app, projectId);
+  if (!controls.ok) {
+    throw new BranchPreviewError(
+      "host_unavailable",
+      `Could not read the project's dock controls: ${controls.message}`,
+    );
+  }
+  const control = pickPreviewControl(controls.value);
   if (!control) {
     throw new BranchPreviewError(
       "no_preview_control",
@@ -285,12 +311,13 @@ async function createBranchPreview(
     );
   }
 
-  if (!(await ensureLocalBranch(project.cwd, branch))) {
+  if (!(await ensureBranch(app, hostId, project.cwd, branch))) {
     throw new BranchPreviewError("unknown_branch", `No branch ${branch} here or on origin`);
   }
   await clearStaleWorktree(
     app,
     projectId,
+    hostId,
     project.cwd,
     dockPreviewWorktreePath(project.cwd, branch),
   );
@@ -298,30 +325,45 @@ async function createBranchPreview(
   // Held from allocation until the row is bound: concurrent creates for
   // different branches don't share the inflight entry, and would otherwise
   // only see each other's ports once bound.
-  // Branch previews are local-only today (see the header), so the port lives
-  // on the local host; the inventory is keyed by host for when that changes.
-  const hostId = LOCAL_HOST_ID;
-  const held = reservedPorts.get(hostId) ?? new Set<number>();
-  reservedPorts.set(hostId, held);
-  const port = await allocatePreviewPort(new Set([...listUpstreamPorts(app, hostId), ...held]));
-  held.add(port);
+  // The port is picked on the host the dev server runs on, outside every
+  // port already bound or reserved there; the inventory itself is the
+  // primary's (the agent's allocator is stateless).
+  // The set is never dropped from the map (one per host): deleting it once
+  // empty would orphan the reference a concurrent create still holds.
+  let held = reservedPorts.get(hostId);
+  if (!held) reservedPorts.set(hostId, (held = new Set<number>()));
+  let port: number | null = null;
   try {
-    return await startOnPort(app, projectId, branch, control, port);
+    const allocated = await allocateHostPreviewPort(
+      app,
+      hostId,
+      new Set([...listUpstreamPorts(app, hostId), ...held]),
+    );
+    if (!allocated.ok) throw hostFailure(allocated, "pick a port for the preview");
+    if (allocated.value === null || held.has(allocated.value)) {
+      throw new BranchPreviewError("start_failed", "No free port for the preview on its host");
+    }
+    port = allocated.value;
+    held.add(port);
+    return await startOnPort(app, projectId, hostId, branch, control, port);
   } finally {
-    held.delete(port);
-    if (held.size === 0) reservedPorts.delete(hostId);
+    if (port !== null) held.delete(port);
   }
 }
 
 async function startOnPort(
   app: FastifyInstance,
   projectId: number,
+  hostId: string,
   branch: string,
   control: DockControl,
   port: number,
 ): Promise<PreviewSummary> {
   const result = await createSessionRecord(app, {
     projectId,
+    // Where the port was picked and the branch prepared: refused, not placed
+    // elsewhere, when that host can't take it.
+    target: { hostId },
     command: control.command,
     kind: "dock",
     name: control.title,

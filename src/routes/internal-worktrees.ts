@@ -9,6 +9,8 @@ import { readCiUnfixableFile } from "../services/task-ci-unfixable-file.js";
 import {
   checkoutBranchWorktree,
   clearOrphanedTaskWorktree,
+  clearStalePreviewWorktree,
+  ensureLocalBranch,
   commitWipChanges,
   resyncStaleWorktree,
   createWorktree,
@@ -22,6 +24,7 @@ import {
   syncWorktree,
 } from "../services/git-worktree.js";
 import { deleteBranch } from "../services/git-branch-delete.js";
+import { allocatePreviewPort } from "../services/preview-port.js";
 import {
   runGenerationTurnInScratchWorktree,
   snapshotCitedPathExistence,
@@ -55,6 +58,9 @@ import {
   runSetupSchema,
   setupLogQuerySchema,
   bundleSyncRemoveSchema,
+  gitEnsureBranchSchema,
+  worktreeClearStaleSchema,
+  previewPortSchema,
 } from "./internal-schemas.js";
 import type {
   GitWorktreeCreateBody,
@@ -73,6 +79,9 @@ import type {
   RunGenerationTurnBody,
   RunSetupBody,
   BundleSyncRemoveBody,
+  GitEnsureBranchBody,
+  WorktreeClearStaleBody,
+  PreviewPortBody,
 } from "./internal-schemas.js";
 import { INTERNAL_RATE_LIMIT, GENERATION_TURN_RATE_LIMIT } from "./internal-rate-limits.js";
 import { requireWithinRoots, requireAllWithinRoots } from "./internal-roots.js";
@@ -595,6 +604,57 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
       const resolvedWorktreePath = requireWithinRoots(app, reply, worktreePath, "worktreePath");
       if (resolvedWorktreePath === null) return;
       return await removeListedWorktree(resolvedCwd, resolvedWorktreePath, { force });
+    },
+  );
+
+  // Issue #3428 — a remote project's branch preview, prepared on THIS agent's
+  // own checkout: the branch made to exist locally (fetched from origin when
+  // only origin has it, fast-forwarded for a PR's head), the branch's leftover
+  // dock-preview worktree cleared, and a free port picked for its dev server.
+  // Each wraps the SAME function the primary runs for a local project; the
+  // sessions that may occupy a worktree, and the ports already handed out, are
+  // the primary's to know, so all three are stateless here. A git-level "no"
+  // answers 200 (`{ok: false}`, an outcome), never an error status.
+  app.post<{ Body: GitEnsureBranchBody }>(
+    "/internal/git-ensure-branch",
+    { ...INTERNAL_RATE_LIMIT, schema: gitEnsureBranchSchema },
+    async (request, reply) => {
+      const { cwd, branch, fastForward } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return { ok: await ensureLocalBranch(resolvedCwd, branch, { fastForward }) };
+    },
+  );
+
+  // The worktree path guard runs here too, against the RESOLVED cwd: `path`
+  // must be a dock-preview directory directly under its .mullion-worktrees,
+  // so this force-removal can never reach a task worktree or anything else.
+  app.post<{ Body: WorktreeClearStaleBody }>(
+    "/internal/worktree-clear-stale",
+    { ...INTERNAL_RATE_LIMIT, schema: worktreeClearStaleSchema },
+    async (request, reply) => {
+      const { cwd, path: candidate } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      const result = await clearStalePreviewWorktree(resolvedCwd, candidate);
+      if (result.outcome === "invalid-path") {
+        return reply.badRequest("path must name a dock-preview worktree of cwd");
+      }
+      return result;
+    },
+  );
+
+  // Read-only: the port is only probed (listen on 0, then closed), never held.
+  app.post<{ Body: PreviewPortBody }>(
+    "/internal/preview-port",
+    { ...INTERNAL_RATE_LIMIT, schema: previewPortSchema },
+    async (request) => {
+      try {
+        return { port: await allocatePreviewPort(new Set(request.body.taken)) };
+      } catch (err) {
+        app.log.warn({ err }, "preview-port: no free port");
+        return { port: null };
+      }
     },
   );
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +14,7 @@ import {
   listUpstreamPorts,
   upsertBranchPreview,
 } from "../../src/services/preview-registry.js";
+import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
 
 // Issue #2247 — a preview follows the execution host of the session it is
 // bound to, never the project's own host, and keeps that target.
@@ -119,6 +120,33 @@ describe("preview proxy session targets", () => {
     expect((await get(row.slug)).statusCode).toBe(200);
     app.db.delete(sessions).where(eq(sessions.id, session.id)).run();
     expect((await get(row.slug)).statusCode).toBe(503);
+  });
+
+  it("forwards a branch preview bound to a remote session to that agent, on the bound port (#2057, #3428)", async () => {
+    const hostId = await addHost();
+    const project = addProject({ [hostId]: "/srv/st-project" });
+    const session = app.db
+      .insert(sessions)
+      .values({ projectId: project.id, command: "vite", kind: "dock", hostId, status: "active" })
+      .returning()
+      .get();
+    const row = upsertBranchPreview(app, project.id, "feat/remote");
+    bindBranchPreview(app, row.slug, { sessionId: session.id, upstreamPort: 45123 });
+    const http = vi
+      .spyOn(getRemoteHostClient(app, hostId).previews, "http")
+      .mockResolvedValue(new Response("remote-branch", { status: 200 }));
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/some/page?q=1",
+        headers: { host: `preview-${row.slug}.${BASE}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toBe("remote-branch");
+      expect(http.mock.calls[0].slice(0, 2)).toEqual([45123, "/some/page?q=1"]);
+    } finally {
+      http.mockRestore();
+    }
   });
 
   it("keeps an open preview on its original host when a session elsewhere accepts a server", async () => {

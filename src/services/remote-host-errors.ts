@@ -12,7 +12,7 @@ import { findSsrfBlock, type SsrfBlockedError } from "./pinned-connect.js";
  * to be classified (here, or in the mutation list that test keeps).
  */
 const IDEMPOTENT_POST_PATHS =
-  /^\/internal\/(sessions\/(live|liveness|[^/]+\/wait-output)|project-files\/(list|read|stat|search|download)|scaffold-scan|read-files|worktrees\/compare-paths|dock-port-check)(\?|$)/;
+  /^\/internal\/(sessions\/(live|liveness|[^/]+\/wait-output)|project-files\/(list|read|stat|search|download)|scaffold-scan|read-files|worktrees\/compare-paths|dock-port-check|preview-port)(\?|$)/;
 
 /** `/internal/git-repair` is a read-only plan unless the body says `confirm: true`. */
 const GIT_REPAIR_PATH = /^\/internal\/git-repair(\?|$)/;

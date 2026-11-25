@@ -596,6 +596,17 @@ const GIT_FIELD_DEFS = {
   // Issue #3068 — the checkout the primary guarded for a per-branch Pull
   // (null: checked out nowhere). Compared by pullBranch, never run in.
   expectedWorktree: { type: ["string", "null"] },
+  // Issue #3428 — a branch preview's agent-side prep. `fastForward` brings an
+  // existing local branch up to origin (a PR's head); `path` is the
+  // dock-preview worktree to clear, re-guarded agent-side; `taken` is the
+  // primary's per-host port inventory, bounded like every array here.
+  fastForward: { type: "boolean" },
+  path: { type: "string", minLength: 1 },
+  taken: {
+    type: "array",
+    items: { type: "integer", minimum: 1, maximum: 65535 },
+    maxItems: 4096,
+  },
 } satisfies Record<string, FieldSchema>;
 
 type GitFieldName = keyof typeof GIT_FIELD_DEFS;
@@ -939,6 +950,39 @@ export const gitResyncStaleSchema = schemaFor({
   required: ["cwd", "branch"],
   optional: [],
 });
+
+export interface GitEnsureBranchBody {
+  cwd: string;
+  branch: string;
+  fastForward?: boolean;
+}
+
+// Issue #3428 — the agent-side counterpart of ensureLocalBranch
+// (git-worktree.ts), for a remote project's branch preview.
+export const gitEnsureBranchSchema = schemaFor({
+  required: ["cwd", "branch"],
+  optional: ["fastForward"],
+});
+
+export interface WorktreeClearStaleBody {
+  cwd: string;
+  path: string;
+}
+
+// Issue #3428 — the agent-side counterpart of clearStalePreviewWorktree
+// (git-worktree.ts): `path` must name a dock-preview worktree directly under
+// `cwd`'s `.mullion-worktrees`, checked again by the handler.
+export const worktreeClearStaleSchema = schemaFor({
+  required: ["cwd", "path"],
+});
+
+export interface PreviewPortBody {
+  taken: number[];
+}
+
+// Issue #3428 — a free loopback port on the agent for a branch preview's dev
+// server, avoiding the ports the primary already bound or reserved there.
+export const previewPortSchema = schemaFor({ required: ["taken"] });
 
 export interface RunGenerationTurnBody {
   cwd: string;

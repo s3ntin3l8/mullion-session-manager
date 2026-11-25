@@ -24,11 +24,15 @@ import { resolveGitHubToken } from "./github-integration.js";
 import { getFileDiff } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import {
+  clearStalePreviewWorktree,
   commitWipChanges,
+  ensureLocalBranch,
   resyncStaleWorktree,
+  type ClearStalePreviewWorktreeResult,
   type CommitWipChangesResult,
   type ResyncStaleWorktreeResult,
 } from "./git-worktree.js";
+import { allocatePreviewPort } from "./preview-port.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
@@ -387,6 +391,68 @@ export async function resyncHostStaleWorktree(
     return { ok: true, value: await resyncStaleWorktree(cwd, branch) };
   }
   return viaGit(app, hostId, (client) => client.resolveResyncStaleWorktree(cwd, branch));
+}
+
+/**
+ * Issue #3428 — makes `refs/heads/<branch>` exist in `cwd` on whichever host
+ * owns it, for a branch preview (`ensureLocalBranch` locally, the agent's
+ * `/internal/git-ensure-branch` remotely). `value: false` is the git-level
+ * "no such branch here or on origin"; `ok: false` is "could not ask".
+ */
+export async function ensureHostBranch(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  branch: string,
+  opts: { fastForward?: boolean } = {},
+): Promise<HostGitResult<boolean>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await ensureLocalBranch(cwd, branch, opts) };
+  }
+  return viaGit(app, hostId, (client) => client.ensureGitBranch(cwd, branch, opts));
+}
+
+/**
+ * Issue #3428 — clears a branch preview's leftover dock-preview worktree on
+ * whichever host owns the checkout (`clearStalePreviewWorktree` locally, the
+ * agent's `/internal/worktree-clear-stale` remotely, which re-runs the path
+ * guard there). The caller decides first that no live session occupies it.
+ */
+export async function clearHostStalePreviewWorktree(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+  worktreePath: string,
+): Promise<HostGitResult<ClearStalePreviewWorktreeResult>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await clearStalePreviewWorktree(cwd, worktreePath) };
+  }
+  return viaRemote(
+    app,
+    hostId,
+    (client) => client.resolveClearStalePreviewWorktree(cwd, worktreePath),
+    "git-worktrees",
+  );
+}
+
+/**
+ * Issue #3428 — a free loopback port for a branch preview's dev server on the
+ * host it runs on, outside `taken` (the primary's inventory for that host).
+ * `value: null`: the host found no free port.
+ */
+export async function allocateHostPreviewPort(
+  app: FastifyInstance,
+  hostId: string,
+  taken: ReadonlySet<number>,
+): Promise<HostGitResult<number | null>> {
+  if (hostId === LOCAL_HOST_ID) {
+    try {
+      return { ok: true, value: await allocatePreviewPort(taken) };
+    } catch {
+      return { ok: true, value: null };
+    }
+  }
+  return viaRemote(app, hostId, (client) => client.allocatePreviewPort(taken), "previews");
 }
 
 /**

@@ -64,9 +64,10 @@ describe("previews slice (#2016)", () => {
 
 describe("previewErrorMessage", () => {
   it("explains each refusal code, previews-off, and anything else", () => {
-    expect(previewErrorMessage(new ApiError("x", 409, "remote_unsupported"))).toMatch(
-      /remote host/,
-    );
+    // #3428 — a host refusal keeps the server's own text (it names the host and the fix).
+    const hostText = "Could not prepare branch x on the project's host: update agent b1";
+    expect(previewErrorMessage(new ApiError(hostText, 409, "host_unsupported"))).toBe(hostText);
+    expect(previewErrorMessage(new ApiError("down", 503, "host_unavailable"))).toBe("down");
     expect(previewErrorMessage(new ApiError("x", 409, "worktree_busy"))).toMatch(/already running/);
     expect(previewErrorMessage(new ApiError("Not Found", 404))).toMatch(/PREVIEW_BASE_HOST/);
     expect(previewErrorMessage(new ApiError("No branch nope", 404, "unknown_branch"))).toMatch(

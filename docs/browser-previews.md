@@ -541,10 +541,41 @@ the preview row alone (`DELETE /api/previews/:slug`) leaves that dev server
 running, and the next start then refuses with `409 worktree_busy` until it
 is stopped.
 
+### On a remote host (#3428)
+
+**A branch preview runs on the project's own host.** That host's checkout is
+where the branch is fetched and the `dock-preview-*` worktree is cut, so the
+port is picked and the dev server started there too; the dock session is
+_targeted_ at the project's host (`target: {hostId}`), never placed elsewhere
+by the placement policy, and is refused (`502 start_failed`) when that host
+can't take it. The steps above run unchanged; for a project on an agent host,
+the ones that touch its checkout or its ports go to the agent:
+
+| Step                                     | Agent route                                                                 |
+| ---------------------------------------- | --------------------------------------------------------------------------- |
+| Read the preview control (`dock.json`)   | `GET /internal/dock`                                                        |
+| Make the branch exist (and fast-forward) | `POST /internal/git-ensure-branch {cwd, branch, fastForward}` (mutating)    |
+| Clear a dead preview's worktree          | `POST /internal/worktree-clear-stale {cwd, path}` (mutating)                |
+| Pick a free loopback port                | `POST /internal/preview-port {taken}` (read-only: probes, reserves nothing) |
+
+What only the primary knows stays on the primary: whether a live session
+still runs in the worktree (checked before the agent is asked to clear it),
+and the ports already bound to branch previews on that host plus the
+in-flight reservations, which it sends as `taken`. The agent re-runs the
+worktree path guard on its own resolved checkout — `path` must name a
+`dock-preview-*` directory directly under `cwd`'s `.mullion-worktrees`, else
+`400` — so a forged path can't reach a task worktree or anything outside it.
+Every path also goes through the agent's `PROJECTS_ROOTS` containment.
+
+A host that can't be asked is refused with its own code instead of reading as
+"no such branch": `503 host_unavailable` (unreachable, busy, or the connection
+dropped mid-request — the next start re-checks), and `409 host_unsupported`
+for an agent build without these routes, whose message says to update that
+host. The proxy then reaches the bound port through the session's host, as
+described under "Multi-host previews" below.
+
 Not yet supported, refused with a code the UI explains:
 
-- A project on a **remote host** (`409 remote_unsupported`) — needs an
-  agent-side port allocator ([#2057](https://github.com/s3ntin3l8/mullion-session-manager/issues/2057)).
 - A **fork's** pull request (`409 fork_unsupported`) — its head branch isn't
   on `origin` ([#2058](https://github.com/s3ntin3l8/mullion-session-manager/issues/2058)).
 
@@ -586,9 +617,11 @@ shared execution-context resolver, not from the project's configured host:
 
 Branch-preview ports are tracked per host (`listUpstreamPorts(app, hostId)`
 and the in-flight reservations), so the same port on two hosts is not a
-conflict. This is only the ports Mullion itself handed to branch previews; a
-full cross-session port inventory and remote branch-preview allocation remain
-separate work.
+conflict; the port itself is picked on the project's host (the agent's
+`/internal/preview-port` for a remote one, see "On a remote host" above). This
+is only the ports Mullion itself handed to branch previews; a full
+cross-session port inventory per worktree remains separate work
+([#2070](https://github.com/s3ntin3l8/mullion-session-manager/issues/2070)).
 
 ## Security
 
@@ -695,4 +728,4 @@ A pane's binding is re-validated when it is used: if its checkout was deleted or
 
 Attaching is leak-free by construction: the attach window always ends, a binding that cannot be recorded (for example the session row was deleted while the browser launched) closes the context if nothing else uses it and reports an error to the pane, and a remote agent that never opens its WebSocket is given up on after 15 seconds. A remote automation call records its binding only after the agent took it.
 
-Removing a worktree (task approval, claim rollback and the claim-time orphan clear, abandoning a task, promote and create rollback, the session reconciler and the auto-rebase stale-worktree clear, dock and branch preview session end, the reclaim, boot-orphan and developer-worktree sweeps, the Source Control remove route, project setup) goes through one set of helpers in `src/services/checkout-removal.ts` (`removeCheckoutIfClean`, `removeCheckoutForced`, `removeListedCheckout`, `pruneCheckouts`, `clearOrphanedCheckout`). Each closes that checkout's browsers and deletes their stored cookies and downloads (the project default's file is kept). `npm run check:checkout-removal` (part of `make lint`) fails and names the file when anything else in `src/` calls a low-level remove (`removeWorktree*`, `removeListedWorktree`, `pruneWorktrees`, `clearOrphanedTaskWorktree`, `git worktree remove`); add a file to its allowlist only for an implementation of those operations. Storage is found even for contexts that already stopped: each time an endpoint context opens, its endpoint is appended to a per-checkout `project-<id>-<digest>.endpoints` index in the browser data dir (on the machine that runs the browser), and forgetting the checkout deletes the storage file and downloads directory of every indexed endpoint, every running one and the default-endpoint target, then the index. Contexts opened before the index existed are not listed, so their files stay until the data dir is cleaned. A close that a remote host could not take is queued and retried on a timer that runs on the primary whether or not its own browser is enabled; a new close request for a target whose record already gave up re-arms it, and queued closes for a host that was removed from the registry are dropped. A browser that could not be closed after a day is shown as leaked in Settings → Hosts. Details: [Browser automation → Execution targets](browser-automation.md#execution-targets).
+Removing a worktree (task approval, claim rollback and the claim-time orphan clear, abandoning a task, promote and create rollback, the session reconciler and the auto-rebase stale-worktree clear, dock and branch preview session end, the reclaim, boot-orphan and developer-worktree sweeps, the Source Control remove route, project setup) goes through one set of helpers in `src/services/checkout-removal.ts` (`removeCheckoutIfClean`, `removeCheckoutForced`, `removeListedCheckout`, `pruneCheckouts`, `clearOrphanedCheckout`, `clearStalePreviewCheckout`). Each closes that checkout's browsers and deletes their stored cookies and downloads (the project default's file is kept). `npm run check:checkout-removal` (part of `make lint`) fails and names the file when anything else in `src/` calls a low-level remove (`removeWorktree*`, `removeListedWorktree`, `pruneWorktrees`, `clearOrphanedTaskWorktree`, `clearStalePreviewWorktree`, `git worktree remove`); add a file to its allowlist only for an implementation of those operations. Storage is found even for contexts that already stopped: each time an endpoint context opens, its endpoint is appended to a per-checkout `project-<id>-<digest>.endpoints` index in the browser data dir (on the machine that runs the browser), and forgetting the checkout deletes the storage file and downloads directory of every indexed endpoint, every running one and the default-endpoint target, then the index. Contexts opened before the index existed are not listed, so their files stay until the data dir is cleaned. A close that a remote host could not take is queued and retried on a timer that runs on the primary whether or not its own browser is enabled; a new close request for a target whose record already gave up re-arms it, and queued closes for a host that was removed from the registry are dropped. A browser that could not be closed after a day is shown as leaked in Settings → Hosts. Details: [Browser automation → Execution targets](browser-automation.md#execution-targets).

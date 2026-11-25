@@ -115,7 +115,7 @@ describe("previews route (issue #28)", () => {
       expect(start.mock.calls[0].slice(1)).toEqual([projectId, "feat/x"]);
 
       start.mockRejectedValueOnce(
-        new branchPreviewModule.BranchPreviewError("remote_unsupported", "not yet"),
+        new branchPreviewModule.BranchPreviewError("host_unsupported", "update the host"),
       );
       const refused = await app.inject({
         method: "POST",
@@ -123,7 +123,10 @@ describe("previews route (issue #28)", () => {
         payload: { kind: "project", projectId, branch: "feat/x" },
       });
       expect(refused.statusCode).toBe(409);
-      expect(refused.json()).toMatchObject({ code: "remote_unsupported", message: "not yet" });
+      expect(refused.json()).toMatchObject({
+        code: "host_unsupported",
+        message: "update the host",
+      });
 
       start.mockRejectedValueOnce(new Error("boom"));
       const crashed = await app.inject({
