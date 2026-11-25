@@ -242,7 +242,8 @@ describe("host capability detection (issue #2306)", () => {
     const { registerProbeRoutes } = await import("../../src/routes/internal-probes.js");
     const app = Fastify();
     Object.assign(app, { deviceEmulatorEnabled: false, config: { DEVICE_EMULATOR_PATH: "" } });
-    registerProbeRoutes(app, {});
+    // Encapsulated, as internalRoutes registers it in production.
+    await app.register(async (child) => registerProbeRoutes(child, {}));
     await app.ready();
     await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(3));
     const res = await app.inject({ method: "GET", url: "/internal/capabilities" });
