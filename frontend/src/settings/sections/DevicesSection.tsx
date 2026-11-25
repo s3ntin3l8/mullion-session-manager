@@ -606,7 +606,7 @@ export function DevicesSection() {
           />
           {showIos && renderList("ios", iosDevices)}
           {iosHints.length > 0 && (
-            <ul data-testid="devices-ios-unavailable" style={IOS_HINTS_STYLE}>
+            <ul role="list" data-testid="devices-ios-unavailable" style={IOS_HINTS_STYLE}>
               {iosHints.map((hint) => (
                 <li key={hint.hostId}>
                   Mac ({hint.name}): {hint.reason}

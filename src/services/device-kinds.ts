@@ -99,16 +99,36 @@ export function withUnavailable(unavailable: DeviceUnavailable | undefined): {
   return unavailable && Object.keys(unavailable).length > 0 ? { unavailable } : {};
 }
 
-/**
- * Why a platform this host could run is not offered (#3510): today only iOS,
- * on a macOS host. Empty when iOS is available, and on a platform that cannot
- * run it at all — so a Linux host with the panel off reports nothing, as the
- * platform is checked before the panel.
- */
-export async function localDeviceUnavailable(app: FastifyInstance): Promise<DeviceUnavailable> {
-  if (app.config.MULLION_DEMO || !isDeviceKindSupported("ios-simulator")) return {};
-  // The panel first: it is the setting to change, and no probe runs while it is off.
-  if (!app.devicePanelEnabled) return { ios: app.devicePanelUnavailableMessage };
+/** What this host can run, and why it does not offer a platform it could
+ * (#3510): today only iOS, on a macOS host. One derivation feeds both
+ * `platforms` and `unavailable`, so the iOS probe runs once per answer. No
+ * reason is given when iOS is available, nor on a platform that cannot run it
+ * at all — the platform is checked before the panel, so a Linux host with the
+ * panel off reports nothing — nor on the demo instance. */
+export interface LocalDeviceSupport {
+  deviceKinds: DeviceKind[];
+  platforms: DevicePlatform[];
+  unavailable?: DeviceUnavailable;
+}
+
+export async function localDeviceSupport(app: FastifyInstance): Promise<LocalDeviceSupport> {
+  const deviceKinds = localDeviceKinds(app);
+  if (!app.devicePanelEnabled) {
+    // The panel is the setting to change, and no probe runs while it is off.
+    const iosPossible = !app.config.MULLION_DEMO && isDeviceKindSupported("ios-simulator");
+    return {
+      deviceKinds,
+      platforms: [],
+      ...(iosPossible ? { unavailable: { ios: app.devicePanelUnavailableMessage } } : {}),
+    };
+  }
   const reason = await iosSimulatorUnavailableReason(app);
-  return typeof reason === "string" ? { ios: reason } : {};
+  const platforms: DevicePlatform[] = [];
+  if (deviceKinds.length > 0) platforms.push("android");
+  if (reason === null) platforms.push("ios");
+  return {
+    deviceKinds,
+    platforms,
+    ...(typeof reason === "string" ? { unavailable: { ios: reason } } : {}),
+  };
 }

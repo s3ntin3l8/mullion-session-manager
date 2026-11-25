@@ -91,6 +91,9 @@ describe("remote-host-devices", () => {
     });
     request.mockResolvedValueOnce({ deviceKinds: [], platforms: [], unavailable: { ios: 42 } });
     await expect(devices.kinds()).resolves.not.toHaveProperty("unavailable");
+    // An empty reason would render as a bare "Mac (x): " row.
+    request.mockResolvedValueOnce({ deviceKinds: [], platforms: [], unavailable: { ios: "" } });
+    await expect(devices.kinds()).resolves.not.toHaveProperty("unavailable");
   });
 
   it("leaves the cheap reads on the default timeout", async () => {

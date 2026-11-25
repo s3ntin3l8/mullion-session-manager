@@ -25,11 +25,9 @@ import { SimctlError, SimulatorRequestError } from "../services/ios-simulators.j
 import { getHostRow, listHosts, LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
   iosSimulatorAvailable,
-  localDeviceKinds,
   physicalDeviceEnabled,
   physicalDeviceUnavailableMessage,
-  localDevicePlatforms,
-  localDeviceUnavailable,
+  localDeviceSupport,
   withUnavailable,
 } from "../services/device-kinds.js";
 import { resolveProjectHostId } from "../services/session-host.js";
@@ -156,9 +154,7 @@ async function listDeviceHosts(app: FastifyInstance): Promise<DeviceHostEntry[]>
       hostId: LOCAL_HOST_ID,
       name: local?.name ?? "Local",
       status: "ok",
-      deviceKinds: localDeviceKinds(app),
-      platforms: await localDevicePlatforms(app),
-      ...withUnavailable(await localDeviceUnavailable(app)),
+      ...(await localDeviceSupport(app)),
     },
     ...remoteEntries,
   ];

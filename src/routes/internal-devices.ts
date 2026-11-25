@@ -12,12 +12,9 @@ import {
 import { isValidDeviceAddress, isValidPairingCode } from "../services/device-address.js";
 import {
   iosSimulatorAvailable,
-  localDeviceKinds,
   physicalDeviceEnabled,
   physicalDeviceUnavailableMessage,
-  localDevicePlatforms,
-  localDeviceUnavailable,
-  withUnavailable,
+  localDeviceSupport,
 } from "../services/device-kinds.js";
 import {
   createIosSimulator,
@@ -69,11 +66,9 @@ function replyFailedDependency(reply: FastifyReply, message: string, deviceStatu
  * host's own DEVICE_* config and platform.
  */
 export function registerDeviceRoutes(app: FastifyInstance, rateLimit: { config: object }): void {
-  app.get<{ Reply: DeviceKindsResponse }>("/internal/devices/kinds", rateLimit, async () => ({
-    deviceKinds: localDeviceKinds(app),
-    platforms: await localDevicePlatforms(app),
-    ...withUnavailable(await localDeviceUnavailable(app)),
-  }));
+  app.get<{ Reply: DeviceKindsResponse }>("/internal/devices/kinds", rateLimit, () =>
+    localDeviceSupport(app),
+  );
 
   app.get<{ Reply: SimulatorsResponse }>(
     "/internal/simulators",
