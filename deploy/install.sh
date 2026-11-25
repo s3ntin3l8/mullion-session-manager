@@ -227,34 +227,108 @@ fi
 # Matches self-update.sh's own NPM_CI_TIMEOUT_SECONDS.
 NPM_CI_TIMEOUT_SECONDS=600
 
+# trim_value VALUE — VALUE without its surrounding whitespace.
+#
+# Hermes review, PR #529 (fifth round): src/app.ts checks `.trim() !== ""`,
+# not just non-empty — a whitespace-only value (e.g. a stray space from a
+# templating bug) would pass a plain `[ -n ]` check but still fail app.ts's
+# own check at boot. Hoisted above the role branches below (was previously
+# defined only inside the agent branch) — issue #1458 needs the same check
+# for the primary branch's own auth-completeness warning.
+trim_value() {
+  local v="${1:-}"
+  while [[ "$v" == [[:space:]]* ]]; do v="${v#[[:space:]]}"; done
+  while [[ "$v" == *[[:space:]] ]]; do v="${v%[[:space:]]}"; done
+  printf '%s' "$v"
+}
+
+# is_blank VALUE — true when VALUE is empty or only whitespace (the check
+# src/app.ts's own `.trim() !== ""` makes).
+is_blank() {
+  [ -z "$(trim_value "${1:-}")" ]
+}
+
+# truthy_flag FLAG VALUE [CONSEQUENCE] — true when VALUE is a recognised
+# truthy spelling of FLAG, false when it is a recognised "off" spelling (or
+# is unset). An unrecognised value warns and counts as off.
+#
+# The caller is not always a shell: Ansible/Jinja renders a YAML boolean as
+# `True` (not `true`), an operator may write `TRUE`, `yes` or `on`, and a
+# templating bug can leave a stray space around the value. Before this
+# helper each of these flags compared ONE exact string, so every other
+# spelling silently took the "off" branch — a role that templated
+# `mullion_pairing_force: true` looked like it had worked while the flag
+# stayed off, and a role that templated `mullion_pairing_code_stdin: true`
+# never read the code it piped in.
+truthy_flag() {
+  local flag="${1:-}" raw="${2:-}" consequence="${3:-}" value
+  # Trim the surrounding whitespace (a stray space from a templating bug
+  # must not decide the flag), then fold the case so `True` and `TRUE` mean
+  # what `true` means.
+  value="$(printf '%s' "$(trim_value "$raw")" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    # Truthy: the spellings Ansible/Jinja and YAML 1.1 accept for a boolean
+    # true (a YAML `true` reaches a shell as "True", not "true").
+    1 | true | yes | on) return 0 ;;
+    # An explicit "off" (and the unset default) — recognised, so it is not
+    # worth a warning.
+    "" | 0 | false | no | off) return 1 ;;
+  esac
+  # Unrecognised: say so instead of silently ignoring what the caller
+  # asked for.
+  if [ -n "$consequence" ]; then
+    echo "WARNING: $flag='$raw' is not a recognised value (use 1, true, yes or on) — it is treated as off, so $consequence." >&2
+  else
+    echo "WARNING: $flag='$raw' is not a recognised value (use 1, true, yes or on) — it is treated as off." >&2
+  fi
+  return 1
+}
+
 # Issue #2703 — the enrollment token from stdin, for a caller that must not put
 # it in an environment (a `ssh host install.sh` pipeline, a CI secret store):
 # MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1 reads the FIRST LINE of stdin into
 # MULLION_AGENT_ENROLLMENT_TOKEN (the Windows bootstrap's -TokenFromStdin does
 # the same). It never appears in a process argument. Agent role only, so a
 # primary install never consumes stdin it was not asked to.
-if [ "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" = "1" ] && [ "${MULLION_AGENT_PAIRING_CODE_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; then
-  echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1 and MULLION_AGENT_PAIRING_CODE_STDIN=1 cannot both be set." >&2
-  exit 1
+#
+# Issue #3498 — both *_STDIN flags are read through truthy_flag, not through
+# an exact `= "1"` comparison: a role that templates a YAML boolean
+# (`mullion_pairing_code_stdin: true`) delivers "True", and the exact
+# comparison then read NOTHING — the piped pairing code was never taken, so
+# the install fell through to the "no complete credential path" warning and
+# left an agent that crash-loops.
+STDIN_ENROLLMENT_TOKEN=false
+STDIN_PAIRING_CODE=false
+if [ "$ROLE" = "agent" ]; then
+  if truthy_flag MULLION_AGENT_ENROLLMENT_TOKEN_STDIN "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" "the enrollment token is not read from stdin"; then
+    STDIN_ENROLLMENT_TOKEN=true
+  fi
+  if truthy_flag MULLION_AGENT_PAIRING_CODE_STDIN "${MULLION_AGENT_PAIRING_CODE_STDIN:-}" "the pairing code is not read from stdin"; then
+    STDIN_PAIRING_CODE=true
+  fi
+  if [ "$STDIN_ENROLLMENT_TOKEN" = true ] && [ "$STDIN_PAIRING_CODE" = true ]; then
+    echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN and MULLION_AGENT_PAIRING_CODE_STDIN cannot both be set." >&2
+    exit 1
+  fi
 fi
-if [ "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; then
+if [ "$STDIN_ENROLLMENT_TOKEN" = true ]; then
   stdin_token=""
   IFS= read -r stdin_token || true
   stdin_token="${stdin_token%$'\r'}"
   if [ -z "${stdin_token//[[:space:]]/}" ]; then
-    echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1 was set but stdin carried no token on its first line." >&2
+    echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN was set but stdin carried no token on its first line." >&2
     exit 1
   fi
   MULLION_AGENT_ENROLLMENT_TOKEN="$stdin_token"
   export MULLION_AGENT_ENROLLMENT_TOKEN
   unset stdin_token
 fi
-if [ "${MULLION_AGENT_PAIRING_CODE_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; then
+if [ "$STDIN_PAIRING_CODE" = true ]; then
   stdin_code=""
   IFS= read -r stdin_code || true
   stdin_code="${stdin_code%$'\r'}"
   if [ -z "${stdin_code//[[:space:]]/}" ]; then
-    echo "MULLION_AGENT_PAIRING_CODE_STDIN=1 was set but stdin carried no pairing code on its first line." >&2
+    echo "MULLION_AGENT_PAIRING_CODE_STDIN was set but stdin carried no pairing code on its first line." >&2
     exit 1
   fi
   # Issue #3499 — the code reaches the redeem step through the pipe it already
@@ -462,18 +536,8 @@ else
   echo "==> mullion CLI not present in this release (dist/cli/mullion.mjs missing) — skipping ~/$CLI_BIN_DIR/mullion link"
 fi
 
-# Hermes review, PR #529 (fifth round): src/app.ts checks `.trim() !== ""`,
-# not just non-empty — a whitespace-only value (e.g. a stray space from a
-# templating bug) would pass a plain `[ -n ]` check but still fail app.ts's
-# own check at boot. Hoisted above the role branches below (was previously
-# defined only inside the agent branch) — issue #1458 needs the same check
-# for the primary branch's own auth-completeness warning.
-is_blank() {
-  local v="$1"
-  while [[ "$v" == [[:space:]]* ]]; do v="${v#[[:space:]]}"; done
-  while [[ "$v" == *[[:space:]] ]]; do v="${v%[[:space:]]}"; done
-  [ -z "$v" ]
-}
+# is_blank and trim_value live above, next to truthy_flag (issue #3498
+# moved them up there so one trim serves all three).
 
 # env_value KEY — the last value of KEY in $MULLION_HOME/.env (empty when absent).
 env_value() {
@@ -510,38 +574,106 @@ if [ "$ROLE" = "agent" ]; then
   fi
 fi
 
+# pair_identity_file SESSIONS_DIR — the machine-identity file a pairing
+# redeem would write. A relative SESSIONS_DIR resolves against
+# $MULLION_HOME/current (the redeem branch cds there), exactly like the
+# redeem itself does — never against the installer's own working directory.
+pair_identity_file() {
+  case "$1" in
+    /* | [A-Za-z]:/* | [A-Za-z]:\\*) printf '%s\n' "$1/agent-identity.json" ;;
+    *) printf '%s\n' "$MULLION_HOME/current/$1/agent-identity.json" ;;
+  esac
+}
+
+# identity_file_is_usable FILE — true when FILE is a machine identity the
+# agent itself would accept: parseable JSON with a non-empty string hostId
+# and a non-empty string machineCredential. This is the same shape check as
+# loadAgentIdentity (src/services/agent-identity.ts), which treats anything
+# else as "no identity" — so a truncated, hand-mangled or otherwise malformed
+# file counts as NO identity here too, and a supplied pairing code is
+# redeemed as usual (the redeem overwrites the broken file).
+identity_file_is_usable() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  "$NODE_PATH" -e '
+    const fs = require("fs");
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    } catch {
+      process.exit(1);
+    }
+    if (!parsed || typeof parsed !== "object") process.exit(1);
+    if (typeof parsed.hostId !== "string" || !parsed.hostId) process.exit(1);
+    if (typeof parsed.machineCredential !== "string" || !parsed.machineCredential) process.exit(1);
+  ' "$file" >/dev/null 2>&1
+}
+
 PAIRED_THIS_RUN=false
 if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
-  PAIR_PRIMARY_URL="${MULLION_AGENT_PRIMARY_URL:-}"
-  if is_blank "$PAIR_PRIMARY_URL" && [ -f "$MULLION_HOME/.env" ]; then
-    PAIR_PRIMARY_URL="$(env_value MULLION_PRIMARY_URL)"
+  # Issue #3498 — a rerun of install.sh must NOT redeem a pairing code for a
+  # host that is already paired. A pairing code is one-time: a second
+  # converge would redeem a spent code (HTTP 401) and fail the play on every
+  # run after the first, and a freshly minted code per run would replace the
+  # agent's identity and create a new host row every time. So an existing,
+  # usable identity means "already paired": the supplied code is ignored and
+  # the identity file is left byte- and mtime-identical.
+  #
+  # MULLION_AGENT_PAIRING_FORCE=1 is the explicit opt-out — re-pair on
+  # purpose (what "Bring a revoked agent back" in deploy/README.md relies
+  # on): the code is redeemed and the identity overwritten, as before.
+  #
+  # The value is NORMALISED before it is read (truthy_flag), because the
+  # caller is not always a shell: Ansible/Jinja renders a YAML boolean as
+  # `True` (not `true`), and an operator may write `TRUE` or `yes`. Only the
+  # exact strings `1`/`true` used to count, so every other spelling took the
+  # skip branch below — the "Bring a revoked agent back" recipe looked like
+  # it had worked while the agent stayed revoked. An unrecognised value warns
+  # instead of being silently ignored — and it warns even when this run has
+  # no identity to protect: the same typo would silently skip the re-pair on
+  # the NEXT run, when the host IS paired — which is exactly the
+  # revoked-agent case this flag exists for.
+  PAIRING_FORCE=false
+  PAIRING_FORCE_RAW="${MULLION_AGENT_PAIRING_FORCE:-}"
+  if truthy_flag MULLION_AGENT_PAIRING_FORCE "$PAIRING_FORCE_RAW" "a supplied pairing code is ignored for an already-paired host"; then
+    PAIRING_FORCE=true
   fi
-  if is_blank "$PAIR_PRIMARY_URL"; then
-    echo "error: MULLION_AGENT_PAIRING_CODE requires MULLION_AGENT_PRIMARY_URL (or MULLION_PRIMARY_URL in $MULLION_HOME/.env) to be set." >&2
-    exit 1
+  PAIR_IDENTITY_FILE="$(pair_identity_file "$PAIR_SESSIONS_DIR")"
+  if [ "$PAIRING_FORCE" = false ] && identity_file_is_usable "$PAIR_IDENTITY_FILE"; then
+    echo "==> Already paired ($PAIR_IDENTITY_FILE exists), so the supplied pairing code is ignored — set MULLION_AGENT_PAIRING_FORCE=1 to re-pair on purpose."
+    unset MULLION_AGENT_PAIRING_CODE
+  else
+    PAIR_PRIMARY_URL="${MULLION_AGENT_PRIMARY_URL:-}"
+    if is_blank "$PAIR_PRIMARY_URL" && [ -f "$MULLION_HOME/.env" ]; then
+      PAIR_PRIMARY_URL="$(env_value MULLION_PRIMARY_URL)"
+    fi
+    if is_blank "$PAIR_PRIMARY_URL"; then
+      echo "error: MULLION_AGENT_PAIRING_CODE requires MULLION_AGENT_PRIMARY_URL (or MULLION_PRIMARY_URL in $MULLION_HOME/.env) to be set." >&2
+      exit 1
+    fi
+    PAIR_SCRIPT="$MULLION_HOME/current/dist/agent-pair.js"
+    if [ ! -f "$PAIR_SCRIPT" ]; then
+      echo "error: pairing helper not found at $PAIR_SCRIPT — upgrade to a release that supports pairing codes." >&2
+      exit 1
+    fi
+    echo "==> Redeeming pairing code with primary"
+    case "$PAIR_SESSIONS_DIR" in
+      /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
+      *)
+        echo "WARNING: SESSIONS_DIR ($PAIR_SESSIONS_DIR) is relative, so the paired agent-identity.json will be written inside $MULLION_HOME/current and orphaned on the next release upgrade. Set SESSIONS_DIR to an absolute path outside the release directory (for example $MULLION_HOME/data/sessions) in $MULLION_HOME/.env." >&2
+        ;;
+    esac
+    PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$PAIR_SESSIONS_DIR")
+    if [ -n "${MULLION_AGENT_NAME:-}" ]; then
+      PAIR_ARGS+=(--name "$MULLION_AGENT_NAME")
+    fi
+    if [ -n "${MULLION_AGENT_ADVERTISE_URL:-}" ]; then
+      PAIR_ARGS+=(--advertise-url "$MULLION_AGENT_ADVERTISE_URL")
+    fi
+    printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | ( cd "$MULLION_HOME/current" && "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}" )
+    PAIRED_THIS_RUN=true
+    unset MULLION_AGENT_PAIRING_CODE
   fi
-  PAIR_SCRIPT="$MULLION_HOME/current/dist/agent-pair.js"
-  if [ ! -f "$PAIR_SCRIPT" ]; then
-    echo "error: pairing helper not found at $PAIR_SCRIPT — upgrade to a release that supports pairing codes." >&2
-    exit 1
-  fi
-  echo "==> Redeeming pairing code with primary"
-  case "$PAIR_SESSIONS_DIR" in
-    /* | [A-Za-z]:/* | [A-Za-z]:\\*) ;;
-    *)
-      echo "WARNING: SESSIONS_DIR ($PAIR_SESSIONS_DIR) is relative, so the paired agent-identity.json will be written inside $MULLION_HOME/current and orphaned on the next release upgrade. Set SESSIONS_DIR to an absolute path outside the release directory (for example $MULLION_HOME/data/sessions) in $MULLION_HOME/.env." >&2
-      ;;
-  esac
-  PAIR_ARGS=(--primary-url "$PAIR_PRIMARY_URL" --sessions-dir "$PAIR_SESSIONS_DIR")
-  if [ -n "${MULLION_AGENT_NAME:-}" ]; then
-    PAIR_ARGS+=(--name "$MULLION_AGENT_NAME")
-  fi
-  if [ -n "${MULLION_AGENT_ADVERTISE_URL:-}" ]; then
-    PAIR_ARGS+=(--advertise-url "$MULLION_AGENT_ADVERTISE_URL")
-  fi
-  printf '%s\n' "$MULLION_AGENT_PAIRING_CODE" | ( cd "$MULLION_HOME/current" && "$NODE_PATH" "$PAIR_SCRIPT" "${PAIR_ARGS[@]}" )
-  PAIRED_THIS_RUN=true
-  unset MULLION_AGENT_PAIRING_CODE
 fi
 
 if [ -f "$MULLION_HOME/.env" ]; then
@@ -611,7 +743,17 @@ EOF
   # together (oidc.ts's isOidcEnabled) and typically need a real, already-
   # provisioned client — better configured by hand or via Settings after
   # first boot than half-wired through install-time flags.
-  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" = "true" ]; then
+  # Issue #3498 — MULLION_INSTALL_TRUST_GATEWAY is read through truthy_flag
+  # like the agent-side flags: a YAML boolean templated by Ansible/Jinja
+  # arrives as "True", and the exact `= "true"` comparison this replaces
+  # silently left the primary without a trust gateway — it then refused to
+  # boot (src/app.ts's #603 fail-closed check) and crash-looped under
+  # systemd, while the role looked like it had worked.
+  INSTALL_TRUST_GATEWAY=false
+  if truthy_flag MULLION_INSTALL_TRUST_GATEWAY "${MULLION_INSTALL_TRUST_GATEWAY:-}" "the generated .env gets no MULLION_TRUST_GATEWAY line, so the primary refuses to boot until an auth path is configured"; then
+    INSTALL_TRUST_GATEWAY=true
+  fi
+  if [ "$INSTALL_TRUST_GATEWAY" = true ]; then
     # Hermes review — TRUST_GATEWAY wins outright when both paths are set
     # (README already says "Set ONE"); this NOTICE is the runtime backstop
     # for a misconfigured Ansible role that sets both without noticing.
@@ -647,7 +789,7 @@ EOF
   # existing-.env branch above leaves a pre-existing file untouched with no
   # warning at all, so re-running install.sh with these vars set against an
   # already-installed host does nothing; edit that file by hand instead.
-  if [ "${MULLION_INSTALL_TRUST_GATEWAY:-}" != "true" ] &&
+  if [ "$INSTALL_TRUST_GATEWAY" = false ] &&
     { is_blank "${MULLION_INSTALL_AUTH_TOKEN:-}" || is_blank "${MULLION_INSTALL_SESSION_SECRET:-}"; }; then
     echo "WARNING: this primary has no auth configured in the generated .env — neither MULLION_TRUST_GATEWAY=true (if a reverse-proxy gateway like Traefik+Authentik already authenticates every request, see deploy/README.md) nor both MULLION_AUTH_TOKEN and MULLION_SESSION_SECRET (a shared secret pair, issues #19/#30 — required TOGETHER, one without the other still refuses to boot) nor MULLION_OIDC_* (all four required together — see docs/auth.md) is set. It will fail to boot at all (src/app.ts's #603 fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_INSTALL_TRUST_GATEWAY=true, or both MULLION_INSTALL_AUTH_TOKEN and MULLION_INSTALL_SESSION_SECRET, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
@@ -763,7 +905,7 @@ EOF
     HAS_ENROLLMENT_PATH=true
   fi
   HAS_PAIRING_IDENTITY=false
-  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$PAIR_SESSIONS_DIR/agent-identity.json" ]; then
+  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$(pair_identity_file "$PAIR_SESSIONS_DIR")" ]; then
     HAS_PAIRING_IDENTITY=true
   fi
   if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_ENROLLMENT_PATH" = false ] && [ "$HAS_PAIRING_IDENTITY" = false ]; then
