@@ -169,7 +169,8 @@ function refresh(app: FastifyInstance): Promise<PlacementCapability[]> {
  * would spawn the real `xcodebuild` for every app it builds.
  */
 export function warmCapabilitiesOnReady(app: FastifyInstance): void {
-  if (app.config.NODE_ENV === "test") return;
+  // No config at all is a bare test double, never a booted server.
+  if (!app.config || app.config.NODE_ENV === "test") return;
   app.addHook("onReady", () => {
     refresh(app).catch((err: unknown) => {
       app.log.warn({ err }, "[host-capabilities] startup probe failed");

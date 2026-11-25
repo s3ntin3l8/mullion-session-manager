@@ -201,8 +201,10 @@ function startCapabilitiesRead(
 ): Promise<CapabilitiesOutcome> | null {
   if (tracker.capabilitiesReading.has(hostId)) return null;
   tracker.capabilitiesReading.add(hostId);
-  return client
-    .detectCapabilities()
+  // Deferred so a synchronous throw lands in the rejection handler, as an
+  // awaited call inside a try did.
+  return Promise.resolve()
+    .then(() => client.detectCapabilities())
     .then(
       (res): CapabilitiesOutcome => res.capabilities,
       (err: unknown): CapabilitiesOutcome =>
