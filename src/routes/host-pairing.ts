@@ -9,9 +9,8 @@ import {
 } from "../services/host-pairing.js";
 import {
   extractAutomationBearer,
-  findLiveAutomationTokenBySecret,
+  findLiveAutomationTokenByBearerHeader,
   touchAutomationTokenLastUsed,
-  type VerifiedAutomationToken,
 } from "../services/automation-tokens.js";
 import { isAuthEnabled, isRequestAuthenticated } from "../services/auth.js";
 import { isIpAllowed } from "../services/cidr.js";
@@ -126,35 +125,35 @@ export async function hostPairingRoute(app: FastifyInstance) {
           // Issue #3440 — key per automation token id so one token's flood
           // never blocks another token (e.g. from the same controller IP).
           keyGenerator: (request: FastifyRequest) => {
-            const bearer = extractAutomationBearer(request.headers.authorization);
-            if (bearer) {
-              const matched = findLiveAutomationTokenBySecret(app, bearer);
-              if (matched) return `automation-token:${matched.id}`;
-            }
+            const matched = findLiveAutomationTokenByBearerHeader(
+              app,
+              request.headers.authorization,
+            );
+            if (matched) return `automation-token:${matched.id}`;
             return request.ip;
           },
         },
       },
     },
     async (request, reply) => {
-      const automationBearer = extractAutomationBearer(request.headers.authorization);
-      let automationToken: VerifiedAutomationToken | null = null;
-      if (automationBearer !== null) {
-        automationToken = findLiveAutomationTokenBySecret(app, automationBearer);
-        if (!automationToken) {
-          return reply.unauthorized("invalid automation token");
-        }
+      const automationToken = findLiveAutomationTokenByBearerHeader(
+        app,
+        request.headers.authorization,
+      );
+      if (automationToken) {
         if (
           automationToken.allowedCidrs &&
           !isIpAllowed(getRawRemoteAddress(request), automationToken.allowedCidrs)
         ) {
           return reply.unauthorized("automation token not allowed from this address");
         }
-      } else if (
-        isAuthEnabled(app.config) &&
-        !isRequestAuthenticated(request.headers, app.config)
-      ) {
-        return reply.unauthorized("authentication required");
+      } else {
+        if (isAuthEnabled(app.config) && !isRequestAuthenticated(request.headers, app.config)) {
+          return reply.unauthorized("authentication required");
+        }
+        if (extractAutomationBearer(request.headers.authorization) !== null) {
+          return reply.unauthorized("invalid automation token");
+        }
       }
 
       const hostId = request.body?.hostId;

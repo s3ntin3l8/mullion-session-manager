@@ -174,6 +174,15 @@ export function findLiveAutomationTokenBySecret(
   };
 }
 
+export function findLiveAutomationTokenByBearerHeader(
+  app: FastifyInstance,
+  authorizationHeader: string | undefined,
+): VerifiedAutomationToken | null {
+  const bearer = extractAutomationBearer(authorizationHeader);
+  if (!bearer) return null;
+  return findLiveAutomationTokenBySecret(app, bearer);
+}
+
 export function touchAutomationTokenLastUsed(app: FastifyInstance, id: string): void {
   app.db
     .update(automationTokens)
