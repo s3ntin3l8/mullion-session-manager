@@ -364,7 +364,7 @@ describe("HostsSection token rotation", () => {
     expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
     expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/keeps working/);
     expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/leaked/);
-    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/another rotation/);
+    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/Re-pair/);
     expect(screen.queryByText(/can no longer reach this primary/)).not.toBeInTheDocument();
   });
 

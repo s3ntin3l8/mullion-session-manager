@@ -192,7 +192,7 @@ describe("credential transitions (issue #2452)", () => {
       expect((await renew(id, fresh)).statusCode).toBe(200);
     });
 
-    it("does not disturb a live machine identity: the agent keeps renewing, the old token cannot claim", async () => {
+    it("does not disturb a live machine identity: the agent keeps renewing, and no token can claim the row", async () => {
       const { id, token: oldToken, first } = await claimedHost("rotating-live");
       const res = await post(`/api/hosts/${id}/rotate-token`);
       const newToken = res.json().token as string;
@@ -202,10 +202,12 @@ describe("credential transitions (issue #2452)", () => {
       ).toBe(401);
       const renewed = await renew(id, first.machine_credential);
       expect(renewed.statusCode).toBe(200);
-      // Re-claiming with the new token is the deliberate re-enroll: the live
-      // credential moves to the grace slot rather than stranding the agent.
+      // Issue #3439 — a rotated token retires a leaked one, it does not hand
+      // the host over: a row with a live identity is not claimable, not even
+      // with the freshly rotated token. Replacing the agent is a re-pair.
       const reclaim = await register({ token: newToken, wantsMachineCredential: true });
-      expect(reclaim.json().host_id).toBe(id);
+      expect(reclaim.statusCode).toBe(401);
+      // The agent keeps renewing on its own identity.
       expect((await renew(id, renewed.json().machine_credential)).statusCode).toBe(200);
     });
 

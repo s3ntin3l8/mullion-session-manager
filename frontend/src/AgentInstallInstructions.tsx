@@ -100,11 +100,10 @@ export function AgentInstallInstructions({
             <span className="create-modal-field-hint" data-testid="rotate-unaffected">
               The running agent keeps working: it holds a machine identity and renews on it. If this
               token leaked or was exposed, rotating it now was the right call (use “Rotate token and
-              discard it”): the old value can no longer be used to take over this host. To re-pair
-              the agent later (state file lost, identity revoked or expired after 90 days unused)
-              you need another rotation and a paste into the .env below, because the token the agent
-              still holds will no longer be accepted; then delete agent-identity.json and restart
-              it.
+              discard it”): the old value can no longer be used to take over this host. To replace
+              the agent itself — a lost state file, a revoked or expired identity — use Re-pair in
+              this host’s menu: it issues a one-time code that re-pairs the agent in place. A token
+              alone no longer takes over a host that holds a live identity.
             </span>
           )}
           <CopyBlock
