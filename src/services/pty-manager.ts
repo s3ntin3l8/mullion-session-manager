@@ -2448,7 +2448,7 @@ export class Session {
       recordSubagentStart: (agentId, agentType, now) =>
         self.recordSubagentStart(agentId, agentType, now),
       recordSubagentStop: (agentId, summary, now) => self.recordSubagentStop(agentId, summary, now),
-      registerPendingGate: (gateId, prompt) => self.registerPendingGate(gateId, prompt, self.hookNow),
+      registerPendingGate: (id, prompt) => self.registerPendingGate(id, prompt, self.hookNow),
       resolveGate: (gateId, decision, reason) => self.resolveGate(gateId, decision, reason),
       pendingGateIds: () => self.pendingGateIds(),
     };

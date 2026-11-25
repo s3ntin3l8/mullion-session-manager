@@ -255,9 +255,7 @@ export class AttentionTracker {
   clearIfConfirmedKind(kind: AttentionSignalKind, now: number = Date.now()): void {
     this.cancelDeferred(kind);
     if (this.state.state === "attention" && this.state.confirmedKind === kind) {
-      this.applyAttentionTransition(
-        advanceAttention(this.state, { type: "userInput", now }),
-      );
+      this.applyAttentionTransition(advanceAttention(this.state, { type: "userInput", now }));
     }
   }
 
@@ -297,9 +295,7 @@ export class AttentionTracker {
    */
   clearAttention(now: number = Date.now()): void {
     this.deferred.clear();
-    this.applyAttentionTransition(
-      advanceAttention(this.state, { type: "userInput", now }),
-    );
+    this.applyAttentionTransition(advanceAttention(this.state, { type: "userInput", now }));
   }
 
   /**
