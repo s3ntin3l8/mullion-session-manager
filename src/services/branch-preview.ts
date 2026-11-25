@@ -14,6 +14,7 @@ import { listActiveSessionsWithProject } from "./project-records.js";
 import {
   allocateHostPreviewPort,
   ensureHostBranch,
+  isHostRejection,
   resolveHostDockControls,
   type HostGitResult,
 } from "./host-git.js";
@@ -166,15 +167,10 @@ function hostFailure(
   // The agent answered but rejected the request (a 4xx other than a missing
   // route — e.g. the project's cwd outside its PROJECTS_ROOTS): retrying
   // won't help, so it is not reported as an unavailable host.
-  const rejected =
-    result.reason === "unreachable" &&
-    result.status !== undefined &&
-    result.status >= 400 &&
-    result.status < 500;
   const code: BranchPreviewErrorCode =
     result.reason === "unsupported"
       ? "host_unsupported"
-      : rejected
+      : isHostRejection(result)
         ? "host_refused"
         : "host_unavailable";
   return new BranchPreviewError(code, `Could not ${what} on the project's host: ${result.detail}`);

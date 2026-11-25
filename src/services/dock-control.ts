@@ -18,7 +18,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
 import { parseHostCwds } from "./host-cwds.js";
-import { resolveHostDockControls } from "./host-git.js";
+import { isHostRejection, resolveHostDockControls } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { projectCwdOnHost } from "./placement.js";
 import { getProjectRow } from "./session-host.js";
@@ -91,7 +91,7 @@ export async function configuredControls(
   if (read.reason === "unsupported") {
     return fail(409, read.detail, { code: "host_unsupported", updateHint: read.updateHint });
   }
-  if (read.reason === "unreachable" && read.status !== undefined && read.status < 500) {
+  if (isHostRejection(read)) {
     return fail(409, `Host ${host} refused the dock read: ${read.detail}`, {
       code: "host_refused",
     });

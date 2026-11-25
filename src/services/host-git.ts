@@ -396,11 +396,27 @@ export async function resyncHostStaleWorktree(
 }
 
 /**
+ * Whether a failed host step was the agent ANSWERING with a rejection — a 4xx
+ * other than a missing route (that one is `"unsupported"`), e.g. a cwd outside
+ * its PROJECTS_ROOTS: not retryable, and not an unreachable host. The one
+ * place callers that surface HostGitResult failures classify it (#3428).
+ */
+export function isHostRejection(result: HostGitResult<unknown>): boolean {
+  return (
+    !result.ok &&
+    result.reason === "unreachable" &&
+    result.status !== undefined &&
+    result.status >= 400 &&
+    result.status < 500
+  );
+}
+
+/**
  * Issue #3428 — the project's configured dock controls (`.crs/dock.json` +
  * the global default) read from its checkout on whichever host owns it, with
- * HostGitResult's failure taxonomy: unlike `configuredControls`' blanket
- * "unreachable", an agent that answered but rejected the request (a cwd
- * outside its PROJECTS_ROOTS) stays distinguishable from one that is down.
+ * HostGitResult's failure taxonomy, so an agent that answered but rejected
+ * the read stays distinguishable from one that is down
+ * (`configuredControls` and branch previews both read through it).
  */
 export async function resolveHostDockControls(
   app: FastifyInstance,
