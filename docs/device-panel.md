@@ -101,7 +101,8 @@ backend; the first real Android operation reports it.
 
 ### iOS Simulator
 
-The iOS Simulator driver (`src/services/device-drivers/ios-simulator.ts`,
+The iOS Simulator driver (`src/services/device-drivers/ios-simulator.ts`, with its
+screenshot in `ios-screenshot.ts` and the `xcrun simctl` runner in `simctl.ts`,
 [#1943](https://github.com/s3ntin3l8/mullion-session-manager/issues/1943)) runs
 on macOS hosts when all of the following hold (`iosSimulatorAvailable()` in
 `src/services/device-kinds.ts`):
@@ -154,7 +155,8 @@ Preview menu. Only http(s) URLs are accepted (`simctl openurl` would otherwise l
 any registered URL scheme). It is manual: nothing opens on dev-server start. Android
 devices answer it with a 400.
 
-**iOS screenshots go through a temp file (#3517).** `screenshot()` makes a fresh
+**iOS screenshots go through a temp file (#3517).** `screenshot()`
+(`simctlScreenshot` in `src/services/device-drivers/ios-screenshot.ts`) makes a fresh
 directory under `os.tmpdir()` with `mkdtemp` (mode 0700), has `simctl` write
 `screenshot.png` there, checks its size against the 64 MiB cap before reading it,
 checks the PNG signature and header, and removes the directory in a `finally`,

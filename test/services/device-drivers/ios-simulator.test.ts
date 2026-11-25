@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type * as ChildProcess from "node:child_process";
+import type * as FsPromises from "node:fs/promises";
 import { existsSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
@@ -9,6 +10,20 @@ vi.mock("node:child_process", async (orig) => ({
   ...(await orig<typeof ChildProcess>()),
   execFile: execFileMock,
 }));
+/** `stat` passes through to the real one unless a test makes it fail once. */
+const statFail = vi.hoisted(() => ({ next: null as Error | null }));
+vi.mock("node:fs/promises", async (orig) => {
+  const actual = await orig<typeof FsPromises>();
+  return {
+    ...actual,
+    stat: (async (...a: Parameters<typeof actual.stat>) => {
+      const err = statFail.next;
+      statFail.next = null;
+      if (err) throw err;
+      return actual.stat(...a);
+    }) as typeof actual.stat,
+  };
+});
 
 import {
   IosSimulatorDriver,
@@ -345,6 +360,13 @@ describe("IosSimulatorDriver", () => {
       res.shot.file = png().subarray(0, 10);
       res.fail.io = new Error("timed out");
       await expect(driver.screenshot()).rejects.toThrow("timed out");
+      expect(existsSync(shotDir(calls))).toBe(false);
+    });
+
+    it("rethrows a stat failure other than ENOENT, and still cleans up", async () => {
+      const { driver, calls } = make();
+      statFail.next = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      await expect(driver.screenshot()).rejects.toThrow("EACCES: permission denied");
       expect(existsSync(shotDir(calls))).toBe(false);
     });
 
