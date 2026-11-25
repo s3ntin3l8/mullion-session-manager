@@ -322,6 +322,61 @@ describe("branch previews on a remote host (#3428)", () => {
     ).toMatchObject({ branch: "feat/x" });
   });
 
+  it("matches a UNC checkout's preview worktree by win32 rules", async () => {
+    expect(
+      await occupied(
+        "\\\\srv\\share\\proj",
+        `\\\\srv\\share\\proj\\.mullion-worktrees\\${nameOf("feat/x")}`,
+      ),
+    ).toMatchObject({ code: "worktree_busy" });
+    expect(
+      await occupied(
+        "\\\\srv\\share\\proj",
+        `\\\\srv\\share\\other\\.mullion-worktrees\\${nameOf("feat/x")}`,
+      ),
+    ).toMatchObject({ branch: "feat/x" });
+  });
+
+  describe("GET /api/projects/:id/dock/controls on an agent host", () => {
+    const list = (projectId: number) =>
+      app.inject({ method: "GET", url: `/api/projects/${projectId}/dock/controls` });
+
+    it("lists the agent's configured controls", async () => {
+      const { projectId } = await remoteProject();
+      scriptAgent();
+      const res = await list(projectId);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([
+        expect.objectContaining({ id: "web", command: "vite --port $PORT", running: null }),
+      ]);
+    });
+
+    it("keeps an outage a 503, but tells a rejecting or outdated agent apart", async () => {
+      const { projectId, hostId } = await remoteProject();
+      scriptAgent();
+      delete agent.scripted.resolveDock;
+      const down = await list(projectId);
+      expect(down.statusCode).toBe(503);
+      expect(down.json().message).toMatch(/is unreachable/);
+
+      agent.scripted.resolveDock = () => {
+        throw new HostRequestError(hostId, 400, "cwd must be within this agent's PROJECTS_ROOTS");
+      };
+      const refused = await list(projectId);
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({ code: "host_refused" });
+      expect(refused.json().message).toMatch(/PROJECTS_ROOTS/);
+
+      agent.scripted.resolveDock = () => {
+        throw new HostRequestError(hostId, 404, "Not Found");
+      };
+      const old = await list(projectId);
+      expect(old.statusCode).toBe(409);
+      expect(old.json()).toMatchObject({ code: "host_unsupported" });
+      expect(old.json().updateHint).toBeTruthy();
+    });
+  });
+
   it("does not hand two concurrent creates on one host the same port", async () => {
     const { projectId, hostId } = await remoteProject();
     scriptAgent();

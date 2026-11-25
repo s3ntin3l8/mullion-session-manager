@@ -188,21 +188,22 @@ function hostFailure(
  * matches, so a live session in it refuses rather than loses its worktree.
  */
 function isPreviewWorktreeOf(sessionCwd: string, projectCwd: string, name: string): boolean {
-  // A Windows host's paths (`C:\\proj`) by win32 rules, case-insensitively;
-  // everything else as POSIX.
-  const windows = WINDOWS_DRIVE.test(projectCwd) || WINDOWS_DRIVE.test(sessionCwd);
+  // A Windows host's paths (drive-letter, UNC and device paths) by win32
+  // rules, case-insensitively; everything else as POSIX.
+  const windows = WINDOWS_PATH.test(projectCwd) || WINDOWS_PATH.test(sessionCwd);
   const p = windows ? path.win32 : path.posix;
   const fold = (s: string) => (windows ? s.toLowerCase() : s);
   if (fold(p.basename(sessionCwd)) !== fold(name)) return false;
   const root = p.dirname(sessionCwd);
   if (p.basename(root) !== ".mullion-worktrees") return false;
   const checkout = fold(p.dirname(root));
-  if (WINDOWS_DRIVE.test(projectCwd) || (!windows && p.isAbsolute(projectCwd))) {
+  if (WINDOWS_PATH.test(projectCwd) || (!windows && p.isAbsolute(projectCwd))) {
     return fold(p.resolve(projectCwd)) === checkout;
   }
-  // `~` alone is the home directory itself, which only the host knows: any
-  // checkout matches. `~/rest` matches a checkout ending in `/rest`.
-  if (projectCwd === "~") return true;
+  // `~/rest` matches a checkout ending in `/rest`. Anything else — `~` alone
+  // (the home directory, which only the host knows) or a cwd this cannot
+  // place — matches below, so a live session refuses rather than loses its
+  // worktree.
   if (projectCwd.startsWith("~/") || projectCwd.startsWith("~\\")) {
     const tail = fold(p.normalize(projectCwd.slice(2))).replace(/[\\/]+$/, "");
     if (tail === "" || tail === ".") return true;
@@ -211,7 +212,8 @@ function isPreviewWorktreeOf(sessionCwd: string, projectCwd: string, name: strin
   return true;
 }
 
-const WINDOWS_DRIVE = /^[A-Za-z]:[\\/]/;
+// A drive-letter path, or one starting with `\\` (UNC, and `\\?\` device paths).
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
 
 /**
  * Makes way for the branch's `dock-preview-*` worktree. If a live session

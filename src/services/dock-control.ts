@@ -18,10 +18,9 @@ import { and, desc, eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
 import { parseHostCwds } from "./host-cwds.js";
+import { resolveHostDockControls } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { projectCwdOnHost } from "./placement.js";
-import { resolveProjectDock } from "./project-config.js";
-import { getRemoteHostClient } from "./remote-host-client.js";
 import { getProjectRow } from "./session-host.js";
 import { killSession } from "./session-lifecycle.js";
 import { withLiveStatus } from "./session-live-info.js";
@@ -83,18 +82,22 @@ export async function configuredControls(
   if (!project) return fail(404, "Project not found");
   const base = resolveLaunchBase(project, hostId);
   if (!base.ok) return base;
-  if (base.value.hostId === LOCAL_HOST_ID) {
-    return { ok: true, value: resolveProjectDock(base.value.cwd, app.config.CRS_CONFIG_DIR) };
+  const { hostId: host, cwd } = base.value;
+  const read = await resolveHostDockControls(app, host, cwd);
+  if (read.ok) return { ok: true, value: read.value };
+  // #3428 — an agent that answered is not reported as unreachable: one that
+  // rejected the read (its cwd outside its PROJECTS_ROOTS) or predates the
+  // route is a 409 that says so; only an outage is the retryable 503.
+  if (read.reason === "unsupported") {
+    return fail(409, read.detail, { code: "host_unsupported", updateHint: read.updateHint });
   }
-  try {
-    return {
-      ok: true,
-      value: await getRemoteHostClient(app, base.value.hostId).resolveDock(base.value.cwd),
-    };
-  } catch (err) {
-    app.log.warn({ hostId: base.value.hostId, err }, "host unreachable, dock unavailable");
-    return fail(503, `Host ${base.value.hostId} is unreachable`);
+  if (read.reason === "unreachable" && read.status !== undefined && read.status < 500) {
+    return fail(409, `Host ${host} refused the dock read: ${read.detail}`, {
+      code: "host_refused",
+    });
   }
+  app.log.warn({ hostId: host, detail: read.detail }, "host unreachable, dock unavailable");
+  return fail(503, `Host ${host} is unreachable`);
 }
 
 /** The active dock session launched from `controlId`, newest first. */
