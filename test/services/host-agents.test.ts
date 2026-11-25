@@ -314,10 +314,15 @@ describe("host agent tracker (issue #2240)", () => {
         await run;
         expect(tracker.get("mac")).toMatchObject({ capabilities: null });
         tracker.invalidateHost("mac");
+        // The new agent's own refresh records a fresh entry (the old read still
+        // holds the slot, so capabilities stay unknown); only the epoch guard
+        // keeps the OLD agent's late answer out of it.
+        await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+        expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: null });
         caps.resolve({ capabilities: ["xcode"] });
         await caps.promise;
         await vi.advanceTimersByTimeAsync(0);
-        expect(tracker.get("mac")?.capabilities ?? null).toBeNull();
+        expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: null });
       } finally {
         vi.useRealTimers();
       }

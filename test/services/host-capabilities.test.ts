@@ -13,7 +13,8 @@ vi.mock("node:child_process", () => ({
 
 const { detectCapabilities, getCachedCapabilities, warmCapabilitiesOnReady } =
   await import("../../src/services/host-capabilities.js");
-const { XCRUN_TIMEOUT_MS } = await import("../../src/services/xcode-probe-budget.js");
+const { XCRUN_TIMEOUT_MS, XCODE_PROBE_STEPS } =
+  await import("../../src/services/xcode-probe-budget.js");
 
 const realPlatform = process.platform;
 function stubPlatform(value: string) {
@@ -79,6 +80,8 @@ describe("host capability detection (issue #2306)", () => {
     xcrunExits(true);
     const app = fakeApp({ enabled: false, emulatorPath: "" });
     expect(await detectCapabilities(app)).toEqual(["xcode"]);
+    // The client's request budget assumes this many steps (xcode-probe-budget.ts).
+    expect(execFile).toHaveBeenCalledTimes(XCODE_PROBE_STEPS);
     expect(execFile).toHaveBeenCalledWith(
       "xcrun",
       ["--find", "simctl"],

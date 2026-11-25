@@ -10,8 +10,12 @@
 // headroom.
 export const XCRUN_TIMEOUT_MS = 30_000;
 
-/** `xcrun --find simctl`, `xcodebuild -checkFirstLaunchStatus`, `simctl list`. */
-const XCODE_PROBE_STEPS = 3;
+/**
+ * `xcrun --find simctl`, `xcodebuild -checkFirstLaunchStatus`, `simctl list`.
+ * host-capabilities.test.ts pins this against the commands probeXcode runs,
+ * so a new step cannot leave the client's budget short of the real worst case.
+ */
+export const XCODE_PROBE_STEPS = 3;
 /** An inconclusive probe is retried once. */
 export const XCODE_PROBE_ATTEMPTS = 2;
 
