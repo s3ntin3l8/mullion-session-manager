@@ -57,6 +57,10 @@ export const DEGRADED_AFTER_BUSY = 3;
 export class HostHeartbeatTracker {
   private state = new Map<string, HeartbeatEntry>();
   private lastWrittenAt = new Map<string, number>();
+  // Issue #3515 — bumped by every verdict write, so a caller can tell whether
+  // anything was recorded since it started a probe. A counter, not a time: a
+  // millisecond clock cannot order two writes in the same millisecond.
+  private writes = new Map<string, number>();
 
   constructor(private readonly db?: FastifyInstance["db"]) {}
 
@@ -64,6 +68,20 @@ export class HostHeartbeatTracker {
 
   setOnOnline(fn?: (hostId: string) => void): void {
     this.onOnline = fn;
+  }
+
+  /** An opaque token for "the verdict as of now"; see recordedSince. */
+  writeMark(hostId: string): number {
+    return this.writes.get(hostId) ?? 0;
+  }
+
+  /** Whether any verdict was recorded for the host after `mark` was taken. */
+  recordedSince(hostId: string, mark: number): boolean {
+    return this.writeMark(hostId) !== mark;
+  }
+
+  private bump(hostId: string): void {
+    this.writes.set(hostId, this.writeMark(hostId) + 1);
   }
 
   getHealth(hostId: string): HostHealth {
@@ -120,6 +138,7 @@ export class HostHeartbeatTracker {
    * predates this tracker entry.
    */
   recordSuccess(hostId: string): boolean {
+    this.bump(hostId);
     const now = Date.now();
     const lastWritten = this.lastWrittenAt.get(hostId);
     if (
@@ -154,6 +173,7 @@ export class HostHeartbeatTracker {
    * with the reason "channel saturated". Returns true once past the threshold.
    */
   recordBusy(hostId: string): boolean {
+    this.bump(hostId);
     const prev = this.state.get(hostId);
     const busy = (prev?.busy ?? 0) + 1;
     const saturated = busy >= DEGRADED_AFTER_BUSY;
@@ -168,6 +188,7 @@ export class HostHeartbeatTracker {
   }
 
   recordFailure(hostId: string): void {
+    this.bump(hostId);
     const prev = this.state.get(hostId);
     const missed = (prev?.missed ?? 0) + 1;
     this.state.set(hostId, {
@@ -187,6 +208,7 @@ export class HostHeartbeatTracker {
    * after the agent comes back overwrites this the normal way — nothing
    * here is sticky. */
   markOffline(hostId: string): void {
+    this.bump(hostId);
     const prev = this.state.get(hostId);
     this.state.set(hostId, {
       status: "offline",
@@ -207,6 +229,9 @@ export class HostHeartbeatTracker {
     for (const id of this.lastWrittenAt.keys()) {
       if (!currentIds.has(id)) this.lastWrittenAt.delete(id);
     }
+    for (const id of this.writes.keys()) {
+      if (!currentIds.has(id)) this.writes.delete(id);
+    }
   }
 
   /** Drops one host's tracked entry — call when its baseUrl/token changes
@@ -215,6 +240,7 @@ export class HostHeartbeatTracker {
    * Same self-invalidation reasoning as remote-host-client.ts's
    * clientCache, which already does this for the HTTP client itself. */
   invalidateHost(hostId: string): void {
+    this.bump(hostId);
     this.state.delete(hostId);
   }
 
@@ -222,6 +248,7 @@ export class HostHeartbeatTracker {
   clearForTests(): void {
     this.state.clear();
     this.lastWrittenAt.clear();
+    this.writes.clear();
   }
 }
 
@@ -254,9 +281,10 @@ function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T | typeof TI
  * recordSuccess, and issue #2090).
  *
  * Two rules keep the two callers from fighting:
- *   - `startedAt` (the sweep passes it): a result is dropped when the tracker
- *     recorded something newer while the probe was out (a Test click, a
- *     deregister). A stale answer never overwrites a newer verdict.
+ *   - `sinceMark` (the sweep passes the tracker's writeMark from before its
+ *     probe): a result is dropped when the tracker recorded something while
+ *     the probe was out (a Test click, a deregister). A stale answer never
+ *     overwrites a newer verdict.
  *   - `fromTest`: a Test click is one observation, not a sweep tick, so it may
  *     take a reachable host down to degraded but never counts further misses
  *     (three quick clicks must not mark a host offline, the double count the
@@ -267,17 +295,11 @@ export function applyProbeResult(
   tracker: HostHeartbeatTracker,
   hostId: string,
   probe: HostProbeResult,
-  opts: { startedAt?: number; fromTest?: boolean } = {},
+  opts: { sinceMark?: number; fromTest?: boolean } = {},
 ): { recovered: boolean; cameOnline: boolean } {
   const none = { recovered: false, cameOnline: false };
+  if (opts.sinceMark !== undefined && tracker.recordedSince(hostId, opts.sinceMark)) return none;
   const before = tracker.getHealth(hostId);
-  if (
-    opts.startedAt !== undefined &&
-    before.lastCheckedAt !== null &&
-    before.lastCheckedAt > opts.startedAt
-  ) {
-    return none;
-  }
   if (probe === "busy") {
     if (!opts.fromTest) tracker.recordBusy(hostId);
     return none;
@@ -295,6 +317,31 @@ export function applyProbeResult(
   const wasPending = before.status === "pending";
   const recovered = tracker.recordSuccess(hostId);
   return { recovered, cameOnline: wasPending || recovered };
+}
+
+/**
+ * Issue #3515 — one probe of a host, never longer than
+ * heartbeatProbeDeadlineMs(): bounded here as well as inside the client, so a
+ * probe that never settles costs one miss and never a sweep, or a Settings
+ * request (POST /api/hosts/:id/ping uses this too). A throw is "down".
+ */
+export async function boundedProbe(app: FastifyInstance, hostId: string): Promise<HostProbeResult> {
+  try {
+    const deadlineMs = heartbeatProbeDeadlineMs();
+    const result = await withDeadline(getRemoteHostClient(app, hostId).probe(), deadlineMs);
+    if (result !== TIMED_OUT) return result;
+    app.log.warn(
+      { hostId, deadlineMs },
+      "[host-heartbeat] the probe did not settle within its deadline; counting a miss",
+    );
+    return "down";
+  } catch (err) {
+    // getRemoteHostClient throws synchronously if the row vanished
+    // between listHosts() and here (e.g. concurrent delete) — treat
+    // exactly like an unreachable ping rather than crashing the sweep.
+    app.log.warn({ err, hostId }, "[host-heartbeat] ping threw unexpectedly");
+    return "down";
+  }
 }
 
 /**
@@ -324,32 +371,11 @@ async function sweepHost(
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
 ): Promise<{ recovered: boolean; cameOnline: boolean }> {
-  let probe: HostProbeResult;
-  const startedAt = Date.now();
-  try {
-    // Issue #3515 — bounded here as well as inside the client: a probe that
-    // never settles must cost this host one miss, never the whole sweep.
-    const deadlineMs = heartbeatProbeDeadlineMs();
-    const result = await withDeadline(getRemoteHostClient(app, hostId).probe(), deadlineMs);
-    if (result === TIMED_OUT) {
-      app.log.warn(
-        { hostId, deadlineMs },
-        "[host-heartbeat] the probe did not settle within its deadline; counting a miss",
-      );
-      probe = "down";
-    } else {
-      probe = result;
-    }
-  } catch (err) {
-    // getRemoteHostClient throws synchronously if the row vanished
-    // between listHosts() and here (e.g. concurrent delete) — treat
-    // exactly like an unreachable ping rather than crashing the sweep.
-    app.log.warn({ err, hostId }, "[host-heartbeat] ping threw unexpectedly");
-    probe = "down";
-  }
+  const sinceMark = tracker.writeMark(hostId);
+  const probe = await boundedProbe(app, hostId);
   // Up but saturated is recorded as busy (bounded by the tracker), with no
   // capacity poll: it would only queue behind the same hung transfers.
-  const { recovered, cameOnline } = applyProbeResult(tracker, hostId, probe, { startedAt });
+  const { recovered, cameOnline } = applyProbeResult(tracker, hostId, probe, { sinceMark });
   if (probe !== "ok") return { recovered: false, cameOnline: false };
 
   // Issue #2240 — the agent CLI list is re-read when its TTL lapses. A host

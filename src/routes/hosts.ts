@@ -47,6 +47,7 @@ import {
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
 import type { ReleaseByTagResult } from "../services/update-checker.js";
 import type { UpdateStatus } from "../services/update-apply.js";
+import { boundedProbe } from "../services/host-heartbeat.js";
 
 interface CreateHostBody {
   name: string;
@@ -478,7 +479,8 @@ export async function hostsRoute(app: FastifyInstance) {
     // never say online while placement (which reads the same tracker) says
     // offline. A busy channel keeps the previous verdict, as in the sweep.
     // With the heartbeat off nothing is recorded and the raw probe answers.
-    const probe = await getRemoteHostClient(app, id).probe();
+    // Bounded like the sweep's probe, so a request can never hang the click.
+    const probe = await boundedProbe(app, id);
     const health = app.recordHostProbe?.(id, probe) ?? null;
     return { online: health ? health.status === "online" : probe !== "down" };
   });

@@ -202,11 +202,6 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
 
     // While the sweep's probe is out, Test reaches the host.
     sweepProbe = false;
-    // Test's verdict must be strictly newer than the probe's start (ms clock).
-    const sweepStarted = Date.now();
-    while (Date.now() <= sweepStarted) {
-      // spin a millisecond
-    }
     const res = await app.inject({ method: "POST", url: `/api/hosts/${hostId}/ping` });
     expect(res.json()).toEqual({ online: true });
 
@@ -228,6 +223,18 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
     await vi.advanceTimersByTimeAsync(heartbeatCapacityDeadlineMs() + 30_000);
     expect(probeCalls.get(hostId)).toBeGreaterThan(calls);
     expect(await healthOf(hostId)).toBe("online");
+  });
+
+  it("bounds a Test whose probe never settles, answering offline", async () => {
+    const { host_id: hostId } = await registerOutboundAgent("wedged");
+    probes.set(hostId, async () => "ok");
+    startSweepOnFakeTimers();
+    await vi.advanceTimersByTimeAsync(0);
+    probes.set(hostId, never);
+    const pending = app.inject({ method: "POST", url: `/api/hosts/${hostId}/ping` });
+    await vi.advanceTimersByTimeAsync(heartbeatProbeDeadlineMs());
+    expect((await pending).json()).toEqual({ online: false });
+    expect(await healthOf(hostId)).toBe("degraded");
   });
 
   it("records nothing from Test while the heartbeat is off", async () => {

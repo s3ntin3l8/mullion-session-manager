@@ -1639,8 +1639,9 @@ settled froze every host's health until the primary restarted: an
 outbound-only Mac stayed "offline" for hours after it had reconnected.)
 
 **Test agrees with placement** (#3515). **Test** in Settings → Hosts
-(`POST /api/hosts/:id/ping`) runs the same probe as the sweep and records its
-result in the same place. A success marks the host online and, after a
+(`POST /api/hosts/:id/ping`) runs the same probe as the sweep, under the same
+deadline (a probe that never answers is reported offline, not left hanging), and
+records its result in the same place. A success marks the host online and, after a
 deregister or two missed pings, runs the same recovery as the sweep (forced
 reconnects, the agent list re-read). A failure takes an online or pending host
 to degraded, but repeated failing clicks never count further misses: escalating
