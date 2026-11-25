@@ -129,7 +129,9 @@ starts on the project's own placement again.
 - Dev-server port detection and Docker Compose discovery run on the agent too
   (see "Docker Compose services" and the detection section below); a host
   without Docker, or an older agent, just contributes no Docker monitors.
-- Not yet on a remote host: branch previews (`409 remote_unsupported`).
+- Branch previews run on the project's own host, the agent preparing the
+  branch, its worktree and the port (see
+  [`browser-previews.md`](browser-previews.md#on-a-remote-host-3428)).
 
 ### Port conflicts
 

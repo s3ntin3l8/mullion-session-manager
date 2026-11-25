@@ -360,10 +360,12 @@ describe("branch previews (issues #2016/#2018)", () => {
 
     const { cwd } = repo();
     writeDock(cwd, [{ id: "dev", title: "Dev", command: "npm run dev" }]);
+    // #3428 — a remote project is no longer refused outright: its host is
+    // asked, and one that can't be reached (no hosts row here) is unavailable.
     await expectCode(
       getOrCreateBranchPreview(app, insertProject(app, cwd, "remote-1"), "feat/x"),
-      "remote_unsupported",
-      409,
+      "host_unavailable",
+      503,
     );
 
     const projectId = insertProject(app, cwd);
