@@ -298,6 +298,16 @@ export function DeviceCreateForm({
     );
   }, [simulatorUdid, simulators, activeIosUdids]);
 
+  // An empty Name falls back to the selected simulator's or AVD's own name, so
+  // the placeholder shows that name, not a fixed example that reads as the
+  // name the device will get (#3516). Nothing selected: no placeholder.
+  const defaultName =
+    effectiveCreatePlatform === "ios"
+      ? activeIosUdids.has(selectedSimulatorUdid)
+        ? ""
+        : (simulators.find((s) => s.udid === selectedSimulatorUdid)?.name ?? "")
+      : avdName;
+
   const submitCreate = () => {
     if (creating) return;
     if (effectiveCreatePlatform === "ios") {
@@ -493,6 +503,7 @@ export function DeviceCreateForm({
               >
                 <TextInput
                   style={{ width: 220 }}
+                  aria-label="New virtual device name"
                   placeholder="Pixel_8_API_35"
                   value={newAvdName}
                   onChange={(e) => setNewAvdName(e.target.value)}
@@ -604,7 +615,8 @@ export function DeviceCreateForm({
         >
           <TextInput
             style={{ width: 220 }}
-            placeholder={effectiveCreatePlatform === "ios" ? "iPhone 16" : "Pixel 8"}
+            aria-label="Name"
+            placeholder={defaultName}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {

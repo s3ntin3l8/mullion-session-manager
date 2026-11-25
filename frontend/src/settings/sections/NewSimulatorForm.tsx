@@ -77,7 +77,9 @@ export function NewSimulatorForm({
   const selectedRuntime = runtimes.some((r) => r.id === runtimeId)
     ? runtimeId
     : (runtimes[0]?.id ?? "");
-  // An empty name falls back to "<device type> (<runtime>)", as Xcode names one.
+  // An empty name falls back to "<device type> (<runtime>)", as Xcode names one;
+  // the placeholder shows exactly that, and nothing (not a fixed example) until
+  // the catalog has loaded.
   const typeName = deviceTypes.find((t) => t.id === selectedType)?.name;
   const runtimeName = runtimes.find((r) => r.id === selectedRuntime)?.name;
   const defaultName = typeName && runtimeName ? `${typeName} (${runtimeName})` : "";
@@ -125,7 +127,7 @@ export function NewSimulatorForm({
             <TextInput
               style={{ width: 220 }}
               aria-label="New simulator name"
-              placeholder={defaultName || "iPhone 18 Pro (iOS 27.0)"}
+              placeholder={defaultName}
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {

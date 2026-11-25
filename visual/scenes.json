@@ -947,10 +947,10 @@
           "click": "role=button[name=\"Add a simulator\"]"
         },
         {
-          "waitFor": "input[placeholder=\"iPhone 16\"]"
+          "waitFor": "input[placeholder=\"iPad Pro 13-inch (M4)\"]"
         },
         {
-          "hover": "input[placeholder=\"iPhone 16\"]"
+          "hover": "input[placeholder=\"iPad Pro 13-inch (M4)\"]"
         }
       ],
       "settle": 500
