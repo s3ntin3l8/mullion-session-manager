@@ -148,8 +148,3 @@ export interface PlacementPreview {
    */
   refusal?: { detail: string; transient: boolean; unreadable?: boolean };
 }
-
-export interface HostSettings {
-  heartbeatSeconds: number;
-  staleAfterDays: number;
-}

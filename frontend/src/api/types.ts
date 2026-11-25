@@ -49,7 +49,6 @@ import type {
   SetupStatus,
   StoredEventRow,
   PreProvision,
-  MergeCounts,
   GitHubIssueOrPr,
   GitHubActionsRun,
   GitHubJob,
@@ -812,20 +811,6 @@ export interface PreparingCheckoutResponse {
   preparingCheckout: { projectId: number; hostId: string };
 }
 
-export interface DuplicateProject {
-  id: number;
-  name: string;
-  hostId: string;
-  cwd: string;
-  createdAt: string;
-}
-
-export interface DuplicateProjectEntry extends DuplicateProject {
-  counts: MergeCounts;
-  // Why merging this one into the survivor is refused right now, or null.
-  refusal: { code: string; message: string } | null;
-}
-
 export interface DetectCheckoutsResult {
   // False while settings.autoDetectHostCheckouts is off: nothing was changed.
   enabled: boolean;
@@ -893,6 +878,11 @@ export type {
   GitHubPRsStatus,
   DeleteBranchReason,
   DeleteBranchResult,
+  DeleteBranchResponse,
+  DuplicateMember,
+  DuplicateEntry,
+  MergeRefusal,
+  MergeRefusalCode,
   DeviceFlowSummary,
   BundleSyncStatusReport,
   BundleSyncCliStatus,
