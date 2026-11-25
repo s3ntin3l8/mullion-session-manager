@@ -234,6 +234,24 @@ describe("the deprecation qualifier (issue #3476)", () => {
     expect(deprecatedKindLabel(host)).toBe("manual token (deprecated)");
   });
 
+  it("keeps the agent words visible for a manual-token host the primary also dials by address", () => {
+    // Such a host is BOTH: its credential is a static token AND it has no
+    // machine identity. The chip used to say "not registered" — it must not
+    // lose that, and it must name the kind that has to change.
+    const host = makeHost({
+      deprecatedKind: "manual-token",
+      legacyAgent: true,
+      mullionVersion: "0.3.62",
+    });
+    expect(deprecatedKindLabel(host)).toBe("not registered · manual token (deprecated)");
+    const old = makeHost({
+      deprecatedKind: "manual-token",
+      legacyAgent: true,
+      mullionVersion: "0.3.50",
+    });
+    expect(deprecatedKindLabel(old)).toBe("outdated agent · manual token (deprecated)");
+  });
+
   it("has no qualifier for a host that is not deprecated", () => {
     expect(deprecatedKindLabel(makeHost())).toBeNull();
     expect(deprecatedKindLabel(makeHost({ deprecatedKind: null }))).toBeNull();
@@ -241,15 +259,21 @@ describe("the deprecation qualifier (issue #3476)", () => {
     expect(deprecatedKindTitle(makeHost({ deprecatedKind: null }))).toBeNull();
   });
 
-  it("points at Re-pair or Add host as the migration", () => {
-    for (const kind of ["legacy-agent", "manual-token"] as const) {
-      const title = deprecatedKindTitle(makeHost({ deprecatedKind: kind }));
-      expect(title).toMatch(/Deprecated/);
-      expect(title).toMatch(/Re-pair/);
-      expect(title).toMatch(/add a new host/);
-    }
-    expect(deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }))).toMatch(
-      /MULLION_AGENT_TOKEN/,
-    );
+  it("points at a migration that exists today, not at a Re-pair the row menu does not offer", () => {
+    // The row menu's Re-pair entry only appears for a host that holds (or
+    // held) a machine identity — a host that is still fully on a legacy
+    // path has no such entry, so the hover must not send the operator
+    // looking for it.
+    const legacy = deprecatedKindTitle(makeHost({ deprecatedKind: "legacy-agent" }));
+    expect(legacy).toMatch(/Deprecated/);
+    expect(legacy).toMatch(/MULLION_PRIMARY_URL/);
+    expect(legacy).toMatch(/one-time pairing code/);
+    expect(legacy).not.toMatch(/Re-pair/);
+
+    const manual = deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }));
+    expect(manual).toMatch(/Deprecated/);
+    expect(manual).toMatch(/MULLION_AGENT_TOKEN/);
+    expect(manual).toMatch(/one-time pairing code/);
+    expect(manual).not.toMatch(/Re-pair/);
   });
 });

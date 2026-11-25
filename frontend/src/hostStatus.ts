@@ -108,10 +108,18 @@ export const DEPRECATED_WORD = "deprecated";
  * Issue #3476 — the chip text for a host that is still on a legacy path, or
  * null when it is on the current one.
  *
- * For a legacy agent this is the EXISTING chip plus the qualifier ("outdated
- * agent (deprecated)"), so the chip still says what is wrong with the agent
- * itself; for a manual-token host there is no such chip, so it gets one of
- * its own.
+ * The chip keeps BOTH facts when a host has both:
+ *
+ * - a legacy agent reads as the EXISTING chip plus the qualifier ("outdated
+ *   agent (deprecated)"), so the chip still says what is wrong with the agent
+ *   itself;
+ * - a manual-token host gets a chip of its own ("manual token (deprecated)") —
+ *   the static token is what has to change, and saying "outdated agent" there
+ *   would point at the wrong fix;
+ * - a manual-token host the primary also dials by address is BOTH (it has no
+ *   machine identity AND its own static token), so the chip carries the agent
+ *   words AND the kind: nothing that was visible before the deprecation
+ *   qualifier disappears.
  */
 export function deprecatedKindLabel(host: Host): string | null {
   switch (host.deprecatedKind) {
@@ -120,7 +128,9 @@ export function deprecatedKindLabel(host: Host): string | null {
         ? `${legacyAgentLabels(host).short} (${DEPRECATED_WORD})`
         : `legacy agent (${DEPRECATED_WORD})`;
     case "manual-token":
-      return `manual token (${DEPRECATED_WORD})`;
+      return host.legacyAgent === true
+        ? `${legacyAgentLabels(host).short} · manual token (${DEPRECATED_WORD})`
+        : `manual token (${DEPRECATED_WORD})`;
     default:
       return null;
   }
@@ -128,22 +138,38 @@ export function deprecatedKindLabel(host: Host): string | null {
 
 /**
  * Issue #3476 — the hover text for a host that is still on a legacy path, or
- * null when it is on the current one. It says what is deprecated and what
- * replaces it: Re-pair the host, or add a new one (Settings → Hosts).
+ * null when it is on the current one.
+ *
+ * It says what is deprecated and what REPLACES it, and every path it names
+ * exists today:
+ *
+ * - a legacy agent is fixed agent-side — upgrade it and point it at the
+ *   primary (MULLION_PRIMARY_URL) so it registers with a machine identity —
+ *   or replaced by a host paired from a one-time pairing code;
+ * - a manual-token host is fixed by pairing: a one-time pairing code
+ *   replaces the static token with a machine identity.
+ *
+ * The row menu's _Re-pair_ entry is deliberately NOT named here: it only
+ * appears once a host holds a machine identity (or had one revoked), and a
+ * host that is still fully on a legacy path has no such entry — the Settings
+ * row is where the pairing code is minted.
  */
 export function deprecatedKindTitle(host: Host): string | null {
   switch (host.deprecatedKind) {
     case "legacy-agent":
       return (
         "Deprecated: this agent has no machine identity, so the primary has to reach it at " +
-        "the address it stored — which only works from the primary's own network. Re-pair it " +
-        "from Settings → Hosts, or add a new host there, to give it a machine identity."
+        "the address it stored — which only works from the primary's own network. Upgrade it " +
+        "to v0.3.59 or later and set MULLION_PRIMARY_URL so it registers with a machine " +
+        "identity, or replace the host with one paired from a one-time pairing code " +
+        "(Settings → Hosts)."
       );
     case "manual-token":
       return (
         "Deprecated: this host's agent still authenticates with the row's own static token " +
-        "(MULLION_AGENT_TOKEN), which never expires. Re-pair it from Settings → Hosts, or add " +
-        "a new host there, to give it a machine identity."
+        "(MULLION_AGENT_TOKEN), which never expires. Mint a one-time pairing code " +
+        "(Settings → Hosts → Pair a desktop) and redeem it on the agent, so the agent holds " +
+        "a machine identity instead of that token."
       );
     default:
       return null;

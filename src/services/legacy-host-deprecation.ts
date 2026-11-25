@@ -34,11 +34,13 @@ export const LEGACY_FLEET_ENROLLMENT_WARNING =
 //   - each notice is emitted ONCE per process: a fleet of a hundred agents
 //     enrolling must not fill the log with the same line, and the operator
 //     needs to see it exactly once to know the path is still in use;
-//   - it is also the RECORD of what was said. The startup notice is logged
-//     while the app is still building — buildApp() boots the whole plugin
-//     tree before it returns, so a test cannot install a spy on the logger
-//     before it happens — and this record is what the notice tests assert
-//     on.
+//   - it is also the RECORD of what was said. The notice is a module-scope
+//     fact rather than a property of the app, so a test can read it after
+//     the fact. The startup notice in particular is logged while the app is
+//     still building (buildApp() boots the whole plugin tree before it
+//     returns), so the boot test pins the LOGGED LINE as well — it captures
+//     the process's stdout — and this record says the notice was emitted
+//     exactly once.
 const emitted = new Set<string>();
 
 /** The deprecation notices this process has emitted. */

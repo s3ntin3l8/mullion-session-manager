@@ -1408,11 +1408,30 @@ decision [#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/332
 **Everything still works** — the primary accepts all three exactly as before —
 but each one is on its way out:
 
-| Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                 |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **legacy agent**                                          | an agent without a machine identity, so the primary has to dial it at the address it stored (`hosts.base_url`) — unreachable off the primary's network | **Re-pair** the host (Settings → Hosts → _Re-pair_) or add a new host with a pairing code, so the agent holds a machine identity and opens the outbound channel |
-| **manual-token host** (`MULLION_AGENT_TOKEN`)             | a host whose agent authenticates with the row's own static token — a credential that never expires                                                     | **Re-pair** the host, or add a new host with a pairing code                                                                                                     |
-| **fleet-secret enrollment** (`MULLION_ENROLLMENT_SECRET`) | a host that enrolled with the fleet-wide secret on the primary                                                                                         | **Automation tokens** (Settings → Hosts → _Automation tokens_), which mint one-off pairing codes                                                                |
+| Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                                     |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **legacy agent**                                          | an agent without a machine identity, so the primary has to dial it at the address it stored (`hosts.base_url`) — unreachable off the primary's network | **Upgrade the agent to v0.3.59 or later** and set `MULLION_PRIMARY_URL`, so it registers with a machine identity — or replace the host with one paired from a one-time pairing code |
+| **manual-token host** (`MULLION_AGENT_TOKEN`)             | a host whose agent authenticates with the row's own static token — a credential that never expires                                                     | **Replace the static token with a one-time pairing code**: mint a code and redeem it on the agent, so it holds a machine identity (a host-bound code keeps the same host row)       |
+| **fleet-secret enrollment** (`MULLION_ENROLLMENT_SECRET`) | a host that enrolled with the fleet-wide secret on the primary                                                                                         | **Automation tokens** (Settings → Hosts → _Automation tokens_), which mint one-off pairing codes                                                                                    |
+
+**How to move a host that is already on the list.** The row menu's _Re-pair_
+entry only appears once a host holds a machine identity (or had one revoked),
+so a host that is still fully on a legacy path has no _Re-pair_ entry yet:
+
+- **legacy agent** — upgrade the agent to v0.3.59 or later and set
+  `MULLION_PRIMARY_URL` in its `.env`; it registers with a machine identity and
+  the qualifier clears by itself. To replace the host instead, mint a one-time
+  pairing code (Settings → Hosts → _Pair a desktop_ → _Generate pairing link_)
+  and redeem it on the agent (`MULLION_AGENT_PAIRING_CODE_STDIN=1`); the new
+  host row holds a machine identity, and the old row goes with _Remove stale
+  host_.
+- **manual-token host** — mint a **host-bound** code with
+  `POST /api/host-pairings` and `{"hostId": "<id>"}` and redeem it on the agent
+  (with `MULLION_PRIMARY_URL` set in the agent's `.env`, because the redeem
+  dials out to the primary). The same row then holds a machine identity and the
+  static token is no longer used; drop it from the agent's `.env`. An unbound
+  code (the _Generate pairing link_ button) creates a _new_ host row instead —
+  remove the old one with _Remove stale host_.
 
 The host's status chip — the one beside a host name in a session row or a pane
 tab — carries a "(deprecated)" qualifier for the first two kinds, and the

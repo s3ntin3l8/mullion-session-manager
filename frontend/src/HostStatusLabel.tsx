@@ -20,11 +20,12 @@ import { namedHostStatus, PARKED_WORD } from "./lib/hostStatusWords.js";
 export function HostStatusLabel({ host }: { host: Host }) {
   const { display, parked } = namedHostStatus(host);
   const legacy = host.legacyAgent === true;
-  // Issue #3476 — the deprecation qualifier. It rides on the SAME chip as
-  // the legacy-agent words (so a host shows one chip, not two): the existing
-  // text plus "(deprecated)", and the hover gains the sentence that says
-  // what replaces the deprecated setup. A manual-token host has no
-  // legacy-agent chip of its own, so it gets the deprecation chip alone.
+  // Issue #3476 — the deprecation qualifier. One chip, never two: the
+  // deprecation label carries the legacy-agent words itself when the host IS
+  // a legacy agent (so a host that is both a manual-token host and a legacy
+  // agent keeps both facts visible), and it stands alone when the host is
+  // not one. The hover gains the sentence that says what is deprecated and
+  // what replaces it.
   const deprecated = deprecatedKindLabel(host);
   const deprecatedNote = deprecatedKindTitle(host);
   const chipText = deprecated ?? (legacy ? legacyAgentLabels(host).short : null);
