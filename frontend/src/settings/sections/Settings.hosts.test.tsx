@@ -91,6 +91,8 @@ describe("Settings -> Hosts", () => {
       "GET /api/bridges": () => jsonResponse(200, []),
       // Issue #2449 — the Pair a desktop panel lists pairing codes on mount.
       "GET /api/host-pairings": () => jsonResponse(200, []),
+      // Issue #3440 — the Automation tokens panel lists tokens on mount.
+      "GET /api/automation-tokens": () => jsonResponse(200, []),
       "DELETE /api/hosts/:id": ({ params, query }) => {
         const host = hostsDb.find((h) => h.id === params.id);
         if (!host) return jsonResponse(404, { message: "not found" });

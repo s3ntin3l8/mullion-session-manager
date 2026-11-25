@@ -285,6 +285,13 @@ import { hostsApi } from "./hosts.js";
 import { bridgesApi } from "./bridges.js";
 import { hostPairingsApi } from "./hostPairings.js";
 export type { HostPairingCreated, HostPairingState, HostPairingSummary } from "./hostPairings.js";
+import { automationTokensApi } from "./automationTokens.js";
+export type {
+  AutomationTokenCreated,
+  AutomationTokenState,
+  AutomationTokenSummary,
+  CreateAutomationTokenOpts,
+} from "./automationTokens.js";
 import { workspacesApi } from "./workspaces.js";
 import { settingsApi } from "./settings.js";
 import { dockerApi } from "./docker.js";
@@ -313,6 +320,7 @@ export const api = {
   ...fsApi,
   ...bridgesApi,
   ...hostPairingsApi,
+  ...automationTokensApi,
   ...workspacesApi,
   ...settingsApi,
   ...dockerApi,

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { HostPairingCreated, HostPairingSummary } from "../shared/types.js";
 import {
   issueHostPairingCode,
@@ -7,6 +7,13 @@ import {
   redeemHostPairingCode,
   revokeHostPairing,
 } from "../services/host-pairing.js";
+import {
+  extractAutomationBearer,
+  findLiveAutomationTokenByBearerHeader,
+  touchAutomationTokenLastUsed,
+} from "../services/automation-tokens.js";
+import { isAuthEnabled, isRequestAuthenticated } from "../services/auth.js";
+import { isIpAllowed } from "../services/cidr.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { requestScheme } from "../services/request-scheme.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
@@ -16,7 +23,12 @@ import {
   normalizePairingOrigin,
   PAIRING_CODE_PATTERN,
 } from "../shared/pairing-link.js";
-import { getHostRow, LOCAL_HOST_ID, type HostRegistration } from "../services/host-registry.js";
+import {
+  getHostRow,
+  LOCAL_HOST_ID,
+  recordHostIdentityEvent,
+  type HostRegistration,
+} from "../services/host-registry.js";
 import { onHostCredentialsChanged } from "./hosts.js";
 import { refreshHostProtocolSoon } from "../services/host-agents.js";
 import { closeAgentChannel } from "./agent-channel.js";
@@ -105,14 +117,73 @@ export async function hostPairingRoute(app: FastifyInstance) {
 
   app.post<{ Body: CreateBody }>(
     "/api/host-pairings",
-    { schema: createSchema, config: { rateLimit: ISSUE_RATE_LIMIT } },
+    {
+      schema: createSchema,
+      config: {
+        rateLimit: {
+          ...ISSUE_RATE_LIMIT,
+          // Issue #3440 — key per automation token id so one token's flood
+          // never blocks another token (e.g. from the same controller IP).
+          keyGenerator: (request: FastifyRequest) => {
+            const matched = findLiveAutomationTokenByBearerHeader(
+              app,
+              request.headers.authorization,
+            );
+            if (matched) return `automation-token:${matched.id}`;
+            return request.ip;
+          },
+        },
+      },
+    },
     async (request, reply) => {
+      const automationToken = findLiveAutomationTokenByBearerHeader(
+        app,
+        request.headers.authorization,
+      );
+      if (automationToken) {
+        if (
+          automationToken.allowedCidrs &&
+          !isIpAllowed(getRawRemoteAddress(request), automationToken.allowedCidrs)
+        ) {
+          return reply.unauthorized("automation token not allowed from this address");
+        }
+      } else {
+        if (isAuthEnabled(app.config) && !isRequestAuthenticated(request.headers, app.config)) {
+          return reply.unauthorized("authentication required");
+        }
+        if (extractAutomationBearer(request.headers.authorization) !== null) {
+          return reply.unauthorized("invalid automation token");
+        }
+      }
+
       const hostId = request.body?.hostId;
+      if (automationToken) {
+        const requiredScope = hostId !== undefined ? "repair" : "enroll";
+        if (!automationToken.scopes.includes(requiredScope)) {
+          return reply.forbidden(`automation token lacks ${requiredScope} scope`);
+        }
+      }
+
       if (hostId !== undefined) {
         if (hostId === LOCAL_HOST_ID) return reply.badRequest("cannot re-pair the local host");
         if (!getHostRow(app, hostId)) return reply.notFound("host not found");
       }
-      const pairing = issueHostPairingCode(app, { label: request.body?.label, hostId });
+      const pairing = issueHostPairingCode(app, {
+        label: request.body?.label,
+        hostId,
+        mintedByTokenId: automationToken?.id ?? null,
+        requireApproval: automationToken?.requireApproval ?? false,
+      });
+      if (automationToken) {
+        touchAutomationTokenLastUsed(app, automationToken.id);
+        recordHostIdentityEvent(
+          app,
+          hostId ?? null,
+          "code_minted",
+          getRawRemoteAddress(request) || null,
+          automationToken.label,
+        );
+      }
       // MULLION_PUBLIC_URL (validated at boot) wins: behind a proxy the Host
       // header and scheme may not be what a Helper can reach.
       const url =
@@ -139,6 +210,7 @@ export async function hostPairingRoute(app: FastifyInstance) {
       expires_at: p.expiresAt.toISOString(),
       created_at: p.createdAt.toISOString(),
       host_id: p.hostId,
+      minted_by_token_id: p.mintedByTokenId,
     })),
   );
 

@@ -277,10 +277,13 @@ credential, token, or code):
 - `replaced` — a registration replaced an already-live machine identity (moving the prior credential to the grace slot).
 - `revoked` — an operator revoked the host's machine identity (`POST /api/hosts/:id/revoke`).
 - `token_rotated` — an operator rotated the host's per-host token (`POST /api/hosts/:id/rotate-token`).
+- `code_minted` — an automation token minted a one-off pairing code on `POST /api/host-pairings` (`hostId` is `null` for `enroll` mints and set for `repair` mints; records the token label and raw TCP peer, never the token or code).
 
 Normal machine-credential renewals write no event. `host_identity_events` retains at
 most the newest 100 rows per host (older rows are deleted as new events arrive, except
-unacknowledged `replaced` events which are preserved until acknowledged), and
+unacknowledged `replaced` events which are preserved until acknowledged), while
+null-host `code_minted` rows are retained in SQLite up to the newest 1,000 rows
+globally as an audit log (not exposed by `GET /api/hosts/:id/identity-events`), and
 `GET /api/hosts/:id/identity-events` caps its response at the newest 100 events. When a
 host has an unacknowledged `replaced` event within the last 30 days (queried via the
 `(acknowledged_at, kind, at)` index), `GET /api/hosts` includes
@@ -527,6 +530,15 @@ than the connecting agent's; there is no separate auto-approve CIDR setting.
 the unauthenticated agent endpoints isolated on their own dedicated hostname
 instead of adding a `/api/internal/*` bypass to the dashboard's `forwardAuth`
 configuration or main Traefik router.
+
+### Automation tokens (minting pairing codes from Ansible or CI)
+
+For automated fleets that want to avoid a standing fleet-wide `MULLION_ENROLLMENT_SECRET` on every agent, operators can mint **automation tokens** (`mat_<64 hex>`) in Settings → Hosts → _Automation tokens_ (or `POST /api/automation-tokens`):
+
+- **Single capability:** an automation token is accepted **only** on `POST /api/host-pairings` to mint one-off pairing codes (`POST /api/internal/pair` still redeems every code). It is rejected with `401` on every other route, including `GET /api/hosts` and `/api/automation-tokens`.
+- **Scopes:** `enroll` allows minting a code without `hostId` (new hosts); `repair` allows minting a host-bound code with `hostId` (rebuilding/re-pairing an existing host). Calling with the wrong scope returns `403`.
+- **Lifecycle & narrowing:** tokens default to 90 days (max 365), can be revoked (`DELETE /api/automation-tokens/:id`), optionally restrict caller source IP via `allowedCidrs` (evaluated against the raw TCP peer `request.raw.socket.remoteAddress`, never `X-Forwarded-For`), can set `requireApproval`, and are rate-limited per token ID. Each mint updates `lastUsedAt` and records a `code_minted` row in `host_identity_events` with the token label and peer address (never the secret).
+- **Controller reachability:** the automation controller (e.g. an Ansible `delegate_to: localhost` task) must reach the primary directly (for example over a private/VPN address) or through the dedicated agent hostname if `/api/host-pairings` is routed there — **never** through a browser-SSO gateway (`forwardAuth`), which would intercept `POST /api/host-pairings` with a login redirect. See [`deploy/README.md`](../deploy/README.md) for the full Ansible task example.
 
 ## Automatic placement
 

@@ -1107,13 +1107,18 @@ export function revokeMachineIdentity(
 
 const IDENTITY_REPLACEMENT_WINDOW_MS = 30 * 86_400_000;
 const IDENTITY_EVENTS_MAX = 100;
+// Null-host events (pre-host `code_minted` audit rows) are shared fleet-wide
+// rather than per-host, so a single automation run over >100 hosts would evict
+// its own audit trail under the per-host 100 cap.
+const NULL_HOST_IDENTITY_EVENTS_MAX = 1000;
 
 export interface HostIdentityEventSummary {
   id: number;
-  hostId: string;
+  hostId: string | null;
   kind: HostIdentityEventKind;
   at: string;
   peer: string | null;
+  label: string | null;
   acknowledgedAt: string | null;
 }
 
@@ -1123,9 +1128,10 @@ export interface HostIdentityEventSummary {
  */
 export function recordHostIdentityEvent(
   app: FastifyInstance,
-  hostId: string,
+  hostId: string | null,
   kind: HostIdentityEventKind,
   peer: string | null = null,
+  label: string | null = null,
 ): void {
   app.db
     .insert(hostIdentityEvents)
@@ -1134,8 +1140,24 @@ export function recordHostIdentityEvent(
       kind,
       at: new Date(),
       peer: peer || null,
+      label: label || null,
     })
     .run();
+  if (hostId === null) {
+    const keepSubquery = app.db
+      .select({ id: hostIdentityEvents.id })
+      .from(hostIdentityEvents)
+      .where(isNull(hostIdentityEvents.hostId))
+      .orderBy(desc(hostIdentityEvents.at), desc(hostIdentityEvents.id))
+      .limit(NULL_HOST_IDENTITY_EVENTS_MAX);
+    app.db
+      .delete(hostIdentityEvents)
+      .where(
+        and(isNull(hostIdentityEvents.hostId), notInArray(hostIdentityEvents.id, keepSubquery)),
+      )
+      .run();
+    return;
+  }
   // Keep at most IDENTITY_EVENTS_MAX rows per host so the table stays bounded,
   // while preserving unacknowledged `replaced` events so the replacement alert
   // cannot be silently evicted by subsequent activity.
@@ -1177,6 +1199,7 @@ export function listHostIdentityEvents(
     kind: row.kind,
     at: row.at.toISOString(),
     peer: row.peer ?? null,
+    label: row.label ?? null,
     acknowledgedAt: row.acknowledgedAt ? row.acknowledgedAt.toISOString() : null,
   }));
 }
@@ -1193,6 +1216,7 @@ export function listRecentIdentityReplacements(
     .from(hostIdentityEvents)
     .where(
       and(
+        isNotNull(hostIdentityEvents.hostId),
         eq(hostIdentityEvents.kind, "replaced"),
         isNull(hostIdentityEvents.acknowledgedAt),
         gte(hostIdentityEvents.at, cutoff),
@@ -1202,6 +1226,7 @@ export function listRecentIdentityReplacements(
     .all();
   const byHost = new Map<string, HostRecentIdentityReplacement>();
   for (const row of rows) {
+    if (!row.hostId) continue;
     if (!byHost.has(row.hostId)) {
       byHost.set(row.hostId, {
         id: row.id,

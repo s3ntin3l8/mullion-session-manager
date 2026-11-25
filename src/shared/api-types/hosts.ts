@@ -149,6 +149,28 @@ export interface HostPairingSummary {
   expires_at: string;
   created_at: string;
   host_id: string | null;
+  minted_by_token_id: string | null;
+}
+
+// GET/POST /api/automation-tokens (src/routes/automation-tokens.ts, issue #3440)
+export type AutomationTokenState = "active" | "expired" | "revoked";
+
+export interface AutomationTokenSummary {
+  id: string;
+  label: string;
+  scopes: ("enroll" | "repair")[];
+  expires_at: string;
+  allowed_cidrs: string | null;
+  require_approval: boolean;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  state: AutomationTokenState;
+}
+
+export interface AutomationTokenCreated extends AutomationTokenSummary {
+  /** Shown once on creation; never stored or returned again. */
+  token: string;
 }
 
 export interface BridgeSummary {

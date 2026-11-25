@@ -46,6 +46,7 @@ export interface HostPairingRecord {
   expiresAt: Date;
   createdAt: Date;
   hostId: string | null;
+  mintedByTokenId: string | null;
 }
 
 export type PairingRow = typeof hostPairings.$inferSelect;
@@ -85,7 +86,12 @@ function cleanupHostPairings(app: FastifyInstance): void {
 
 export function issueHostPairingCode(
   app: FastifyInstance,
-  opts: { label?: string; hostId?: string } = {},
+  opts: {
+    label?: string;
+    hostId?: string;
+    mintedByTokenId?: string | null;
+    requireApproval?: boolean;
+  } = {},
 ): IssuedHostPairing {
   cleanupHostPairings(app);
   const id = crypto.randomUUID();
@@ -99,6 +105,8 @@ export function issueHostPairingCode(
       expiresAt,
       label: opts.label?.trim() || null,
       targetHostId: opts.hostId ?? null,
+      mintedByTokenId: opts.mintedByTokenId ?? null,
+      requireApproval: opts.requireApproval ?? false,
     })
     .run();
   return { id, code, expiresAt };
@@ -125,6 +133,7 @@ export function listHostPairings(app: FastifyInstance): HostPairingRecord[] {
       expiresAt: row.expiresAt,
       createdAt: row.createdAt,
       hostId: row.redeemedHostId ?? row.targetHostId,
+      mintedByTokenId: row.mintedByTokenId,
     }));
 }
 
