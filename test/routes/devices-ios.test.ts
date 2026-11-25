@@ -1,3 +1,4 @@
+import type * as HostCapabilities from "../../src/services/host-capabilities.js";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // Must come before any import below that could itself trigger loading
 // "node-pty"/"node:child_process" — see mock-pty.ts's header comment.
@@ -26,11 +27,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const getCachedCapabilities = vi.fn();
-vi.mock("../../src/services/host-capabilities.js", () => ({
+vi.mock("../../src/services/host-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof HostCapabilities>()),
   warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
   detectCapabilities: async () => getCachedCapabilities(),
-  clearCapabilityCache: () => undefined,
 }));
 
 const UDID = "0F4A9B7E-1111-2222-3333-444455556666";

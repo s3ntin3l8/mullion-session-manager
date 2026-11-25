@@ -1,3 +1,4 @@
+import type * as HostCapabilities from "../../src/services/host-capabilities.js";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
@@ -23,11 +24,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const getCachedCapabilities = vi.fn();
-vi.mock("../../src/services/host-capabilities.js", () => ({
+vi.mock("../../src/services/host-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof HostCapabilities>()),
   warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
   detectCapabilities: async () => getCachedCapabilities(),
-  clearCapabilityCache: () => undefined,
 }));
 
 const devices = {

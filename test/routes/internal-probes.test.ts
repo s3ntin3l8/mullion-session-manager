@@ -1,3 +1,4 @@
+import type * as HostCapabilities from "../../src/services/host-capabilities.js";
 import { describe, it, expect, vi } from "vitest";
 import Fastify from "fastify";
 import { registerProbeRoutes } from "../../src/routes/internal-probes.js";
@@ -7,7 +8,8 @@ import {
 } from "../../src/services/user-shell-env.js";
 import { localProtocolInfo } from "../../src/shared/agent-protocol.js";
 
-vi.mock("../../src/services/host-capabilities.js", () => ({
+vi.mock("../../src/services/host-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof HostCapabilities>()),
   warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: vi.fn().mockResolvedValue(["xcode"]),
 }));

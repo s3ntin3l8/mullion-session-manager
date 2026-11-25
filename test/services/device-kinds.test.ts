@@ -1,3 +1,4 @@
+import type * as HostCapabilities from "../../src/services/host-capabilities.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -5,7 +6,8 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 
 const getCachedCapabilities = vi.fn();
-vi.mock("../../src/services/host-capabilities.js", () => ({
+vi.mock("../../src/services/host-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof HostCapabilities>()),
   warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
 }));

@@ -26,14 +26,14 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const getCachedCapabilities = vi.fn();
-// Partial mock: only the probe is faked. Everything else stays real, so an
-// export added to the module later (as warmCapabilitiesOnReady was, #3511)
-// cannot break this suite; the real warmCapabilitiesOnReady is a no-op under
-// NODE_ENV=test.
+// Partial mock: only the probe and its startup warm-up are faked. Everything
+// else stays real, so an export added to the module later (as
+// warmCapabilitiesOnReady was, #3511) cannot break this suite.
 vi.mock("../../src/services/host-capabilities.js", async (importOriginal) => {
   const actual = await importOriginal<typeof HostCapabilities>();
   return {
     ...actual,
+    warmCapabilitiesOnReady: () => undefined,
     getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
     detectCapabilities: async () => getCachedCapabilities(),
   };
