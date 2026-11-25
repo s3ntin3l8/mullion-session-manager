@@ -270,6 +270,75 @@ describe("branch previews on a remote host (#3428)", () => {
     expect(calls("resolveClearStalePreviewWorktree").at(-1)!.args[0]).toBe("~/code/repo");
   });
 
+  it("answers an agent rejecting the dock read (cwd outside its roots) as host_refused", async () => {
+    const { projectId, hostId } = await remoteProject();
+    scriptAgent();
+    agent.scripted.resolveDock = () => {
+      throw new HostRequestError(hostId, 400, "cwd must be within this agent's PROJECTS_ROOTS");
+    };
+    fakeCreate(hostId);
+    const res = await start(projectId);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "host_refused" });
+    expect(calls("ensureGitBranch")).toHaveLength(0);
+  });
+
+  /** A live session at `sessionCwd` on the host, for a project whose cwd is `projectCwd`. */
+  async function occupied(projectCwd: string, sessionCwd: string) {
+    const { projectId, hostId } = await remoteProject();
+    app.db.update(projects).set({ cwd: projectCwd }).where(eq(projects.id, projectId)).run();
+    app.db
+      .insert(sessions)
+      .values({
+        projectId,
+        command: "vite",
+        kind: "dock",
+        cwd: sessionCwd,
+        hostId,
+        status: "active",
+      })
+      .run();
+    vi.spyOn(sessionBackend, "resolveBackend").mockReturnValue({
+      liveness: async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, "alive"])),
+    } as unknown as ReturnType<typeof sessionBackend.resolveBackend>);
+    scriptAgent();
+    fakeCreate(hostId);
+    return (await start(projectId)).json() as { code?: string; branch?: string };
+  }
+  const nameOf = (branch: string) => path.basename(dockPreviewWorktreePath("/x", branch));
+
+  it("treats a session in the home directory's preview worktree as an occupant of a bare ~ project", async () => {
+    expect(await occupied("~", `/home/agent/.mullion-worktrees/${nameOf("feat/x")}`)).toMatchObject(
+      { code: "worktree_busy" },
+    );
+  });
+
+  it("matches a Windows checkout's preview worktree by win32 rules, and not another checkout's", async () => {
+    expect(
+      await occupied("C:\\work\\proj", `c:\\Work\\proj\\.mullion-worktrees\\${nameOf("feat/x")}`),
+    ).toMatchObject({ code: "worktree_busy" });
+    expect(
+      await occupied("C:\\work\\proj", `D:\\other\\.mullion-worktrees\\${nameOf("feat/x")}`),
+    ).toMatchObject({ branch: "feat/x" });
+  });
+
+  it("does not hand two concurrent creates on one host the same port", async () => {
+    const { projectId, hostId } = await remoteProject();
+    scriptAgent();
+    // The agent's allocator: the lowest of two ports not in `taken`, answered
+    // after a delay, as a round trip would.
+    agent.scripted.allocatePreviewPort = async (taken: unknown) => {
+      await new Promise((r) => setTimeout(r, 20));
+      return [43000, 43001].find((p) => !(taken as Set<number>).has(p)) ?? null;
+    };
+    fakeCreate(hostId);
+    const [a, b] = await Promise.all([start(projectId, "feat/a"), start(projectId, "feat/b")]);
+    expect([a.statusCode, b.statusCode]).toEqual([201, 201]);
+    expect(new Set([a.json().upstreamPort, b.json().upstreamPort])).toEqual(
+      new Set([43000, 43001]),
+    );
+  });
+
   it("answers an unreadable dock config as host_unavailable", async () => {
     const { projectId, hostId } = await remoteProject();
     scriptAgent();

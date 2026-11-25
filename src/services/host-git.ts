@@ -33,6 +33,8 @@ import {
   type ResyncStaleWorktreeResult,
 } from "./git-worktree.js";
 import { allocatePreviewPort } from "./preview-port.js";
+import { resolveProjectDock } from "./project-config.js";
+import type { DockControl } from "../shared/types.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
@@ -391,6 +393,24 @@ export async function resyncHostStaleWorktree(
     return { ok: true, value: await resyncStaleWorktree(cwd, branch) };
   }
   return viaGit(app, hostId, (client) => client.resolveResyncStaleWorktree(cwd, branch));
+}
+
+/**
+ * Issue #3428 — the project's configured dock controls (`.crs/dock.json` +
+ * the global default) read from its checkout on whichever host owns it, with
+ * HostGitResult's failure taxonomy: unlike `configuredControls`' blanket
+ * "unreachable", an agent that answered but rejected the request (a cwd
+ * outside its PROJECTS_ROOTS) stays distinguishable from one that is down.
+ */
+export async function resolveHostDockControls(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+): Promise<HostGitResult<DockControl[]>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: resolveProjectDock(cwd, app.config.CRS_CONFIG_DIR) };
+  }
+  return viaRemote(app, hostId, (client) => client.resolveDock(cwd), "dock");
 }
 
 /**

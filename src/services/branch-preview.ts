@@ -11,8 +11,12 @@ import {
 } from "./git-worktree.js";
 import { clearStalePreviewCheckout } from "./checkout-removal.js";
 import { listActiveSessionsWithProject } from "./project-records.js";
-import { configuredControls } from "./dock-control.js";
-import { allocateHostPreviewPort, ensureHostBranch, type HostGitResult } from "./host-git.js";
+import {
+  allocateHostPreviewPort,
+  ensureHostBranch,
+  resolveHostDockControls,
+  type HostGitResult,
+} from "./host-git.js";
 import {
   bindBranchPreview,
   findBranchPreview,
@@ -184,20 +188,30 @@ function hostFailure(
  * matches, so a live session in it refuses rather than loses its worktree.
  */
 function isPreviewWorktreeOf(sessionCwd: string, projectCwd: string, name: string): boolean {
-  const posix = path.posix;
-  const cwd = sessionCwd.replace(/\\/g, "/");
-  if (posix.basename(cwd) !== name) return false;
-  const root = posix.dirname(cwd);
-  if (posix.basename(root) !== ".mullion-worktrees") return false;
-  const checkout = posix.dirname(root);
-  const project = projectCwd.replace(/\\/g, "/");
-  if (posix.isAbsolute(project)) return posix.resolve(project) === checkout;
-  if (project === "~" || project.startsWith("~/")) {
-    const tail = posix.normalize(project.slice(1)).replace(/\/+$/, "");
-    return tail === "" || checkout.endsWith(tail);
+  // A Windows host's paths (`C:\\proj`) by win32 rules, case-insensitively;
+  // everything else as POSIX.
+  const windows = WINDOWS_DRIVE.test(projectCwd) || WINDOWS_DRIVE.test(sessionCwd);
+  const p = windows ? path.win32 : path.posix;
+  const fold = (s: string) => (windows ? s.toLowerCase() : s);
+  if (fold(p.basename(sessionCwd)) !== fold(name)) return false;
+  const root = p.dirname(sessionCwd);
+  if (p.basename(root) !== ".mullion-worktrees") return false;
+  const checkout = fold(p.dirname(root));
+  if (WINDOWS_DRIVE.test(projectCwd) || (!windows && p.isAbsolute(projectCwd))) {
+    return fold(p.resolve(projectCwd)) === checkout;
+  }
+  // `~` alone is the home directory itself, which only the host knows: any
+  // checkout matches. `~/rest` matches a checkout ending in `/rest`.
+  if (projectCwd === "~") return true;
+  if (projectCwd.startsWith("~/") || projectCwd.startsWith("~\\")) {
+    const tail = fold(p.normalize(projectCwd.slice(2))).replace(/[\\/]+$/, "");
+    if (tail === "" || tail === ".") return true;
+    return checkout === tail || checkout.endsWith(p.sep + tail);
   }
   return true;
 }
+
+const WINDOWS_DRIVE = /^[A-Za-z]:[\\/]/;
 
 /**
  * Makes way for the branch's `dock-preview-*` worktree. If a live session
@@ -339,13 +353,8 @@ async function createBranchPreview(
   if (existing?.sessionId != null && (await isServing(app, existing.sessionId))) return existing;
 
   // Read from the checkout on the project's host (its agent for a remote one).
-  const controls = await configuredControls(app, projectId);
-  if (!controls.ok) {
-    throw new BranchPreviewError(
-      "host_unavailable",
-      `Could not read the project's dock controls: ${controls.message}`,
-    );
-  }
+  const controls = await resolveHostDockControls(app, hostId, project.cwd);
+  if (!controls.ok) throw hostFailure(controls, "read the project's dock controls");
   const control = pickPreviewControl(controls.value);
   if (!control) {
     throw new BranchPreviewError(
@@ -375,23 +384,42 @@ async function createBranchPreview(
   // empty would orphan the reference a concurrent create still holds.
   let held = reservedPorts.get(hostId);
   if (!held) reservedPorts.set(hostId, (held = new Set<number>()));
-  let port: number | null = null;
-  try {
+  const reserved = held;
+  // Allocate-and-reserve is serialized per host: two creates asking at once
+  // would otherwise each send a `taken` without the other's port (a full
+  // round trip apart on an agent) and be handed the same one.
+  const port = await serializedPerHost(hostId, async () => {
     const allocated = await allocateHostPreviewPort(
       app,
       hostId,
-      new Set([...listUpstreamPorts(app, hostId), ...held]),
+      new Set([...listUpstreamPorts(app, hostId), ...reserved]),
     );
     if (!allocated.ok) throw hostFailure(allocated, "pick a port for the preview");
-    if (allocated.value === null || held.has(allocated.value)) {
+    if (allocated.value === null || reserved.has(allocated.value)) {
       throw new BranchPreviewError("start_failed", "No free port for the preview on its host");
     }
-    port = allocated.value;
-    held.add(port);
+    reserved.add(allocated.value);
+    return allocated.value;
+  });
+  try {
     return await startOnPort(app, projectId, hostId, branch, control, port);
   } finally {
-    if (port !== null) held.delete(port);
+    reserved.delete(port);
   }
+}
+
+// One allocation in flight per host (see above). Like `reservedPorts`, an
+// entry per host, never dropped; a failed allocation does not block the next.
+const allocationQueues = new Map<string, Promise<unknown>>();
+
+function serializedPerHost<T>(hostId: string, fn: () => Promise<T>): Promise<T> {
+  const previous = allocationQueues.get(hostId) ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  allocationQueues.set(
+    hostId,
+    run.catch(() => undefined),
+  );
+  return run;
 }
 
 async function startOnPort(
