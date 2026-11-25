@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { CopyBlock } from "./ui/CopyBlock.js";
 import { HostsIcon } from "./ui/icons.js";
 import { Modal } from "./ui/Modal.js";
 import {
@@ -21,45 +21,8 @@ interface AgentInstallInstructionsProps {
    * installed and must have its .env updated.
    */
   kind: "install" | "rotate";
-  /**
-   * "rotate" only: the agent holds a live machine identity, so the rotation
-   * did not lock it out and the new token is only needed to register again.
-   */
-  agentUnaffected?: boolean;
   primaryUrl: string;
   baseUrl?: string;
-}
-
-function CopyBlock({ label, text }: { label: string; text: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard
-      ?.writeText(text)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      })
-      .catch(() => {});
-  };
-  return (
-    <div className="create-modal-field">
-      <span className="create-modal-field-label">{label}</span>
-      <pre
-        className="mono"
-        style={{
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-all",
-          margin: "4px 0",
-          userSelect: "all",
-        }}
-      >
-        {text}
-      </pre>
-      <button className="settings-secondary-btn" onClick={copy} aria-label={`Copy ${label}`}>
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
-  );
 }
 
 export function AgentInstallInstructions({
@@ -67,7 +30,6 @@ export function AgentInstallInstructions({
   token,
   hostName,
   kind,
-  agentUnaffected = false,
   primaryUrl,
   baseUrl,
 }: AgentInstallInstructionsProps) {
@@ -96,18 +58,8 @@ export function AgentInstallInstructions({
         </>
       ) : (
         <>
-          {agentUnaffected && (
-            <span className="create-modal-field-hint" data-testid="rotate-unaffected">
-              The running agent keeps working: it holds a machine identity and renews on it. If this
-              token leaked or was exposed, rotating it now was the right call (use “Rotate token and
-              discard it”): the old value can no longer be used to take over this host. To replace
-              the agent itself — a lost state file, a revoked or expired identity — use Re-pair in
-              this host’s menu: it issues a one-time code that re-pairs the agent in place. A token
-              alone no longer takes over a host that holds a live identity.
-            </span>
-          )}
           <CopyBlock
-            label="Agent's .env (installed with the Add host command)"
+            label="Agent's .env (installed with a generated token)"
             text={envUpdateSnippet(token)}
           />
           <CopyBlock
@@ -116,10 +68,7 @@ export function AgentInstallInstructions({
           />
           <span className="create-modal-field-hint">
             Use the one that matches how this host was added (keep the primary URL the agent's .env
-            already has), then restart the agent.{" "}
-            {agentUnaffected
-              ? "Until then the agent keeps running on its identity."
-              : "Until you do, it can no longer reach this primary."}{" "}
+            already has), then restart the agent. Until you do, it can no longer reach this primary.
             Re-running the installer would not apply it: the installer never rewrites an existing
             .env.
           </span>

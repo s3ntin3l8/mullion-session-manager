@@ -1,7 +1,7 @@
 import type { Host, HostPairingSummary } from "./api/index.js";
 
 // Issue #2597 — GET /api/hosts reports `unclaimed: true` for a paired host whose
-// Helper never took delivery of its identity (retry window passed, credential
+// agent never took delivery of its identity (retry window passed, credential
 // never renewed, no channel ever connected). Absent from an older primary.
 // Declared here rather than inline in api/types.ts, whose size ceiling is a
 // ratchet (scripts/check-max-file-lines.mjs).
@@ -13,12 +13,12 @@ declare module "./api/types.js" {
 
 // Issue #2449 — the three states a pairing shows in the Hosts UI, kept
 // distinct on purpose:
-//   pending   — a code was issued and the Helper has not redeemed it yet
+//   pending   — a code was issued and the agent has not redeemed it yet
 //   paired    — the code was redeemed: the host has an identity and credential
 //   connected — paired AND the primary can reach it (heartbeat says online)
 // "Paired" is not "connected": while the outbound-channel rollout is incomplete
 // a paired host can be perfectly valid yet unreachable from the primary.
-//   unclaimed — paired, but the Helper never took delivery (issue #2597): the
+//   unclaimed — paired, but the agent never took delivery (issue #2597): the
 //               retry window passed with no credential renewal and no channel
 export type PairingStage = "pending" | "paired" | "unclaimed" | "connected" | "expired" | "revoked";
 
@@ -33,7 +33,7 @@ export function derivePairingStage(
 }
 
 export const PAIRING_STAGE_LABEL: Record<PairingStage, string> = {
-  pending: "waiting for the Helper",
+  pending: "waiting for the agent",
   paired: "paired · not reachable yet",
   unclaimed: "Paired, never connected",
   connected: "connected",

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HostsSection } from "./HostsSection.js";
 import { useDashboardStore } from "../../store/index.js";
@@ -14,7 +14,9 @@ import type { PlacementCapability } from "../../../../src/shared/constants.js";
 function stubFetch(opts: {
   rotate?: () => Response;
   acknowledge?: () => Response;
-  createPairing?: (body: unknown) => Response;
+  createPairing?: (body: unknown) => Response | Promise<Response>;
+  createHost?: (body: unknown) => Response;
+  revoke?: () => Response;
 }) {
   const calls: string[] = [];
   vi.stubGlobal(
@@ -25,6 +27,12 @@ function stubFetch(opts: {
       calls.push(`${method} ${url}`);
       if (url === "/api/hosts" && method === "GET") {
         return Promise.resolve(jsonResponse(200, useDashboardStore.getState().hosts));
+      }
+      if (url === "/api/hosts" && method === "POST" && opts.createHost) {
+        return Promise.resolve(opts.createHost(JSON.parse(String(init?.body))));
+      }
+      if (url.endsWith("/revoke") && method === "POST" && opts.revoke) {
+        return Promise.resolve(opts.revoke());
       }
       if (url === "/api/host-pairings" && method === "GET") {
         return Promise.resolve(jsonResponse(200, []));
@@ -55,7 +63,7 @@ async function openRotate(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByText("Click again to rotate"));
 }
 
-describe("HostsSection token rotation", () => {
+describe("HostsSection", () => {
   beforeEach(() => {
     useDashboardStore.setState({
       hosts: [makeHost({ id: "h1", name: "win-pc", baseUrl: null })],
@@ -358,72 +366,42 @@ describe("HostsSection token rotation", () => {
     expect(screen.queryByText(/New token for/)).not.toBeInTheDocument();
   });
 
-  it("for a live-identity host says the agent is unaffected and offers rotate-and-discard", async () => {
+  it.each([
+    { kind: "live identity", host: { hasLiveMachineIdentity: true }, rotates: false },
+    { kind: "manual with token", host: { origin: "manual", hasToken: true }, rotates: true },
+    { kind: "manual without token", host: { origin: "manual", hasToken: false }, rotates: false },
+    { kind: "enrolled", host: { origin: "enrolled", hasToken: false }, rotates: false },
+  ] as const)("shows the allowed actions for a $kind host", async ({ host, rotates }) => {
     const user = userEvent.setup();
-    useDashboardStore.setState({
-      hosts: [
-        makeHost({
-          id: "h1",
-          name: "win-pc",
-          baseUrl: null,
-          hasMachineIdentity: true,
-          hasLiveMachineIdentity: true,
-        }),
-      ],
-    });
-    stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });
+    useDashboardStore.setState({ hosts: [makeHost(host)] });
+    stubFetch({});
     render(<HostsSection />);
-    await user.click(screen.getByRole("button", { name: "More…" }));
-    await user.click(screen.getByText("Rotate token"));
-    await user.click(screen.getByText("Click again to rotate (agent unaffected)"));
 
-    expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
-    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/keeps working/);
-    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/leaked/);
-    expect(screen.getByTestId("rotate-unaffected")).toHaveTextContent(/Re-pair/);
-    expect(screen.queryByText(/can no longer reach this primary/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "More…" }));
+    const menu = within(screen.getByRole("menu"));
+    for (const action of [
+      "View config",
+      "Edit",
+      "Park host",
+      "Re-pair",
+      "Revoke identity",
+      "Delete host",
+    ]) {
+      expect(menu.getByText(action, { exact: action !== "Park host" })).toBeInTheDocument();
+    }
+    expect(menu.queryByText(/rotate token and discard/i)).not.toBeInTheDocument();
+    expect(menu.queryAllByText("Rotate token")).toHaveLength(rotates ? 1 : 0);
   });
 
-  it("rotate-and-discard never renders the token and keeps no dialog open", async () => {
+  it("can revoke a manual host that has no machine identity", async () => {
     const user = userEvent.setup();
-    useDashboardStore.setState({
-      hosts: [
-        makeHost({
-          id: "h1",
-          name: "win-pc",
-          baseUrl: null,
-          hasMachineIdentity: true,
-          hasLiveMachineIdentity: true,
-        }),
-      ],
-    });
-    const calls = stubFetch({ rotate: () => jsonResponse(200, { token: "secret-token-xyz" }) });
+    const calls = stubFetch({ revoke: () => new Response(null, { status: 204 }) });
     render(<HostsSection />);
+
     await user.click(screen.getByRole("button", { name: "More…" }));
-    await user.click(screen.getByText("Rotate token and discard it"));
-    await user.click(screen.getByText("Click again to rotate (token not shown)"));
-
-    await vi.waitFor(() => expect(calls).toContain("POST /api/hosts/h1/rotate-token"));
-    expect(screen.queryByText(/New token for/)).not.toBeInTheDocument();
-    expect(document.body.textContent).not.toContain("secret-token-xyz");
-    expect(JSON.stringify(useDashboardStore.getState())).not.toContain("secret-token-xyz");
-  });
-
-  it("for a host without a live identity keeps the lockout copy and offers no discard", async () => {
-    const user = userEvent.setup();
-    useDashboardStore.setState({
-      hosts: [makeHost({ id: "h1", name: "win-pc", baseUrl: null })],
-    });
-    stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });
-    render(<HostsSection />);
-    await user.click(screen.getByRole("button", { name: "More…" }));
-    expect(screen.queryByText("Rotate token and discard it")).not.toBeInTheDocument();
-    await user.click(screen.getByText("Rotate token"));
-    await user.click(screen.getByText("Click again to rotate"));
-
-    expect(await screen.findByText("New token for win-pc")).toBeInTheDocument();
-    expect(screen.queryByTestId("rotate-unaffected")).not.toBeInTheDocument();
-    expect(screen.getByText(/can no longer reach this primary/)).toBeInTheDocument();
+    await user.click(screen.getByText("Revoke identity"));
+    await user.click(screen.getByText("Click again to revoke"));
+    expect(calls).toContain("POST /api/hosts/h1/revoke");
   });
 
   it("renders identity replacement badge and detail when recentIdentityReplacement is set, and Acknowledge clears it", async () => {
@@ -475,68 +453,142 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByTestId("host-row-h1")).not.toHaveClass("stacked");
   });
 
-  it("shows Re-pair for hosts with a machine identity (including revoked), hides it for manual hosts, and shows the code in the pairing panel", async () => {
-    const user = userEvent.setup();
-    useDashboardStore.setState({
-      hosts: [
-        makeHost({ id: "local", name: "This machine", isLocal: true }),
-        makeHost({
-          id: "h-live",
-          name: "mac-live",
-          hasMachineIdentity: true,
-          hasLiveMachineIdentity: true,
-        }),
-        makeHost({
-          id: "h-revoked",
-          name: "mac-revoked",
-          hasMachineIdentity: false,
-          machineIdentityRevoked: true,
-        }),
-        makeHost({
-          id: "h-manual",
-          name: "manual-unclaimed",
-          hasMachineIdentity: false,
-          machineIdentityRevoked: false,
-        }),
-      ],
-    });
-    const postedBodies: unknown[] = [];
-    const calls = stubFetch({
-      createPairing: (body) => {
-        postedBodies.push(body);
-        return jsonResponse(200, {
-          id: "pair-1",
-          pairing_link: "mullion://pair?url=http%3A%2F%2Fprimary.test&code=" + "a".repeat(64),
-          url: "http://primary.test",
-          code: "a".repeat(64),
-          expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
-        });
-      },
+  const code = "a".repeat(64);
+  const pairingLink = `mullion://pair?url=http%3A%2F%2Fprimary.test&code=${code}`;
+  const pairingResponse = () =>
+    jsonResponse(200, {
+      id: "pair-1",
+      pairing_link: pairingLink,
+      url: "http://primary.test",
+      code,
+      expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
     });
 
+  it("confirms Re-pair before issuing a host-bound code and showing its install command", async () => {
+    const user = userEvent.setup();
+    const createPairing = vi.fn(pairingResponse);
+    stubFetch({ createPairing });
     render(<HostsSection />);
 
-    const menus = screen.getAllByRole("button", { name: "More…" });
-    // Manual host (3rd remote row) has no Re-pair action.
-    await user.click(menus[2]);
-    expect(screen.queryByText("Re-pair")).not.toBeInTheDocument();
-
-    // Revoked host (2nd remote row) has Re-pair.
-    await user.click(menus[1]);
-    expect(screen.getByText("Re-pair")).toBeInTheDocument();
-
-    // Live host (1st remote row) has Re-pair with disconnect confirmation.
-    await user.click(menus[0]);
+    await user.click(screen.getByRole("button", { name: "More…" }));
     await user.click(screen.getByText("Re-pair"));
-    await user.click(
-      screen.getByText("Click again to re-pair (disconnects running agent immediately)"),
-    );
+    const dialog = within(screen.getByRole("dialog", { name: "Re-pair win-pc" }));
+    expect(dialog.getByText(/disconnects the running agent immediately/)).toBeInTheDocument();
+    expect(createPairing).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(calls).toContain("POST /api/host-pairings"));
-    expect(postedBodies).toEqual([{ hostId: "h-live" }]);
-    const panel = await screen.findByTestId("pairing-link-panel");
-    expect(panel).toHaveTextContent("http://primary.test");
-    expect(panel).toHaveTextContent("a".repeat(64));
-    expect(panel).toHaveTextContent(/mullion:\/\/pair\?/);
+    await user.click(dialog.getByRole("button", { name: "Generate pairing code" }));
+    expect(createPairing).toHaveBeenCalledExactlyOnceWith({ hostId: "h1" });
+    const panel = await dialog.findByTestId("pairing-link-panel");
+    expect(panel).toHaveTextContent(code);
+    expect(panel).toHaveTextContent("MULLION_AGENT_PAIRING_FORCE=1");
   });
+
+  it("adds a host with a one-time code, the Helper link and the headless install command", async () => {
+    const user = userEvent.setup();
+    const createPairing = vi.fn(pairingResponse);
+    stubFetch({ createPairing });
+    render(<HostsSection />);
+
+    expect(screen.queryByText("Pair a desktop")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add host" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Add host" }));
+    await user.click(dialog.getByRole("button", { name: "Generate pairing code" }));
+
+    expect(createPairing).toHaveBeenCalledExactlyOnceWith({});
+    const panel = await dialog.findByTestId("pairing-link-panel");
+    expect(panel).toHaveTextContent("http://primary.test");
+    expect(within(panel).getByText(code)).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "Open in Helper" })).toHaveAttribute(
+      "href",
+      pairingLink,
+    );
+    expect(
+      within(panel).getByRole("link", { name: "Download Mullion Helper" }),
+    ).toBeInTheDocument();
+    expect(panel).toHaveTextContent("MULLION_AGENT_PAIRING_CODE_STDIN=1");
+    expect(panel).not.toHaveTextContent("MULLION_AGENT_PAIRING_FORCE=1");
+    await user.click(within(panel).getByRole("button", { name: "Copy Pairing code" }));
+    expect(await navigator.clipboard.readText()).toBe(code);
+    await user.click(
+      within(panel).getByRole("button", { name: "Copy Install command (Linux / macOS)" }),
+    );
+    const command = await navigator.clipboard.readText();
+    const stdin = `<<'MULLION_PAIRING_CODE'\n${code}\nMULLION_PAIRING_CODE`;
+    expect(command.endsWith(stdin)).toBe(true);
+    expect(command.slice(0, -stdin.length)).not.toContain(code);
+  });
+
+  it("keeps the pending pairing dialog open and sends only one request", async () => {
+    const user = userEvent.setup();
+    let resolvePairing!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolvePairing = resolve;
+    });
+    const createPairing = vi.fn(() => pending);
+    stubFetch({ createPairing });
+    render(<HostsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Add host" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Add host" }));
+    await user.click(dialog.getByText("Advanced: host the primary dials directly (deprecated)"));
+    await user.click(dialog.getByRole("button", { name: "Generate pairing code" }));
+
+    await user.click(dialog.getByRole("button", { name: "Generating…" }));
+    await user.click(dialog.getByRole("button", { name: "Cancel" }));
+    await user.click(dialog.getByRole("button", { name: "Add with a token" }));
+    await user.keyboard("{Escape}");
+    expect(dialog.queryByRole("textbox", { name: "Name" })).not.toBeInTheDocument();
+    expect(createPairing).toHaveBeenCalledTimes(1);
+
+    resolvePairing(pairingResponse());
+    expect(await dialog.findByTestId("pairing-link-panel")).toBeInTheDocument();
+  });
+
+  it("shows pairing errors and allows retry", async () => {
+    const user = userEvent.setup();
+    const createPairing = vi
+      .fn(pairingResponse)
+      .mockReturnValueOnce(jsonResponse(500, { message: "Pairing failed" }));
+    stubFetch({ createPairing });
+    render(<HostsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Add host" }));
+    const generate = screen.getByRole("button", { name: "Generate pairing code" });
+    await user.click(generate);
+    expect(await screen.findByText("Pairing failed")).toBeInTheDocument();
+    await user.click(generate);
+    expect(await screen.findByTestId("pairing-link-panel")).toBeInTheDocument();
+  });
+
+  it.each([false, true])(
+    "keeps the advanced token-host flow on POST /api/hosts (own token: %s)",
+    async (ownToken) => {
+      const user = userEvent.setup();
+      const host = makeHost({ id: "h2", name: "legacy-host" });
+      const createHost = vi.fn(() =>
+        jsonResponse(201, { ...host, ...(ownToken ? {} : { token: "generated-token" }) }),
+      );
+      const createPairing = vi.fn(pairingResponse);
+      stubFetch({ createHost, createPairing });
+      render(<HostsSection />);
+
+      await user.click(screen.getByRole("button", { name: "Add host" }));
+      await user.click(screen.getByText("Advanced: host the primary dials directly (deprecated)"));
+      await user.click(screen.getByRole("button", { name: "Add with a token" }));
+      const form = within(screen.getByRole("dialog", { name: "Add host" }));
+      await user.type(form.getByRole("textbox", { name: "Name" }), "legacy-host");
+      if (ownToken) {
+        await user.click(form.getByRole("checkbox", { name: "Use my own token" }));
+        await user.type(form.getByLabelText(/^Token/), "provided-token");
+      }
+      await user.click(form.getByRole("button", { name: "Add host" }));
+
+      expect(createPairing).not.toHaveBeenCalled();
+      expect(createHost).toHaveBeenCalledExactlyOnceWith({
+        name: "legacy-host",
+        ...(ownToken ? { token: "provided-token" } : {}),
+      });
+      if (!ownToken) expect(await screen.findByText("generated-token")).toBeInTheDocument();
+    },
+  );
 });

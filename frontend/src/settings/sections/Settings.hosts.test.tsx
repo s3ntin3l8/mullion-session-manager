@@ -89,7 +89,7 @@ describe("Settings -> Hosts", () => {
       // what this file's own tests care about; not asserted on by any test
       // here (see Settings.bridges.test.tsx for that).
       "GET /api/bridges": () => jsonResponse(200, []),
-      // Issue #2449 — the Pair a desktop panel lists pairing codes on mount.
+      // Issue #2449 — pairing activity lists pairing codes on mount.
       "GET /api/host-pairings": () => jsonResponse(200, []),
       // Issue #3440 — the Automation tokens panel lists tokens on mount.
       "GET /api/automation-tokens": () => jsonResponse(200, []),

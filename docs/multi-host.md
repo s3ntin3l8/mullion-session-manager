@@ -35,19 +35,20 @@ talking to an agent's `/internal/*` routes over HTTP + WebSocket
 ## Setting up an agent host
 
 For a **single new headless host**, the recommended path is a **one-time
-pairing code** (`POST /api/host-pairings` on the primary, redeemed during
-`deploy/install.sh --role agent` via `MULLION_AGENT_PAIRING_CODE` or
-`MULLION_AGENT_PAIRING_CODE_STDIN=1`): the code is redeemed once into
-`$SESSIONS_DIR/agent-identity.json` (`0600`) and never lands in `.env`, a
-process argument, or a log. For **zero-touch fleet deploys** (e.g. an Ansible
-playbook provisioning many hosts without per-host codes), **self-registration**
-with `MULLION_ENROLLMENT_TOKEN` / `MULLION_ENROLLMENT_SECRET` stays supported.
+pairing code**. In **Settings → Hosts & SSH bridges**, open **Add host**,
+select **Generate pairing code**, and run the install command on the agent. The installer reads the code from
+stdin and redeems it for an identity in `$SESSIONS_DIR/agent-identity.json`
+(`0600`). It keeps the code out of `.env`, process arguments and logs.
+
+For **zero-touch fleet deploys** (e.g. an Ansible playbook provisioning many
+hosts without per-host codes), **self-registration** with
+`MULLION_ENROLLMENT_TOKEN` / `MULLION_ENROLLMENT_SECRET` stays supported.
 See [`deploy/README.md`](../deploy/README.md)'s "Automating agent deploys"
 section for the full deploy-tooling contract (`install.sh --role agent`,
 the systemd unit, an example Ansible role); the protocol itself is
 documented here. **Manual registration** (a pre-provisioned, per-agent
 static token, added by hand in Settings → Hosts & SSH bridges) is also
-supported — see below.
+supported as a deprecated advanced option, described below.
 
 ### Self-registration (zero manual steps)
 
@@ -169,12 +170,12 @@ in `machine_credential`.
   **The expired identity is the one remaining takeover window**: a credential
   unused for 90 days expires, and the row's token can claim the row again
   then. Revoke or re-pair such a row instead of leaving it idle.
-- **Revocation is final.** `POST /api/hosts/:id/revoke` (Settings → Hosts →
+- **Revocation is final.** `POST /api/hosts/:id/revoke` (Settings → Hosts & SSH bridges →
   the row's menu → _Revoke identity_) drops the credential, its grace copy
   and the live session. The agent's next registration gets `401`, and it
   does **not** fall back to its bootstrap token to regain the identity: it
   logs the rejection and stops. To bring a revoked host back onto the **same**
-  host row, use Settings → Hosts → row menu → _Re-pair_ (or `POST
+  host row, use Settings → Hosts & SSH bridges → row menu → _Re-pair_ (or `POST
 /api/host-pairings` with `{"hostId": "<id>"}`) and run the agent-side redeem
   with the code (through `deploy/install.sh` that means
   `MULLION_AGENT_PAIRING_CODE_STDIN=1` **and `MULLION_AGENT_PAIRING_FORCE=1`** —
@@ -196,11 +197,9 @@ in `machine_credential`.
   holds **no** live identity (a revoked or expired one): since issue #3439 a
   row with a live identity refuses a claim, so rotating the token and pasting
   it in cannot replace a live identity — that needs a re-pair. Do this at
-  repair time, not at rotation time: rotating to retire a leaked token (rotate
-  and discard) does not need it, but it leaves the `.env` token dead, so a
-  later re-pairing via that legacy recipe needs a second, fresh rotation. A
-  credential unused for 90 days is rejected the same way as a revoked one, so
-  the agent log's "revoked or unknown" can also mean expiry.
+  repair time so the agent has the current token. A credential unused for
+  90 days is rejected the same way as a revoked one, so the agent log's
+  "revoked or unknown" can also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
   credential is compared, so a caller who guesses an id can tell a revoked host
@@ -321,16 +320,22 @@ ever show a historic event from before that change: a claim no longer replaces
 a live identity (such a row refuses the claim, and re-pairing writes a
 `paired` event). #3507 restores the event on the re-pair path.
 
-### Pairing a desktop Helper (one-time code)
+### Add host with a one-time pairing code
 
-For a Mac or Windows machine running the Mullion Helper, the dashboard
-generates a **one-time pairing link** instead of handing out the fleet
-enrollment secret. Settings → Hosts → **Pair a desktop** → _Generate pairing
-link_. Pairing grants **execution permission only**: it does not share an SSH
-key (that is the separate SSH-agent bridge pairing), and it leaves headless
-Ansible enrollment and manually configured hosts untouched. Both onboarding
-methods converge on the same stable host identity and renewable machine
-credential (see "Machine identity and machine credentials").
+In **Settings → Hosts & SSH bridges**, select **Add host**, then
+**Generate pairing code**. For a Mac or Windows machine, open the pairing link on that machine in the
+Mullion Helper. For a headless Linux or macOS host, copy and run the install
+command there. Pairing grants permission to run sessions. Configure SSH key
+sharing separately with an SSH-agent bridge.
+
+```text
+Settings → Hosts & SSH bridges
+  Add host → Generate pairing code
+             ├─ Pairing link · server address · pairing code
+             └─ Install command (Linux / macOS)
+           → Advanced: host the primary dials directly (deprecated)
+             └─ Add with a token → Generated token or Use my own token
+```
 
 **The link.** `mullion://pair?url=<primary url>&code=<code>`, both
 URL-encoded. It carries the primary's URL and the bootstrap code and nothing
@@ -344,18 +349,17 @@ a valid `url` is reduced to its origin. `parsePairingLink`
 primary's `MULLION_PUBLIC_URL` when set (see `deploy/README.md`), otherwise
 derived from the request's `Host` and scheme. The dashboard also shows the server
 address and code separately, so a Helper that cannot receive the deep link
-(not installed, or the OS did not route it) can be given them by hand; the
-panel links to the Helper download for the not-installed case, and _Open in
-Helper_ retries the link.
+(the OS did not route it) can be given them by hand. The panel offers
+**Download Mullion Helper** and **Open in Helper**.
 
 **The code.** 10 minutes, single use. Generating another does not invalidate
-earlier ones; _Cancel_ withdraws a pending code. Operators see each code as
-`pending` → `paired` → `connected`:
+earlier ones. **Cancel** in **Pairing activity** withdraws a pending code.
+Pairing activity shows whether the agent has redeemed the code and connected:
 
 - **pending** — issued, not yet redeemed.
 - **paired** — redeemed: the host row, identity and credential exist.
 - **unclaimed** — paired, but the retry window has passed with no credential
-  renewal and no outbound channel ever connected: the Helper never took
+  renewal and no outbound channel ever connected. The agent never took
   delivery of its identity (for example the redeem response was lost and the
   retry came too late). `GET /api/hosts` reports `unclaimed: true` and the
   Hosts UI shows "Paired, never connected" with the usual _Revoke identity_
@@ -409,13 +413,41 @@ creates no duplicate identity. A new `requestId`, a renewed or revoked host,
 or a later retry needs a new code. Revoking a host
 (`POST /api/hosts/:id/revoke`) is final for its pairing too.
 
-### Generated token (recommended for a single host)
+### Hosts row menu
 
-**Settings → Hosts & SSH bridges → Add a host**, with just a name. The primary
-mints a per-host token, shows it **once**, and prints a ready-to-paste install
-command for Windows (PowerShell) and Linux/macOS with the token, the primary's
-URL and the host's name filled in. The agent runs it, registers itself
-(`POST /api/internal/register` — the token matches this host's row, so it
+Every remote host has **View config**, **Edit**, **Park host** (or **Unpark host**),
+**Re-pair**, **Revoke identity** and **Delete host**. **Rotate token** is available
+only when the host has a per-host token and no live machine identity.
+
+| Host kind                                     | Credential actions                       |
+| --------------------------------------------- | ---------------------------------------- |
+| Host with a live machine identity             | Re-pair · Revoke identity                |
+| Manual host with a token and no live identity | Rotate token · Re-pair · Revoke identity |
+| Enrolled host without a per-host token        | Re-pair · Revoke identity                |
+
+Choose **Re-pair**, then confirm by selecting **Generate pairing code**. The
+panel shows the link, server address, code and install command. Redeeming this
+host-bound code disconnects the running agent immediately and connects the
+replacement to the same host row.
+
+**Rotate token** (click twice to confirm) mints a new token, shows it once and
+clears the host's session. Update and restart the agent with the new value.
+For a host installed with a generated token, set `MULLION_ENROLLMENT_TOKEN`,
+leave `MULLION_AGENT_TOKEN` empty and keep the existing `MULLION_PRIMARY_URL`.
+For a host added with **Use my own token**, set `MULLION_AGENT_TOKEN`. The
+dialog shows both options. The installer preserves an existing `.env`, so
+edit it directly to apply the new value. An enrolling agent without an
+identity that sees its bootstrap token rejected can also pick up the new
+`.env` value without a restart.
+
+### Generated token (deprecated)
+
+Open **Settings → Hosts & SSH bridges → Add host**, expand **Advanced: host the primary
+dials directly (deprecated)**, select **Add with a token**, and enter a name.
+The primary mints a per-host token, shows it **once**, and prints a
+ready-to-paste install command for Windows (PowerShell) and Linux/macOS with
+the token, the primary's URL and the host's name filled in. The agent runs
+it, registers itself (`POST /api/internal/register` — the token matches this host's row, so it
 needs neither `MULLION_ENROLLMENT_SECRET` on the primary nor
 `MULLION_AGENT_TOKEN` on the agent), and the primary fills in the agent's own
 URL. Until then the host reads **pending** ("waiting for the agent to
@@ -428,46 +460,13 @@ specific address.
   (e.g. `http://dev-01:3100`) if that applies to you, or see
   [Dedicated agent hostname behind Traefik](#dedicated-agent-hostname-behind-traefik)
   for exposing only the agent endpoints over HTTPS.
-- **Rotate token** (the host's `…` menu, click twice to confirm) mints a new
-  token, shows it once, and clears the host's session. What that means depends
-  on the host:
-  - **No live machine identity** (a manual-token host, a legacy agent, a revoked
-    row): the running agent is locked out until its `.env` carries the new value
-    and it is restarted — re-running the installer does not rewrite an existing
-    `.env`. An agent that registered itself needs
-    `MULLION_ENROLLMENT_TOKEN=<new>` and `MULLION_AGENT_TOKEN=` empty (leave its
-    `MULLION_PRIMARY_URL` as installed); a host added with **Use my own token**
-    needs `MULLION_AGENT_TOKEN=<new>` instead (it never registers, so clearing it
-    would leave the agent with no credential and it would refuse to boot). The
-    dialog shows both.
-  - **Live machine identity** (the agent registered itself): the running agent is
-    unaffected. It renews with its `{hostId, machineCredential}` and never
-    presents the bootstrap token again. Two cases:
-    - **Leak:** a per-host token is never cleared after first registration, so
-      retire it now with **Rotate token and discard it**: the old value dies, the
-      running agent is untouched, the new token is never shown. The token left in
-      the agent's `.env` is now dead. Since issue #3439 a leaked token can no
-      longer take the row over either — a host with a live identity refuses a
-      claim — but retire the leaked value anyway.
-    - **Repair** (state file lost, identity revoked, or expired after 90 days
-      unused): **Re-pair** the host — the row's `…` menu → _Re-pair_, or
-      `POST /api/host-pairings` with `{"hostId": "<id>"}` — and redeem the
-      one-time code on the agent. It issues a fresh session and machine
-      credential in place and rejects the displaced credential immediately.
-      Rotating the token is no longer enough: a row with a live identity
-      refuses a claim (issue #3439), so "rotate, paste into `.env`, delete
-      `agent-identity.json`, restart" only works for a row whose identity is
-      gone (revoked or expired).
-      An agent without an identity whose bootstrap token was rotated logs a one-time
-      warning and picks up the new `.env` value without a restart.
 - Tick **Use my own token** to supply a token yourself instead (the manual
   flow below).
 
-### Manual registration (also supported)
+### Manual registration (deprecated)
 
-A pre-provisioned, per-agent static token, added by hand — the original
-flow, still fully supported for a one-off host or anyone who'd rather not
-hand a shared enrollment secret to automation:
+Use a pre-provisioned, per-agent static token to add a legacy host that
+the primary dials directly.
 
 1. **Install and configure Mullion on the remote machine** exactly like a
    normal deploy (see the main [README](../README.md) Quick Start /
@@ -488,7 +487,8 @@ hand a shared enrollment secret to automation:
 3. **Start it.** It boots to `/health`/`/ready` plus the internal API; there
    is no UI to open on the agent itself — you never point a browser at it.
 4. **Register it on the primary**: open the primary's dashboard →
-   **Settings → Hosts & SSH bridges → Add a host**, and fill in:
+   **Settings → Hosts & SSH bridges → Add host → Advanced: host the primary dials directly
+   (deprecated) → Add with a token**. Check **Use my own token** and fill in:
    - **Name** — any label (e.g. `home-server`).
    - **Base URL** — where the agent is reachable, e.g.
      `http://192.168.1.20:4000`.
