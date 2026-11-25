@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.3.67](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.66...v0.3.67) (2026-11-25)
+
+
+### Features
+
+* **browser:** quick pick of running services, saved pages and recent addresses in the Browser pane ([#3473](https://github.com/s3ntin3l8/mullion-session-manager/issues/3473)) ([db492d5](https://github.com/s3ntin3l8/mullion-session-manager/commit/db492d5cfdfa6c6b2ab23e22d239518a75a54603))
+* **browser:** type into the agent browser's page on a touch screen ([#3433](https://github.com/s3ntin3l8/mullion-session-manager/issues/3433)) ([e893c19](https://github.com/s3ntin3l8/mullion-session-manager/commit/e893c19699e733e575afccdfb32bfa3e5487dcde))
+* **devices:** create an iOS Simulator from Settings → Devices ([#3421](https://github.com/s3ntin3l8/mullion-session-manager/issues/3421)) ([440d8cd](https://github.com/s3ntin3l8/mullion-session-manager/commit/440d8cd0bbca7e427b22c91cc770e267516af82f))
+* **devices:** open preview-target URLs in a simulator, including across hosts ([#3503](https://github.com/s3ntin3l8/mullion-session-manager/issues/3503)) ([f9abd4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/f9abd4a3bf2c80d3f0dd93934debcd57f153b340))
+* **devices:** open the dev server URL in a simulator ([#3493](https://github.com/s3ntin3l8/mullion-session-manager/issues/3493)) ([9befcbf](https://github.com/s3ntin3l8/mullion-session-manager/commit/9befcbf39c4c6d9079d58ee527c97405708327f9))
+* **devices:** separate Android and iOS in Settings → Devices and make the simulator list usable ([#3449](https://github.com/s3ntin3l8/mullion-session-manager/issues/3449)) ([291eaac](https://github.com/s3ntin3l8/mullion-session-manager/commit/291eaac2c42f09b74e26c360244b299cd2400084))
+* **devices:** wire hostId in PairDeviceDialog and device CLI/control-socket ops ([#3470](https://github.com/s3ntin3l8/mullion-session-manager/issues/3470)) ([dd29d18](https://github.com/s3ntin3l8/mullion-session-manager/commit/dd29d187ab945abe126434485ce65e44026b3ca0))
+* **dock:** dev-server port detection and Docker discovery on agent hosts ([#3492](https://github.com/s3ntin3l8/mullion-session-manager/issues/3492)) ([2e19e8e](https://github.com/s3ntin3l8/mullion-session-manager/commit/2e19e8e162a426dfd3497144d37a888c3d0df931))
+* **dock:** keyboard-resizable rail and pane dividers ([#3452](https://github.com/s3ntin3l8/mullion-session-manager/issues/3452)) ([469dfbd](https://github.com/s3ntin3l8/mullion-session-manager/commit/469dfbd8f74940c784851883c48df72d48878dda))
+* **dock:** port-conflict check for remote launches ([#3482](https://github.com/s3ntin3l8/mullion-session-manager/issues/3482)) ([cf417ce](https://github.com/s3ntin3l8/mullion-session-manager/commit/cf417ce353a6b4c4be525a9504fa89744e34aebf))
+* **dock:** run a dock control on a chosen host and make its preview follow it ([#3434](https://github.com/s3ntin3l8/mullion-session-manager/issues/3434)) ([aaa911f](https://github.com/s3ntin3l8/mullion-session-manager/commit/aaa911fda7fb21536f863ecdc40b2aed13c65e50))
+* **git:** pull any branch from the Source Control sidebar, and tell rebase apart from pull ([#3444](https://github.com/s3ntin3l8/mullion-session-manager/issues/3444)) ([c4172f0](https://github.com/s3ntin3l8/mullion-session-manager/commit/c4172f03edc3d1ccccde655057b7f6e739282445))
+* **hosts:** headless agents redeem a pairing code instead of holding a bootstrap token ([cb2b750](https://github.com/s3ntin3l8/mullion-session-manager/commit/cb2b750242795ed3d9e2204aa0ec92400d340334))
+* **hosts:** re-pair an existing host with a host-bound pairing code ([14bd943](https://github.com/s3ntin3l8/mullion-session-manager/commit/14bd943d8eba65d87ee328c3952eda38c243d7e9))
+* **hosts:** record host identity events and flag a replaced identity ([2ceb222](https://github.com/s3ntin3l8/mullion-session-manager/commit/2ceb2225fb9e4ffc28ecaca37198c0de7c80f1f2))
+* **previews:** branch previews for remote projects ([#3504](https://github.com/s3ntin3l8/mullion-session-manager/issues/3504)) ([152ddee](https://github.com/s3ntin3l8/mullion-session-manager/commit/152ddee39d7390a0e4724cac98b816871fa93698))
+* **sessions:** offer the model choice for custom launchers that run an agent ([#3430](https://github.com/s3ntin3l8/mullion-session-manager/issues/3430)) ([33ca0a4](https://github.com/s3ntin3l8/mullion-session-manager/commit/33ca0a4a65603c2bf4f4c0911b373666305213ba))
+* **tasks:** propose issues filed by Mullion's own App for human approval ([#3418](https://github.com/s3ntin3l8/mullion-session-manager/issues/3418)) ([e93a82b](https://github.com/s3ntin3l8/mullion-session-manager/commit/e93a82b72082a359bb73a6408847d96b67d428b2))
+* **uiux:** a full-height notification panel with status chips and a way back ([#3490](https://github.com/s3ntin3l8/mullion-session-manager/issues/3490)) ([b78e288](https://github.com/s3ntin3l8/mullion-session-manager/commit/b78e2882ddd9f7b57c2e50f9ee624ddf0627b7be))
+* **uiux:** add a Tasks section with its own needs-you count to the bell ([#3489](https://github.com/s3ntin3l8/mullion-session-manager/issues/3489)) ([bf12a16](https://github.com/s3ntin3l8/mullion-session-manager/commit/bf12a1673e077d6886f38a9e0523065583867438))
+* **uiux:** finish the Task Master integration in the GitHub sidebar rows ([#3496](https://github.com/s3ntin3l8/mullion-session-manager/issues/3496)) ([b6d3cde](https://github.com/s3ntin3l8/mullion-session-manager/commit/b6d3cde869eebc06820d722250b4eed80c6aa873))
+* **uiux:** let the copy-mode sheet leave on the spring ([#3455](https://github.com/s3ntin3l8/mullion-session-manager/issues/3455)) ([5ea83f6](https://github.com/s3ntin3l8/mullion-session-manager/commit/5ea83f607d4002f3b066ecca85b1cc2dcfc2e5f8))
+* **uiux:** make sheets and popovers about 15% see-through, with text colours that hold AA on them ([#3471](https://github.com/s3ntin3l8/mullion-session-manager/issues/3471)) ([220c7ff](https://github.com/s3ntin3l8/mullion-session-manager/commit/220c7ff7c7c86553c1ac08b47b2a8ec74b689412))
+* **uiux:** mark cross-project child sessions with a "spawned by" link to their coordinator ([#3485](https://github.com/s3ntin3l8/mullion-session-manager/issues/3485)) ([9462ae9](https://github.com/s3ntin3l8/mullion-session-manager/commit/9462ae93ed529ff237c219400c228e9ed1b124c6))
+* **uiux:** play PairDeviceDialog's exit when a pairing closes it ([#3474](https://github.com/s3ntin3l8/mullion-session-manager/issues/3474)) ([dc3cf19](https://github.com/s3ntin3l8/mullion-session-manager/commit/dc3cf19ea3d9a0eb6fd1f2731f3e9ac87aec0b79))
+* **uiux:** play the exit when a parent closes an overlay ([#3454](https://github.com/s3ntin3l8/mullion-session-manager/issues/3454)) ([2f60620](https://github.com/s3ntin3l8/mullion-session-manager/commit/2f606204e2393e2af61c111a2bdf5c4b978c8bb8))
+* **uiux:** the bell lists only open decisions, with informative events grouped ([#3488](https://github.com/s3ntin3l8/mullion-session-manager/issues/3488)) ([db6e25c](https://github.com/s3ntin3l8/mullion-session-manager/commit/db6e25ccce7d6249daa8b9f787fd9eb601bb102f))
+
+
+### Bug Fixes
+
+* **devices:** an iOS-only Mac host no longer crashes at boot with an empty DEVICE_ADB_PATH ([#3457](https://github.com/s3ntin3l8/mullion-session-manager/issues/3457)) ([e49b69e](https://github.com/s3ntin3l8/mullion-session-manager/commit/e49b69e79f28f379a29301e97fd701d5bd7e93e0))
+* **devices:** Settings pane on an iOS-only host no longer shows Android and discovery rows ([#3479](https://github.com/s3ntin3l8/mullion-session-manager/issues/3479)) ([dc34162](https://github.com/s3ntin3l8/mullion-session-manager/commit/dc34162a96a19a405e89fbd97d8473001f153de7))
+* **hosts:** a rerun of install.sh must not redeem a pairing code for an already paired agent ([315727c](https://github.com/s3ntin3l8/mullion-session-manager/commit/315727c04759c6f27069fb77a41e56d011709924))
+* **hosts:** clearer pairing redeem errors, no code in the install environment ([5dbcd8b](https://github.com/s3ntin3l8/mullion-session-manager/commit/5dbcd8be6c90470d8aef9bf93533b79acbe8a87f))
+* **previews:** prune the quick pick's port previews once their service stops ([#3481](https://github.com/s3ntin3l8/mullion-session-manager/issues/3481)) ([20167b0](https://github.com/s3ntin3l8/mullion-session-manager/commit/20167b0bce08447349f2d42ce761ade1f1200177))
+* **review-relay:** resolve a remote-placed session's branch on the session's own host ([#3424](https://github.com/s3ntin3l8/mullion-session-manager/issues/3424)) ([a9d8def](https://github.com/s3ntin3l8/mullion-session-manager/commit/a9d8def11f5ca5406eb978265c6fd244b7cea2dc))
+* **sessions:** upload a pasted image to a remote-placed session's own checkout ([#3417](https://github.com/s3ntin3l8/mullion-session-manager/issues/3417)) ([c9dd106](https://github.com/s3ntin3l8/mullion-session-manager/commit/c9dd10694c8e9187fe613e27a23955e750a8a543))
+* **uiux:** 44px touch floor for browser toolbars and a keyboard-resizable dock height handle ([#3483](https://github.com/s3ntin3l8/mullion-session-manager/issues/3483)) ([b750d1d](https://github.com/s3ntin3l8/mullion-session-manager/commit/b750d1dbee5015896728e414af8e78bb3fa96cb2))
+* **uiux:** raise the simulator picker's dark meta contrast; re-add the check tag and baseline for settings-devices-ios-form ([#3487](https://github.com/s3ntin3l8/mullion-session-manager/issues/3487)) ([c8fbd5e](https://github.com/s3ntin3l8/mullion-session-manager/commit/c8fbd5e6bb7da952102471fc8b83d1a83ec1ce29)), closes [#3468](https://github.com/s3ntin3l8/mullion-session-manager/issues/3468)
+* **uiux:** sidebar Delete shares the actions row; pane tab text no longer overlaps x and ⋯ ([#3484](https://github.com/s3ntin3l8/mullion-session-manager/issues/3484)) ([389debc](https://github.com/s3ntin3l8/mullion-session-manager/commit/389debc17fe39471bdf2ceb5cd18e5efd84977a9))
+
+
+### Performance Improvements
+
+* **uiux:** virtualize the sidebar tree on project count, not just session count ([#3497](https://github.com/s3ntin3l8/mullion-session-manager/issues/3497)) ([565e5f3](https://github.com/s3ntin3l8/mullion-session-manager/commit/565e5f3baf87df7579b87eaa96872d85940a3048))
+
 ## [0.3.66](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.65...v0.3.66) (2026-11-20)
 
 
