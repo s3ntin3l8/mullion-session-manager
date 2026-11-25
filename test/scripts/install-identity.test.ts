@@ -662,36 +662,109 @@ const arg = (name) => {
     }
   });
 
-  it("redeems the code anyway with MULLION_AGENT_PAIRING_FORCE=1 and restarts an active unit", async () => {
-    const home = pairedHome();
-    writeRedeemHelper(home);
-    // Report mullion-agent.service as active so the restart condition is exercised.
-    writeShim(
-      binDir,
-      "systemctl",
-      `#!/usr/bin/env bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "systemctl $*" >> "$DIR/commands.log"\ncase "$*" in *"is-enabled mullion.service"*|*"is-active mullion.service"*) exit 1;; *is-enabled*|*is-active*) exit 0;; *) exit 0;; esac\n`,
-    );
-
-    const primary = await startFakePrimary();
-    try {
-      const result = await run(
-        home,
-        pairingRun(primary.url, { MULLION_AGENT_PAIRING_FORCE: "1" }),
-        `${PAIR_CODE}\n`,
+  // The force flag must honour every spelling a caller may legitimately
+  // produce: a hand-written "1", and the boolean spellings an Ansible/Jinja
+  // template renders (a YAML `true` reaches a shell as "True", not "true").
+  // Before the fix only the exact strings "1" and "true" counted, so every
+  // other spelling silently took the skip branch — the "Bring a revoked
+  // agent back" recipe looked like it had worked while the agent stayed
+  // revoked.
+  it.each(["1", "true", "True", "TRUE", "yes", "on"])(
+    "redeems the code anyway with MULLION_AGENT_PAIRING_FORCE=%s and restarts an active unit",
+    async (force) => {
+      const home = pairedHome();
+      writeRedeemHelper(home);
+      // Report mullion-agent.service as active so the restart condition is exercised.
+      writeShim(
+        binDir,
+        "systemctl",
+        `#!/usr/bin/env bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "systemctl $*" >> "$DIR/commands.log"\ncase "$*" in *"is-enabled mullion.service"*|*"is-active mullion.service"*) exit 1;; *is-enabled*|*is-active*) exit 0;; *) exit 0;; esac\n`,
       );
 
-      // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
-      expect(result.stdout).toContain("Redeeming pairing code with primary");
-      expect(primary.pairRequests).toHaveLength(1);
-      expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
-        hostId: "paired-host-1",
-      });
-      const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
-      expect(commands).toContain("systemctl --user restart mullion-agent.service");
-    } finally {
-      await primary.close();
-    }
-  });
+      const primary = await startFakePrimary();
+      try {
+        const result = await run(
+          home,
+          pairingRun(primary.url, { MULLION_AGENT_PAIRING_FORCE: force }),
+          `${PAIR_CODE}\n`,
+        );
+
+        // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+        expect(result.stdout).toContain("Redeeming pairing code with primary");
+        expect(result.stderr).not.toMatch(/MULLION_AGENT_PAIRING_FORCE/);
+        expect(primary.pairRequests).toHaveLength(1);
+        expect(JSON.parse(fs.readFileSync(identityFile(home), "utf8"))).toMatchObject({
+          hostId: "paired-host-1",
+        });
+        const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+        expect(commands).toContain("systemctl --user restart mullion-agent.service");
+      } finally {
+        await primary.close();
+      }
+    },
+  );
+
+  // An unrecognised value must not silently no-op the re-pair: it is
+  // treated as off (the safe default — never spend a code by accident), but
+  // it says so, because a typo here used to look like a successful re-pair.
+  it.each(["maybe", "2", "enabled"])(
+    "warns and ignores the code when MULLION_AGENT_PAIRING_FORCE=%s is not a recognised value",
+    async (force) => {
+      const home = pairedHome();
+      writeRedeemHelper(home);
+      const file = identityFile(home);
+      const past = new Date("2024-01-01T00:00:00Z");
+      fs.utimesSync(file, past, past);
+
+      const primary = await startFakePrimary();
+      try {
+        const result = await run(
+          home,
+          pairingRun(primary.url, { MULLION_AGENT_PAIRING_FORCE: force }),
+          `${PAIR_CODE}\n`,
+        );
+
+        // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+        expect(result.stdout).toMatch(/already paired/i);
+        expect(result.stderr).toContain(`MULLION_AGENT_PAIRING_FORCE='${force}'`);
+        expect(result.stderr).toMatch(/not a recognised value/i);
+        // The redeem was never attempted, and the identity is untouched.
+        expect(primary.pairRequests).toHaveLength(0);
+        expect(fs.readFileSync(file, "utf8")).toBe(PAIRED_IDENTITY);
+        expect(fs.statSync(file).mtimeMs).toBe(past.getTime());
+      } finally {
+        await primary.close();
+      }
+    },
+  );
+
+  // An explicit "off" is recognised, not a typo: a role that templates
+  // `mullion_pairing_force: false` reaches the shell as "False", and the
+  // operator meant off. It must not warn — a warning here would train
+  // operators to ignore the real one.
+  it.each(["0", "false", "False", "no", "off"])(
+    "treats MULLION_AGENT_PAIRING_FORCE=%s as off without warning",
+    async (force) => {
+      const home = pairedHome();
+      writeRedeemHelper(home);
+
+      const primary = await startFakePrimary();
+      try {
+        const result = await run(
+          home,
+          pairingRun(primary.url, { MULLION_AGENT_PAIRING_FORCE: force }),
+          `${PAIR_CODE}\n`,
+        );
+
+        // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+        expect(result.stdout).toMatch(/already paired/i);
+        expect(result.stderr).not.toMatch(/MULLION_AGENT_PAIRING_FORCE/);
+        expect(primary.pairRequests).toHaveLength(0);
+      } finally {
+        await primary.close();
+      }
+    },
+  );
 
   it("redeems a pairing code when the host has no identity yet", async () => {
     const home = freshHome();

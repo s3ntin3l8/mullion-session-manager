@@ -558,9 +558,37 @@ if [ "$ROLE" = "agent" ] && ! is_blank "${MULLION_AGENT_PAIRING_CODE:-}"; then
   # MULLION_AGENT_PAIRING_FORCE=1 is the explicit opt-out — re-pair on
   # purpose (what "Bring a revoked agent back" in deploy/README.md relies
   # on): the code is redeemed and the identity overwritten, as before.
+  #
+  # The value is NORMALISED before it is read, because the caller is not
+  # always a shell: Ansible/Jinja renders a YAML boolean as `True` (not
+  # `true`), and an operator may write `TRUE` or `yes`. Only the exact
+  # strings `1`/`true` used to count, so every other spelling took the skip
+  # branch below — the "Bring a revoked agent back" recipe looked like it
+  # had worked while the agent stayed revoked. An unrecognised value warns
+  # instead of being silently ignored.
   PAIRING_FORCE=false
-  case "${MULLION_AGENT_PAIRING_FORCE:-}" in
-    1 | true) PAIRING_FORCE=true ;;
+  PAIRING_FORCE_RAW="${MULLION_AGENT_PAIRING_FORCE:-}"
+  # Trim the surrounding whitespace the same way is_blank does (a stray
+  # space from a templating bug must not decide the flag), then fold the
+  # case so `True` and `TRUE` mean what `true` means.
+  PAIRING_FORCE_VALUE="$PAIRING_FORCE_RAW"
+  while [[ "$PAIRING_FORCE_VALUE" == [[:space:]]* ]]; do PAIRING_FORCE_VALUE="${PAIRING_FORCE_VALUE#[[:space:]]}"; done
+  while [[ "$PAIRING_FORCE_VALUE" == *[[:space:]] ]]; do PAIRING_FORCE_VALUE="${PAIRING_FORCE_VALUE%[[:space:]]}"; done
+  PAIRING_FORCE_VALUE="$(printf '%s' "$PAIRING_FORCE_VALUE" | tr '[:upper:]' '[:lower:]')"
+  case "$PAIRING_FORCE_VALUE" in
+    # Truthy: the spellings Ansible/Jinja and YAML 1.1 accept for a boolean
+    # true (a YAML `true` reaches a shell as "True", not "true").
+    1 | true | yes | on) PAIRING_FORCE=true ;;
+    # An explicit "off" (and the unset default) — recognised, so it is not
+    # worth a warning: the code is simply ignored for an already-paired host.
+    "" | 0 | false | no | off) ;;
+    *)
+      # Warn even when this run has no identity to protect: the same typo
+      # would silently skip the re-pair on the NEXT run, when the host IS
+      # paired — which is exactly the revoked-agent case this flag exists
+      # for.
+      echo "WARNING: MULLION_AGENT_PAIRING_FORCE='$PAIRING_FORCE_RAW' is not a recognised value (use 1, true, yes or on) — it is treated as off, so a supplied pairing code is ignored for an already-paired host." >&2
+      ;;
   esac
   PAIR_IDENTITY_FILE="$(pair_identity_file "$PAIR_SESSIONS_DIR")"
   if [ "$PAIRING_FORCE" = false ] && identity_file_is_usable "$PAIR_IDENTITY_FILE"; then
@@ -819,7 +847,7 @@ EOF
     HAS_ENROLLMENT_PATH=true
   fi
   HAS_PAIRING_IDENTITY=false
-  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$PAIR_SESSIONS_DIR/agent-identity.json" ]; then
+  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$(pair_identity_file "$PAIR_SESSIONS_DIR")" ]; then
     HAS_PAIRING_IDENTITY=true
   fi
   if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_ENROLLMENT_PATH" = false ] && [ "$HAS_PAIRING_IDENTITY" = false ]; then
