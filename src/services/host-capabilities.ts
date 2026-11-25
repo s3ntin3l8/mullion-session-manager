@@ -2,6 +2,8 @@ import { execFile } from "node:child_process";
 import { access, constants as fsConstants } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { PLACEMENT_CAPABILITIES, type PlacementCapability } from "../shared/constants.js";
+// Per step and attempt; a timeout must not read as "lacks" (see ProbeResult).
+import { XCODE_PROBE_ATTEMPTS, XCRUN_TIMEOUT_MS } from "./xcode-probe-budget.js";
 
 /**
  * What this host can do beyond running agent CLIs (issue #2306): `xcode` (the
@@ -9,11 +11,6 @@ import { PLACEMENT_CAPABILITIES, type PlacementCapability } from "../shared/cons
  * start). Detected, never configured, and kept in memory only: enrollment's
  * static `capabilities` snapshot goes stale and is deliberately not read.
  */
-
-// Per probe step. `xcodebuild -checkFirstLaunchStatus` takes ~6 s and `simctl
-// list` ~2 s on an idle Mac, and over 10 s under load (#3511), so the bound has
-// real headroom. A timeout must still not read as "lacks" (see ProbeResult).
-export const XCRUN_TIMEOUT_MS = 30_000;
 
 /** `ok`/`lacks` are verdicts; `unknown` (timeout, spawn error) is not one. */
 type ProbeResult =
@@ -72,16 +69,28 @@ interface XcodeState {
   /** Last logged reason, so a persistent absence logs once per state change. */
   loggedReason: string | undefined;
 }
-// Per app, like the cache: tests build many Fastify instances in one process.
-const xcodeStates = new WeakMap<FastifyInstance, XcodeState>();
+// Per app tree, like the cache: tests build many Fastify instances in one process.
+const xcodeStates = new WeakMap<object, XcodeState>();
+
+/**
+ * One key per Fastify app tree. Every route plugin gets its own encapsulated
+ * child instance, but they all share the root's `server`, so the warm-up and
+ * every caller read one cache (#3511). Test doubles without a server key on
+ * themselves.
+ */
+function treeKey(app: FastifyInstance): object {
+  return (app as { server?: object }).server ?? app;
+}
 
 async function xcodeAvailable(app: FastifyInstance): Promise<boolean> {
-  let state = xcodeStates.get(app);
-  if (!state) xcodeStates.set(app, (state = { last: undefined, loggedReason: undefined }));
-  let result = await probeXcode();
+  let state = xcodeStates.get(treeKey(app));
+  if (!state) xcodeStates.set(treeKey(app), (state = { last: undefined, loggedReason: undefined }));
   // One retry: an inconclusive probe on a cold, loaded Mac usually succeeds the
   // second time, and the fallback below reads as "lacks" until a verdict lands.
-  if (result.kind === "unknown") result = await probeXcode();
+  let result = await probeXcode();
+  for (let i = 1; i < XCODE_PROBE_ATTEMPTS && result.kind === "unknown"; i++) {
+    result = await probeXcode();
+  }
   if (result.kind === "unknown") {
     app.log.warn(
       { detail: result.detail },
@@ -135,36 +144,42 @@ interface CacheEntry {
 }
 
 const CACHE_TTL_MS = 60_000;
-// Per app: tests build many Fastify instances in one process.
-const caches = new WeakMap<FastifyInstance, CacheEntry>();
-const inflight = new WeakMap<FastifyInstance, Promise<PlacementCapability[]>>();
+// Per app tree (treeKey): tests build many Fastify instances in one process.
+const caches = new WeakMap<object, CacheEntry>();
+const inflight = new WeakMap<object, Promise<PlacementCapability[]>>();
 
 function refresh(app: FastifyInstance): Promise<PlacementCapability[]> {
-  const running = inflight.get(app);
+  const key = treeKey(app);
+  const running = inflight.get(key);
   if (running) return running;
   const p = detectCapabilities(app)
     .then((data) => {
-      caches.set(app, { data, expiresAt: Date.now() + CACHE_TTL_MS });
+      caches.set(key, { data, expiresAt: Date.now() + CACHE_TTL_MS });
       return data;
     })
-    .finally(() => inflight.delete(app));
-  inflight.set(app, p);
+    .finally(() => inflight.delete(key));
+  inflight.set(key, p);
   return p;
 }
 
 /**
- * Starts the first probe without waiting for it (#3511), so the cache is warm
- * by the time the primary asks; a request meanwhile joins the in-flight probe.
+ * Starts the first probe when the app is ready rather than on the first
+ * request (#3511), so the cache is usually warm by the time anyone asks; a
+ * request meanwhile joins the in-flight probe. Not under test: a suite on a Mac
+ * would spawn the real `xcodebuild` for every app it builds.
  */
-export function warmCapabilities(app: FastifyInstance): void {
-  refresh(app).catch((err: unknown) => {
-    app.log.warn({ err }, "[host-capabilities] startup probe failed");
+export function warmCapabilitiesOnReady(app: FastifyInstance): void {
+  if (app.config.NODE_ENV === "test") return;
+  app.addHook("onReady", () => {
+    refresh(app).catch((err: unknown) => {
+      app.log.warn({ err }, "[host-capabilities] startup probe failed");
+    });
   });
 }
 
 /** Stale-while-revalidate: only the very first call waits on the probes. */
 export async function getCachedCapabilities(app: FastifyInstance): Promise<PlacementCapability[]> {
-  const cached = caches.get(app);
+  const cached = caches.get(treeKey(app));
   if (!cached) return refresh(app);
   if (cached.expiresAt <= Date.now()) refresh(app).catch(() => {});
   return cached.data;

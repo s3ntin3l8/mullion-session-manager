@@ -24,7 +24,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const getCachedCapabilities = vi.fn();
 vi.mock("../../src/services/host-capabilities.js", () => ({
-  warmCapabilities: vi.fn(),
+  warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
   detectCapabilities: async () => getCachedCapabilities(),
   clearCapabilityCache: () => undefined,

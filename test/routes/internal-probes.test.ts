@@ -8,7 +8,7 @@ import {
 import { localProtocolInfo } from "../../src/shared/agent-protocol.js";
 
 vi.mock("../../src/services/host-capabilities.js", () => ({
-  warmCapabilities: vi.fn(),
+  warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: vi.fn().mockResolvedValue(["xcode"]),
 }));
 

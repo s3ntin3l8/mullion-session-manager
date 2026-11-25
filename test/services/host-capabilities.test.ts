@@ -11,8 +11,9 @@ vi.mock("node:child_process", () => ({
   execFile: (...args: unknown[]) => execFile(...args),
 }));
 
-const { detectCapabilities, getCachedCapabilities, XCRUN_TIMEOUT_MS } =
+const { detectCapabilities, getCachedCapabilities, warmCapabilitiesOnReady } =
   await import("../../src/services/host-capabilities.js");
+const { XCRUN_TIMEOUT_MS } = await import("../../src/services/xcode-probe-budget.js");
 
 const realPlatform = process.platform;
 function stubPlatform(value: string) {
@@ -250,6 +251,41 @@ describe("host capability detection (issue #2306)", () => {
     expect(res.json()).toEqual({ capabilities: ["xcode"] });
     // Served from the warm cache: the request did not probe again.
     expect(execFile).toHaveBeenCalledTimes(3);
+    await app.close();
+  });
+
+  it("shares one cache across the app tree: a root warm-up serves a child plugin's reads (#3511)", async () => {
+    stubPlatform("darwin");
+    xcodeSteps({});
+    const Fastify = (await import("fastify")).default;
+    const app = Fastify();
+    Object.assign(app, { deviceEmulatorEnabled: false, config: { DEVICE_EMULATOR_PATH: "" } });
+    // The primary warms from its root; device routes read from their own child.
+    warmCapabilitiesOnReady(app);
+    await app.register(async (child) => {
+      child.get("/caps", async () => getCachedCapabilities(child));
+    });
+    await app.ready();
+    await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(3));
+    const res = await app.inject({ method: "GET", url: "/caps" });
+    expect(res.json()).toEqual(["xcode"]);
+    expect(execFile).toHaveBeenCalledTimes(3);
+    await app.close();
+  });
+
+  it("does not warm up under NODE_ENV=test", async () => {
+    stubPlatform("darwin");
+    xcodeSteps({});
+    const Fastify = (await import("fastify")).default;
+    const app = Fastify();
+    Object.assign(app, {
+      deviceEmulatorEnabled: false,
+      config: { DEVICE_EMULATOR_PATH: "", NODE_ENV: "test" },
+    });
+    warmCapabilitiesOnReady(app);
+    await app.ready();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(execFile).not.toHaveBeenCalled();
     await app.close();
   });
 

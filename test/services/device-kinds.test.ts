@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 
 const getCachedCapabilities = vi.fn();
 vi.mock("../../src/services/host-capabilities.js", () => ({
-  warmCapabilities: vi.fn(),
+  warmCapabilitiesOnReady: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
 }));
 

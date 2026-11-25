@@ -1589,10 +1589,16 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
   Each step has a 30 s budget (a loaded Mac takes over 10 s, #3511). A timeout
   or spawn error is inconclusive, not "lacks": the probe is retried once, and
   if that is inconclusive too the previous reading is kept (and one warning
-  logged), while a clean non-zero exit is a real "lacks". The agent starts the
-  first probe at startup rather than on the first request, so the 60 s cache
-  is usually warm by the primary's first ask; a stale answer is served while a
-  refresh runs. The agent logs at info, once per change,
+  logged), while a clean non-zero exit is a real "lacks". So a cold probe on a
+  wedged Mac can take up to ~3 minutes (2 attempts × 3 steps × 30 s) before it
+  falls back. Every host, the primary included, starts the first probe at
+  startup rather than on the first request, so the 60 s cache is usually warm
+  by the first ask; a request that arrives during that first probe still waits
+  for it, and a stale answer is served while a later refresh runs. The
+  primary's `/internal/capabilities` request is sized to that worst case and
+  runs beside the agent-list read rather than ahead of it: a slow answer is
+  patched in when it lands, and the agent list and protocol are recorded
+  without waiting for it. The agent logs at info, once per change,
   which step failed (`simctl missing`, `first launch incomplete`,
   `no simulator runtime`); Settings → Hosts shows the `Xcode` chip when present
   (and does not show the failing-step reason). It does **not** promise
