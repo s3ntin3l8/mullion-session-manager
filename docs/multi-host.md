@@ -1476,11 +1476,13 @@ lives. Every route on the primary resolves the device's host through a
   it, and the REST routes, the panel's WebSocket, and `mullion device` all
   resolve the owning host and forward there. `GET /api/devices/hosts` queries
   the primary and every registered agent in parallel (5 s timeout, 10 s cache)
-  and returns `{hostId, name, status, deviceKinds, platforms}` (`status` is
-  `ok`, `unsupported`, or `unreachable`).
+  and returns `{hostId, name, status, deviceKinds, platforms, unavailable?}`
+  (`status` is `ok`, `unsupported`, or `unreachable`; `unavailable.ios` is a
+  macOS host's reason for offering no iOS Simulator, #3510, passed through from
+  the agent and omitted when there is none).
 - **`platforms` on `GET /internal/devices/kinds`.** The agent serves
   `/internal/devices*` behind the same auth as every other `/internal/*` route
-  and reports `{deviceKinds, platforms}` at `GET /internal/devices/kinds`
+  and reports `{deviceKinds, platforms, unavailable?}` at `GET /internal/devices/kinds`
   (evaluated from the agent's own `DEVICE_*` config and `xcode` capability).
   An agent that omits `platforms` is treated as Android-only (`["android"]`
   when `deviceKinds` is non-empty, `[]` otherwise), and an agent that predates

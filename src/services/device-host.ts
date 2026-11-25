@@ -9,7 +9,7 @@ import {
   type DeviceInfo,
   type DeviceKind,
 } from "./device-drivers/types.js";
-import { localDeviceKinds, localDevicePlatforms } from "./device-kinds.js";
+import { localDeviceSupport } from "./device-kinds.js";
 import type { HostDeviceSupport } from "./remote-host-devices.js";
 import { performDeviceAction } from "./device-drivers/actions.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -89,11 +89,8 @@ class LocalDeviceHost implements DeviceHost {
   readonly isLocal = true;
   constructor(private readonly app: FastifyInstance) {}
 
-  async kinds(): Promise<HostDeviceSupport> {
-    return {
-      deviceKinds: localDeviceKinds(this.app),
-      platforms: await localDevicePlatforms(this.app),
-    };
+  kinds(): Promise<HostDeviceSupport> {
+    return localDeviceSupport(this.app);
   }
 
   async getOrCreate(row: DeviceRow): Promise<SpawnedDevice> {

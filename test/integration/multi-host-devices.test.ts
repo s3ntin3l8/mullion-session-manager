@@ -285,6 +285,8 @@ describe("devices on an agent host (issue #3200)", () => {
       expect(ok.json().deviceKinds).toEqual(expect.arrayContaining(["emulator", "physical"]));
       // DEVICE_IOS_ENABLED is unset: Android only.
       expect(ok.json().platforms).toEqual(["android"]);
+      // A Linux agent cannot run iOS at all, so it gives no reason why not (#3510).
+      expect(ok.json()).not.toHaveProperty("unavailable");
     });
 
     it("refuses a spawn for an iOS device when the agent has no iOS Simulator available", async () => {

@@ -117,6 +117,16 @@ function ReconnectPrompt({
   );
 }
 
+const IOS_HINTS_STYLE = {
+  fontSize: "0.71875rem",
+  color: "var(--dim)",
+  margin: "10px 0 0",
+  paddingLeft: 0,
+  listStyle: "none",
+  display: "grid",
+  gap: 4,
+} as const;
+
 export function DevicesSection() {
   const serverInfo = useServerInfo();
   const devices = useDashboardStore(useShallow((s) => s.devices));
@@ -507,6 +517,14 @@ export function DevicesSection() {
   const [iosSeen, setIosSeen] = useState(false);
   if (iosConfirmed && !iosSeen) setIosSeen(true);
   const showIos = iosConfirmed || iosSeen;
+  // A Mac that could run simulators but is not set up to says why (#3510). An
+  // agent sends a reason only on macOS, so a Linux host never shows one. It
+  // shows the section without latching it: the hint goes when the reason does.
+  const iosHints = (deviceHosts ?? []).flatMap((h) =>
+    h.status === "ok" && !h.platforms?.includes("ios") && h.unavailable?.ios
+      ? [{ hostId: h.hostId, name: h.name, reason: h.unavailable.ios }]
+      : [],
+  );
   const toggleCreate = (platform: "android" | "ios") =>
     setCreateOpen((open) => (open === platform ? null : platform));
 
@@ -580,13 +598,22 @@ export function DevicesSection() {
         </section>
       )}
 
-      {showIos && (
+      {(showIos || iosHints.length > 0) && (
         <section aria-label="iOS Simulator" data-testid="devices-ios" style={{ marginTop: 20 }}>
           <GroupHeading
             title="iOS Simulator"
             desc="Xcode simulators on a Mac host, streamed into a panel."
           />
-          {renderList("ios", iosDevices)}
+          {showIos && renderList("ios", iosDevices)}
+          {iosHints.length > 0 && (
+            <ul role="list" data-testid="devices-ios-unavailable" style={IOS_HINTS_STYLE}>
+              {iosHints.map((hint) => (
+                <li key={hint.hostId}>
+                  Mac ({hint.name}): {hint.reason}
+                </li>
+              ))}
+            </ul>
+          )}
           <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
             {reportsPlatform("ios") ? (
               <AddButton onClick={() => toggleCreate("ios")}>
@@ -594,9 +621,11 @@ export function DevicesSection() {
                 Add a simulator
               </AddButton>
             ) : (
-              <div style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>
-                No host can run simulators right now, so none can be added.
-              </div>
+              iosHints.length === 0 && (
+                <div style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>
+                  No host can run simulators right now, so none can be added.
+                </div>
+              )
             )}
           </div>
           {createOpen === "ios" && (

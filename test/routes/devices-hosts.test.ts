@@ -114,6 +114,34 @@ describe("GET /api/devices/hosts", () => {
     });
   });
 
+  it("passes a remote Mac's reason for offering no iOS through (#3510)", async () => {
+    const app = await build();
+    const host = createHost(app, { name: "Macbook", baseUrl: "http://agent:1", token: "t" });
+    kindsByHost.set(host.id, async () => ({
+      deviceKinds: [],
+      platforms: [],
+      unavailable: { ios: "Device panel is disabled — set DEVICE_ENABLED=true." },
+    }));
+    const body: DeviceHostEntry[] = (await get(app)).json();
+    expect(body[1]).toEqual({
+      hostId: host.id,
+      name: "Macbook",
+      status: "ok",
+      deviceKinds: [],
+      platforms: [],
+      unavailable: { ios: "Device panel is disabled — set DEVICE_ENABLED=true." },
+    });
+  });
+
+  it("sends no reason for an older agent that reports none, nor for a Linux primary", async () => {
+    const app = await build();
+    const host = createHost(app, { name: "Old Mac", baseUrl: "http://agent:1", token: "t" });
+    kindsByHost.set(host.id, async () => ({ deviceKinds: ["physical"], platforms: ["android"] }));
+    const body: DeviceHostEntry[] = (await get(app)).json();
+    expect(body[0]).not.toHaveProperty("unavailable");
+    expect(body[1]).not.toHaveProperty("unavailable");
+  });
+
   it("marks an agent that predates the route (404) unsupported", async () => {
     const app = await build();
     const host = createHost(app, { name: "Old", baseUrl: "http://agent:1", token: "t" });

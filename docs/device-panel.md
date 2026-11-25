@@ -121,6 +121,27 @@ on macOS hosts when all of the following hold (`iosSimulatorAvailable()` in
   [`deploy/README.md`](../deploy/README.md#preparing-a-mac-to-build-mobile-tasks)
   for `brew install facebook/fb/idb-companion`).
 
+**Why a Mac offers no iOS Simulator (#3510).** When a macOS host cannot run the
+simulator, `GET /internal/devices/kinds` (agent) and each entry of `GET
+/api/devices/hosts` (primary, which passes an agent's answer through) carry an
+optional `unavailable: { ios: "<reason>" }`, and Settings → Devices shows it
+under the iOS Simulator section as `Mac (<host name>): <reason>`, even when no
+host can run iOS (the section is otherwise hidden). The reason is the first
+condition that fails, checked in this order (`localDeviceUnavailable()` in
+`src/services/device-kinds.ts`):
+
+| Reason shown                                                             | Fix                                                                                    |
+| ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Device panel is disabled — set DEVICE_ENABLED=true.                      | Set `DEVICE_ENABLED=true` (default `false`) and restart.                               |
+| iOS Simulator is off — set DEVICE_IOS_ENABLED=true.                      | Set `DEVICE_IOS_ENABLED=true` (default `false`) and restart.                           |
+| Xcode is not ready — install it, select it with xcode-select, …          | Install full Xcode, `xcode-select -s` it, finish its first launch, add an iOS runtime. |
+| idb_companion is not configured — set DEVICE_IDB_COMPANION_PATH …        | Set `DEVICE_IDB_COMPANION_PATH` to the `idb_companion` binary (no `PATH` fallback).    |
+| idb_companion at DEVICE_IDB_COMPANION_PATH is missing or not executable. | Point it at an existing file and `chmod +x` it.                                        |
+
+A host that is not macOS sends no reason (iOS is not a thing there, whatever its
+panel setting), nor does the demo instance or an agent that predates the field;
+the `platforms` list is unchanged either way.
+
 **How it works (`simctl` + `idb_companion`).** `xcrun simctl` handles simulator
 lifecycle (`boot`, `bootstatus -b`, `shutdown` — `stop()` shuts the simulator
 down only if this Mullion process booted it, and never deletes or erases it),

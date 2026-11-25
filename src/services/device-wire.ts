@@ -1,6 +1,7 @@
 import type { DeviceInfo, DeviceKind, DevicePlatform } from "./device-drivers/types.js";
 import type { DiscoveredDevice } from "./device-discovery.js";
 import type { CreateSimulatorInput, IosSimulator, SimulatorCatalog } from "./ios-simulators.js";
+import type { DeviceUnavailable } from "../shared/types.js";
 
 // The request/response shapes of the agent's `/internal/devices*` routes
 // (routes/internal-devices.ts), shared by the agent that serves them and the
@@ -77,6 +78,9 @@ export interface DeviceKindsResponse {
   /** The device platforms this host can run right now. Absent from an agent that
    * predates iOS support, which is Android-only. */
   platforms?: DevicePlatform[];
+  /** Why a platform this host could run is not offered (#3510). Absent when
+   * there is none, and from an agent that predates it. */
+  unavailable?: DeviceUnavailable;
 }
 
 /** The device id a device socket names: the route's path param

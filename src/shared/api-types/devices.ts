@@ -57,12 +57,21 @@ export interface DiscoveredDevice {
   discoveredAt: string;
 }
 
+/** Why a host does not offer a device platform it could run (#3510): one
+ * line naming the setting to change. Today only iOS, on a macOS host; absent
+ * for a platform the host cannot run at all, and from an agent that predates it. */
+export interface DeviceUnavailable {
+  ios?: string;
+}
+
 export interface DeviceHostEntry {
   hostId: string;
   name: string;
   status: "ok" | "unsupported" | "unreachable";
   deviceKinds: DeviceKind[];
   platforms: DevicePlatform[];
+  /** Present only when the host reports a reason (see {@link DeviceUnavailable}). */
+  unavailable?: DeviceUnavailable;
 }
 
 export type IosSimulatorState = "Booted" | "Shutdown";

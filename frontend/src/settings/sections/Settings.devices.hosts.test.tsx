@@ -150,6 +150,56 @@ describe("Settings -> Devices host picker", () => {
     expect(within(screen.getByTestId("device-row-2")).queryByText(/Mac mini/)).toBeNull();
   });
 
+  describe("why a Mac offers no iOS Simulator (#3510)", () => {
+    const IOS_OFF = "iOS Simulator is off — set DEVICE_IOS_ENABLED=true.";
+    const macbook: DeviceHostEntry = {
+      hostId: "h-macbook",
+      name: "Macbook",
+      status: "ok",
+      deviceKinds: [],
+      platforms: [],
+      unavailable: { ios: IOS_OFF },
+    };
+
+    it("shows the iOS section with the Mac's reason, and no Add button", async () => {
+      hostsDb = [FOUR_HOSTS[0]!, macbook];
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      const ios = await screen.findByRole("region", { name: "iOS Simulator" });
+      const hints = within(ios).getByTestId("devices-ios-unavailable");
+      expect(hints).toHaveTextContent(`Mac (Macbook): ${IOS_OFF}`);
+      expect(within(ios).queryByText("Add a simulator")).toBeNull();
+      expect(within(ios).queryByText(/No simulators added yet/)).toBeNull();
+      expect(within(ios).queryByText(/No host can run simulators right now/)).toBeNull();
+    });
+
+    it("names only the host that reports a reason, not a Linux host beside it", async () => {
+      hostsDb = [{ ...FOUR_HOSTS[0]!, name: "Linux box" }, macbook];
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      const hints = await screen.findByTestId("devices-ios-unavailable");
+      expect(within(hints).getAllByRole("listitem")).toHaveLength(1);
+      expect(hints).not.toHaveTextContent("Linux box");
+    });
+
+    it("lists a Mac's reason beside another Mac that can run iOS, keeping Add", async () => {
+      hostsDb = [{ ...macbook, hostId: "h-mini", name: "Mac mini", platforms: ["ios"] }, macbook];
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      const ios = await screen.findByRole("region", { name: "iOS Simulator" });
+      expect(await within(ios).findByText("Add a simulator")).toBeInTheDocument();
+      const hints = within(ios).getByTestId("devices-ios-unavailable");
+      expect(within(hints).getAllByRole("listitem")).toHaveLength(1);
+      expect(hints).toHaveTextContent(`Mac (Macbook): ${IOS_OFF}`);
+      expect(within(ios).getByText(/No simulators added yet/)).toBeInTheDocument();
+    });
+
+    it("shows no reason when the host can run iOS", async () => {
+      hostsDb = [{ ...macbook, platforms: ["ios"] }];
+      render(<Settings onClose={vi.fn()} initialSection="devices" />);
+      const ios = await screen.findByRole("region", { name: "iOS Simulator" });
+      expect(within(ios).getByText("Add a simulator")).toBeInTheDocument();
+      expect(screen.queryByTestId("devices-ios-unavailable")).toBeNull();
+    });
+  });
+
   it("renders a device on an unreachable host as unavailable and disables Start", async () => {
     devicesDb = [device({ hostId: "h-mac", status: "killed", hostUnreachable: true })];
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
