@@ -10,9 +10,10 @@ import { PLACEMENT_CAPABILITIES, type PlacementCapability } from "../shared/cons
  * static `capabilities` snapshot goes stale and is deliberately not read.
  */
 
-// Per probe step. `xcodebuild -checkFirstLaunchStatus` and `simctl list` can be
-// slow on a cold Mac, and a timeout must not read as "lacks" (see ProbeResult).
-const XCRUN_TIMEOUT_MS = 10_000;
+// Per probe step. `xcodebuild -checkFirstLaunchStatus` takes ~6 s and `simctl
+// list` ~2 s on an idle Mac, and over 10 s under load (#3511), so the bound has
+// real headroom. A timeout must still not read as "lacks" (see ProbeResult).
+export const XCRUN_TIMEOUT_MS = 30_000;
 
 /** `ok`/`lacks` are verdicts; `unknown` (timeout, spawn error) is not one. */
 type ProbeResult =
@@ -77,7 +78,10 @@ const xcodeStates = new WeakMap<FastifyInstance, XcodeState>();
 async function xcodeAvailable(app: FastifyInstance): Promise<boolean> {
   let state = xcodeStates.get(app);
   if (!state) xcodeStates.set(app, (state = { last: undefined, loggedReason: undefined }));
-  const result = await probeXcode();
+  let result = await probeXcode();
+  // One retry: an inconclusive probe on a cold, loaded Mac usually succeeds the
+  // second time, and the fallback below reads as "lacks" until a verdict lands.
+  if (result.kind === "unknown") result = await probeXcode();
   if (result.kind === "unknown") {
     app.log.warn(
       { detail: result.detail },
@@ -146,6 +150,16 @@ function refresh(app: FastifyInstance): Promise<PlacementCapability[]> {
     .finally(() => inflight.delete(app));
   inflight.set(app, p);
   return p;
+}
+
+/**
+ * Starts the first probe without waiting for it (#3511), so the cache is warm
+ * by the time the primary asks; a request meanwhile joins the in-flight probe.
+ */
+export function warmCapabilities(app: FastifyInstance): void {
+  refresh(app).catch((err: unknown) => {
+    app.log.warn({ err }, "[host-capabilities] startup probe failed");
+  });
 }
 
 /** Stale-while-revalidate: only the very first call waits on the probes. */

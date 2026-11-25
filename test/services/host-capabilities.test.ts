@@ -11,7 +11,7 @@ vi.mock("node:child_process", () => ({
   execFile: (...args: unknown[]) => execFile(...args),
 }));
 
-const { detectCapabilities, getCachedCapabilities } =
+const { detectCapabilities, getCachedCapabilities, XCRUN_TIMEOUT_MS } =
   await import("../../src/services/host-capabilities.js");
 
 const realPlatform = process.platform;
@@ -81,7 +81,7 @@ describe("host capability detection (issue #2306)", () => {
     expect(execFile).toHaveBeenCalledWith(
       "xcrun",
       ["--find", "simctl"],
-      expect.objectContaining({ timeout: 10_000 }),
+      expect.objectContaining({ timeout: 30_000 }),
       expect.any(Function),
     );
   });
@@ -156,6 +156,100 @@ describe("host capability detection (issue #2306)", () => {
     xcodeSteps({ find: "exit1" });
     await detectCapabilities(app);
     expect(app.log.info).toHaveBeenCalledTimes(2);
+  });
+
+  // #3511: execFile's own timeout is the bound, so the fake honours the option
+  // it is given: a step slower than `timeout` fails as a kill, as Node does.
+  function slowSteps(delays: Partial<Record<Step, number[]>>) {
+    const seen: Record<Step, number> = { find: 0, first: 0, list: 0 };
+    execFile.mockImplementation(
+      (
+        cmd: string,
+        args: string[],
+        opts: { timeout: number },
+        cb: (err: Error | null, stdout?: string) => void,
+      ) => {
+        const step = stepOf(cmd, args);
+        const delay = delays[step]?.[seen[step]++] ?? 0;
+        if (delay > opts.timeout) {
+          setTimeout(
+            () => cb(Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" })),
+            opts.timeout,
+          );
+        } else {
+          setTimeout(() => cb(null, step === "list" ? RUNTIMES : ""), delay);
+        }
+      },
+    );
+  }
+
+  it("reports xcode when a step is slower than the old 10 s bound (#3511)", async () => {
+    stubPlatform("darwin");
+    vi.useFakeTimers();
+    try {
+      slowSteps({ first: [15_000] });
+      const app = fakeApp({ enabled: false, emulatorPath: "" });
+      const p = detectCapabilities(app);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await p).toEqual(["xcode"]);
+      expect(XCRUN_TIMEOUT_MS).toBe(30_000);
+      expect(app.log.warn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries an inconclusive probe once, and a success then reports xcode (#3511)", async () => {
+    stubPlatform("darwin");
+    vi.useFakeTimers();
+    try {
+      // Cold start: no last verdict, so a bare fallback would read as "lacks".
+      slowSteps({ first: [45_000, 5_000] });
+      const app = fakeApp({ enabled: false, emulatorPath: "" });
+      const p = detectCapabilities(app);
+      await vi.advanceTimersByTimeAsync(40_000);
+      expect(await p).toEqual(["xcode"]);
+      expect(stepsRun()).toEqual(["find", "first", "find", "first", "list"]);
+      expect(app.log.warn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the last known value after two inconclusive probes, and warns once (#3511)", async () => {
+    stubPlatform("darwin");
+    const app = fakeApp({ enabled: false, emulatorPath: "" });
+    xcodeSteps({});
+    expect(await detectCapabilities(app)).toEqual(["xcode"]);
+    execFile.mockClear();
+    xcodeSteps({ first: "timeout" });
+    expect(await detectCapabilities(app)).toEqual(["xcode"]);
+    expect(stepsRun()).toEqual(["find", "first", "find", "first"]);
+    expect(app.log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry a clean non-zero exit: that is a verdict (#3511)", async () => {
+    stubPlatform("darwin");
+    xcodeSteps({ first: "exit1" });
+    expect(await detectCapabilities(fakeApp({ enabled: false, emulatorPath: "" }))).toEqual([]);
+    expect(stepsRun()).toEqual(["find", "first"]);
+  });
+
+  it("starts the first probe at startup, before any capabilities request (#3511)", async () => {
+    stubPlatform("darwin");
+    xcodeSteps({});
+    const Fastify = (await import("fastify")).default;
+    const { registerProbeRoutes } = await import("../../src/routes/internal-probes.js");
+    const app = Fastify();
+    Object.assign(app, { deviceEmulatorEnabled: false, config: { DEVICE_EMULATOR_PATH: "" } });
+    registerProbeRoutes(app, {});
+    await app.ready();
+    await vi.waitFor(() => expect(execFile).toHaveBeenCalledTimes(3));
+    const res = await app.inject({ method: "GET", url: "/internal/capabilities" });
+    expect(res.json()).toEqual({ capabilities: ["xcode"] });
+    // Served from the warm cache: the request did not probe again.
+    expect(execFile).toHaveBeenCalledTimes(3);
+    await app.close();
   });
 
   it("answers GET /internal/capabilities through the route", async () => {

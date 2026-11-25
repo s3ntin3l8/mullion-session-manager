@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { localProtocolInfo } from "../shared/agent-protocol.js";
 import { getSessionEnvInfo } from "../services/user-shell-env.js";
-import { getCachedCapabilities } from "../services/host-capabilities.js";
+import { getCachedCapabilities, warmCapabilities } from "../services/host-capabilities.js";
 
 /**
  * The agent's small "what are you" probes. Registered from `internalRoutes` so
@@ -10,6 +10,11 @@ import { getCachedCapabilities } from "../services/host-capabilities.js";
 export function registerProbeRoutes(app: FastifyInstance, rateLimit: object): void {
   // Issue #2306 — what this host can do beyond agent CLIs (Xcode, an Android
   // emulator). Its own route: /internal/agents answers a bare array.
+  // #3511: probe at startup, not on the first request — the Xcode probe takes
+  // seconds on a Mac, and a cold cache made the first answer slow or empty.
+  app.addHook("onReady", () => {
+    warmCapabilities(app);
+  });
   app.get("/internal/capabilities", rateLimit, async () => {
     return { capabilities: await getCachedCapabilities(app) };
   });

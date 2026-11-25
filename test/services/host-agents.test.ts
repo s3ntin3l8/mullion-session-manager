@@ -7,6 +7,7 @@ import type { DetectedAgent } from "../../src/services/agent-detect.js";
 const getCachedAgents = vi.fn();
 const getCachedCapabilities = vi.fn();
 vi.mock("../../src/services/host-capabilities.js", () => ({
+  warmCapabilities: vi.fn(),
   getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
 }));
 vi.mock("../../src/services/agent-detect.js", () => ({
