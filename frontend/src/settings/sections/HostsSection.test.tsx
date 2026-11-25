@@ -253,6 +253,17 @@ describe("HostsSection token rotation", () => {
             recoveredKeys: ["ANDROID_HOME"],
           },
         }),
+        makeHost({
+          id: "h4",
+          name: "desktop",
+          sessionEnv: {
+            shell: null,
+            interactiveResolve: "not-applicable",
+            reason: null,
+            path: ["C:\\Windows\\system32"],
+            recoveredKeys: [],
+          },
+        }),
       ],
     });
     render(<HostsSection />);
@@ -262,6 +273,11 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText("/usr/bin")).toBeInTheDocument();
     expect(screen.getByTestId("host-session-env-h2")).toHaveTextContent("not reported");
     expect(screen.queryByTestId("host-session-env-warning-h3")).not.toBeInTheDocument();
+    // Windows never resolves, by design: no warning, and it says so.
+    expect(screen.queryByTestId("host-session-env-warning-h4")).not.toBeInTheDocument();
+    expect(screen.getByTestId("host-session-env-h4")).toHaveTextContent(
+      "Interactive resolve: not applicable (Windows)",
+    );
     expect(screen.getByText("Recovered: ANDROID_HOME")).toBeInTheDocument();
   });
 

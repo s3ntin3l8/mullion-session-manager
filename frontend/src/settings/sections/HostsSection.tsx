@@ -120,7 +120,10 @@ function HostSessionEnvDetail({ host }: { host: Host }) {
       {env && (
         <div>
           <div>
-            Interactive resolve: {env.interactiveResolve}
+            Interactive resolve:{" "}
+            {env.interactiveResolve === "not-applicable"
+              ? "not applicable (Windows)"
+              : env.interactiveResolve}
             {env.reason ? ` (${env.reason})` : ""} · shell: {env.shell ?? "none"}
           </div>
           <div>PATH:</div>

@@ -45,6 +45,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 import {
   getSessionEnvInfo,
+  getSessionPathEntries,
   getUserShellEnv,
   getUserShellPath,
   getUserShellRecoverKeys,
@@ -83,6 +84,14 @@ describe("mergePaths", () => {
 
   it("handles an unset base", () => {
     expect(mergePaths(undefined, "/a:/b")).toBe("/a:/b");
+  });
+
+  // A Windows PATH is `;`-separated and every entry carries a `C:` drive, so
+  // splitting on `:` shredded it into "C", "\\Users\\…;C", ….
+  it("splits a Windows PATH on its own delimiter", () => {
+    expect(mergePaths("C:\\Windows;C:\\Git\\cmd", "C:\\Tools;C:\\Windows", ";")).toBe(
+      "C:\\Tools;C:\\Windows;C:\\Git\\cmd",
+    );
   });
 });
 
@@ -184,13 +193,25 @@ describe("resolveUserShellEnv", () => {
   // $SHELL inherited from Git Bash is an MSYS path Windows cannot spawn.
   it("does not resolve on Windows, even with a bash-looking $SHELL", async () => {
     const original = process.platform;
+    const savedPath = process.env.PATH;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
       process.env.SHELL = "/usr/bin/bash";
       await resolveUserShellEnv();
       expect(spawned).toEqual([]);
       expect(getUserShellPath()).toBeNull();
+      // By design, not a fallback: the host panel must not warn about it.
+      expect(getSessionEnvInfo()).toMatchObject({
+        interactiveResolve: "not-applicable",
+        reason: null,
+      });
+      process.env.PATH = "C:\\Windows\\system32;C:\\Program Files\\Git\\cmd";
+      expect(getSessionPathEntries(";")).toEqual([
+        "C:\\Windows\\system32",
+        "C:\\Program Files\\Git\\cmd",
+      ]);
     } finally {
+      process.env.PATH = savedPath;
       Object.defineProperty(process, "platform", { value: original, configurable: true });
     }
   });
