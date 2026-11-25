@@ -164,6 +164,25 @@ describe("PtyManager", () => {
         expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(0);
       });
 
+      // Hermes review round 2, PR #3528 — the blocked tier's gate latch.
+      it("stamps gateAt with emitHookEvent's pinned now, and sweeps it on that clock", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "ok?" }, now);
+        expect(session.toInfo().gateAt).toBe(now);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().gateState).toBe("idle");
+      });
+
       it("fix: sticky needs_input (D4) — the stale sweep does NOT drop a hookNotification-confirmed flag with no dedicated latch behind it (deliberately left to keystroke/notification_resolved only)", async () => {
         const session = manager.getOrCreate({
           id: "1",

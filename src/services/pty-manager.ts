@@ -2440,15 +2440,15 @@ export class Session {
         self.attention.emitAttentionSignalDeferred(kind, extras, alsoEmit, self.hookNow),
       cancelDeferred: (kind) => self.attention.cancelDeferred(kind),
       markStateDirty: () => self.stateFile.schedule(),
-      clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind),
-      clearAttention: () => self.attention.clearAttention(),
+      clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind, self.hookNow),
+      clearAttention: () => self.attention.clearAttention(self.hookNow),
       resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(),
       setBackgroundTasks: (tasks) => self.attention.setBackgroundTasks(tasks, self.hookNow),
       bumpSubagentActivity: (agentId, kind) => self.bumpSubagentActivity(agentId, kind),
       recordSubagentStart: (agentId, agentType, now) =>
         self.recordSubagentStart(agentId, agentType, now),
       recordSubagentStop: (agentId, summary, now) => self.recordSubagentStop(agentId, summary, now),
-      registerPendingGate: (gateId, prompt) => self.registerPendingGate(gateId, prompt),
+      registerPendingGate: (gateId, prompt) => self.registerPendingGate(gateId, prompt, self.hookNow),
       resolveGate: (gateId, decision, reason) => self.resolveGate(gateId, decision, reason),
       pendingGateIds: () => self.pendingGateIds(),
     };
@@ -2688,8 +2688,8 @@ export class Session {
    * raise at the call site keeps this method a pure "record the gate"
    * operation.
    */
-  registerPendingGate(gateId: string, prompt: string): void {
-    this.gates.register(gateId, prompt);
+  registerPendingGate(gateId: string, prompt: string, now: number = Date.now()): void {
+    this.gates.register(gateId, prompt, now);
   }
 
   /** The ids of every currently-waiting gate, oldest first (Map iteration

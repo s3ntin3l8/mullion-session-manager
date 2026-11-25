@@ -252,11 +252,11 @@ export class AttentionTracker {
    * produce zero events at all rather than a race between "confirm" and
    * "clear".
    */
-  clearIfConfirmedKind(kind: AttentionSignalKind): void {
+  clearIfConfirmedKind(kind: AttentionSignalKind, now: number = Date.now()): void {
     this.cancelDeferred(kind);
     if (this.state.state === "attention" && this.state.confirmedKind === kind) {
       this.applyAttentionTransition(
-        advanceAttention(this.state, { type: "userInput", now: Date.now() }),
+        advanceAttention(this.state, { type: "userInput", now }),
       );
     }
   }
@@ -295,10 +295,10 @@ export class AttentionTracker {
    * was still settling; none of it is worth surfacing once the user has
    * already moved the session forward themselves.
    */
-  clearAttention(): void {
+  clearAttention(now: number = Date.now()): void {
     this.deferred.clear();
     this.applyAttentionTransition(
-      advanceAttention(this.state, { type: "userInput", now: Date.now() }),
+      advanceAttention(this.state, { type: "userInput", now }),
     );
   }
 

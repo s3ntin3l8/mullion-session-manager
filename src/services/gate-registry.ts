@@ -40,13 +40,13 @@ export class GateRegistry {
    * stale sweep's TTL is measured against). Does not raise attention — the
    * caller does.
    */
-  register(gateId: string, prompt: string): void {
+  register(gateId: string, prompt: string, now: number = Date.now()): void {
     const isFirstGate = this.pending.size === 0;
-    this.pending.set(gateId, { prompt, at: Date.now() });
+    this.pending.set(gateId, { prompt, at: now });
     this.state = "waiting";
     if (isFirstGate) {
       this.prompt = prompt;
-      this.at = Date.now();
+      this.at = now;
     }
   }
 
