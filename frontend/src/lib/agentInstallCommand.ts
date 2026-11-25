@@ -57,6 +57,21 @@ export function unixInstallCommand(p: AgentInstallParams): string {
   ].join("\n");
 }
 
+export function pairingInstallCommand(primaryUrl: string, code: string, rePair: boolean): string {
+  const env = [
+    `MULLION_AGENT_PRIMARY_URL=${sh(primaryUrl)}`,
+    "MULLION_AGENT_PAIRING_CODE_STDIN=1",
+    'MULLION_AGENT_PROJECTS_ROOTS="$HOME/code"',
+    ...(rePair ? ["MULLION_AGENT_PAIRING_FORCE=1"] : []),
+  ];
+  const download = `curl -fsSL -o mullion-install.sh ${RELEASE_BASE}/mullion-install.sh`;
+  return [
+    `${download} &&`,
+    `printf '%s\\n' ${sh(code)} | ${env.join(" ")} \\
+  sh mullion-install.sh --role agent "$HOME/mullion"`,
+  ].join("\n");
+}
+
 /**
  * What an agent that registered itself (installed from the Add host command)
  * changes after a rotate. install.sh never rewrites an existing .env, so

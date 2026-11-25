@@ -3,7 +3,7 @@ import type { HostEditableRole, PlacementCapability } from "../../../../src/shar
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
 import { hasRemoteHosts } from "../../lib/hostBadge.js";
-import type { Host, HostPairingCreated, HostUpdateStatus } from "../../api/index.js";
+import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { AgentInstallInstructions } from "../../AgentInstallInstructions.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
@@ -26,7 +26,7 @@ import {
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
-import { PairDesktopSection } from "./PairDesktopSection.js";
+import { HostPairingDialog, HostPairings } from "./HostPairings.js";
 import { AutomationTokensSection } from "./AutomationTokensSection.js";
 import { HostHeartbeatSetting, HostStaleAfterSetting } from "../RuntimeSettings.js";
 import { Presence } from "../../ui/Presence.js";
@@ -233,16 +233,14 @@ export function HostsSection() {
   const hostNameById = new Map(hosts.map((h) => [h.id, h.name]));
   // The primary's own version, reported on its "local" row (Issue #2969).
   const primaryVersion = hosts.find((h) => h.id === LOCAL_HOST_ID)?.mullionVersion ?? null;
-  const [addOpen, setAddOpen] = useState(false);
+  const [pairing, setPairing] = useState<{ host?: Host } | null>(null);
   const [editing, setEditing] = useState<Host | null>(null);
   // A freshly rotated token, shown once (the DB only keeps it encrypted).
   const [rotated, setRotated] = useState<{
     name: string;
     token: string;
-    liveIdentity: boolean;
   } | null>(null);
   const [rotateError, setRotateError] = useState<string | null>(null);
-  const [pairingCreated, setPairingCreated] = useState<HostPairingCreated | null>(null);
   const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingState>>({});
   // A host that 409s on delete (still owns projects) — offers a cascade
@@ -516,31 +514,9 @@ export function HostsSection() {
   const handleRotate = (host: Host) => {
     setRotateError(null);
     rotateHostToken(host.id)
-      .then((token) =>
-        setRotated({ name: host.name, token, liveIdentity: host.hasLiveMachineIdentity === true }),
-      )
+      .then((token) => setRotated({ name: host.name, token }))
       .catch((err: unknown) =>
         setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
-      );
-  };
-
-  // Rotate and discard: the old token dies, the new one is never rendered or
-  // kept. Only offered for a host with a live machine identity (it renews on
-  // that, so it does not need the value).
-  const handleRotateDiscard = (host: Host) => {
-    setRotateError(null);
-    rotateHostToken(host.id).catch((err: unknown) =>
-      setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
-    );
-  };
-
-  const handleRePair = (host: Host) => {
-    setRotateError(null);
-    api
-      .createHostPairing({ hostId: host.id })
-      .then((created) => setPairingCreated(created))
-      .catch((err: unknown) =>
-        setRotateError(err instanceof Error ? err.message : "Could not create a pairing link."),
       );
   };
 
@@ -663,7 +639,7 @@ export function HostsSection() {
                       (host.health === "online"
                         ? "connected over the outbound channel"
                         : host.paired
-                          ? "paired — waiting for the Helper to connect"
+                          ? "paired — waiting for the agent to connect"
                           : host.hasMachineIdentity
                             ? "outbound only — waiting for the agent to connect"
                             : "waiting for the agent to register")}
@@ -683,7 +659,7 @@ export function HostsSection() {
                         {" · "}
                         <span
                           style={{ color: "var(--y)" }}
-                          title="The pairing code was redeemed but the Helper never renewed its credential or connected. Revoke the identity or remove the host."
+                          title="The pairing code was redeemed but the agent never renewed its credential or connected. Revoke the identity or remove the host."
                         >
                           Paired, never connected
                         </span>
@@ -882,77 +858,35 @@ export function HostsSection() {
                               },
                             ]
                           : []),
-                        // An enrolled host re-registers with the fleet secret, so it
-                        // has no per-host token to rotate.
-                        ...(host.origin === "enrolled"
-                          ? []
-                          : [
+                        ...(host.hasToken &&
+                        !host.hasLiveMachineIdentity &&
+                        host.origin !== "enrolled"
+                          ? [
                               {
-                                // Replaces the host's token. Without a live
-                                // machine identity the running agent is locked
-                                // out until its .env carries the new one; with
-                                // one it keeps renewing, and the new token is
-                                // only needed to register again. Arm-then-confirm
-                                // either way.
                                 key: "rotate",
                                 label: "Rotate token",
-                                armLabel:
-                                  host.hasLiveMachineIdentity === true
-                                    ? "Click again to rotate (agent unaffected)"
-                                    : "Click again to rotate",
+                                armLabel: "Click again to rotate",
                                 icon: <GearIcon size={14} style={{ color: "var(--muted)" }} />,
                                 confirm: true,
                                 onClick: () => handleRotate(host),
                               },
-                              ...(host.hasLiveMachineIdentity === true
-                                ? [
-                                    {
-                                      key: "rotate-discard",
-                                      label: "Rotate token and discard it",
-                                      armLabel: "Click again to rotate (token not shown)",
-                                      icon: (
-                                        <GearIcon size={14} style={{ color: "var(--muted)" }} />
-                                      ),
-                                      confirm: true,
-                                      onClick: () => handleRotateDiscard(host),
-                                    },
-                                  ]
-                                : []),
-                            ]),
-                        // Issue #3438 — re-pair any remote host that has (or had)
-                        // a machine identity row, including revoked hosts.
-                        ...(!host.isLocal &&
-                        host.id !== LOCAL_HOST_ID &&
-                        (host.hasMachineIdentity || host.machineIdentityRevoked)
-                          ? [
-                              {
-                                key: "re-pair",
-                                label: "Re-pair",
-                                armLabel:
-                                  "Click again to re-pair (disconnects running agent immediately)",
-                                icon: <HostsIcon size={14} style={{ color: "var(--muted)" }} />,
-                                confirm: true,
-                                onClick: () => handleRePair(host),
-                              },
                             ]
                           : []),
-                        // Issue #2568 — only a host that holds a machine identity
-                        // has one to revoke.
-                        ...(host.hasMachineIdentity
-                          ? [
-                              {
-                                // Final: the agent is rejected and does not fall
-                                // back to its bootstrap token; clearing its
-                                // state file is the only way back.
-                                key: "revoke",
-                                label: "Revoke identity",
-                                armLabel: "Click again to revoke",
-                                icon: <CloseIcon size={14} style={{ color: "var(--muted)" }} />,
-                                confirm: true,
-                                onClick: () => handleRevoke(host),
-                              },
-                            ]
-                          : []),
+                        {
+                          key: "re-pair",
+                          label: "Re-pair",
+                          icon: <HostsIcon size={14} style={{ color: "var(--muted)" }} />,
+                          onClick: () => setPairing({ host }),
+                          opensOverlay: true,
+                        },
+                        {
+                          key: "revoke",
+                          label: "Revoke identity",
+                          armLabel: "Click again to revoke",
+                          icon: <CloseIcon size={14} style={{ color: "var(--muted)" }} />,
+                          confirm: true,
+                          onClick: () => handleRevoke(host),
+                        },
                         {
                           key: "delete",
                           label:
@@ -1064,9 +998,9 @@ export function HostsSection() {
       ))}
 
       <div style={{ marginTop: 10 }}>
-        <button className="settings-add-btn" onClick={() => setAddOpen(true)}>
+        <button className="settings-add-btn" onClick={() => setPairing({})}>
           <PlusIcon size={13} />
-          Add a host
+          Add host
         </button>
       </div>
 
@@ -1076,13 +1010,18 @@ export function HostsSection() {
         </div>
       )}
 
-      <Presence when={addOpen}>
-        <CreateHostModal
-          onClose={() => setAddOpen(false)}
-          onSave={(name, baseUrl, token) =>
-            createHost(name, baseUrl || undefined, token || undefined)
-          }
-        />
+      <HostPairings />
+
+      <Presence when={pairing !== null}>
+        {pairing && (
+          <HostPairingDialog
+            host={pairing.host}
+            onClose={() => setPairing(null)}
+            onSaveTokenHost={(name, baseUrl, token) =>
+              createHost(name, baseUrl || undefined, token || undefined)
+            }
+          />
+        )}
       </Presence>
       <Presence when={editing !== null}>
         {editing && (
@@ -1114,7 +1053,6 @@ export function HostsSection() {
             kind="rotate"
             token={rotated.token}
             hostName={rotated.name}
-            agentUnaffected={rotated.liveIdentity}
             primaryUrl={window.location.origin}
             onClose={() => setRotated(null)}
           />
@@ -1133,10 +1071,6 @@ export function HostsSection() {
       <div style={{ marginTop: 16 }}>
         <HostHeartbeatSetting />
         <HostStaleAfterSetting />
-      </div>
-
-      <div style={{ marginTop: 28 }}>
-        <PairDesktopSection created={pairingCreated} onCreatedChange={setPairingCreated} />
       </div>
 
       <div style={{ marginTop: 28 }}>
