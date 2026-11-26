@@ -3,10 +3,9 @@
 // timeouts cannot cut the retry short. Credentials travel over IPC, never
 // argv or a temporary file. This remains in the session's systemd scope.
 import { fork } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { deliverStop } from "./forwarder-delivery.mjs";
 
-export function startBackgroundStop(socketPath, token, messages) {
+export function startBackgroundStop(socketPath, token, messages, deliveryId) {
   return new Promise((resolve) => {
     // The mcode Stop command uses `exec`, and its shim execs node, so the
     // parent is the agent itself, not an intermediate short-lived shell.
@@ -17,7 +16,7 @@ export function startBackgroundStop(socketPath, token, messages) {
       execArgv: [],
     });
     worker.on("error", () => resolve(false));
-    worker.send({ socketPath, token, messages, ownerPid, deliveryId: randomUUID() }, (error) => {
+    worker.send({ socketPath, token, messages, ownerPid, deliveryId }, (error) => {
       if (worker.connected) worker.disconnect();
       worker.unref();
       resolve(!error);

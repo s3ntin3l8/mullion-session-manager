@@ -116,9 +116,15 @@ describe("mcode Stop background delivery (#3189)", () => {
       socket.end('{"ack":"accepted"}\n{"ack":"delivered"}\n');
     });
     expect(
-      await startBackgroundStop(target, "test-token", [{ kind: "progress", phase: "done" }]),
+      await startBackgroundStop(
+        target,
+        "test-token",
+        [{ kind: "progress", phase: "done" }],
+        "ipc-id",
+      ),
     ).toBe(true);
     await expect.poll(() => ids.length).toBe(1);
+    expect(ids[0]).toBe("ipc-id");
     await runBackgroundStop({
       socketPath: target,
       token: "test-token",
@@ -128,6 +134,82 @@ describe("mcode Stop background delivery (#3189)", () => {
     });
     expect(ids[1]).toBe("handed-off-id");
   });
+
+  it.each(["fork throw", "worker error", "send error", "send error after delivery"])(
+    "falls back to foreground delivery on %s with the same identity",
+    async (failure) => {
+      const { HookDeliveryRegistry } = await import("../../src/services/hook-deliveries.js");
+      const ledger = new HookDeliveryRegistry();
+      const ids: unknown[] = [];
+      let dispatched = 0;
+      const target = await listener((socket, lines) => {
+        const id = lines[0].deliveryId as string;
+        ids.push(id);
+        expect(lines[0].token).toBe("test-token");
+        expect(lines[1]).toEqual({ kind: "progress", phase: "done" });
+        if (ledger.claim("session", `${id}:0`)) dispatched++;
+        socket.end('{"ack":"accepted"}\n{"ack":"delivered"}\n');
+      });
+      // Patch only this subprocess's fork API, then run the real entry point
+      // against a real socket. A send callback can fail AFTER IPC delivery.
+      const hook = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import childProcess from 'node:child_process';
+           import { syncBuiltinESMExports } from 'node:module';
+           import { EventEmitter } from 'node:events';
+           const failure = process.argv[1];
+           const forwarder = process.argv[2];
+           const { deliverStop } = await import(process.argv[3]);
+           childProcess.fork = () => {
+             if (failure === 'fork throw') throw new Error('EAGAIN');
+             const worker = new EventEmitter();
+             worker.connected = true;
+             worker.disconnect = () => { worker.connected = false; };
+             worker.unref = () => {};
+             worker.send = async (delivery, callback) => {
+               if (failure === 'worker error') {
+                 worker.emit('error', new Error('spawn failed'));
+                 return;
+               }
+               if (failure === 'send error after delivery') {
+                 await deliverStop(delivery.socketPath, delivery.token, delivery.messages, delivery.deliveryId);
+               }
+               callback(new Error('send failed'));
+             };
+             return worker;
+           };
+           syncBuiltinESMExports();
+           process.argv = [process.execPath, forwarder, 'mcode', 'Stop'];
+           await import(forwarder);`,
+          failure,
+          path.join(hooksDir, "forwarder.mjs"),
+          path.join(hooksDir, "forwarder-delivery.mjs"),
+        ],
+        {
+          env: { ...process.env, MULLION_HOOK_SOCKET: target, MULLION_HOOK_TOKEN: "test-token" },
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+      children.push(hook);
+      let output = "";
+      let errors = "";
+      hook.stdout!.on("data", (chunk) => (output += chunk));
+      hook.stderr!.on("data", (chunk) => (errors += chunk));
+      const exited = once(hook, "exit");
+      hook.stdin!.end("{}");
+      await exited;
+      expect(hook.exitCode).toBe(0);
+      expect(output).toBe("{}\n");
+      expect(errors).toBe("");
+      expect(ids).toHaveLength(failure === "send error after delivery" ? 2 : 1);
+      expect(typeof ids[0]).toBe("string");
+      expect(new Set(ids).size).toBe(1);
+      expect(dispatched).toBe(1);
+    },
+  );
 
   it("exits the hook promptly and delivers after refusals lasting beyond mcode's 10s ceiling", async () => {
     const ids: unknown[] = [];

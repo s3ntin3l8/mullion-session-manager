@@ -261,8 +261,25 @@ async function forward() {
   // until its budget expires. Every other hook keeps the fire-and-forget
   // behaviour below — connect, write, exit.
   if (kind === "Stop") {
-    if (agent === "mcode") await startBackgroundStop(socketPath, token, messages);
-    else await deliverStop(socketPath, token, messages);
+    const deliveryId = randomUUID();
+    let handedOff = false;
+    if (agent === "mcode") {
+      try {
+        handedOff = await startBackgroundStop(socketPath, token, messages, deliveryId);
+      } catch {
+        // Fork/send can throw under resource pressure. Keep the foreground
+        // attempts available even when a detached worker cannot be started.
+      }
+    }
+    if (!handedOff) {
+      try {
+        // A failed send may still have reached the worker: reuse its id so
+        // concurrent deliveries remain at most once at the socket ledger.
+        await deliverStop(socketPath, token, messages, deliveryId);
+      } catch {
+        // Hook failures must never surface to the agent.
+      }
+    }
     return nudge ? { type: "postToolUse", additionalContext: nudge } : null;
   }
 

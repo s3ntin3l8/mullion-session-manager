@@ -618,6 +618,9 @@ export`/`import --standalone`, re-keying the imported session to the
   when its agent PID disappears (checked every 250ms). Agent exit therefore
   never waits for the retry; delivery remains best-effort if the agent
   exits first or the outage exceeds the bound (issue #3189).
+  A failed worker hand-off falls back to foreground delivery using the same
+  id, preserving deduplication if the worker also received it; this fallback
+  remains subject to mcode's ten-second hook timeout.
   `opencode-plugin.js` is OpenCode's own bridge,
   auto-injected as a per-session plugin directory referenced from
   `OPENCODE_CONFIG_CONTENT`, with the TUI launched `--standalone` (OpenCode

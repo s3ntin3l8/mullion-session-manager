@@ -158,6 +158,10 @@ every 250ms, exiting when the agent exits, on delivery, or at the retry bound.
 Retries therefore survive the hook runner but do not hold up agent exit or
 continue after session teardown (issue #3189). A Stop is still best-effort:
 an outage beyond the bound, or agent exit before delivery, can lose it.
+If starting the worker or sending the hand-off fails, the hook falls back to
+foreground delivery with the same id, preserving deduplication even if the
+worker received the hand-off before the send error. This fallback is subject
+to mcode's ten-second hook timeout.
 
 Every message after the handshake is validated JSON, one object per line,
 against a `kind`-discriminated shape. This table (rewritten against the
