@@ -14,14 +14,19 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
   set,
   get,
 ) => {
-  // Self-review (code-review high) — two independent pollers (SidebarDevices
-  // + DevicesSection) can each have a refreshDevices() GET in flight at
-  // once, and network resolution order doesn't have to match request order:
-  // without this guard, a slow response from a poll tick issued BEFORE a
-  // create/delete's own follow-up refresh could resolve AFTER it and
-  // overwrite the store with stale (pre-mutation) data. Only the most
-  // recently ISSUED call's response is ever applied.
+  // Self-review (code-review high) — several independent pollers
+  // (SidebarDevices, DevicesSection and every open DevicePane, #3540) can
+  // each have a refreshDevices() GET in flight at once, and network
+  // resolution order doesn't have to match request order: without this
+  // guard, a slow response from a poll tick issued BEFORE a create/delete's
+  // own follow-up refresh could resolve AFTER it and overwrite the store with
+  // stale (pre-mutation) data. A response is applied unless a NEWER-issued
+  // one has already landed. Not "only the latest issued": with N pollers out
+  // of phase a new GET starts every 4000/N ms, and a list slower than that
+  // (a remote host's live() can take up to its 5 s timeout) would then never
+  // land at all.
   let latestRefreshId = 0;
+  let latestAppliedId = 0;
 
   // Shared tail for every mutation below: re-fetch, best-effort, so a
   // transient GET failure never masquerades as a mutation failure (the
@@ -40,7 +45,10 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
     refreshDevices: async () => {
       const requestId = ++latestRefreshId;
       const devices = await api.listDevices();
-      if (requestId === latestRefreshId) set({ devices, devicesLoaded: true });
+      if (requestId > latestAppliedId) {
+        latestAppliedId = requestId;
+        set({ devices, devicesLoaded: true });
+      }
     },
 
     createDevice: async (avdName, name, hostId) => {

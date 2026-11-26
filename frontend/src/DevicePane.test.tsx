@@ -924,6 +924,9 @@ describe("DevicePane (issue #1326)", () => {
       resetStore({ devices: [], devicesLoaded: false });
       serverDevices = [iosRow()];
       render(<DevicePane params={{ deviceId: 7 }} />);
+      // Before the poll lands: unknown, so no Android controls first.
+      expect(screen.getByRole("toolbar", { name: "Device controls" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
 
       expect(
         await screen.findByRole("toolbar", { name: "iOS device controls" }),
