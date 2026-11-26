@@ -9,6 +9,23 @@
 
 export type HostHealthStatus = "pending" | "online" | "degraded" | "offline";
 
+/**
+ * Issue #3476 — which legacy path a host is still on, or null when it is on
+ * the current one. Derived on read (no column, nothing is stored):
+ *
+ * - `"legacy-agent"` — an agent without a machine identity that the primary
+ *   has to dial at the address it stored (a host enrolled with the fleet
+ *   secret before machine identities existed).
+ * - `"manual-token"` — a host whose agent still authenticates with the
+ *   row's own static per-host token (`MULLION_AGENT_TOKEN`), a credential
+ *   that never expires.
+ *
+ * The two kinds overlap (a manual-token host is dialled by address too), so
+ * the kind names the CREDENTIAL path: a row that carries a static token of
+ * its own is a manual-token host, whatever address the primary dials it at.
+ */
+export type DeprecatedHostKind = "legacy-agent" | "manual-token";
+
 export interface HostRecentIdentityReplacement {
   id: number;
   at: string;

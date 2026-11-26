@@ -6,6 +6,7 @@ import { afterAll, beforeEach, vi } from "vitest";
 import { resetLateFindingsCaches } from "../src/services/task-late-findings-cache.js";
 import { resetHostWarnThrottle } from "../src/services/host-warn-throttle.js";
 import { resetHostRegistryNotices } from "../src/services/host-registry.js";
+import { resetLegacyHostDeprecationNotices } from "../src/services/legacy-host-deprecation.js";
 import { schema } from "../src/plugins/env.js";
 import { reapDtachMasters } from "./helpers/reap-dtach.js";
 import { SESSION_RUNTIME_ENV_KEYS } from "./helpers/session-runtime-env.js";
@@ -198,4 +199,6 @@ beforeEach(() => {
   // The once-per-process host notices (the legacy-agent line, the refused
   // claim of a host with a live identity) are module-scope too (#3439).
   resetHostRegistryNotices();
+  // The once-per-process fleet-enrollment deprecation notice (#3476).
+  resetLegacyHostDeprecationNotices();
 });

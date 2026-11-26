@@ -102,6 +102,7 @@ import { taskBlockingAlertDismissRoute } from "./routes/task-blocking-alert-dism
 import { demoFixturesRoute } from "./routes/demo-fixtures.js";
 import { closePinnedConnectors } from "./services/pinned-connect.js";
 import { registerDispatchCleanup } from "./services/task-dispatch.js";
+import { warnLegacyEnrollmentSecretAtBoot } from "./services/legacy-host-deprecation.js";
 import { identityStatePath, loadAgentIdentity } from "./services/agent-identity.js";
 
 export async function buildApp() {
@@ -115,6 +116,12 @@ export async function buildApp() {
   // app.config.
   await app.register(envPlugin);
   await app.register(githubApiBasePlugin);
+
+  // Issue #3476 — the fleet-wide enrollment secret is deprecated (use
+  // automation tokens instead; the removal is planned). Nothing changes
+  // here: the secret still enrolls hosts exactly as before, this only says
+  // so — once per process, as the process boots.
+  warnLegacyEnrollmentSecretAtBoot(app);
 
   // Multi-host support (issue #26). "primary" (default) is today's full
   // single-process app, unchanged below. "agent" is a lightweight, DB-less

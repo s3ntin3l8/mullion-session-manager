@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { CHANNEL_SATURATED_REASON } from "../../src/shared/constants.js";
 import {
+  deprecatedKindLabel,
+  deprecatedKindTitle,
   deriveHostStatus,
   legacyAgentFix,
   legacyAgentLabels,
@@ -198,5 +200,90 @@ describe("deriveHostStatus (issue #246)", () => {
     expect(legacyAgentLabels(current).long).toBe("Not registered — set primary URL");
     expect(legacyAgentTitle(old)).toMatch(/Upgrade the agent/);
     expect(legacyAgentTitle(current)).toMatch(/MULLION_PRIMARY_URL/);
+  });
+});
+
+// Issue #3476 — the deprecation qualifier for a host that is still on a
+// legacy path. It says the setup is going away and what replaces it; it
+// refuses nothing.
+describe("the deprecation qualifier (issue #3476)", () => {
+  it("adds the qualifier to the legacy agent's own chip", () => {
+    const old = makeHost({
+      legacyAgent: true,
+      deprecatedKind: "legacy-agent",
+      mullionVersion: "0.3.50",
+    });
+    expect(deprecatedKindLabel(old)).toBe("outdated agent (deprecated)");
+    const current = makeHost({
+      legacyAgent: true,
+      deprecatedKind: "legacy-agent",
+      mullionVersion: "0.3.62",
+    });
+    expect(deprecatedKindLabel(current)).toBe("not registered (deprecated)");
+  });
+
+  it("names the legacy agent plainly when the host is not flagged as one", () => {
+    // A primary that reported the kind without the legacyAgent flag (an
+    // older primary, a row the route cleared) still gets a truthful chip.
+    const host = makeHost({ deprecatedKind: "legacy-agent" });
+    expect(deprecatedKindLabel(host)).toBe("legacy agent (deprecated)");
+  });
+
+  it("gives a manual-token host a chip of its own", () => {
+    const host = makeHost({ deprecatedKind: "manual-token" });
+    expect(deprecatedKindLabel(host)).toBe("manual token (deprecated)");
+  });
+
+  it("keeps the agent words visible for a manual-token host the primary also dials by address", () => {
+    // Such a host is BOTH: its credential is a static token AND it has no
+    // machine identity. The chip used to say "not registered" — it must not
+    // lose that, and it must name the kind that has to change.
+    const host = makeHost({
+      deprecatedKind: "manual-token",
+      legacyAgent: true,
+      mullionVersion: "0.3.62",
+    });
+    expect(deprecatedKindLabel(host)).toBe("not registered · manual token (deprecated)");
+    const old = makeHost({
+      deprecatedKind: "manual-token",
+      legacyAgent: true,
+      mullionVersion: "0.3.50",
+    });
+    expect(deprecatedKindLabel(old)).toBe("outdated agent · manual token (deprecated)");
+  });
+
+  it("has no qualifier for a host that is not deprecated", () => {
+    expect(deprecatedKindLabel(makeHost())).toBeNull();
+    expect(deprecatedKindLabel(makeHost({ deprecatedKind: null }))).toBeNull();
+    expect(deprecatedKindTitle(makeHost())).toBeNull();
+    expect(deprecatedKindTitle(makeHost({ deprecatedKind: null }))).toBeNull();
+  });
+
+  it("points at a migration that exists today, not at a Re-pair the row menu does not offer", () => {
+    // The row menu's Re-pair entry only appears for a host that holds (or
+    // held) a machine identity — a host that is still fully on a legacy
+    // path has no such entry, so the hover must not send the operator
+    // looking for it.
+    const legacy = deprecatedKindTitle(makeHost({ deprecatedKind: "legacy-agent" }));
+    expect(legacy).toMatch(/Deprecated/);
+    expect(legacy).toMatch(/MULLION_PRIMARY_URL/);
+    expect(legacy).toMatch(/one-time pairing code/);
+    expect(legacy).not.toMatch(/Re-pair/);
+
+    const manual = deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }));
+    expect(manual).toMatch(/Deprecated/);
+    expect(manual).toMatch(/MULLION_AGENT_TOKEN/);
+    expect(manual).toMatch(/one-time pairing code/);
+    expect(manual).not.toMatch(/Re-pair/);
+  });
+
+  it("names the host-bound pairing code for a manual-token host", () => {
+    // The unbound code the _Generate pairing link_ button mints creates a NEW
+    // host row and leaves the deprecated one behind, so the hover has to name
+    // the host-bound code (POST /api/host-pairings with {"hostId": ...}) that
+    // re-pairs the same row.
+    const manual = deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }));
+    expect(manual).toMatch(/hostId/);
+    expect(manual).toMatch(/NEW host row/);
   });
 });

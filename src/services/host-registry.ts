@@ -17,7 +17,7 @@ import { HOST_PAIRING_RETRY_WINDOW_MS } from "./host-pairing-policy.js";
 // backend importer of this module keeps working unchanged. Runtime VALUE,
 // not type-only, so this is a plain import.
 import { LOCAL_HOST_ID, type HostIdentityEventKind, type HostRole } from "../shared/constants.js";
-import type { HostRecentIdentityReplacement } from "../shared/types.js";
+import type { DeprecatedHostKind, HostRecentIdentityReplacement } from "../shared/types.js";
 export type { HostRecentIdentityReplacement } from "../shared/types.js";
 
 export { LOCAL_HOST_ID };
@@ -84,6 +84,14 @@ export interface HostSummary {
   // connected. Distinct from a healthy outbound-only host (which connects a
   // channel). Set by listHosts.
   unclaimed: boolean;
+  // Issue #3476 — which legacy path this host is still on, or null when it is
+  // on the current one. Derived on read from the row (no column, nothing is
+  // stored): "legacy-agent" is an agent without a machine identity that the
+  // primary has to dial at its stored address, "manual-token" is a host whose
+  // agent still authenticates with the row's own static per-host token
+  // (MULLION_AGENT_TOKEN). Nothing is refused or gated on this yet — the
+  // gating lands in a later release (MULLION_ALLOW_LEGACY_HOSTS).
+  deprecatedKind: DeprecatedHostKind | null;
   // baseUrl is null for "local" and for a "manual" host added without one
   // (Settings -> Add host, token minted by the primary) that is still
   // waiting for its agent: claimHost fills it in from the agent's own
@@ -159,6 +167,36 @@ export function hasLiveMachineIdentity(
   );
 }
 
+/**
+ * Issue #3476 — which legacy path a host row is on, or null.
+ *
+ * Derived on read, never stored: a host does not become "current" by being
+ * flagged, it becomes current by HOLDING a machine identity — so the flag
+ * disappears on its own the moment the agent is re-paired.
+ *
+ * The kinds overlap (a manual-token host is dialled by address too, so it is
+ * also a "legacy agent" in the HostSummary.legacyAgent sense), and the kind
+ * names the CREDENTIAL path, because that is what the operator has to
+ * change:
+ *
+ * - a row that carries a static per-host token of its own is a
+ *   "manual-token" host — its agent authenticates with MULLION_AGENT_TOKEN,
+ *   a credential that never expires and cannot be renewed;
+ * - a row with NO token of its own and no machine identity is a
+ *   "legacy-agent" host — the primary has to dial it at the address it
+ *   stored, which is only reachable from the primary's network.
+ *
+ * A machine identity (even a revoked or expired one) is the current path:
+ * re-arming it is an operator action (Re-pair), not a legacy credential.
+ */
+function deprecatedKindOf(row: HostRow): DeprecatedHostKind | null {
+  if (row.id === LOCAL_HOST_ID) return null;
+  if (row.machineCredentialEnc !== null) return null;
+  if (row.authTokenEnc !== null && row.authTokenEnc !== "") return "manual-token";
+  if (row.baseUrl !== null && row.machineCredentialRevokedAt === null) return "legacy-agent";
+  return null;
+}
+
 function toSummary(row: HostRow): HostSummary {
   return {
     id: row.id,
@@ -182,6 +220,7 @@ function toSummary(row: HostRow): HostSummary {
       row.machineCredentialRevokedAt === null,
     paired: false,
     unclaimed: false,
+    deprecatedKind: deprecatedKindOf(row),
   };
 }
 

@@ -11,6 +11,7 @@ import {
   type RegisterAgentInput,
 } from "../services/host-registry.js";
 import { refreshHostProtocolSoon } from "../services/host-agents.js";
+import { noteLegacyFleetEnrollment } from "../services/legacy-host-deprecation.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
@@ -232,6 +233,11 @@ export async function enrollmentRoute(app: FastifyInstance) {
         if (allowedCidrs && !isIpAllowed(getRawRemoteAddress(request), allowedCidrs)) {
           return reply.forbidden("peer address not in MULLION_ENROLLMENT_ALLOWED_CIDRS");
         }
+        // Issue #3476 — the fleet-wide enrollment secret is deprecated (use
+        // automation tokens instead). Nothing changes here: the enrollment
+        // succeeds exactly as before, this only says so — once per process,
+        // so a fleet of agents enrolling does not fill the log.
+        noteLegacyFleetEnrollment(app);
         const enrolled = enrollHost(app, input, peer);
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
         refreshHostProtocolSoon(app, enrolled.hostId);

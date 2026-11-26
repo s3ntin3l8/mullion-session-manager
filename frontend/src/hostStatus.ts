@@ -97,6 +97,88 @@ export function legacyAgentTitle(host: Host, primaryVersion?: string | null): st
         "connects out from anywhere.";
 }
 
+/**
+ * Issue #3476 — the word that marks a host as being on a legacy path. One
+ * literal, so the chip text, the hover title and the accessible name cannot
+ * drift apart.
+ */
+export const DEPRECATED_WORD = "deprecated";
+
+/**
+ * Issue #3476 — the chip text for a host that is still on a legacy path, or
+ * null when it is on the current one.
+ *
+ * The chip keeps BOTH facts when a host has both:
+ *
+ * - a legacy agent reads as the EXISTING chip plus the qualifier ("outdated
+ *   agent (deprecated)"), so the chip still says what is wrong with the agent
+ *   itself;
+ * - a manual-token host gets a chip of its own ("manual token (deprecated)") —
+ *   the static token is what has to change, and saying "outdated agent" there
+ *   would point at the wrong fix;
+ * - a manual-token host the primary also dials by address is BOTH (it has no
+ *   machine identity AND its own static token), so the chip carries the agent
+ *   words AND the kind: nothing that was visible before the deprecation
+ *   qualifier disappears.
+ */
+export function deprecatedKindLabel(host: Host): string | null {
+  switch (host.deprecatedKind) {
+    case "legacy-agent":
+      return host.legacyAgent === true
+        ? `${legacyAgentLabels(host).short} (${DEPRECATED_WORD})`
+        : `legacy agent (${DEPRECATED_WORD})`;
+    case "manual-token":
+      return host.legacyAgent === true
+        ? `${legacyAgentLabels(host).short} · manual token (${DEPRECATED_WORD})`
+        : `manual token (${DEPRECATED_WORD})`;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Issue #3476 — the hover text for a host that is still on a legacy path, or
+ * null when it is on the current one.
+ *
+ * It says what is deprecated and what REPLACES it, and every path it names
+ * exists today:
+ *
+ * - a legacy agent is fixed agent-side — upgrade it and point it at the
+ *   primary (MULLION_PRIMARY_URL) so it registers with a machine identity —
+ *   or replaced by a host paired from a one-time pairing code;
+ * - a manual-token host is fixed by pairing: a one-time pairing code BOUND to
+ *   that host replaces the static token with a machine identity. An unbound
+ *   code (the _Generate pairing link_ button) creates a NEW host row and
+ *   leaves the deprecated row behind, so the hover names the bound one.
+ *
+ * The row menu's _Re-pair_ entry is deliberately NOT named here: it only
+ * appears once a host holds a machine identity (or had one revoked), and a
+ * host that is still fully on a legacy path has no such entry — the Settings
+ * row is where the pairing code is minted.
+ */
+export function deprecatedKindTitle(host: Host): string | null {
+  switch (host.deprecatedKind) {
+    case "legacy-agent":
+      return (
+        "Deprecated: this agent has no machine identity, so the primary has to reach it at " +
+        "the address it stored — which only works from the primary's own network. Upgrade it " +
+        "to v0.3.59 or later and set MULLION_PRIMARY_URL so it registers with a machine " +
+        "identity, or replace the host with one paired from a one-time pairing code " +
+        "(Settings → Hosts)."
+      );
+    case "manual-token":
+      return (
+        "Deprecated: this host's agent still authenticates with the row's own static token " +
+        "(MULLION_AGENT_TOKEN), which never expires. Mint a one-time pairing code BOUND to " +
+        'this host (POST /api/host-pairings with {"hostId": "<id>"}) and redeem it on the ' +
+        "agent, so the agent holds a machine identity instead of that token. An unbound code " +
+        "creates a NEW host row and leaves this one deprecated."
+      );
+    default:
+      return null;
+  }
+}
+
 // Issue #246 — the primary's background heartbeat sweep (host.health) is
 // the preferred source of truth once it has swept a host at least once;
 // the click-driven "Test" button (click) is the fallback for a host the

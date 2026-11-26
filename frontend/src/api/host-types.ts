@@ -9,12 +9,14 @@ import type {
   HostRecentIdentityReplacement,
   HostCapacityReport,
   HostChannelStatus,
+  DeprecatedHostKind,
 } from "../../../src/shared/types.js";
 export type {
   HostHealthStatus,
   HostRecentIdentityReplacement,
   HostCapacityReport,
   HostChannelStatus,
+  DeprecatedHostKind,
 } from "../../../src/shared/types.js";
 
 export interface HostSessionEnv {
@@ -47,6 +49,12 @@ export interface Host {
   // open the outbound channel, so it is unreachable off the primary's network.
   // Absent from an older primary.
   legacyAgent?: boolean;
+  // Issue #3476 — which legacy path this host is still on: "legacy-agent" (an
+  // agent without a machine identity that the primary dials by address) or
+  // "manual-token" (an agent that still authenticates with the row's own
+  // static token). Null/absent on a host that is on the current path.
+  // Absent from an older primary.
+  deprecatedKind?: DeprecatedHostKind | null;
   // Issue #2449 — created by redeeming a one-time pairing code. Absent from an
   // older primary.
   paired?: boolean;
