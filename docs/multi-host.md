@@ -1795,7 +1795,10 @@ always reports `not-applicable` (with `reason: null`): it never resolves an
 interactive PATH, by design (#1728), so the panel shows no warning for it. The
 `reason` for a fallback is one of
 `disabled` (`MULLION_RESOLVE_INTERACTIVE_ENV=0`), `unsupported-shell`, `timeout`,
-`spawn-failed`, `unparseable` or `pending` (not resolved yet). `path` is the PATH
+`spawn-failed`, `unparseable` or `pending` (not resolved yet). `timeout`,
+`spawn-failed` and `unparseable` are transient: the agent retries them on its next
+agent-detection refresh once a backoff has passed (1 min, doubling to 15 min), and
+`retryAt` (ms epoch, else `null`; absent from older agents) says when. `path` is the PATH
 a new session gets, already split on the host's own delimiter (`;` on Windows). `recoveredKeys` lists the recovered variable names (never
 their values) configured by `SESSION_ENV_RECOVER_KEYS`.
 

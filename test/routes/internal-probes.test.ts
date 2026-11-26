@@ -52,6 +52,7 @@ describe("agent probe routes (issues #2306, #2248)", () => {
         shell: "/bin/zsh",
         interactiveResolve: "fallback",
         reason: "disabled",
+        retryAt: null,
         path: expect.any(Array),
         recoveredKeys: [],
       });

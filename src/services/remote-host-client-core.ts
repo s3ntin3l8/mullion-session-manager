@@ -122,6 +122,16 @@ const CAPACITY_REQUEST_TIMEOUT_MS = 2_000;
 // long wait does not hold up the agent list or the protocol handshake.
 export const CAPABILITIES_REQUEST_TIMEOUT_MS = XCODE_PROBE_WORST_CASE_MS + 10_000;
 
+// Issue #3524 — the agent-list call's own budget. On a cold cache the agent's
+// `/internal/agents` first waits on the interactive-PATH resolve
+// (user-shell-env.ts: 10 s by default, plus its 2 s kill escalation) and then
+// on the login-shell probes (login-shell.ts: 5 s each, run in parallel), so
+// the 5 s default would time the primary out of exactly the read that
+// recovers a slow rc. An agent configured with a longer
+// SESSION_ENV_RESOLVE_TIMEOUT_MS can still outlast this; the read then keeps
+// its previous answer and the next one hits the warm cache.
+export const AGENTS_REQUEST_TIMEOUT_MS = 20_000;
+
 // Test-only knob (issue #1634): a full local `make test` runs hundreds of real
 // Fastify servers in parallel, and the multi-host integration tests make REAL
 // loopback round trips whose 5s budget the resulting event-loop lag can blow
@@ -572,7 +582,7 @@ export class RemoteHostClient {
   }
 
   detectAgents(): Promise<DetectedAgent[]> {
-    return this.request("/internal/agents");
+    return this.request("/internal/agents", undefined, AGENTS_REQUEST_TIMEOUT_MS);
   }
 
   // Issue #2306 — an agent build without the route answers 404 (unknown).

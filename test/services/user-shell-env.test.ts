@@ -58,6 +58,8 @@ import {
   resetUserShellEnvForTests,
   resolveUserShellEnv,
   setUserShellEnvLogger,
+  setUserShellResolveTimeoutMs,
+  retryDelayMs,
 } from "../../src/services/user-shell-env.js";
 
 const S = "__MULLION_USER_ENV_8f3a1c__";
@@ -251,12 +253,12 @@ describe("resolveUserShellEnv", () => {
     try {
       stdoutToEmit = null;
       const p = resolveUserShellEnv();
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await p;
       expect(getUserShellPath()).toBeNull();
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledWith(
-        { shell: "/usr/bin/zsh", timeoutMs: 5_000 },
+        { shell: "/usr/bin/zsh", timeoutMs: 10_000 },
         expect.stringContaining("timed out"),
       );
     } finally {
@@ -309,7 +311,7 @@ describe("resolveUserShellEnv", () => {
     try {
       stdoutToEmit = null;
       const p = resolveUserShellEnv();
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await p;
       expect(getSessionEnvInfo()).toMatchObject({
         interactiveResolve: "fallback",
@@ -318,6 +320,114 @@ describe("resolveUserShellEnv", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Issue #3524 — a transient failure used to be final, so one slow boot left
+// an agent on the service PATH for its whole lifetime.
+describe("resolveUserShellEnv retries a transient failure (#3524)", () => {
+  const savedShell = process.env.SHELL;
+
+  beforeEach(() => {
+    spawned = [];
+    spawnError = null;
+    childPid = undefined;
+    process.env.SHELL = "/usr/bin/zsh";
+    resetUserShellEnvForTests();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    process.env.SHELL = savedShell;
+    resetUserShellEnvForTests();
+  });
+
+  async function timedOutResolve(): Promise<void> {
+    stdoutToEmit = null;
+    const p = resolveUserShellEnv();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await p;
+  }
+
+  it("backs off 1 min doubling to 15 min", () => {
+    expect([1, 2, 3, 4, 5, 6].map(retryDelayMs)).toEqual([
+      60_000, 120_000, 240_000, 480_000, 900_000, 900_000,
+    ]);
+  });
+
+  it("recovers the PATH on a later call once the backoff has passed", async () => {
+    await timedOutResolve();
+    const info = getSessionEnvInfo();
+    expect(info).toMatchObject({ interactiveResolve: "fallback", reason: "timeout" });
+    expect(info.retryAt).toBe(Date.now() + 60_000);
+
+    // Inside the backoff: no new shell.
+    stdoutToEmit = dump("/home/u/.nvm/bin:/usr/bin");
+    await resolveUserShellEnv();
+    expect(spawned).toHaveLength(1);
+
+    vi.setSystemTime(Date.now() + 60_000);
+    const p = resolveUserShellEnv();
+    await vi.advanceTimersByTimeAsync(1);
+    await p;
+    expect(spawned).toHaveLength(2);
+    expect(getUserShellPath()).toBe("/home/u/.nvm/bin:/usr/bin");
+    expect(getSessionEnvInfo()).toMatchObject({
+      interactiveResolve: "ok",
+      reason: null,
+      retryAt: null,
+    });
+
+    // A success is final again.
+    vi.setSystemTime(Date.now() + 3_600_000);
+    await resolveUserShellEnv();
+    expect(spawned).toHaveLength(2);
+  });
+
+  it("doubles the backoff on repeated failures, and a rescan bypasses it", async () => {
+    await timedOutResolve();
+    vi.setSystemTime(Date.now() + 60_000);
+    await timedOutResolve();
+    expect(spawned).toHaveLength(2);
+    expect(getSessionEnvInfo().retryAt).toBe(Date.now() + 120_000);
+
+    invalidateUserShellEnv();
+    stdoutToEmit = dump("/opt/x/bin");
+    const p = resolveUserShellEnv();
+    await vi.advanceTimersByTimeAsync(1);
+    await p;
+    expect(spawned).toHaveLength(3);
+    expect(getUserShellPath()).toBe("/opt/x/bin");
+  });
+
+  it("keeps an unsupported shell final, with no retry scheduled", async () => {
+    process.env.SHELL = "/usr/bin/fish";
+    await resolveUserShellEnv();
+    vi.setSystemTime(Date.now() + 3_600_000);
+    process.env.SHELL = "/usr/bin/zsh";
+    await resolveUserShellEnv();
+    expect(spawned).toHaveLength(0);
+    expect(getSessionEnvInfo()).toMatchObject({ reason: "unsupported-shell", retryAt: null });
+  });
+
+  it("honours a configured timeout, and ignores a nonsensical one", async () => {
+    setUserShellResolveTimeoutMs(3_000);
+    stdoutToEmit = null;
+    const p = resolveUserShellEnv();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await p;
+    expect(getSessionEnvInfo().reason).toBe("timeout");
+
+    resetUserShellEnvForTests();
+    setUserShellResolveTimeoutMs(0);
+    stdoutToEmit = null;
+    const q = resolveUserShellEnv();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(getSessionEnvInfo().reason).toBe("pending");
+    await vi.advanceTimersByTimeAsync(7_000);
+    await q;
+    expect(getSessionEnvInfo().reason).toBe("timeout");
   });
 });
 
@@ -399,7 +509,7 @@ describe("recovery through the interactive shell", () => {
     try {
       stdoutToEmit = null;
       const p = resolveUserShellEnv();
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(10_000);
       await p;
       expect(getUserShellEnv(["ANDROID_HOME"])).toEqual({});
     } finally {

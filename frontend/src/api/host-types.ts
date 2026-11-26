@@ -24,6 +24,9 @@ export interface HostSessionEnv {
   /** `not-applicable`: a Windows host, which never resolves (by design). */
   interactiveResolve: "ok" | "fallback" | "not-applicable";
   reason: string | null;
+  /** ms-epoch of the agent's next automatic retry after a transient failure
+   * (issue #3524); null or absent (an older agent) when none is scheduled. */
+  retryAt?: number | null;
   path: string[];
   recoveredKeys: string[];
 }

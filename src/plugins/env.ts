@@ -943,6 +943,12 @@ export const schema = {
       type: "string",
       default: "ANDROID_HOME,ANDROID_SDK_ROOT,ANDROID_NDK_HOME,JAVA_HOME",
     },
+    // Issue #3524 — how long the one-shot interactive shell (user-shell-env.ts)
+    // may take to print its PATH before it is killed and retried later.
+    SESSION_ENV_RESOLVE_TIMEOUT_MS: {
+      type: "number",
+      default: 10000,
+    },
     // Issue #1133 — opt-out for scaffold-generate.ts's mandatory bwrap
     // sandboxing of a generation turn. Default ON: when a usable bwrap is
     // present, `defaultSpawnGenerationTurn` wraps the turn and does NOT
@@ -1253,6 +1259,7 @@ declare module "fastify" {
       MULLION_SOCKET_PATH: string;
       MULLION_SSH_AUTH_SOCK: string;
       SESSION_ENV_RECOVER_KEYS: string;
+      SESSION_ENV_RESOLVE_TIMEOUT_MS: number;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;
       MULLION_WEBHOOK_BASE_URL: string;
       MULLION_PUBLIC_URL: string;

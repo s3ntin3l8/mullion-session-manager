@@ -10,6 +10,7 @@ import { getCachedAgents } from "./services/agent-detect.js";
 import {
   parseRecoverKeys,
   setUserShellEnvLogger,
+  setUserShellResolveTimeoutMs,
   setUserShellRecoverKeys,
 } from "./services/user-shell-env.js";
 
@@ -31,6 +32,7 @@ async function start() {
   }
 
   setUserShellRecoverKeys(parseRecoverKeys(app.config.SESSION_ENV_RECOVER_KEYS));
+  setUserShellResolveTimeoutMs(app.config.SESSION_ENV_RESOLVE_TIMEOUT_MS);
   setUserShellEnvLogger(app.log);
 
   try {

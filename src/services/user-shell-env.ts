@@ -17,7 +17,15 @@ import { runShellCapture } from "./shell-spawn.js";
 // `read`), resolve the interactive PATH ONCE with a throwaway `-ilc` shell and
 // merge it into buildSessionEnv() — the same approach VS Code takes.
 
-const RESOLVE_TIMEOUT_MS = 5_000;
+// Issue #3524 — 10 s, VS Code's figure: an interactive zsh with oh-my-zsh/nvm
+// on a Mac that just restarted the agent routinely needs more than 5 s.
+// Overridable via SESSION_ENV_RESOLVE_TIMEOUT_MS (setUserShellResolveTimeoutMs).
+export const DEFAULT_RESOLVE_TIMEOUT_MS = 10_000;
+// A transient failure (timeout, spawn error, unparseable output) is retried on
+// this backoff rather than kept for the agent's lifetime: 1 min, doubling, at
+// most 15 min — so a shell that always hangs is not re-spawned every minute.
+const RETRY_BASE_MS = 60_000;
+const RETRY_MAX_MS = 15 * 60_000;
 const RESOLVE_KILL_ESCALATION_MS = 2_000;
 // rc files may print anything (banners, oh-my-zsh update prompts); only the
 // bytes between these markers are parsed.
@@ -81,6 +89,9 @@ export interface UserShellEnvStatus {
   interactiveResolve: "ok" | "fallback" | "not-applicable";
   /** A short reason when `interactiveResolve` is `fallback`, else null. */
   reason: SessionEnvFallbackReason | null;
+  /** ms-epoch of the next automatic retry after a transient failure, else null
+   * (issue #3524). Absent from older agents. */
+  retryAt: number | null;
 }
 
 export interface UserShellEnvLogger {
@@ -106,11 +117,26 @@ export function getUserShellRecoverKeys(): readonly string[] {
   return recoverKeys;
 }
 
+let resolveTimeoutMs = DEFAULT_RESOLVE_TIMEOUT_MS;
+/** Wired once at boot (server.ts) from `app.config.SESSION_ENV_RESOLVE_TIMEOUT_MS`. */
+export function setUserShellResolveTimeoutMs(ms: number): void {
+  resolveTimeoutMs = Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_RESOLVE_TIMEOUT_MS;
+}
+
+/** Pure: how long to wait before retry number `failures` (1-based). */
+export function retryDelayMs(failures: number): number {
+  return Math.min(RETRY_BASE_MS * 2 ** Math.max(0, failures - 1), RETRY_MAX_MS);
+}
+
 let resolved: { path: string; env: Record<string, string> } | null = null;
 // Why the last resolve fell back, for the session-env probe (null: it did not).
 let lastFailure: SessionEnvFallbackReason | null = null;
 let announced = false;
+// True once the outcome is final: a success, or a permanent skip (unsupported
+// shell). A transient failure leaves it false, with `retryAt` gating the next try.
 let settled = false;
+let consecutiveFailures = 0;
+let retryAt: number | null = null;
 let inflight: Promise<void> | null = null;
 
 /** Pure: the PATH printed between the sentinels (anything the rc printed
@@ -161,7 +187,7 @@ function runInteractiveShell(shell: string, script: string): Promise<string | nu
     shell,
     args: ["-ilc", script],
     env: process.env,
-    timeoutMs: RESOLVE_TIMEOUT_MS,
+    timeoutMs: resolveTimeoutMs,
     killEscalationMs: RESOLVE_KILL_ESCALATION_MS,
     // The raw text carries the sentinel markers, so it must not be trimmed —
     // and an empty result stays an empty string, because the caller parses
@@ -173,7 +199,7 @@ function runInteractiveShell(shell: string, script: string): Promise<string | nu
     onTimeout: () => {
       lastFailure = "timeout";
       log?.warn(
-        { shell, timeoutMs: RESOLVE_TIMEOUT_MS },
+        { shell, timeoutMs: resolveTimeoutMs },
         `user-shell-env: interactive shell timed out; ${fallbackNote()}`,
       );
     },
@@ -194,15 +220,21 @@ function runInteractiveShell(shell: string, script: string): Promise<string | nu
 }
 
 /**
- * Resolves (once; concurrent callers share one shell) the interactive shell's
- * PATH. Never rejects — failure, timeout, an unsupported shell, or the
+ * Resolves (concurrent callers share one shell) the interactive shell's PATH.
+ * Never rejects — failure, timeout, an unsupported shell, or the
  * `MULLION_RESOLVE_INTERACTIVE_ENV=0` opt-out leave the cache as it was: empty
  * on the first resolve (buildSessionEnv() then behaves exactly as before), or
  * the previous PATH on a rescan.
+ *
+ * A success or an unsupported shell is final. A transient failure is not
+ * (issue #3524): a later call re-runs the shell once its backoff (`retryAt`)
+ * has passed, so one slow boot does not strip the rc PATH for the agent's
+ * lifetime. Callers already call this on every agent-detection refresh.
  */
 export function resolveUserShellEnv(): Promise<void> {
   if (settled || isDisabled()) return Promise.resolve();
   if (inflight) return inflight;
+  if (retryAt !== null && Date.now() < retryAt) return Promise.resolve();
   // Not on Windows (issue #1728): its PATH is system-wide, with no rc-file
   // additions to recover — and a $SHELL inherited from Git Bash is an MSYS
   // path ("/usr/bin/bash") Windows cannot spawn, so trying would only warn.
@@ -214,6 +246,7 @@ export function resolveUserShellEnv(): Promise<void> {
     return Promise.resolve();
   }
   const keys = recoverKeys;
+  const startedAt = Date.now();
   inflight = runInteractiveShell(shell, buildResolveScript(keys))
     .then((stdout) => {
       const path = stdout === null ? null : parseUserShellPath(stdout);
@@ -223,6 +256,13 @@ export function resolveUserShellEnv(): Promise<void> {
       if (path) {
         resolved = { path, env };
         lastFailure = null;
+        settled = true;
+        consecutiveFailures = 0;
+        retryAt = null;
+        log?.debug(
+          { shell, elapsedMs: Date.now() - startedAt },
+          "user-shell-env: resolved the interactive PATH",
+        );
       }
       // stdout === null already logged its own reason (timeout / spawn error);
       // here the shell ran but printed no PATH between the markers.
@@ -243,7 +283,15 @@ export function resolveUserShellEnv(): Promise<void> {
       }
     })
     .finally(() => {
-      settled = true;
+      if (!settled) {
+        consecutiveFailures++;
+        const delay = retryDelayMs(consecutiveFailures);
+        retryAt = Date.now() + delay;
+        log?.info?.(
+          { shell, reason: lastFailure, retryInMs: delay, attempt: consecutiveFailures },
+          "user-shell-env: will retry the interactive PATH resolve",
+        );
+      }
       inflight = null;
     });
   return inflight;
@@ -264,11 +312,18 @@ export function getUserShellEnvStatus(): UserShellEnvStatus {
   // Windows never resolves (see resolveUserShellEnv): that is by design, not a
   // fallback worth a warning.
   if (process.platform === "win32") {
-    return { shell, interactiveResolve: "not-applicable", reason: null };
+    return { shell, interactiveResolve: "not-applicable", reason: null, retryAt: null };
   }
-  if (isDisabled()) return { shell, interactiveResolve: "fallback", reason: "disabled" };
-  if (resolved) return { shell, interactiveResolve: "ok", reason: null };
-  return { shell, interactiveResolve: "fallback", reason: lastFailure ?? "pending" };
+  if (isDisabled()) {
+    return { shell, interactiveResolve: "fallback", reason: "disabled", retryAt: null };
+  }
+  if (resolved) return { shell, interactiveResolve: "ok", reason: null, retryAt: null };
+  return {
+    shell,
+    interactiveResolve: "fallback",
+    reason: lastFailure ?? "pending",
+    retryAt: settled ? null : retryAt,
+  };
 }
 
 /** The PATH entries a new session on this host starts with (no values of any other variable). */
@@ -282,6 +337,9 @@ export interface SessionEnvInfo {
   shell: string | null;
   interactiveResolve: UserShellEnvStatus["interactiveResolve"];
   reason: SessionEnvFallbackReason | null;
+  /** See UserShellEnvStatus.retryAt. Optional on the wire: an agent older
+   * than issue #3524 does not send it. */
+  retryAt?: number | null;
   path: string[];
   /** Names (never values) of variables recovered from the user's shell. */
   recoveredKeys: string[];
@@ -311,6 +369,9 @@ export function getUserShellEnv(keys: readonly string[]): Record<string, string>
  * mid-rescan doesn't briefly lose it. */
 export function invalidateUserShellEnv(): void {
   settled = false;
+  // An explicit rescan bypasses the backoff: the user just edited their rc.
+  retryAt = null;
+  consecutiveFailures = 0;
 }
 
 /** Exported for tests only — production never needs to clear this. */
@@ -318,6 +379,9 @@ export function resetUserShellEnvForTests(): void {
   resolved = null;
   lastFailure = null;
   settled = false;
+  consecutiveFailures = 0;
+  retryAt = null;
+  resolveTimeoutMs = DEFAULT_RESOLVE_TIMEOUT_MS;
   inflight = null;
   announced = false;
   recoverKeys = [];

@@ -14,6 +14,7 @@ import {
   type PingState,
 } from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
+import { formatRelativeUntil } from "../../relativeTime.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { CloseIcon, GearIcon, HostsIcon, MoonIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
@@ -111,9 +112,14 @@ function HostSessionEnvDetail({ host }: { host: Host }) {
           <span
             data-testid={`host-session-env-warning-${host.id}`}
             style={{ color: "var(--y)", marginLeft: 6 }}
-            title="The interactive shell's PATH could not be recovered, so sessions on this host get only the service PATH."
+            title={
+              env.retryAt
+                ? "The interactive shell's PATH could not be recovered yet, so sessions on this host get only the service PATH until the agent's automatic retry succeeds."
+                : "The interactive shell's PATH could not be recovered, so sessions on this host get only the service PATH."
+            }
           >
             ⚠ PATH recovery fell back{env.reason ? `: ${env.reason}` : ""}
+            {env.retryAt ? ` — will retry ${formatRelativeUntil(env.retryAt)}` : ""}
           </span>
         )}
       </summary>
