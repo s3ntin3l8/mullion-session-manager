@@ -11,11 +11,12 @@
 // This is the same shape as the Workflow Runs path's `runsAnswered` flag
 // (the `warnUnstableRunsUnreadable` helper in task-reconciler.ts): the
 // lookup says whether GitHub answered, and the CALLER decides what an
-// unanswered lookup means. Three callers share it — the unstable-PR path
+// unanswered lookup means. Four callers share it — the unstable-PR path
 // (which holds the PR either way and only changes what the operator is
-// told), the red-CI return (which stands down on an unanswered lookup,
-// exactly as it stood down on the old empty-list answer) and auto-approve's
-// CI gate (which holds the approval on one).
+// told), the blocked-PR path (#2971, which names a stuck non-Actions status
+// only from a list it actually read), the red-CI return (which stands down on
+// an unanswered lookup, exactly as it stood down on the old empty-list
+// answer) and auto-approve's CI gate (which holds the approval on one).
 //
 // The warning is throttled the same way — once per task per hour — because
 // this runs on every sweep tick (30s by default) and an unstable PR that
@@ -41,7 +42,8 @@ export type PrCheckRuns = { ok: true; runs: CheckRunResult[] } | { ok: false; de
  * Which caller asked — the callers share the lookup and the warning, and a log
  * line that cannot say which one it was is a log line nobody can act on.
  */
-export type PrCheckRunsSource = "unstable-merge" | "red-ci-return" | "approval-gate";
+export type PrCheckRunsSource =
+  "unstable-merge" | "blocked-merge" | "red-ci-return" | "approval-gate";
 
 /** Once per task per hour — see the header. */
 const warnUnreadableCheckRuns = createThrottledWarn(60 * 60_000);

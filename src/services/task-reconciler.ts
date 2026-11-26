@@ -83,7 +83,6 @@ import {
   postReviewFindingsComment,
   type PendingReviewPost,
 } from "./task-github-sync.js";
-import { resolveMullionOwnThreadsIfClean } from "./task-own-threads.js";
 import {
   attemptPendingReviewPost,
   holdsForReviewPost,
@@ -132,10 +131,11 @@ import {
   CLEARED_MERGE_ERROR,
   CLEARED_NEEDS_HUMAN,
   mergeRecordedSet,
-  describeBlockingThreads,
-  type MergeBlockedThreads,
   recordMergeError,
 } from "./task-merge-human.js";
+import { mergeRetryBackoff } from "./task-merge-backoff.js";
+import { holdBlockedPullRequest } from "./task-merge-blocked.js";
+export { resetMergeBackoff } from "./task-merge-backoff.js";
 import { reseedTaskIfSessionExited, recheckAdoptedSeeds } from "./task-reseed.js";
 import {
   MAX_REBASE_ATTEMPTS,
@@ -153,11 +153,7 @@ import {
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { deriveTaskBranchName } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
-import {
-  resolveGitHubToken,
-  resolveReviewerToken,
-  resolveMullionReviewLogins,
-} from "./github-integration.js";
+import { resolveGitHubToken, resolveMullionReviewLogins } from "./github-integration.js";
 import {
   getPullRequestByNumber,
   mergePullRequest,
@@ -165,8 +161,6 @@ import {
   deleteRemoteBranch,
   fetchPullRequestReviewThreads,
   detectReleaseWorkflow,
-  getPullRequestReviewDecision,
-  createPullRequestReview,
   updatePullRequestTitle,
 } from "./github-write.js";
 import {
@@ -1273,42 +1267,9 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
 // Per-task attempt state is process-local (module state, not a DB column),
 // same posture and same reasoning as draftPrRetryBackoff above — the merge
 // *intent* is durable (tasks.mergeRequestedAt), the retry *rate limiter*
-// doesn't need to be.
-const MERGE_RETRY_TTL_MS = 60 * 1000;
-// Tighter ceiling than DRAFT_PR_RETRY_MAX_TTL_MS above — a merge is a cheap
-// GitHub API call (no git push involved) and a human is typically watching
-// for it to land, unlike a stranded draft-PR retry.
-const MERGE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
+// doesn't need to be. The ledger itself lives in `task-merge-backoff.ts`,
+// because the `blocked` arm's re-assert path reads and writes it too.
 const MAX_MERGE_RETRIES_PER_SWEEP = 20;
-const MAX_MERGE_RETRY_ENTRIES = 500;
-// Keyed by task id, and the one site that carries a field of its own:
-// `lastReassertedSha` — the head SHA a re-assert APPROVE was last posted
-// for. Without it, a re-assert whose APPROVE succeeds at the GitHub API
-// level but doesn't actually satisfy the branch protection rule (the
-// reviewer App isn't an eligible approver — the CODEOWNERS limitation this
-// feature already documents) never flips `reviewDecision` to `APPROVED`, so
-// the "can't spin" argument's premise fails: every backoff tick would
-// re-post an identical APPROVE on the same commit forever, spam bounded by
-// ticks, not pushes. Only cleared by `clearMergeState`/`resetMergeBackoff`,
-// same lifecycle as the rest of this entry — a human's explicit "Merge
-// now"/"Retry merge" click (which calls `resetMergeBackoff`) deliberately
-// gets a fresh re-assert attempt even on an unchanged head.
-const mergeRetryBackoff = createRetryBackoff<number, { lastReassertedSha?: string }>({
-  ttlMs: MERGE_RETRY_TTL_MS,
-  maxTtlMs: MERGE_RETRY_MAX_TTL_MS,
-  maxEntries: MAX_MERGE_RETRY_ENTRIES,
-});
-
-/**
- * Re-arms a task's merge backoff so the next reconcile tick attempts it
- * immediately instead of waiting out whatever backoff interval it was on.
- * Called by `POST /api/tasks/:id/merge` (a human's "Merge now"/"Retry merge"
- * click) — without this, a click during a long backoff window would appear
- * to do nothing until the window elapsed on its own.
- */
-export function resetMergeBackoff(taskId: number): void {
-  mergeRetryBackoff.reset(taskId);
-}
 
 function clearMergeState(
   app: FastifyInstance,
@@ -1597,211 +1558,17 @@ async function attemptMerge(
         // #737 — `mergeable_state: "blocked"` collapses several distinct
         // reasons GitHub won't merge into one state: a required CHECK red
         // or pending, or a required APPROVING REVIEW missing/dismissed.
-        // Before this, every "blocked" PR got the same "Required checks
-        // are red or still pending" message even when the real cause was a
-        // missing review — actively misleading once a repo's branch
-        // protection also requires an approval. `reviewDecision` is
-        // GitHub's own aggregate verdict across all reviews on the PR
-        // (`null` when the repo has no review requirement configured at
-        // all, in which case a required CHECK is the only thing "blocked"
-        // could mean here).
-        const reviewDecision = await getPullRequestReviewDecision(
+        // The arm's own logic — which cause is holding the PR, the
+        // re-assert of a dismissed approval, and (#2971) the coverage
+        // re-upload for a stuck non-Actions status — lives in
+        // `task-merge-blocked.ts`, split out of this file because it is
+        // at its file-size ceiling.
+        await holdBlockedPullRequest(app, task, project, {
+          repoRef,
           token,
-          repoRef.owner,
-          repoRef.repo,
-          task.prNumber,
-        ).catch((err) => {
-          app.log.warn(
-            { err, taskId: task.id, prNumber: task.prNumber },
-            "task reconcile: failed to read the PR's review decision — falling back to the generic 'blocked' message",
-          );
-          return null;
+          prNumber: task.prNumber,
+          headSha: pr.headSha,
         });
-
-        // #737 — re-assert an approval a later Mullion-initiated push may
-        // have dismissed. Deliberately `"REVIEW_REQUIRED"` ONLY, not
-        // `"CHANGES_REQUESTED"` too (Hermes review, PR #827): a `done` task
-        // only ever got there via the bot's own clean-gate or a human
-        // clicking Approve, so a `CHANGES_REQUESTED` decision at THIS point
-        // can only be a review posted AFTER that — either a human on
-        // GitHub, or a later review-agent round the reviewer identity
-        // itself posted. Re-asserting APPROVE over that would silently
-        // override an explicit rejection, exactly the "manufacture an
-        // approval nobody made" failure mode this mechanism must never
-        // become, just with the rejection arriving after approval instead
-        // of before it. `REVIEW_REQUIRED` has no such ambiguity — it means
-        // "no active review objects, but the required-approval count isn't
-        // met," which is what a push-dismissed approval (and nothing else
-        // reachable from this arm) produces.
-        //
-        // `attemptMerge` only ever runs for `status: "done"` tasks
-        // (processMergeRequests' own candidate query, above) — reaching
-        // "done" already means a human clicked Approve or auto-approve's
-        // own `lastReviewVerdict === "clean"` gate fired, so `task.status
-        // === "done"` is trivially true on every call here today. Kept as
-        // an explicit condition anyway (not just a comment) as a guard
-        // against a future refactor calling this function from a context
-        // where that's no longer guaranteed.
-        //
-        // Why this usually can't spin: a successful re-assert flips
-        // `reviewDecision` to `"APPROVED"` and the condition below closes
-        // immediately. It only reopens when something DISMISSES that
-        // approval, which is always a push (`"behind"`'s
-        // `updatePullRequestBranch` above, or an auto-rebase worker's
-        // commits) — so the number of re-asserts this can ever produce is
-        // bounded by the number of pushes to the head branch, not by how
-        // many sweep ticks pass while blocked, PROVIDED the re-assert
-        // actually counts. Hermes review, PR #827 (round 2): that proviso
-        // can fail — the reviewer App's `APPROVE` can succeed at the GitHub
-        // API level without satisfying the branch protection rule at all
-        // (the App isn't an eligible approver — the CODEOWNERS limitation
-        // this feature already documents), in which case `reviewDecision`
-        // NEVER flips to `"APPROVED"` and the argument above breaks: every
-        // backoff tick would re-post an identical `APPROVE` on the same
-        // commit forever, spam bounded by ticks, not pushes. Guarded here
-        // by memoizing the head SHA a re-assert was last attempted for
-        // (`mergeRetryBackoff`, shared with the rest of this task's merge
-        // backoff — same lifecycle, cleared by `clearMergeState`/
-        // `resetMergeBackoff`) and only trying again once `pr.headSha`
-        // actually changes — restoring "bounded by pushes" as a guarantee
-        // rather than an assumption, regardless of whether any given
-        // re-assert counts. (A persistent failure to re-assert — e.g. a
-        // reviewer App that always 422s — still only retries at
-        // `processMergeRequests`' own per-task backoff cadence, same as
-        // every other `attemptMerge` call, not on every tick — that part
-        // of the throttling was never the issue.)
-        const retryState = mergeRetryBackoff.get(task.id);
-        if (
-          reviewDecision === "REVIEW_REQUIRED" &&
-          task.status === "done" &&
-          retryState?.lastReassertedSha !== pr.headSha
-        ) {
-          const reviewerToken = await resolveReviewerToken(app, repoRef);
-          if (reviewerToken) {
-            try {
-              await createPullRequestReview(
-                reviewerToken,
-                repoRef.owner,
-                repoRef.repo,
-                task.prNumber,
-                {
-                  body: "Re-affirming approval: this task's clean review was already approved in Mullion; re-asserting it after a required branch update.",
-                  commitId: pr.headSha,
-                  event: "APPROVE",
-                },
-              );
-              // Record the SHA regardless of whether this ends up
-              // satisfying branch protection — that's precisely the case
-              // this memoization exists to stop from retrying forever.
-              // The attempt count and the timestamp are carried over
-              // unchanged: this memoizes a re-assert, it does not start a
-              // new attempt.
-              mergeRetryBackoff.record(task.id, retryState?.lastAttemptedAt ?? Date.now(), {
-                attempts: retryState?.attempts ?? 1,
-                extra: { lastReassertedSha: pr.headSha },
-              });
-              // Don't record an error — the next sweep tick re-reads
-              // GitHub's fresh mergeable_state instead of retrying a merge
-              // this tick already knows is still blocked on stale data.
-              return;
-            } catch (err) {
-              app.log.warn(
-                { err, taskId: task.id, prNumber: task.prNumber },
-                "task reconcile: failed to re-assert the reviewer App's approval",
-              );
-            }
-          }
-        }
-
-        // D3 — `reviewDecision` (a repo-wide required-approval verdict) has
-        // no opinion on conversation resolution, a SEPARATE, per-thread
-        // branch-protection rule (this repo's own `main` has both enabled).
-        // Before this, a `blocked` PR with no required-approval rule but an
-        // unresolved thread got the same generic "Required checks" message
-        // even with CI green — actively wrong, and exactly what made D1's
-        // deadlock invisible in the logs. Checked whenever `reviewDecision`
-        // ISN'T already a more specific, correct explanation on its own —
-        // that's `CHANGES_REQUESTED`/`REVIEW_REQUIRED`, but NOT `APPROVED`:
-        // independent review, round 3 — a repo requiring both an approval
-        // AND conversation resolution can be `blocked` with the approval
-        // requirement already satisfied (`reviewDecision: "APPROVED"`)
-        // while a stale conversation is the sole remaining cause; treating
-        // `APPROVED` as "already explained" would leave exactly that
-        // combination on the old generic message forever.
-        //
-        // Reading branch protection's own `required_conversation_resolution`
-        // flag directly isn't an option here — that endpoint needs the
-        // `administration` scope, which neither WRITE_PERMISSIONS nor
-        // READ_PERMISSIONS grants — so this
-        // derives the cause from OBSERVED unresolved threads instead, which
-        // is more precise anyway: it answers "is THIS PR actually blocked on
-        // a conversation," not "does the branch require one."
-        let message =
-          reviewDecision === "CHANGES_REQUESTED"
-            ? "Changes were requested on the PR"
-            : reviewDecision === "REVIEW_REQUIRED"
-              ? "Waiting on a required approving review"
-              : "Required checks are red or still pending";
-        let blockedDetail: MergeBlockedThreads | null = null;
-        if (reviewDecision === null || reviewDecision === "APPROVED") {
-          // Self-heals the D1 deadlock — but ONLY when this row's own last
-          // ingested verdict is "clean". Independent review, round 2: an
-          // earlier version of this call fired unconditionally on the
-          // (false) assumption that a `done` task's verdict can never be
-          // "changes-requested." It can: `POST .../approve`
-          // (task-approve.ts) and the closed-issue sync path
-          // (syncClosedIssueToLocal, task-github-sync.ts) both flip
-          // "reviewing" straight to "done" on `canTransition` alone, never
-          // consulting `lastReviewVerdict` — a human (or a closed issue)
-          // can promote a task whose last review genuinely requested
-          // changes. Resolving Mullion's own threads in THAT case would
-          // satisfy `required_conversation_resolution` with zero
-          // corroboration a finding was ever addressed, defeating the
-          // entire point of the gate. Checking the column here is what
-          // keeps this call as safe as its sibling in
-          // processReviewingTasks, which reads the SAME column at the
-          // point of ingestion rather than re-deriving a "must be clean by
-          // now" assumption.
-          //
-          // Reuses the self-heal's own fetch for the diagnostic below
-          // (independent review, round 3) rather than fetching twice in
-          // the same tick — `null` means either self-heal didn't run
-          // (verdict isn't "clean") or it hit its own early-return
-          // (fetch failure/truncation), either way falling through to a
-          // fresh fetch just for the count.
-          const selfHealResult = isApprovingVerdict(task.lastReviewVerdict)
-            ? await resolveMullionOwnThreadsIfClean(app, task, project)
-            : null;
-          try {
-            const threadsResult =
-              selfHealResult ??
-              (await fetchPullRequestReviewThreads(
-                token,
-                repoRef.owner,
-                repoRef.repo,
-                task.prNumber,
-              ));
-            // Only threads Mullion did not open need a human: its own are
-            // resolved above when the verdict allows, or belong to the
-            // review loop.
-            const blocking = await describeBlockingThreads(threadsResult, (viewer) =>
-              resolveMullionReviewLogins(app, repoRef, viewer),
-            );
-            if (blocking) ({ message, detail: blockedDetail } = blocking);
-          } catch (err) {
-            app.log.warn(
-              { err, taskId: task.id, prNumber: task.prNumber },
-              "task reconcile: failed to check for unresolved review conversations — falling back to the generic 'blocked' message",
-            );
-          }
-        }
-        recordMergeError(
-          app,
-          task.id,
-          message,
-          blockedDetail ? "blocked-threads" : undefined,
-          blockedDetail,
-        );
         return;
       }
       case "computing": {

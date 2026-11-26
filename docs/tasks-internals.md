@@ -1995,7 +1995,9 @@ cases.
 **`blocked` isn't one state (`#737`).** GitHub collapses several distinct
 reasons a PR can't merge into this one `mergeable_state` value — a required
 CHECK red or still pending, or a required APPROVING REVIEW missing or
-dismissed. `attemptMerge` reads the PR's aggregate
+dismissed. `attemptMerge`'s `blocked` arm (`task-merge-blocked.ts`, split
+out of `task-reconciler.ts` because that file is at its file-size ceiling)
+reads the PR's aggregate
 `reviewDecision` (`getPullRequestReviewDecision`, `github-write.ts`,
 GraphQL-only — REST has no equivalent) to tell them apart and records a
 `tasks.mergeError` that actually names the cause:
@@ -2010,6 +2012,13 @@ GraphQL-only — REST has no equivalent) to tell them apart and records a
 generic message) and "this repo has no review requirement configured at
 all" — the same generic message is correct either way, since a required
 CHECK is the only thing `blocked` could then mean.
+
+The `APPROVED` / `null` row is also where the coverage stall lands
+(#2971): a stuck non-Actions status that is what is actually holding the
+PR replaces that generic message with one that names the stuck status —
+see "The same recovery on a `blocked` PR" below. The two rows above keep
+their message: a missing approval or a requested change is not a CI
+stall, and saying so is more actionable than naming a check.
 
 **Re-asserting a dismissed approval.** A task only ever reaches `attemptMerge`
 once it's `done` — a human clicked Approve, or auto-approve's own gate
@@ -2258,6 +2267,29 @@ cannot exhaust the cap and park the task with a false "provider stall"; it still
 stamps `coverageReuploadAt`, so the 20-minute spacing holds. A PR that also has a
 red non-required check keeps the red-check message and gets no re-upload — that
 one needs a fix, not a re-run.
+
+**The same recovery on a `blocked` PR (`#2971`).** The `unstable` arm above is
+where a NON-REQUIRED pending check holds a PR. A repository whose branch
+protection REQUIRES the provider's status never reaches that arm: the PR reads
+`mergeable_state: "blocked"` instead, and the `blocked` arm handled the review
+requirements without reading the PR's check runs at all — so the same stuck
+status held such a task indefinitely, with no re-upload, no
+`ci-status-stalled` flag and no message naming the stuck status. The `blocked`
+arm (`task-merge-blocked.ts`) therefore runs the same mechanism, with the
+same budget, spacing, cap, `ci-status-stalled` reason and merge-error text —
+it reads the PR's check runs through the shared `readPrCheckRuns` lookup, so
+"no checks" and "couldn't ask" stay different answers and only a list that was
+actually read can name a stuck status. The two guards are the same ones: every
+Actions check on the head must be completed and green, and the head's own
+workflow runs must all have completed — a status pending because its own
+Actions job is still running is not a provider stall. The `blocked` arm's own
+explanations keep their meaning: a PR blocked on a required approving review,
+on unresolved review conversations, or on a red check keeps the message it
+already had, and the coverage message replaces the generic "Required checks are
+red or still pending" only when a stuck non-Actions status is what is actually
+holding the PR. A review decision that could not be READ is "couldn't ask",
+not "no approval required", so it does not license the coverage message
+either — the next tick reads it again.
 
 **Exception — PR-title lint self-heals (`#1035`).** A failing **PR-title
 lint** check (e.g. `wagoid/commitlint-github-action` on repos that adopted
