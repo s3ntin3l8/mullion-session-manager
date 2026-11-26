@@ -215,15 +215,14 @@ export function DevicePane(props: {
   const deviceStatus = useDashboardStore(
     (s) => s.devices.find((d) => d.id === props.params.deviceId)?.status,
   );
-  // The platform, or null while it is unknown. A loaded row decides (a row
-  // without the field is from a server that predates iOS, so Android); before
-  // the row is in the store the panel's own params do. Never a silent Android
-  // default for a row that simply isn't loaded yet (#3540): an iOS panel would
-  // render the Android toolbar and send it Android key events.
-  const rowPlatform = useDashboardStore((s) => {
-    const row = s.devices.find((d) => d.id === props.params.deviceId);
-    return row ? (row.platform ?? "android") : undefined;
-  });
+  // The platform, or null while it is unknown. A loaded row decides; before
+  // the row is in the store the panel's own params do (a layout saved before
+  // #3540 has none). Never a silent Android default for a row that simply
+  // isn't loaded yet (#3540): an iOS panel would render the Android toolbar
+  // and send it Android key events.
+  const rowPlatform = useDashboardStore(
+    (s) => s.devices.find((d) => d.id === props.params.deviceId)?.platform,
+  );
   const devicePlatform: DevicePlatform | null = rowPlatform ?? props.params.platform ?? null;
   const platformRef = useRef(devicePlatform);
   useEffect(() => {

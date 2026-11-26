@@ -101,6 +101,7 @@ const DEVICE: Device = {
   hostId: "local",
   projectId: null,
   name: "My Pixel",
+  platform: "android",
   kind: "emulator",
   avdName: "pixel_7",
   serial: null,
@@ -1004,7 +1005,7 @@ describe("usePanelOpener — onOpenDevice", () => {
         id: "device-1",
         component: "device",
         title: "My Pixel",
-        params: { deviceId: 1 },
+        params: { deviceId: 1, platform: "android" },
       }),
     );
   });
@@ -1038,7 +1039,7 @@ describe("usePanelOpener — onOpenDevice", () => {
 
     expect(startDevice).toHaveBeenCalledWith(1);
     expect(api.addPanel).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "device-1", params: { deviceId: 1 } }),
+      expect.objectContaining({ id: "device-1", params: { deviceId: 1, platform: "android" } }),
     );
   });
 

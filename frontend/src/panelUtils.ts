@@ -1095,9 +1095,7 @@ export function openDevicePanel(api: DockviewApi, device: Device, layout: Layout
       // The platform rides in the params (and so in the saved layout) so the
       // pane picks the right toolbar and input profile before its row is in
       // the store (#3540) — the devices list only loads while a poller runs.
-      params: device.platform
-        ? { deviceId: device.id, platform: device.platform }
-        : { deviceId: device.id },
+      params: { deviceId: device.id, platform: device.platform },
     },
     layout,
   );

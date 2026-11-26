@@ -11,6 +11,7 @@ function device(id: number): Device {
     hostId: "local",
     projectId: null,
     name: null,
+    platform: "android",
     kind: "physical",
     avdName: null,
     serial: null,

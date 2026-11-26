@@ -117,6 +117,7 @@ function makeDevice(overrides: Partial<Device> = {}): Device {
     hostId: "local",
     projectId: null,
     name: "My Pixel",
+    platform: "android",
     kind: "emulator",
     avdName: "pixel_7",
     serial: null,
@@ -960,19 +961,6 @@ describe("DevicePane (issue #1326)", () => {
   });
 
   describe("iOS input profile and platform-aware toolbar", () => {
-    it("renders the Android toolbar when platform is missing", () => {
-      const device = makeDevice();
-      delete (device as Partial<Device>).platform;
-      resetStore({ devices: [device], devicesLoaded: true });
-      render(<DevicePane params={{ deviceId: 7 }} />);
-
-      expect(screen.getByRole("toolbar", { name: "Android device controls" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Recent apps" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Rotate device" })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Lock" })).not.toBeInTheDocument();
-    });
-
     it("renders the iOS toolbar and sends button messages for Home and Lock", () => {
       localStorage.removeItem("crs.deviceFrame");
       resetStore({

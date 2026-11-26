@@ -21,6 +21,7 @@ const device = (over: Partial<Device>): Device => ({
   hostId: "local",
   projectId: null,
   name: "Dev",
+  platform: "android",
   kind: "emulator",
   avdName: "pixel_7",
   serial: null,
