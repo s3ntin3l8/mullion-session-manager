@@ -296,13 +296,14 @@ export async function holdBlockedPullRequest(
   // a message naming a stuck status would hide. That is a transient answer —
   // the next tick reads the decision again.
   //
-  // The message text itself is #2904's, reused verbatim: it names the stuck
-  // status, says how long it has been pending and says what a human can do
-  // about it. It calls the status a "non-required check", which is what it
-  // is in the `unstable` arm; here the status may be a REQUIRED one (that is
-  // why the PR reads `blocked`), and Mullion cannot tell — branch protection
-  // is not readable with the scopes this App holds — so it says neither way
-  // beyond what it can see.
+  // The message text itself is #2904's, reused apart from how it names the
+  // check: it says how long the status has been pending and what a human can
+  // do about it. #2904's arm calls the status a "non-required check", which
+  // is what it is there — but HERE it may be a REQUIRED one (that is why the
+  // PR reads `blocked` at all), and Mullion cannot tell: branch protection is
+  // not readable with the scopes this App holds. So this arm asks for the
+  // neutral "the check" instead of asserting the opposite of what the state
+  // proves.
   let needsHumanReason: MergeNeedsHumanReason | undefined = blockedDetail
     ? "blocked-threads"
     : undefined;
@@ -321,6 +322,9 @@ export async function holdBlockedPullRequest(
       // the `unstable` arm makes.
       skip: runs.some((c) => isRedCheckConclusion(c.conclusion)),
       fallbackMessage: message,
+      // Neutral on purpose: this status may be the REQUIRED one holding the
+      // PR, and Mullion cannot read branch protection to tell.
+      statusNoun: "the check",
     });
     message = coverage.message;
     needsHumanReason = coverage.reason ?? needsHumanReason;

@@ -1558,9 +1558,10 @@ fails fast and locally with `GitHubRateLimitError`, without spending a
 request (or its 5s timeout) proving what the budget already knows.
 
 **This is enforced at the transport, not threaded into
-task-reconciler.ts's independent backoff ledgers**
-(`draftPrRetryBackoff`/`mergeRetryBackoff`/`releaseRetryBackoff`/
-`autoApproveRetryBackoff`). Those ledgers record an attempt optimistically,
+the sweeps' independent backoff ledgers** (`draftPrRetryBackoff`/
+`releaseRetryBackoff`/`autoApproveRetryBackoff` in `task-reconciler.ts`,
+`mergeRetryBackoff` in `task-merge-backoff.ts`). Those ledgers record an
+attempt optimistically,
 before the network call even happens —
 there's no single catch site to hook a server-provided resume time into
 without a deeper refactor of the discriminated-result types the sweeps
@@ -2007,18 +2008,23 @@ GraphQL-only — REST has no equivalent) to tell them apart and records a
 | `CHANGES_REQUESTED` | "Changes were requested on the PR"                     |
 | `REVIEW_REQUIRED`   | "Waiting on a required approving review"               |
 | `APPROVED` / `null` | "Required checks are red or still pending" (unchanged) |
+| `undefined`         | "Required checks are red or still pending" (unchanged) |
 
-`null` covers both "the read itself failed" (logged, falls back to the
-generic message) and "this repo has no review requirement configured at
-all" — the same generic message is correct either way, since a required
-CHECK is the only thing `blocked` could then mean.
+`null` means "asked, and this repo has no review requirement configured at
+all" — the same generic message is correct then, since a required CHECK is
+the only thing `blocked` could mean. A read that FAILED is a different
+answer again: the decision is `undefined` ("couldn't ask"), and the generic
+message stands too — but the coverage hold below is skipped, because a
+required APPROVAL may still be what holds the PR and a message naming a
+stuck status would hide that. The next tick reads the decision again.
 
 The `APPROVED` / `null` row is also where the coverage stall lands
 (#2971): a stuck non-Actions status that is what is actually holding the
 PR replaces that generic message with one that names the stuck status —
-see "The same recovery on a `blocked` PR" below. The two rows above keep
-their message: a missing approval or a requested change is not a CI
-stall, and saying so is more actionable than naming a check.
+see "The same recovery on a `blocked` PR" below. The `CHANGES_REQUESTED`
+and `REVIEW_REQUIRED` rows keep their message: a missing approval or a
+requested change is not a CI stall, and saying so is more actionable than
+naming a check.
 
 **Re-asserting a dismissed approval.** A task only ever reaches `attemptMerge`
 once it's `done` — a human clicked Approve, or auto-approve's own gate
@@ -2276,7 +2282,10 @@ requirements without reading the PR's check runs at all — so the same stuck
 status held such a task indefinitely, with no re-upload, no
 `ci-status-stalled` flag and no message naming the stuck status. The `blocked`
 arm (`task-merge-blocked.ts`) therefore runs the same mechanism, with the
-same budget, spacing, cap, `ci-status-stalled` reason and merge-error text —
+same budget, spacing, cap and `ci-status-stalled` reason, and the same
+merge-error text apart from how it names the check — here "the check", not
+"the non-required check": a status that holds a PR at `blocked` is normally a
+REQUIRED one, and Mullion cannot read branch protection to tell which it is —
 it reads the PR's check runs through the shared `readPrCheckRuns` lookup, so
 "no checks" and "couldn't ask" stay different answers and only a list that was
 actually read can name a stuck status. The two guards are the same ones: every

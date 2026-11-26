@@ -507,7 +507,7 @@ This posts while the PR is still in Task Master's draft state — confirmed
 the _latest_ review per reviewer: a reviewer App's fresh `APPROVE` supersedes
 its own earlier `REQUEST_CHANGES` on the same PR without needing dismissal
 or an admin grant. `attemptMerge`'s `"blocked"` handling
-(`src/services/task-reconciler.ts`) uses this — when a later Mullion-pushed
+(`src/services/task-merge-blocked.ts`) uses this — when a later Mullion-pushed
 update (an auto-rebase, a "branch is behind" update) dismisses an
 already-counted approval (also confirmed directly: the dismissed review
 object flips to GitHub's own `DISMISSED` state), it re-asserts a fresh

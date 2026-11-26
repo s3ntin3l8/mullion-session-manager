@@ -1541,6 +1541,9 @@ async function attemptMerge(
           fallbackMessage: checkRuns.ok
             ? heldReason
             : `${heldReason} The check list could not be read, so the title-lint self-heal did not run — use "Merge now" to override, or wait for the lookup to answer.`,
+          // This arm holds the PR because a NON-REQUIRED check is pending —
+          // that is what `unstable` means, so the status can be named.
+          statusNoun: "the non-required check",
         });
         recordMergeError(app, task.id, coverage.message, coverage.reason);
         return;

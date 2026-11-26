@@ -306,6 +306,11 @@ describe("#2971 — a stuck non-Actions status on a blocked PR", () => {
     // checks" one.
     expect(row.mergeError).toContain("codecov/patch");
     expect(row.mergeError).not.toBe("Required checks are red or still pending");
+    // Neutral noun: on a `blocked` PR the status may be the REQUIRED one
+    // holding the PR, so it must not be called "non-required" the way the
+    // `unstable` arm's message calls it.
+    expect(row.mergeError).toContain('the check "codecov/patch"');
+    expect(row.mergeError).not.toContain("non-required check");
     await app.close();
   });
 
@@ -406,6 +411,34 @@ describe("#2971 — a stuck non-Actions status on a blocked PR", () => {
     expect(mockRerunJob).not.toHaveBeenCalled();
     const row = getTask(app, id);
     expect(row.coverageReuploadCount).toBe(0);
+    expect(row.mergeError).toBe("Required checks are red or still pending");
+    await app.close();
+  });
+
+  it("keeps the generic message and re-runs nothing when a check on the head is red", async () => {
+    const app = await buildApp();
+    const id = await createTask(app);
+    // A red check needs a fix, not a coverage re-upload — the same skip the
+    // `unstable` arm makes. The status is stuck too, but the PR is held by
+    // something a re-run of the upload cannot fix.
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      {
+        name: "test-node / test-merge",
+        conclusion: "failure",
+        status: "completed",
+        app: "github-actions",
+        startedAt: minutesAgo(45),
+        url: runUrl(4242),
+      },
+      pendingCodecovCheck(),
+    ]);
+
+    await reconcileTasks(app);
+
+    expect(mockRerunJob).not.toHaveBeenCalled();
+    const row = getTask(app, id);
+    expect(row.coverageReuploadCount).toBe(0);
+    // The blocked arm's own message stands: the PR is blocked on a red check.
     expect(row.mergeError).toBe("Required checks are red or still pending");
     await app.close();
   });
