@@ -115,6 +115,93 @@ describe("PtyManager", () => {
         expect(session.toInfo().attention).toBe(false);
       });
 
+      // The handlers used to stamp `permissionAt` with a fresh Date.now()
+      // instead of emitHookEvent's `now`, so the sweep above flaked whenever
+      // CI's clock moved >1ms between the two reads. Pinning `now` well in
+      // the past makes that drift deterministic.
+      it("stamps latches with emitHookEvent's pinned now, not a fresh Date.now()", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent({ kind: "permission_request", tool: "Bash", summary: "ls" }, now);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().permissionState).toBe("idle");
+      });
+
+      // Hermes review, PR #3528 — the busy tier's backgroundTasksAt is stamped
+      // by the tracker's setBackgroundTasks, reached through the facade.
+      it("stamps backgroundTasksAt with emitHookEvent's pinned now, too", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent(
+          {
+            kind: "progress",
+            phase: "done",
+            backgroundTasks: [
+              { id: "t1", type: "subagent", status: "running", description: "Explore agent" },
+            ],
+          },
+          now,
+        );
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().outstandingBackgroundTasks).toHaveLength(0);
+      });
+
+      // Hermes review round 2, PR #3528 — the blocked tier's gate latch.
+      it("stamps gateAt with emitHookEvent's pinned now, and sweeps it on that clock", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent({ kind: "review_gate", state: "waiting", prompt: "ok?" }, now);
+        expect(session.toInfo().gateAt).toBe(now);
+
+        expect(session.clearStaleBlockedIfOlderThan(600_000, 600_000, now + 600_001)).toBe(true);
+        expect(session.toInfo().gateState).toBe("idle");
+      });
+
+      // Hermes review round 3, PR #3528 — the deferred turn-end ping's settle
+      // window (resolveDeferredTurnEnd -> agentIdle) runs on the same clock.
+      it("settles the deferred agentIdle ping on emitHookEvent's pinned now", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent({ kind: "progress", phase: "done" }, now);
+        session.tick(now + 3_000);
+
+        expect(session.toInfo().attention).toBe(true);
+      });
+
       it("fix: sticky needs_input (D4) — the stale sweep does NOT drop a hookNotification-confirmed flag with no dedicated latch behind it (deliberately left to keystroke/notification_resolved only)", async () => {
         const session = manager.getOrCreate({
           id: "1",

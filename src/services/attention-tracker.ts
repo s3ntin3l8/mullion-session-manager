@@ -252,12 +252,10 @@ export class AttentionTracker {
    * produce zero events at all rather than a race between "confirm" and
    * "clear".
    */
-  clearIfConfirmedKind(kind: AttentionSignalKind): void {
+  clearIfConfirmedKind(kind: AttentionSignalKind, now: number = Date.now()): void {
     this.cancelDeferred(kind);
     if (this.state.state === "attention" && this.state.confirmedKind === kind) {
-      this.applyAttentionTransition(
-        advanceAttention(this.state, { type: "userInput", now: Date.now() }),
-      );
+      this.applyAttentionTransition(advanceAttention(this.state, { type: "userInput", now }));
     }
   }
 
@@ -295,11 +293,9 @@ export class AttentionTracker {
    * was still settling; none of it is worth surfacing once the user has
    * already moved the session forward themselves.
    */
-  clearAttention(): void {
+  clearAttention(now: number = Date.now()): void {
     this.deferred.clear();
-    this.applyAttentionTransition(
-      advanceAttention(this.state, { type: "userInput", now: Date.now() }),
-    );
+    this.applyAttentionTransition(advanceAttention(this.state, { type: "userInput", now }));
   }
 
   /**
@@ -395,11 +391,12 @@ export class AttentionTracker {
       | "apiError"
     >,
     extras: Record<string, unknown>,
+    now: number = Date.now(),
   ): void {
     const transition = advanceAttention(this.state, {
       type: "signal",
       kind,
-      now: Date.now(),
+      now,
     });
     this.state = transition.next;
     this.host.emitEvent("attention", { attention: true, signal: kind, ...extras });
@@ -491,9 +488,9 @@ export class AttentionTracker {
    * re-stamp-on-every-start (not just the initial idle -> busy transition)
    * precedent — the staleness sweep's silence window should reset on each
    * fresh report, not just the first. */
-  setBackgroundTasks(tasks: BackgroundTask[]): void {
+  setBackgroundTasks(tasks: BackgroundTask[], now: number = Date.now()): void {
     this.backgroundTasks = tasks;
-    this.backgroundTasksAt = filterOutstandingBackgroundTasks(tasks).length > 0 ? Date.now() : null;
+    this.backgroundTasksAt = filterOutstandingBackgroundTasks(tasks).length > 0 ? now : null;
   }
 
   /** Issue #428 — fires the deferred "turn really is over" attention ping.
@@ -521,12 +518,12 @@ export class AttentionTracker {
    * cancel (every `done` message unconditionally resets it before calling
    * back in here, regardless of whether the PRIOR latch's ping fired,
    * settled, or was cancelled). */
-  resolveDeferredTurnEnd(): void {
+  resolveDeferredTurnEnd(now: number = Date.now()): void {
     if (this.lastTurnEndedAt === null) return;
     if (this.turnEndPingSent) return;
     if (filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0) return;
     this.turnEndPingSent = true;
-    this.emitAttentionSignalDeferred("agentIdle", {});
+    this.emitAttentionSignalDeferred("agentIdle", {}, [], now);
   }
 
   /** Drops every pending deferred emit with no attempt to emit anything —
