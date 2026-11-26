@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,7 +6,12 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import type { FastifyInstance } from "fastify";
-import { recheckAdoptedHookTokensForApp } from "../../src/plugins/pty.js";
+import type { Session } from "../../src/services/pty-manager.js";
+import type { ScopeLiveness } from "../../src/services/scope/types.js";
+import {
+  HOOK_TOKEN_RECHECK_INTERVAL_MS,
+  recheckAdoptedHookTokensForApp,
+} from "../../src/plugins/pty.js";
 
 // Issue #3206 — an ADOPTED hook token must stop resolving once its scope
 // dies.
@@ -93,6 +98,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const { buildTestApp } = await import("../helpers/app.js");
+// The app module is imported OUTSIDE every test body on purpose: importing
+// it pulls in the whole server (playwright, the DB layer, ...), which costs
+// several seconds — more than the 20s per-test timeout allows once a test
+// body also has to build an app and wait for the boot sweep.
+const { buildApp } = await import("../../src/app.js");
 const { deriveInstanceId } = await import("../../src/services/session-process.js");
 
 /** A well-formed hook token: 48 lowercase hex characters (hook-token.ts's
@@ -106,6 +116,13 @@ const LIVE_TOKEN = "a1".repeat(24);
  * is the marker that tells a test "the sweep's verdict is in".
  */
 const SWEEP_FINISHED = "boot sweep of surviving hook tokens finished";
+
+/**
+ * The re-check's own log line (src/plugins/pty.ts): it fires once the
+ * re-check FORGOT at least one token, so it is the marker that tells a test
+ * "the re-check's verdict is in".
+ */
+const FORGOT_TOKENS = "forgot the hook tokens of adopted sessions whose scope died";
 
 /** Connects a raw net socket to `path`, resolving once actually connected. */
 function connect(socketPath: string): Promise<net.Socket> {
@@ -139,6 +156,31 @@ function waitForLine(socket: net.Socket): Promise<string> {
       if (newlineIndex !== -1) resolve(buffer.slice(0, newlineIndex));
     });
   });
+}
+
+/**
+ * The handshake is ACCEPTED: the server answers the `session_start` line on
+ * the SAME connection (only an accepted handshake gets a reply), so this is
+ * the proof that the handshake was not merely "not closed yet".
+ */
+async function expectHandshakeAccepted(app: FastifyInstance): Promise<void> {
+  const socket = await connect(app.pty.hookSocketPath);
+  socket.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
+  socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+  const line = await waitForLine(socket);
+  expect(JSON.parse(line)).toHaveProperty("additionalContext");
+  socket.destroy();
+}
+
+/**
+ * The handshake is REFUSED: the server closes the connection without a
+ * reply.
+ */
+async function expectHandshakeRefused(app: FastifyInstance): Promise<void> {
+  const socket = await connect(app.pty.hookSocketPath);
+  socket.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
+  await waitForClose(socket);
+  expect(socket.destroyed).toBe(true);
 }
 
 describe("an adopted hook token stops resolving once its scope dies (issue #3206)", () => {
@@ -178,14 +220,15 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
   }
 
   /**
-   * Builds the agent-role app and waits for the boot sweep to finish.
+   * Awaits the app's readiness and the boot sweep that follows it.
    *
    * The sweep is fire-and-forget inside the onReady hook (the same posture
    * the primary's own adoption uses), so "the sweep is done" is observed
-   * through the log line it always ends with — never by a sleep.
+   * through the log line it always ends with — never by a sleep. The log
+   * spy has to be installed BEFORE `ready()`, or the sweep's own line could
+   * land before anyone is listening for it.
    */
-  async function bootAgent(): Promise<FastifyInstance> {
-    const app = await buildTestApp();
+  async function readyAndAwaitSweep(app: FastifyInstance): Promise<void> {
     const logs = vi.spyOn(app.log, "info");
     await app.ready();
     await vi.waitFor(
@@ -195,6 +238,19 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
       },
       { timeout: 10_000, interval: 20 },
     );
+  }
+
+  /**
+   * Builds the agent-role app and waits for the boot sweep to finish.
+   *
+   * `buildTestApp()` closes the app again when the test ends (its own
+   * `onTestFinished` hook), so the app's re-check timer cannot outlive the
+   * test that armed it — the timer is cleared by the app's own `onClose`
+   * hook.
+   */
+  async function bootAgent(): Promise<FastifyInstance> {
+    const app = await buildTestApp();
+    await readyAndAwaitSweep(app);
     return app;
   }
 
@@ -232,14 +288,6 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     await expireListingCache();
   }
 
-  beforeAll(async () => {
-    // Warm the app module OUTSIDE a test body: importing it pulls in the
-    // whole server (playwright, the DB layer, ...), which costs several
-    // seconds — more than the 20s per-test timeout allows once a test body
-    // also has to build an app and wait for the boot sweep.
-    await import("../../src/app.js");
-  });
-
   beforeEach(async () => {
     // Reset BEFORE the fixture fills the listing in — the fixture's own
     // listing is what the scope backend reads.
@@ -270,38 +318,21 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
   it("accepts the adopted token while the scope is alive", async () => {
     const app = await bootAgent();
 
-    const socket = await connect(app.pty.hookSocketPath);
-    socket.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
-    // A message on the SAME connection: only an accepted handshake gets a
-    // reply (the `session_start` answer), so this is the proof that the
-    // handshake was not merely "not closed yet".
-    socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
-
-    const line = await waitForLine(socket);
-    expect(JSON.parse(line)).toHaveProperty("additionalContext");
-    socket.destroy();
+    await expectHandshakeAccepted(app);
   });
 
   it("refuses the adopted token once the scope is confirmed dead", async () => {
     const app = await bootAgent();
 
     // Alive at boot: the token resolves.
-    const alive = await connect(app.pty.hookSocketPath);
-    alive.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
-    alive.write(`${JSON.stringify({ kind: "session_start" })}\n`);
-    expect(JSON.parse(await waitForLine(alive))).toHaveProperty("additionalContext");
-    alive.destroy();
+    await expectHandshakeAccepted(app);
 
     await killScope();
 
     const result = await recheck(app);
     expect(result.forgotten).toContain("1");
 
-    const socket = await connect(app.pty.hookSocketPath);
-    socket.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
-
-    await waitForClose(socket);
-    expect(socket.destroyed).toBe(true);
+    await expectHandshakeRefused(app);
   });
 
   it("keeps the adopted token accepted while the scope's liveness is unknown", async () => {
@@ -317,13 +348,7 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     expect(result.forgotten).not.toContain("1");
     expect(result.retained).toContain("1");
 
-    const socket = await connect(app.pty.hookSocketPath);
-    socket.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
-    socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
-
-    const line = await waitForLine(socket);
-    expect(JSON.parse(line)).toHaveProperty("additionalContext");
-    socket.destroy();
+    await expectHandshakeAccepted(app);
   });
 
   it("keeps every token when the re-check itself fails", async () => {
@@ -339,14 +364,10 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     spy.mockRestore();
 
     expect(result.forgotten).toEqual([]);
+    // The failed tick kept every adopted token registered.
+    expect(result.retained).toContain("1");
 
-    const socket = await connect(app.pty.hookSocketPath);
-    socket.write(`${JSON.stringify({ token: LIVE_TOKEN })}\n`);
-    socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
-
-    const line = await waitForLine(socket);
-    expect(JSON.parse(line)).toHaveProperty("additionalContext");
-    socket.destroy();
+    await expectHandshakeAccepted(app);
   });
 
   it("never stops, terminates or respawns a scope while re-checking", async () => {
@@ -363,6 +384,83 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     for (const spawn of childState.spawns) {
       expect(spawn).not.toMatch(/\bstop\b/);
       expect(spawn).not.toContain("systemd-run");
+    }
+  });
+
+  it("keeps the token of an id this process now tracks itself", async () => {
+    const app = await bootAgent();
+
+    // The user re-opens the adopted session: the manager rebuilds the
+    // `Session`, registers the token itself (the token FILE is reused
+    // verbatim, so it is the very token the adoption registered) and spawns
+    // a fresh scope. The scope listing still answers "dead" for the scope
+    // that is coming back — it is cached for a few hundred milliseconds and
+    // the new scope is not in it yet — so a re-check tick landing in that
+    // window sees "dead" for a session that is ALIVE.
+    //
+    // The tracked state flips WHILE the liveness answer is in flight: the
+    // exact shape of that window.
+    let tracked = false;
+    vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(
+      async (ids: string[]): Promise<Record<string, ScopeLiveness>> => {
+        tracked = true;
+        return Object.fromEntries(ids.map((id) => [id, "dead" as const]));
+      },
+    );
+    vi.spyOn(app.pty, "get").mockImplementation((id: string) =>
+      tracked && id === "1" ? ({} as Session) : undefined,
+    );
+
+    const result = await recheck(app);
+
+    // The tracked session's token is NOT forgotten: it belongs to the
+    // manager now, and the manager's own kill() path is what drops it.
+    expect(result.forgotten).not.toContain("1");
+    expect(result.retained).toContain("1");
+
+    // And it still resolves: the live session's hook handshakes are
+    // accepted, exactly as they were before the re-check ran.
+    await expectHandshakeAccepted(app);
+  });
+
+  it("re-checks the adopted scopes on its own timer, and stops the timer when the app closes", async () => {
+    // Only the interval timers are faked: the re-check's cadence is what
+    // this test drives, while everything else (the scope listing's cache
+    // TTL, the app's own boot) keeps running on real time.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    // NOT the shared `buildTestApp()` helper: this test closes the app
+    // itself, and the helper closes it a second time from its own
+    // `onTestFinished` hook.
+    let app: FastifyInstance | null = null;
+    let closed = false;
+    try {
+      app = await buildApp();
+      await readyAndAwaitSweep(app);
+      const logs = vi.spyOn(app.log, "info");
+
+      await killScope();
+
+      // The tick fires on its own: the re-check runs, the dead scope's
+      // token is forgotten, and the handshake is refused from then on.
+      await vi.advanceTimersByTimeAsync(HOOK_TOKEN_RECHECK_INTERVAL_MS);
+      await vi.waitFor(
+        () => {
+          const logged = logs.mock.calls.some((call) => call.some((arg) => arg === FORGOT_TOKENS));
+          expect(logged).toBe(true);
+        },
+        { timeout: 10_000, interval: 20 },
+      );
+      await expectHandshakeRefused(app);
+
+      // The app's close clears the timer: no further tick runs.
+      const liveness = vi.spyOn(app.pty, "isMasterAliveStateBatch");
+      await app.close();
+      closed = true;
+      await vi.advanceTimersByTimeAsync(HOOK_TOKEN_RECHECK_INTERVAL_MS * 2);
+      expect(liveness).not.toHaveBeenCalled();
+    } finally {
+      if (!closed) await app?.close();
+      vi.useRealTimers();
     }
   });
 });

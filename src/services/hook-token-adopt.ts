@@ -102,7 +102,10 @@ const TOKEN_SUFFIX = ".token";
  *
  * Only ids this process ADOPTED are in here. A session this process tracks
  * has a `Session` object carrying its token, and the manager's own `kill()`
- * path drops that one — see hook-token-registry.ts's `forgetHookToken`.
+ * path drops that one — see hook-token-registry.ts's `forgetHookToken`. An
+ * adopted id that LATER becomes tracked leaves this bookkeeping on the next
+ * re-check (without its token being dropped) — see
+ * `RecheckAdoptedHookTokensOptions.isTracked`.
  */
 const adoptedTokens = new Map<string, string>();
 
@@ -263,6 +266,24 @@ export interface RecheckAdoptedHookTokensOptions {
    * same socket.
    */
   isAliveBatch: (ids: string[]) => Promise<Record<string, ScopeLiveness>>;
+  /**
+   * Whether THIS PROCESS tracks `id` right now — i.e. whether the manager
+   * holds a `Session` object for it.
+   *
+   * An id that BECAME tracked after the boot sweep is not ours to forget:
+   * the manager rebuilt the session, registered the token itself (the token
+   * FILE is reused verbatim, so it is the very same token the adoption
+   * registered), and its own `kill()` path is what drops that token. A
+   * re-check that forgot it here would unregister a LIVE session's token —
+   * and a re-check tick can land inside the re-spawn window, where the
+   * scope listing still answers "dead" for the scope that is being brought
+   * back. So a tracked id leaves the bookkeeping here WITHOUT its token
+   * being dropped.
+   *
+   * Optional: a caller that cannot tell keeps the older behaviour (the id
+   * is treated as adopted). The agent boot path DOES pass it.
+   */
+  isTracked?: (id: string) => boolean;
 }
 
 export interface RecheckAdoptedHookTokensResult {
@@ -270,9 +291,23 @@ export interface RecheckAdoptedHookTokensResult {
   forgotten: string[];
   /**
    * The adopted ids whose token is STILL resolvable — either their scope is
-   * alive, or its liveness could not be confirmed ("unknown").
+   * alive, or its liveness could not be confirmed ("unknown"), or this
+   * process has since started TRACKING the session itself (the manager
+   * owns that token now).
    */
   retained: string[];
+}
+
+/**
+ * The ids this process ADOPTED at boot and has not dropped yet — the
+ * bookkeeping `recheckAdoptedHookTokens` works on.
+ *
+ * Exported for the caller that has to report the outcome of a FAILED
+ * re-check: nothing was forgotten, so every one of these ids still has its
+ * token registered.
+ */
+export function adoptedHookTokenIds(): string[] {
+  return [...adoptedTokens.keys()];
 }
 
 /**
@@ -299,6 +334,14 @@ export interface RecheckAdoptedHookTokensResult {
  * the scope's socket path, never by unit name (see
  * `ScopeBackend.isAliveBatch` and the ownership rules in
  * src/services/session-process.ts).
+ *
+ * **It never forgets a token this process TRACKS.** An adopted id can
+ * become a tracked session later (the user re-opens it: the manager rebuilds
+ * the `Session`, registers the token itself and spawns a fresh scope). From
+ * that moment the manager's own `kill()` path owns the token, and the
+ * re-check must keep its hands off it — including in the re-spawn window,
+ * where the scope listing still answers "dead" for the scope that is coming
+ * back. See `RecheckAdoptedHookTokensOptions.isTracked`.
  */
 export async function recheckAdoptedHookTokens(
   opts: RecheckAdoptedHookTokensOptions,
@@ -311,6 +354,17 @@ export async function recheckAdoptedHookTokens(
   const liveness = await opts.isAliveBatch(ids);
 
   for (const id of ids) {
+    // An id THIS PROCESS TRACKS is the manager's business now, not ours:
+    // it registered the token itself when it rebuilt the session, and its
+    // `kill()` path is what drops that token. Forgetting it here would
+    // unregister a LIVE session's token — and the check happens AFTER the
+    // liveness answer came back, so it also covers an id that became
+    // tracked WHILE the answer was in flight (the re-spawn window).
+    if (opts.isTracked?.(id)) {
+      adoptedTokens.delete(id);
+      result.retained.push(id);
+      continue;
+    }
     // Only "dead" drops a token. Anything else — "alive", "unknown", or a
     // missing key from a backend that broke its own TOTAL contract — keeps
     // it registered.

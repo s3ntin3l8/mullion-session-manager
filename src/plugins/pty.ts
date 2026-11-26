@@ -27,6 +27,7 @@ import { prunePortPreviews } from "../services/browser-destinations.js";
 import { adoptActiveTaskSessions } from "../services/session-adopt.js";
 import {
   adoptSurvivingHookTokens,
+  adoptedHookTokenIds,
   recheckAdoptedHookTokens,
   type RecheckAdoptedHookTokensResult,
 } from "../services/hook-token-adopt.js";
@@ -132,7 +133,10 @@ const DEV_SERVER_DETECT_INTERVAL_MS = 10_000;
 // `reconcileIntervalSeconds`), so the extra `systemctl --user list-units`
 // spawn per tick is no heavier than the sweep the primary already does on the
 // same cadence.
-const HOOK_TOKEN_RECHECK_INTERVAL_MS = 30_000;
+//
+// Exported so the test that drives the tick does not hard-code the number
+// (the cadence IS the behaviour under test).
+export const HOOK_TOKEN_RECHECK_INTERVAL_MS = 30_000;
 
 // Issue #404 — the DB-side half of the plain-session dev-server-detection
 // feature: finds every session eligible for a rescan (a terminal or a dock
@@ -554,6 +558,13 @@ export async function recheckAdoptedHookTokensForApp(
   try {
     const result = await recheckAdoptedHookTokens({
       isAliveBatch: (ids) => app.pty.isMasterAliveStateBatch(ids),
+      // An id this process TRACKS is the manager's own: it registered the
+      // token itself when it rebuilt the session, and its `kill()` path is
+      // what drops that token. The re-check must keep its hands off it —
+      // a tick that lands inside a re-spawn window would otherwise
+      // unregister a LIVE session's token (the scope listing still answers
+      // "dead" for the scope that is coming back).
+      isTracked: (id) => app.pty.get(id) !== undefined,
     });
     if (result.forgotten.length > 0) {
       // Session ids only — never a token value (see the service's own doc
@@ -566,7 +577,9 @@ export async function recheckAdoptedHookTokensForApp(
     return result;
   } catch (err) {
     app.log.error({ err }, "re-check of adopted hook tokens failed");
-    return { forgotten: [], retained: [] };
+    // A failed re-check is a LOST TICK, not a broken state: nothing was
+    // forgotten, so every adopted id still has its token registered.
+    return { forgotten: [], retained: adoptedHookTokenIds() };
   }
 }
 
