@@ -40,6 +40,7 @@ import {
   collectSourceFiles,
   countFileLines,
   countSourceFiles,
+  deriveBaselineCounts,
   histogram,
   summariseByArea,
 } from "../../scripts/lib/audit-loc-core.mjs";
@@ -239,6 +240,30 @@ describe("audit-loc-core: the file map", () => {
       { label: "250-499", files: 2 },
     ]);
   });
+
+  it("derives production/test/tooling counts from baseline entries", () => {
+    expect(deriveBaselineCounts({})).toEqual({
+      production: 0,
+      test: 0,
+      tooling: 0,
+      total: 0,
+    });
+    expect(
+      deriveBaselineCounts({
+        "src/routes/projects.ts": 1403,
+        "frontend/src/TerminalPane.tsx": 996,
+        "test/routes/projects.test.ts": 2838,
+        "frontend/src/Sidebar.test.tsx": 1415,
+        "frontend/src/panelUtils.test.ts": 2531,
+        "scripts/audit-loc.mjs": 1300,
+      }),
+    ).toEqual({
+      production: 2,
+      test: 3,
+      tooling: 1,
+      total: 6,
+    });
+  });
 });
 
 describe("check-max-file-lines.mjs", () => {
@@ -415,6 +440,21 @@ describe("check-max-file-lines.mjs", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("src/deleted.ts");
   });
+
+  it("derives counts from entries even when a stale counts block disagrees", async () => {
+    writeCodeLines("src/huge.ts", LIMIT + 500);
+    fs.writeFileSync(
+      baselinePath,
+      JSON.stringify({
+        limit: LIMIT,
+        counts: { production: 9, test: 9, tooling: 9, total: 27 },
+        files: { "src/huge.ts": LIMIT + 500 },
+      }),
+    );
+    const result = await runCheck();
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("1 production, 0 test, 0 tooling");
+  });
 });
 
 describe("check-max-file-lines.mjs: the repository's own baseline", () => {
@@ -457,40 +497,31 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
   // baseline at all, which is the opposite of what a guard should do.
   //
   // What must hold is that the baseline is a well-formed RECORD: it names
-  // the giants, its counts block agrees with its entries, and every entry is
-  // a path the guard actually scans. What it must NOT hold is that the
-  // snapshot still matches the tree — the guard's judgement comes from the
-  // reference commit, not from these numbers.
+  // the giants, carries no hand-maintained counts block that could drift
+  // across merges (the split is derived from the entries at read time), and
+  // every entry is a path the guard actually scans. What it must NOT hold is
+  // that the snapshot still matches the tree — the guard's judgement comes
+  // from the reference commit, not from these numbers.
   it("is a well-formed record of the files it names", () => {
     const baseline = JSON.parse(fs.readFileSync(BASELINE, "utf8")) as {
       limit: number;
-      counts: { production: number; test: number; tooling: number; total: number };
       files: Record<string, number>;
     };
+    expect(baseline).not.toHaveProperty("counts");
+
     const names = Object.keys(baseline.files);
-    expect(names.length).toBe(baseline.counts.total);
-    expect(baseline.counts.production + baseline.counts.test + baseline.counts.tooling).toBe(
-      baseline.counts.total,
-    );
+    const counts = deriveBaselineCounts(baseline.files);
+    expect(counts.total).toBe(names.length);
+    expect(counts.production + counts.test + counts.tooling).toBe(counts.total);
+    expect(counts.production).toBeGreaterThan(0);
+    expect(counts.test).toBeGreaterThan(0);
+
     for (const file of names) {
       // Every entry names a source file the guard scans, under one of the
       // audited roots.
       expect(AUDIT_ROOTS.some((root) => file.startsWith(`${root}/`))).toBe(true);
       expect(SOURCE_EXTENSIONS.has(path.extname(file))).toBe(true);
     }
-
-    // And the split itself, classified the way the audit classifies it — so
-    // the counts the report quotes are pinned, and a block claiming "57
-    // production, 0 test" cannot pass.
-    const split = { production: 0, test: 0, tooling: 0 };
-    for (const file of names) {
-      if (file.startsWith("test/") || /\.test\.tsx?$/.test(file)) split.test += 1;
-      else if (file.startsWith("scripts/")) split.tooling += 1;
-      else split.production += 1;
-    }
-    expect(split.production).toBe(baseline.counts.production);
-    expect(split.test).toBe(baseline.counts.test);
-    expect(split.tooling).toBe(baseline.counts.tooling);
   });
 
   it("names the commit its sizes were measured from", () => {

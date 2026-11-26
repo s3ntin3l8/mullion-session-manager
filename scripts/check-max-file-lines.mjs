@@ -93,7 +93,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
-import { AUDIT_ROOTS, countFileLines, countSourceFiles } from "./lib/audit-loc-core.mjs";
+import {
+  AUDIT_ROOTS,
+  countFileLines,
+  countSourceFiles,
+  deriveBaselineCounts,
+} from "./lib/audit-loc-core.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -145,6 +150,7 @@ function warn(message) {
  * @property {number} limit
  * @property {Record<string, number>} files
  * @property {Record<string, number>} pins
+ * @property {{ production: number, test: number, tooling: number, total: number }} counts
  */
 
 /**
@@ -161,7 +167,7 @@ function readBaseline(file) {
         `fails — the baseline is what records the existing offenders at their ` +
         `current size.`,
     );
-    return { limit: FALLBACK_LIMIT, files: {}, pins: {} };
+    return { limit: FALLBACK_LIMIT, files: {}, pins: {}, counts: deriveBaselineCounts({}) };
   }
   let parsed;
   try {
@@ -182,7 +188,7 @@ function readBaseline(file) {
   for (const [key, value] of Object.entries(parsed.pins ?? {})) {
     if (typeof value === "number") pins[key] = value;
   }
-  return { limit, files, pins };
+  return { limit, files, pins, counts: deriveBaselineCounts(files) };
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -303,7 +309,7 @@ if (reference === null && isGitCheckout(options.root)) {
       `is not a merge commit), so this check ABSTAINS: it cannot tell what ` +
       `this change did, and a stale snapshot would blame it for the default ` +
       `branch's own growth. ${over.length} file(s) are over the ` +
-      `${baseline.limit}-line ceiling; the baseline records ${Object.keys(baseline.files).length}.`,
+      `${baseline.limit}-line ceiling; the baseline records ${baseline.counts.total}.`,
   );
   if (options.strict) {
     console.error(
@@ -443,7 +449,9 @@ const smallest = [...baselinedHere]
 
 console.log(
   `OK — no file is over its size ceiling (${baseline.limit} for a new file; ` +
-    `${baselinedHere.length} baselined, all within their own ceilings).`,
+    `${baselinedHere.length} baselined ` +
+    `(${baseline.counts.production} production, ${baseline.counts.test} test, ${baseline.counts.tooling} tooling), ` +
+    `all within their own ceilings).`,
 );
 console.log("");
 console.log("Smallest baselined files — the cheapest ceilings to lower:");
