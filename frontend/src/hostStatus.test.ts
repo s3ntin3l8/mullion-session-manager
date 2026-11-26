@@ -276,4 +276,14 @@ describe("the deprecation qualifier (issue #3476)", () => {
     expect(manual).toMatch(/one-time pairing code/);
     expect(manual).not.toMatch(/Re-pair/);
   });
+
+  it("names the host-bound pairing code for a manual-token host", () => {
+    // The unbound code the _Generate pairing link_ button mints creates a NEW
+    // host row and leaves the deprecated one behind, so the hover has to name
+    // the host-bound code (POST /api/host-pairings with {"hostId": ...}) that
+    // re-pairs the same row.
+    const manual = deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }));
+    expect(manual).toMatch(/hostId/);
+    expect(manual).toMatch(/NEW host row/);
+  });
 });

@@ -141,6 +141,9 @@ describe("HostStatusLabel (issue #1892)", () => {
     const chip = screen.getByText("manual token (deprecated)");
     expect(chip).toHaveAttribute("title", expect.stringMatching(/MULLION_AGENT_TOKEN/));
     expect(chip).toHaveAttribute("title", expect.stringMatching(/one-time pairing code/));
+    // The unbound pairing link mints a code for a NEW host row, so the hover
+    // names the host-bound one that re-pairs this row.
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/hostId/));
   });
 
   it("keeps the agent words next to the deprecation on a host that is both", () => {

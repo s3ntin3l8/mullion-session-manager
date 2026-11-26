@@ -146,8 +146,10 @@ export function deprecatedKindLabel(host: Host): string | null {
  * - a legacy agent is fixed agent-side — upgrade it and point it at the
  *   primary (MULLION_PRIMARY_URL) so it registers with a machine identity —
  *   or replaced by a host paired from a one-time pairing code;
- * - a manual-token host is fixed by pairing: a one-time pairing code
- *   replaces the static token with a machine identity.
+ * - a manual-token host is fixed by pairing: a one-time pairing code BOUND to
+ *   that host replaces the static token with a machine identity. An unbound
+ *   code (the _Generate pairing link_ button) creates a NEW host row and
+ *   leaves the deprecated row behind, so the hover names the bound one.
  *
  * The row menu's _Re-pair_ entry is deliberately NOT named here: it only
  * appears once a host holds a machine identity (or had one revoked), and a
@@ -167,9 +169,10 @@ export function deprecatedKindTitle(host: Host): string | null {
     case "manual-token":
       return (
         "Deprecated: this host's agent still authenticates with the row's own static token " +
-        "(MULLION_AGENT_TOKEN), which never expires. Mint a one-time pairing code " +
-        "(Settings → Hosts → Pair a desktop) and redeem it on the agent, so the agent holds " +
-        "a machine identity instead of that token."
+        "(MULLION_AGENT_TOKEN), which never expires. Mint a one-time pairing code BOUND to " +
+        'this host (POST /api/host-pairings with {"hostId": "<id>"}) and redeem it on the ' +
+        "agent, so the agent holds a machine identity instead of that token. An unbound code " +
+        "creates a NEW host row and leaves this one deprecated."
       );
     default:
       return null;

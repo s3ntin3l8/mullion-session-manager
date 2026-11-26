@@ -599,7 +599,7 @@ so a host that is still fully on a legacy path has no _Re-pair_ entry yet:
   dark away from it" below). To replace the host instead, mint a one-time
   pairing code (Settings → Hosts → **Pair a desktop** → _Generate pairing
   link_) and redeem it on the agent; the new host row holds a machine
-  identity, and the old row goes with _Remove stale host_.
+  identity, and the old row goes with _Delete host_.
 - **manual-token host** — mint a **host-bound** code with
   `POST /api/host-pairings` and `{"hostId": "<id>"}` and redeem it on the agent
   (`install.sh` with `MULLION_AGENT_PAIRING_CODE_STDIN=1`, and
@@ -607,7 +607,11 @@ so a host that is still fully on a legacy path has no _Re-pair_ entry yet:
   to the primary). The same row then holds a machine identity and the static
   token is no longer used; drop it from the agent's `.env`. An unbound code
   (the _Generate pairing link_ button) creates a _new_ host row instead —
-  remove the old one with _Remove stale host_.
+  remove the old one with _Delete host_.
+
+The row menu's delete entry reads _Delete host_, or _Remove stale host_ once
+that row is stale (offline for `hosts.staleAfterDays`) or flagged a duplicate —
+both entries delete the row.
 
 `GET /api/hosts` carries the signal as `deprecatedKind` (`"legacy-agent"`,
 `"manual-token"`, or `null` for a host that is on the current path). The host's
@@ -2500,16 +2504,18 @@ kinds"). An agent that already reports v0.3.59 or later reads **Not registered
 — set primary URL** (`not registered (deprecated)` as the chip) instead, because
 upgrading would change nothing for it; see Fix. A host whose agent authenticates
 with the row's own static token (`MULLION_AGENT_TOKEN`) reads
-`manual token (deprecated)` instead of the agent words, because that credential
-— not the agent's version — is what has to change. Every surface has a hover
-with the agent's reported version, but only the Settings hover also gives the
-primary's version. The `GET /api/hosts` field is `legacyAgent`: true for a
-non-local host that has a `baseUrl`, no machine identity and no revoked
-identity; `deprecatedKind` says which legacy path a host is on
-(`"legacy-agent"`, `"manual-token"`, or `null`). An older row that a newer
-registration replaced is not flagged (it shows as a possible duplicate
-instead). The server logs the "legacy agent registered" notice once per host per
-process, not on every renewal.
+`manual token (deprecated)` — the kind is ADDED to the chip, not swapped in: a
+host that is both (no machine identity AND a static token) reads
+`not registered · manual token (deprecated)` (or `outdated agent · manual token
+(deprecated)`), because that credential — not the agent's version — is what has
+to change. Every surface has a hover with the agent's reported version, but only
+the Settings hover also gives the primary's version. The `GET /api/hosts` field
+is `legacyAgent`: true for a non-local host that has a `baseUrl`, no machine
+identity and no revoked identity; `deprecatedKind` says which legacy path a
+host is on (`"legacy-agent"`, `"manual-token"`, or `null`). An older row that a
+newer registration replaced is not flagged (it shows as a possible duplicate
+instead). The server logs the "legacy agent registered" notice once per host
+per process, not on every renewal.
 
 **Fix.** Upgrade the agent to v0.3.59 or later and restart it. It then
 registers with a machine identity and dials out to `MULLION_PRIMARY_URL`; the

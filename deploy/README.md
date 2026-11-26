@@ -1422,16 +1422,20 @@ so a host that is still fully on a legacy path has no _Re-pair_ entry yet:
   `MULLION_PRIMARY_URL` in its `.env`; it registers with a machine identity and
   the qualifier clears by itself. To replace the host instead, mint a one-time
   pairing code (Settings → Hosts → _Pair a desktop_ → _Generate pairing link_)
-  and redeem it on the agent (`MULLION_AGENT_PAIRING_CODE_STDIN=1`); the new
-  host row holds a machine identity, and the old row goes with _Remove stale
-  host_.
+  and redeem it on the agent (`install.sh` with
+  `MULLION_AGENT_PAIRING_CODE_STDIN=1`); the new host row holds a machine
+  identity, and the old row goes with _Delete host_.
 - **manual-token host** — mint a **host-bound** code with
   `POST /api/host-pairings` and `{"hostId": "<id>"}` and redeem it on the agent
   (with `MULLION_PRIMARY_URL` set in the agent's `.env`, because the redeem
   dials out to the primary). The same row then holds a machine identity and the
   static token is no longer used; drop it from the agent's `.env`. An unbound
   code (the _Generate pairing link_ button) creates a _new_ host row instead —
-  remove the old one with _Remove stale host_.
+  remove the old one with _Delete host_.
+
+The row menu's delete entry reads _Delete host_, or _Remove stale host_ once
+that row is stale (offline for `hosts.staleAfterDays`) or flagged a duplicate —
+both entries delete the row.
 
 The host's status chip — the one beside a host name in a session row or a pane
 tab — carries a "(deprecated)" qualifier for the first two kinds, and the
