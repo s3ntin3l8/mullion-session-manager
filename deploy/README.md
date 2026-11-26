@@ -1333,11 +1333,20 @@ To change something on purpose, from Ansible:
 | Change `.env` settings (primary URL, roots, name) | Delete `{{ mullion_home }}/.env` in a task before `install.sh` (or template the whole file). Leave `agent-identity.json` alone to keep the same host row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Cut off a lost or compromised agent               | `POST /api/hosts/:id/revoke` on the primary. Final: the agent gets `401`, does not fall back to its bootstrap token, and the fleet secret cannot re-claim that row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | Bring a revoked agent back                        | **Recommended (host-bound pairing code):** Settings → Hosts → row menu → _Re-pair_ (or `POST /api/host-pairings` with `{"hostId": "<id>"}`), then run the agent-side redeem with the code (e.g. `install.sh` with `MULLION_AGENT_PAIRING_CODE_STDIN=1` **and `MULLION_AGENT_PAIRING_FORCE=1`** — the force flag is required, because a host that still holds an identity ignores the supplied code (issue #3498)). The redeem overwrites `$SESSIONS_DIR/agent-identity.json` and restarts an active unit, so no manual restart is needed. Redeeming a host-bound code keeps the same host row and disconnects any displaced agent immediately (no grace period). **Legacy per-host token agents that cannot redeem:** `POST /api/hosts/:id/rotate-token` on the primary (re-arms the row and returns a new bootstrap token), then on the agent: (1) delete `$SESSIONS_DIR/agent-identity.json`; (2) put the new token in `{{ mullion_home }}/.env` as `MULLION_ENROLLMENT_TOKEN` (or delete the `.env` and re-run `install.sh` with the new token in `MULLION_AGENT_ENROLLMENT_TOKEN`, which writes a fresh one); (3) **restart the agent unit** (`systemctl --user restart mullion-agent.service`). The restart is not optional: a rejected agent is terminal in memory and stops retrying, and `.env` wins over the environment, so a running agent keeps presenting the old, dead token (HTTP 401) until it restarts. `install.sh` restarts a unit that was already running when it rewrote the `.env`, so deleting the `.env` and re-running it covers (2) and (3). Old secrets stay dead. |
-| Re-enroll a fleet-secret agent as a fresh host    | Clear its `agent-identity.json` and restart. It becomes a **new** host; remove the old offline row (_Remove stale host_).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Re-enroll a fleet-secret agent as a fresh host    | Clear its `agent-identity.json` and restart. **With the legacy gate open** (`MULLION_ALLOW_LEGACY_HOSTS=true`) the agent comes back as a **new** host — remove the old offline row (_Remove stale host_). **With the gate off (the default)** no new host appears: the agent is served by the row it already owns, as long as that row holds no identity of its own (it is matched on the address the agent advertises); when that address no longer matches, the registration is refused (401) — put the address the agent now advertises on that row (Settings → Hosts → **Edit**, `PATCH /api/hosts/:id { "baseUrl": "…" }`) or pair the host again with a one-time pairing code. **Never remove the old row while the gate is off**: it is the only row the agent can be served by.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 The legacy per-host-token path in that table only works while the row holds **no**
 live identity (a revoked or expired one). Since issue #3439 a row with a live
 identity refuses a claim, so replacing _that_ agent needs the re-pair above.
+
+_Re-enroll a fleet-secret agent as a fresh host_ needs the legacy gate open
+(`MULLION_ALLOW_LEGACY_HOSTS=true`): with the gate off (the default) the
+enrollment is refused (401) unless the agent still advertises the address on
+its old row — then that row serves it instead of a new host appearing. The
+"clear the identity and restart" recipe therefore only produces a second row
+while the gate is open. With the gate off, the old row is the only row the
+agent can be served by: fix the address on it (Settings → Hosts → **Edit**) or
+pair the host again with a one-time pairing code — never remove it.
 
 There is deliberately no operator "rotate machine credential" endpoint:
 renewal rotates it already (the previous credential stays valid for 24 h so a
@@ -1387,6 +1396,14 @@ there, and every agent booted with the matching
 them (`POST /api/hosts/:id/approve`). For automation-token pairing, tokens
 with `requireApproval` similarly wait in **Awaiting approval** until approved.
 
+That fleet-secret self-registration is deprecated: it only creates a host
+while the primary runs with `MULLION_ALLOW_LEGACY_HOSTS=true`. With the
+default configuration the primary answers the agent's registration with a
+**401** and no host row is created — mint a one-time pairing code per agent
+instead (see "Deprecated host kinds" below). Agents that enrolled with the
+fleet secret before the gate keep registering with it: their registration is
+served by the row they already own.
+
 **Updating an agent:** as of issue #647 / roadmap 7.8, an agent has its own
 self-update surface — see "Layout and updates" above and
 [`docs/multi-host.md`](../docs/multi-host.md)'s "Agent updates" section.
@@ -1397,21 +1414,24 @@ there.
 
 An agent keeps its machine identity in `agent-identity.json` under
 `SESSIONS_DIR`. If that directory does not survive a restart (an ephemeral
-container, a re-imaged VM), the agent re-enrolls as a **new host** on every
-boot and the previous row stays offline. Put `SESSIONS_DIR` on persistent
-storage (a mounted volume). Symptom: Settings → Hosts fills with offline rows
-for the same machine, the newer ones marked "Possible duplicate of …", and the
-agent log says "no stored identity found at the state path" on every start.
-Cleanup: use _Remove stale host_ on the offline rows (nothing is merged or
-removed automatically). See
+container, a re-imaged VM), the agent has no identity at boot: with the legacy
+gate open (`MULLION_ALLOW_LEGACY_HOSTS=true`) it re-enrolls as a **new host**
+on every boot and the previous row stays offline; with the gate off (the
+default) that enrollment is **refused** (401) instead. Put `SESSIONS_DIR` on
+persistent storage (a mounted volume). Symptom: Settings → Hosts fills with
+offline rows for the same machine, the newer ones marked "Possible duplicate
+of …", and the agent log says "no stored identity found at the state path" on
+every start. Cleanup: use _Remove stale host_ on the offline rows (nothing is
+merged or removed automatically). See
 [`docs/multi-host.md`](../docs/multi-host.md#machine-identity-and-machine-credentials).
 
 ## Deprecated host kinds
 
 Three ways of putting an agent on a primary are deprecated (issue #3476,
 decision [#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)).
-**Everything still works** — the primary accepts all three exactly as before —
-but each one is on its way out:
+Each one is on its way out: new legacy hosts are gated behind
+`MULLION_ALLOW_LEGACY_HOSTS` (see "The gate" below), and the paths themselves
+are removed in the next minor release.
 
 | Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                                     |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1446,11 +1466,69 @@ The host's status chip — the one beside a host name in a session row or a pane
 tab — carries a "(deprecated)" qualifier for the first two kinds, and the
 primary logs a warning at startup while `MULLION_ENROLLMENT_SECRET` is set.
 
-**Schedule.** In the next minor release after this one, all three kinds are
-**gated behind `MULLION_ALLOW_LEGACY_HOSTS`** — without it the primary stops
-accepting them. In the minor release after that, they are **removed**. Plan
-the move to pairing codes and automation tokens now; nothing breaks before
-the gate, but the gate is coming.
+**The gate (`MULLION_ALLOW_LEGACY_HOSTS`, off by default).** The gate stops
+**new** legacy hosts from appearing. It sits on the two entry points that
+create one, not on the hosts themselves:
+
+- **Adding a host by token is refused.** `POST /api/hosts` answers **400** and
+  names the replacements — the _Add host_ flow (a one-time pairing code) and
+  automation tokens. In the UI, the _Advanced: host the primary dials directly
+  (deprecated)_ entry is shown only while the server reports the gate open
+  (`GET /api/server-info` → `allowLegacyHosts`), so the operator is never
+  walked into a refusal.
+- **Fleet-secret enrollment no longer creates a host.** The fleet-wide secret
+  (`MULLION_ENROLLMENT_SECRET`) does not enroll a new host row:
+  `POST /api/internal/register` answers the same **401** an unknown credential
+  gets — the refusal tells the caller nothing about the secret — and the
+  primary logs the reason once per process.
+
+**What keeps working with the gate off.** Every host that already exists: its
+renewals, its outbound channel, a per-host token claiming a row created
+earlier, a legacy agent registering on every boot with its own row's token —
+and an agent that enrolled with the **fleet secret**, which still registers
+with it on every boot. Such a registration is served by the row the agent
+already owns (the row is matched by the address it advertises), so no second
+row appears. The claim path is how an existing host proves itself, and it is
+not gated.
+
+**That match is on the advertised address, exactly.** The address is what the
+agent advertises — by default `http://<hostname>:<port>`, or whatever
+`MULLION_AGENT_ADVERTISE_URL` names — so a host that renamed its box, that
+came back as a container with another address, or whose Base URL an operator
+edited in Settings no longer matches its row. Its registration is then
+refused with the same 401, for as long as the mismatch lasts, and the
+primary's log says so (once per process; it names the row it expects when it
+can tell). The row is still there; only the address on it is stale. Put the
+address the agent now advertises on the row — Settings → Hosts → **Edit**
+(`PATCH /api/hosts/:id { "baseUrl": "…" }`) — or pair the host again with a
+one-time pairing code. Flipping `MULLION_ALLOW_LEGACY_HOSTS` back on works
+too, but it lets the agent through as a **new** host — a second row for a
+box the operator already has.
+
+**What the gate does break.** A host that does not exist yet cannot be
+created through a legacy path: `POST /api/hosts` answers 400 and a
+fleet-secret enrollment answers 401. Mint a one-time pairing code instead
+(_Add host_ → **Generate pairing code**, or an automation token) and redeem
+it on the agent.
+
+**A fleet-secret agent that asks for an identity.** An agent that enrolled
+with the fleet secret and now runs a release that persists a machine identity
+(v0.3.59 or later) presents the fleet secret once more and asks for a
+credential: the primary hands it one **on the row it already owns**, so the
+host leaves the fleet-secret path and no second row appears. (With the gate
+open, the old behaviour stands: that registration creates a second row.) A row
+that already holds an identity is never taken over by a fleet secret (issue
+[#3439](https://github.com/s3ntin3l8/mullion-session-manager/issues/3439)) —
+an agent that lost its state file has to be re-paired from Settings → Hosts
+instead.
+
+Set `MULLION_ALLOW_LEGACY_HOSTS=true` to keep the old behaviour exactly as it
+is today — the same requests, the same answers, the same rows.
+
+**Schedule.** The gate is here now; the legacy paths are **removed** in the
+next minor release, together with the flag. The hosts that exist keep working
+when the gate lands — the gate is what to plan for, and the removal is what
+to plan for after it.
 
 ## What still needs a real, live check
 

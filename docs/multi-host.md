@@ -218,11 +218,18 @@ in `machine_credential`.
   `agent-identity.json` under the agent's `SESSIONS_DIR`. A container or
   image-based agent whose data dir does not survive a restart (an ephemeral
   container, a re-imaged VM) has no identity at boot, so it enrolls with the
-  fleet secret and the primary creates a **new** host row each time, leaving
-  the previous one offline. Mount `SESSIONS_DIR` on a volume or other
-  persistent storage. The agent logs once at info level when it registers
-  without a stored identity ("no stored identity found at the state path");
-  seeing that on every restart means the state path is not persistent.
+  fleet secret: with the legacy gate open (`MULLION_ALLOW_LEGACY_HOSTS=true`)
+  the primary creates a **new** host row each time, leaving the previous one
+  offline; with the gate closed (the default) that enrollment is **refused**
+  (401), so a container fleet that relied on it goes dark on the next
+  recreate instead of registering a second time. A row is matched by an
+  exact address compare either way: with the gate open a changed address
+  means a second row, with the gate closed it means a refusal until the row
+  carries the address the agent now advertises (see the gate section below).
+  Mount `SESSIONS_DIR` on a volume or other persistent storage. The agent
+  logs once at info level when it registers without a stored identity ("no
+  stored identity found at the state path"); seeing that on every restart
+  means the state path is not persistent.
   The primary never merges these rows by URL or hostname (that is the
   hijack risk the identity removed). Instead `GET /api/hosts` marks the newer
   row with `possibleDuplicateOf`: older enrolled rows with the same advertised
@@ -336,6 +343,8 @@ Settings → Hosts & SSH bridges
              └─ Install command (Linux / macOS)
            → Advanced: host the primary dials directly (deprecated)
              └─ Add with a token → Generated token or Use my own token
+               (only while MULLION_ALLOW_LEGACY_HOSTS=true; with the default
+                configuration the entry is hidden and the API answers 400)
 ```
 
 **The link.** `mullion://pair?url=<primary url>&code=<code>`, both
@@ -455,6 +464,12 @@ URL. Until then the host reads **pending** ("waiting for the agent to
 register"); give a Base URL up front if the agent should be dialled at a
 specific address.
 
+This whole flow is deprecated: it is only available while the primary runs
+with `MULLION_ALLOW_LEGACY_HOSTS=true`. With the default configuration the
+**Advanced** entry is hidden and `POST /api/hosts` answers **400** — use
+**Add host → Generate pairing code** instead (see "Deprecated host kinds"
+below).
+
 - **Primary URL the agent calls.** Defaults to the address the dashboard was
   opened on. A login gateway in front of the primary (Authentik forwardAuth)
   blocks `/api/internal/register`, so use the primary's direct address
@@ -494,6 +509,12 @@ the primary dials directly.
    - **Base URL** — where the agent is reachable, e.g.
      `http://192.168.1.20:4000`.
    - **Token** — must exactly match that agent's `MULLION_AGENT_TOKEN`.
+
+   Step 4 is deprecated and only available while the primary runs with
+   `MULLION_ALLOW_LEGACY_HOSTS=true`; with the default configuration the
+   **Advanced** entry is hidden and `POST /api/hosts` answers **400** — pair
+   the agent with a one-time pairing code instead (see "Deprecated host kinds"
+   below).
 
    Once saved, use **Test** in the Hosts list to confirm connectivity.
 
@@ -600,9 +621,10 @@ For automated fleets that want to avoid a standing fleet-wide `MULLION_ENROLLMEN
 ## Deprecated host kinds
 
 Three ways of putting a host on a primary are deprecated (issue #3476, decision
-[#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)). The
-setup paths described above still work — the primary accepts all three exactly
-as before — but each one is on its way out:
+[#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)). Each
+one is on its way out: new legacy hosts are gated behind
+`MULLION_ALLOW_LEGACY_HOSTS` (see "The gate" below), and the paths themselves
+are removed in the next minor release.
 
 | Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                                     |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -640,10 +662,69 @@ status chip — the one beside a host name in a session row or a pane tab —
 carries a "(deprecated)" qualifier for the first two kinds, and the primary
 logs a warning at startup while `MULLION_ENROLLMENT_SECRET` is set.
 
-**Schedule.** In the next minor release after this one, all three kinds are
-**gated behind `MULLION_ALLOW_LEGACY_HOSTS`** — without it the primary stops
-accepting them. In the minor release after that, they are **removed**. Nothing
-stops working before the gate; the gate is what to plan for.
+**The gate (`MULLION_ALLOW_LEGACY_HOSTS`, off by default).** The gate stops
+**new** legacy hosts from appearing. It sits on the two entry points that
+create one, not on the hosts themselves:
+
+- **Adding a host by token is refused.** `POST /api/hosts` answers **400** and
+  names the replacements — the _Add host_ flow (a one-time pairing code) and
+  automation tokens. In the UI, the _Advanced: host the primary dials directly
+  (deprecated)_ entry is shown only while the server reports the gate open
+  (`GET /api/server-info` → `allowLegacyHosts`), so the operator is never
+  walked into a refusal.
+- **Fleet-secret enrollment no longer creates a host.** The fleet-wide secret
+  (`MULLION_ENROLLMENT_SECRET`) does not enroll a new host row:
+  `POST /api/internal/register` answers the same **401** an unknown credential
+  gets — the refusal tells the caller nothing about the secret — and the
+  primary logs the reason once per process.
+
+**What keeps working with the gate off.** Every host that already exists: its
+renewals, its outbound channel, a per-host token claiming a row created
+earlier, a legacy agent registering on every boot with its own row's token —
+and an agent that enrolled with the **fleet secret**, which still registers
+with it on every boot. Such a registration is served by the row the agent
+already owns (the row is matched by the address it advertises), so no second
+row appears. The claim path is how an existing host proves itself, and it is
+not gated.
+
+**That match is on the advertised address, exactly.** The address is what the
+agent advertises — by default `http://<hostname>:<port>`, or whatever
+`MULLION_AGENT_ADVERTISE_URL` names — so a host that renamed its box, that
+came back as a container with another address, or whose Base URL an operator
+edited in Settings no longer matches its row. Its registration is then
+refused with the same 401, for as long as the mismatch lasts, and the
+primary's log says so (once per process; it names the row it expects when it
+can tell). The row is still there; only the address on it is stale. Put the
+address the agent now advertises on the row — Settings → Hosts → **Edit**
+(`PATCH /api/hosts/:id { "baseUrl": "…" }`) — or pair the host again with a
+one-time pairing code. Flipping `MULLION_ALLOW_LEGACY_HOSTS` back on works
+too, but it lets the agent through as a **new** host — a second row for a
+box the operator already has.
+
+**What the gate does break.** A host that does not exist yet cannot be
+created through a legacy path: `POST /api/hosts` answers 400 and a
+fleet-secret enrollment answers 401. Mint a one-time pairing code instead
+(_Add host_ → **Generate pairing code**, or an automation token) and redeem
+it on the agent.
+
+**A fleet-secret agent that asks for an identity.** An agent that enrolled
+with the fleet secret and now runs a release that persists a machine identity
+(v0.3.59 or later) presents the fleet secret once more and asks for a
+credential: the primary hands it one **on the row it already owns**, so the
+host leaves the fleet-secret path and no second row appears. (With the gate
+open, the old behaviour stands: that registration creates a second row.) A row
+that already holds an identity is never taken over by a fleet secret (issue
+[#3439](https://github.com/s3ntin3l8/mullion-session-manager/issues/3439)) —
+an agent that lost its state file has to be re-paired from Settings → Hosts
+instead.
+
+Set `MULLION_ALLOW_LEGACY_HOSTS=true` to keep the old behaviour exactly as it
+is today — the same requests, the same answers, the same rows.
+
+**Schedule.** The gate is here now; the legacy paths are **removed** in the
+next minor release, together with the flag. The hosts that exist keep working
+when the gate lands — the gate is what to plan for, and the removal is what
+to plan for after it.
 
 ## Automatic placement
 

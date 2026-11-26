@@ -386,11 +386,18 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
           }
           if (!identity && isUnauthorized(err) && !loggedBootstrapRejected) {
             // No stored identity, the primary rejected the bootstrap token and
-            // the env file held nothing newer: the usual cause is a rotated (or
-            // wrong) token. Logged once per process; never includes the token.
+            // the env file held nothing newer. There is more than one cause,
+            // and the operator has to be told about all of them: a rotated
+            // (or wrong) token is the usual one, but a primary that refuses
+            // fleet-secret enrollment (issue #3477, MULLION_ALLOW_LEGACY_HOSTS
+            // off) answers the same 401 — and a host that enrolled with the
+            // fleet-wide secret has no per-host token to rotate, so sending
+            // the operator to "rotate the host's token" would point at a fix
+            // that does not exist for them. Logged once per process; never
+            // includes the token.
             loggedBootstrapRejected = true;
             app.log.warn(
-              "[agent-enrollment] the primary rejected the bootstrap token (401) and the env file has no newer one: it was most likely rotated, or is wrong. Rotate the host's token in Settings -> Hosts and put the new value in MULLION_ENROLLMENT_TOKEN; no restart is needed, the agent re-reads the env file on a 401",
+              "[agent-enrollment] the primary rejected the bootstrap token (401) and the env file has no newer one. It was most likely rotated, or is wrong: rotate the host's token in Settings -> Hosts and put the new value in MULLION_ENROLLMENT_TOKEN; no restart is needed, the agent re-reads the env file on a 401. A host that enrolled with the fleet-wide MULLION_ENROLLMENT_SECRET has no per-host token to rotate, though: if the primary refuses fleet-secret enrollment (MULLION_ALLOW_LEGACY_HOSTS is off there), pair the host instead (Settings -> Hosts -> Add host -> Generate pairing code) or let the primary accept the fleet secret again.",
             );
           }
           enrollment.failedAttempts++;

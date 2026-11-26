@@ -299,6 +299,22 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Issue #3477 — the legacy host kinds (a host added by token through
+    // POST /api/hosts, and fleet-secret enrollment through
+    // POST /api/internal/register) are deprecated (decision #3320). Off by
+    // default: with it off, those two entry points no longer CREATE a host,
+    // so no NEW legacy host can appear. What already exists keeps working —
+    // renewals, the outbound channel, a per-host token claiming a row created
+    // earlier, a legacy agent registering on every boot, and an agent that
+    // enrolled with the fleet secret (it is served by the row it owns).
+    //
+    // On by default in the test harness instead (see test/setup.ts): the bulk
+    // of the suite creates its hosts through POST /api/hosts, and the flag's
+    // own behaviour is covered by test/routes/hosts-legacy-hosts.test.ts.
+    MULLION_ALLOW_LEGACY_HOSTS: {
+      type: "boolean",
+      default: false,
+    },
     // Optional in-process auth (issue #19) for the primary role: a single
     // shared token/API key, checked via src/plugins/auth.ts's global
     // onRequest gate against every HTTP route and the /ws/terminal upgrade
@@ -1214,6 +1230,7 @@ declare module "fastify" {
       MULLION_ENROLLMENT_SECRET: string;
       MULLION_ENROLLMENT_ALLOWED_CIDRS: string;
       MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: string;
+      MULLION_ALLOW_LEGACY_HOSTS: boolean;
       MULLION_ALLOW_TAILNET_HOSTS: boolean;
       MULLION_AUTH_TOKEN: string;
       MULLION_TRUST_GATEWAY: boolean;

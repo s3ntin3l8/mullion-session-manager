@@ -89,8 +89,9 @@ export interface HostSummary {
   // stored): "legacy-agent" is an agent without a machine identity that the
   // primary has to dial at its stored address, "manual-token" is a host whose
   // agent still authenticates with the row's own static per-host token
-  // (MULLION_AGENT_TOKEN). Nothing is refused or gated on this yet — the
-  // gating lands in a later release (MULLION_ALLOW_LEGACY_HOSTS).
+  // (MULLION_AGENT_TOKEN). Nothing is refused on this flag itself — the gate
+  // (MULLION_ALLOW_LEGACY_HOSTS, issue #3477) sits on the entry points that
+  // create a legacy host, not on the hosts that already exist.
   deprecatedKind: DeprecatedHostKind | null;
   // Issue #3441 — when this host was approved for execution (null = awaiting
   // approval; `local` is always approved by construction).
@@ -819,10 +820,34 @@ export function enrollHost(
     return insertEnrolledHost(app, input, peer, opts);
   }
   const baseUrl = input.baseUrl;
-  const metadata = JSON.stringify({
-    hostname: input.hostname,
-    capabilities: input.capabilities ?? null,
-  });
+  const existing = findLegacyEnrolledHost(app, baseUrl);
+  if (existing) {
+    noteLegacyAgent(app, existing.id);
+    return reuseEnrolledHostRow(app, existing, input, peer, opts);
+  }
+  const inserted = insertEnrolledHost(app, input, peer, opts);
+  noteLegacyAgent(app, inserted.hostId);
+  return inserted;
+}
+
+/**
+ * Issue #3477 — the enrolled row a fleet-secret registration may REUSE.
+ *
+ * The dedupe key is the agent's advertised address (baseUrl), the same key
+ * enrollHost dedupes on: an agent's address is stable across boots, which
+ * is what lets a stateless legacy agent find its own row again on every
+ * boot. Only a row that is still on the legacy path qualifies:
+ *
+ *   - origin "enrolled" — it came from the fleet-secret enrollment path.
+ *     A manually created row is "manual" and must never be taken over by a
+ *     fleet-secret presentation (the same rule enrollHost's dedupe follows);
+ *   - no machine identity — a row that holds one belongs to the agent that
+ *     presents that identity, and the fleet secret must not take it over
+ *     (the rule claimHost follows, issue #3439);
+ *   - no revoked identity — a revoked row is the operator's explicit "this
+ *     host is gone", never a target.
+ */
+function findLegacyEnrolledHost(app: FastifyInstance, baseUrl: string): HostRow | undefined {
   const [existing] = app.db
     .select()
     .from(hosts)
@@ -837,49 +862,140 @@ export function enrollHost(
       ),
     )
     .all();
-  if (existing) {
-    // Independent review, PR #528: this dedup key is baseUrl, which only
-    // proves "reaches the same address," not "is the same agent process" —
-    // two agents sharing a hostname (e.g. both defaulting
-    // MULLION_AGENT_ADVERTISE_URL from the same cloned VM/container image)
-    // would collide here too, each re-stealing the row from the other on
-    // their independent renewal cycles. That's indistinguishable at this
-    // layer from the lost-response retry this dedup exists to fix, so it
-    // isn't refused — but a still-live existing session (not yet expired)
-    // being reused is the specific shape of that collision, worth
-    // surfacing rather than resolving silently. See docs/multi-host.md's
-    // note on baseUrl uniqueness.
-    if (existing.sessionExpiresAt && existing.sessionExpiresAt.getTime() > Date.now()) {
-      app.log.warn(
-        { hostId: existing.id, baseUrl },
-        "[host-registry] enrollHost reused a row with a still-live session — either a retried " +
-          "registration from the same agent, or two agents advertising the same baseUrl",
-      );
-    }
-    app.db
-      .update(hosts)
-      .set({
-        name: input.name?.trim() || input.hostname,
-        agentMetadata: metadata,
-        // Issue #1721 — the platform is refreshed on every enrollment, not
-        // only on the first: an agent's platform does not change, but a
-        // RE-ENROLLED agent (a wiped install root re-registering against a
-        // row that survived) may report a different one — and one that
-        // reports NONE (an older build, a downgrade, a mixed fleet) must
-        // not erase what was recorded before. An absent platform is not a
-        // reset, the same rule recordHostSelfReport() applies on renewal.
-        ...(input.platform ? { platform: input.platform } : {}),
-        ...(opts?.approved && existing.approvedAt === null ? { approvedAt: new Date() } : {}),
-      })
-      .where(eq(hosts.id, existing.id))
-      .run();
-    noteLegacyAgent(app, existing.id);
-    recordHostIdentityEvent(app, existing.id, "enrolled", peer);
-    return issueSession(app, existing.id);
+  return existing;
+}
+
+/**
+ * Issue #3477 — the legacy row a REFUSED fleet-secret registration may
+ * belong to.
+ *
+ * The gate-off reuse matches a row by the address the agent advertises, and
+ * that compare is exact (findLegacyEnrolledHost). A host that changed its
+ * address — a container recreated at a new IP, a Base URL the operator edited
+ * in Settings — therefore no longer finds its row, and its registration is
+ * refused with the same 401 a brand-new host gets. The refusal then reads as
+ * "this host does not exist yet", which is the wrong story for a host the
+ * operator can see in Settings.
+ *
+ * This lookup finds the row such a host most likely owns: a legacy enrolled
+ * row (no machine identity, not revoked) that advertises an address and
+ * reports the SAME self-reported hostname. A hostname is not an identity —
+ * the rule findPossibleDuplicates follows, for the same reason: two agents
+ * may share one (a cloned image, a compose service name) — so this is a
+ * heuristic, and it picks only the WORDING of an operator-side log line.
+ * The refusal itself is the same 401 either way, and nothing is created,
+ * taken over or changed by looking.
+ */
+export function findLegacyEnrolledHostByHostname(
+  app: FastifyInstance,
+  hostname: string,
+): HostRow | undefined {
+  const wanted = hostname.trim();
+  const rows = app.db
+    .select()
+    .from(hosts)
+    .where(
+      and(
+        eq(hosts.origin, "enrolled"),
+        isNull(hosts.machineCredentialRevokedAt),
+        isNull(hosts.machineCredentialEnc),
+        isNotNull(hosts.baseUrl),
+      ),
+    )
+    .all();
+  return rows.find((row) => reportedHostname(row) === wanted);
+}
+
+/**
+ * Issue #3477 — reuse an enrolled row instead of creating one: refresh it
+ * from the agent's self-report and hand it a fresh session. The same
+ * operations enrollHost's own dedupe performs, in the same order.
+ */
+function reuseEnrolledHostRow(
+  app: FastifyInstance,
+  existing: HostRow,
+  input: RegisterAgentInput,
+  peer: string | null,
+  opts?: { approved?: boolean },
+): HostRegistration {
+  // Independent review, PR #528: this dedup key is baseUrl, which only
+  // proves "reaches the same address," not "is the same agent process" —
+  // two agents sharing a hostname (e.g. both defaulting
+  // MULLION_AGENT_ADVERTISE_URL from the same cloned VM/container image)
+  // would collide here too, each re-stealing the row from the other on
+  // their independent renewal cycles. That's indistinguishable at this
+  // layer from the lost-response retry this dedup exists to fix, so it
+  // isn't refused — but a still-live existing session (not yet expired)
+  // being reused is the specific shape of that collision, worth
+  // surfacing rather than resolving silently. See docs/multi-host.md's
+  // note on baseUrl uniqueness.
+  if (existing.sessionExpiresAt && existing.sessionExpiresAt.getTime() > Date.now()) {
+    app.log.warn(
+      { hostId: existing.id, baseUrl: existing.baseUrl },
+      "[host-registry] reused a row with a still-live session — either a retried " +
+        "registration from the same agent, or two agents advertising the same baseUrl",
+    );
   }
-  const inserted = insertEnrolledHost(app, input, peer, opts);
-  noteLegacyAgent(app, inserted.hostId);
-  return inserted;
+  const metadata = JSON.stringify({
+    hostname: input.hostname,
+    capabilities: input.capabilities ?? null,
+  });
+  app.db
+    .update(hosts)
+    .set({
+      name: input.name?.trim() || input.hostname,
+      agentMetadata: metadata,
+      // Issue #1721 — the platform is refreshed on every enrollment, not
+      // only on the first: an agent's platform does not change, but a
+      // RE-ENROLLED agent (a wiped install root re-registering against a
+      // row that survived) may report a different one — and one that
+      // reports NONE (an older build, a downgrade, a mixed fleet) must
+      // not erase what was recorded before. An absent platform is not a
+      // reset, the same rule recordHostSelfReport() applies on renewal.
+      ...(input.platform ? { platform: input.platform } : {}),
+      // Issue #3441 — a re-registration from an auto-approved peer approves
+      // the row it reuses, the same rule enrollHost's own dedupe follows:
+      // a pending row becomes usable as soon as its peer is trusted.
+      ...(opts?.approved && existing.approvedAt === null ? { approvedAt: new Date() } : {}),
+    })
+    .where(eq(hosts.id, existing.id))
+    .run();
+  recordHostIdentityEvent(app, existing.id, "enrolled", peer);
+  return issueSession(app, existing.id);
+}
+
+/**
+ * Issue #3477 — the legacy gate's allow path: a fleet-secret registration
+ * that maps to an EXISTING legacy host row is served by that row instead of
+ * creating a new one. Returns null when no such row exists — the caller
+ * then refuses the registration.
+ *
+ * This is what keeps a fleet that enrolled before the gate working: such an
+ * agent holds no identity of its own, so it presents the fleet secret on
+ * every boot, and the primary has to answer with a session instead of
+ * turning it away. Nothing is created here — the row is the one the agent
+ * already owns, matched by the address it advertises (the same key
+ * enrollHost dedupes on).
+ *
+ * An agent that asks for a machine credential gets one, on that same row:
+ * that is how a legacy agent leaves the fleet-secret path (the documented
+ * "upgrade the agent" migration), and it costs no second row.
+ */
+export function enrollExistingLegacyHost(
+  app: FastifyInstance,
+  input: RegisterAgentInput,
+  peer: string | null = null,
+  opts?: { approved?: boolean },
+): HostRegistration | null {
+  if (input.baseUrl === undefined) return null;
+  const existing = findLegacyEnrolledHost(app, input.baseUrl);
+  if (!existing) return null;
+  return withMachineCredential(
+    app,
+    reuseEnrolledHostRow(app, existing, input, peer, opts),
+    input,
+    peer,
+  );
 }
 
 function insertEnrolledHost(

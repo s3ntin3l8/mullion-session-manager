@@ -11,6 +11,7 @@ import { Modal } from "../../ui/Modal.js";
 import { CopyBlock } from "../../ui/CopyBlock.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { pairingInstallCommand } from "../../lib/agentInstallCommand.js";
+import { useServerInfo } from "../useServerInfo.js";
 import {
   derivePairingStage,
   HELPER_DOWNLOAD_URL,
@@ -40,6 +41,13 @@ export function HostPairingDialog({ host, onClose, onSaveTokenHost }: HostPairin
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showTokenForm, setShowTokenForm] = useState(false);
+  // Issue #3477 — the token-based host path is deprecated and, with the
+  // server's legacy gate off, refused (POST /api/hosts answers 400). The
+  // entry that offers it is therefore only rendered when the server reports
+  // the gate open; "not reported" is not "open", so the entry stays hidden
+  // until the server has actually said so.
+  const serverInfo = useServerInfo();
+  const legacyHostsAllowed = serverInfo?.allowLegacyHosts === true;
 
   const close = () => {
     if (!busy) onClose();
@@ -138,20 +146,22 @@ export function HostPairingDialog({ host, onClose, onSaveTokenHost }: HostPairin
       ) : (
         <>
           <span>Pair a machine to let it run sessions on this server.</span>
-          <details>
-            <summary style={{ cursor: "pointer" }}>
-              Advanced: host the primary dials directly (deprecated)
-            </summary>
-            <div style={{ marginTop: 8 }}>
-              <button
-                className="settings-secondary-btn"
-                onClick={busy ? undefined : () => setShowTokenForm(true)}
-                aria-disabled={busy || undefined}
-              >
-                Add with a token
-              </button>
-            </div>
-          </details>
+          {legacyHostsAllowed && (
+            <details>
+              <summary style={{ cursor: "pointer" }}>
+                Advanced: host the primary dials directly (deprecated)
+              </summary>
+              <div style={{ marginTop: 8 }}>
+                <button
+                  className="settings-secondary-btn"
+                  onClick={busy ? undefined : () => setShowTokenForm(true)}
+                  aria-disabled={busy || undefined}
+                >
+                  Add with a token
+                </button>
+              </div>
+            </details>
+          )}
         </>
       )}
       {error && <ErrorText>{error}</ErrorText>}

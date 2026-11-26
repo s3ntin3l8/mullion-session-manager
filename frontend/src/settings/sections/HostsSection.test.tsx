@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { HostsSection } from "./HostsSection.js";
 import { useDashboardStore } from "../../store/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
-import { makeHost } from "../../test/fixtures.js";
+import { makeHost, makeServerInfo } from "../../test/fixtures.js";
 import type { PlacementCapability } from "../../../../src/shared/constants.js";
 
 // Token rotation and the "waiting for the agent" row state. The rest of the
@@ -19,6 +19,10 @@ function stubFetch(opts: {
   createPairing?: (body: unknown) => Response | Promise<Response>;
   createHost?: (body: unknown) => Response;
   revoke?: () => Response;
+  // Issue #3477 — what the server reports on /api/server-info. The default
+  // is the legacy gate OPEN, so the tests that exercise the token flow keep
+  // seeing it; the gate-off test passes its own value.
+  serverInfo?: Record<string, unknown>;
 }) {
   const calls: string[] = [];
   vi.stubGlobal(
@@ -27,6 +31,11 @@ function stubFetch(opts: {
       const url = String(input);
       const method = init?.method ?? "GET";
       calls.push(`${method} ${url}`);
+      if (url === "/api/server-info" && method === "GET") {
+        return Promise.resolve(
+          jsonResponse(200, makeServerInfo({ allowLegacyHosts: true, ...(opts.serverInfo ?? {}) })),
+        );
+      }
       if (url === "/api/hosts" && method === "GET") {
         return Promise.resolve(jsonResponse(200, useDashboardStore.getState().hosts));
       }
@@ -591,7 +600,9 @@ describe("HostsSection", () => {
 
     await user.click(screen.getByRole("button", { name: "Add host" }));
     const dialog = within(screen.getByRole("dialog", { name: "Add host" }));
-    await user.click(dialog.getByText("Advanced: host the primary dials directly (deprecated)"));
+    await user.click(
+      await dialog.findByText("Advanced: host the primary dials directly (deprecated)"),
+    );
     await user.click(dialog.getByRole("button", { name: "Generate pairing code" }));
 
     await user.click(dialog.getByRole("button", { name: "Generating…" }));
@@ -634,8 +645,11 @@ describe("HostsSection", () => {
       render(<HostsSection />);
 
       await user.click(screen.getByRole("button", { name: "Add host" }));
-      await user.click(screen.getByText("Advanced: host the primary dials directly (deprecated)"));
-      await user.click(screen.getByRole("button", { name: "Add with a token" }));
+      const dialog = within(screen.getByRole("dialog", { name: "Add host" }));
+      await user.click(
+        await dialog.findByText("Advanced: host the primary dials directly (deprecated)"),
+      );
+      await user.click(dialog.getByRole("button", { name: "Add with a token" }));
       const form = within(screen.getByRole("dialog", { name: "Add host" }));
       await user.type(form.getByRole("textbox", { name: "Name" }), "legacy-host");
       if (ownToken) {
@@ -650,6 +664,47 @@ describe("HostsSection", () => {
         ...(ownToken ? { token: "provided-token" } : {}),
       });
       if (!ownToken) expect(await screen.findByText("generated-token")).toBeInTheDocument();
+    },
+  );
+
+  // Issue #3477 — the token flow is the legacy one, and the server refuses it
+  // while MULLION_ALLOW_LEGACY_HOSTS is off. The entry that offers it is
+  // shown only when the server says the path is still open, so the operator
+  // is not walked into a 400.
+  it.each([
+    { allowLegacyHosts: true, expectVisible: true },
+    { allowLegacyHosts: false, expectVisible: false },
+    // A primary that predates the gate — or a bundle cached from before it —
+    // does not report the field at all. "Not reported" is not "open", so the
+    // entry stays hidden: the server would refuse the request anyway.
+    { allowLegacyHosts: undefined, expectVisible: false },
+  ])(
+    "offers the advanced token-host disclosure only when the server reports the legacy gate on (allowLegacyHosts: $allowLegacyHosts)",
+    async ({ allowLegacyHosts, expectVisible }) => {
+      const user = userEvent.setup();
+      const calls = stubFetch({ serverInfo: { allowLegacyHosts } });
+      render(<HostsSection />);
+
+      await user.click(screen.getByRole("button", { name: "Add host" }));
+      const dialog = within(screen.getByRole("dialog", { name: "Add host" }));
+      // The pairing flow itself is untouched either way.
+      expect(dialog.getByRole("button", { name: "Generate pairing code" })).toBeInTheDocument();
+      // The server was asked which paths it still takes.
+      await vi.waitFor(() => expect(calls).toContain("GET /api/server-info"));
+
+      if (expectVisible) {
+        expect(
+          await dialog.findByText("Advanced: host the primary dials directly (deprecated)"),
+        ).toBeInTheDocument();
+        expect(dialog.getByRole("button", { name: "Add with a token" })).toBeInTheDocument();
+      } else {
+        await vi.waitFor(() =>
+          expect(
+            dialog.queryByText("Advanced: host the primary dials directly (deprecated)"),
+          ).toBeNull(),
+        );
+        expect(dialog.queryByRole("button", { name: "Add with a token" })).toBeNull();
+      }
     },
   );
 });
