@@ -68,7 +68,11 @@ describe("browser-cookies", () => {
       .from(browserCookies)
       .where(eq(browserCookies.id, summary.id))
       .all();
-    expect(row.cookiesEnc).not.toContain("sid"); // never stored in plaintext
+    // Never stored in plaintext. Checked against the JSON a plaintext store
+    // would hold, not a bare "sid": base64url ciphertext contains "sid" by
+    // chance now and then, which made this assertion flaky (#3542's CI).
+    expect(row.cookiesEnc).not.toContain('"name":"sid"');
+    expect(row.cookiesEnc).not.toContain("example.com");
     expect(row.cookiesEnc.startsWith("enc:")).toBe(true);
   });
 

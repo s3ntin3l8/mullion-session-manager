@@ -8,6 +8,7 @@ function row(id: number, serial: string | null, over: Partial<Device> = {}): Dev
     hostId: "local",
     projectId: null,
     name: null,
+    platform: "android",
     kind: "physical",
     avdName: null,
     serial,

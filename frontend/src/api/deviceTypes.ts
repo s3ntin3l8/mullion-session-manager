@@ -22,10 +22,10 @@ export interface Device {
   projectId: number | null;
   name: string | null;
   // Which platform's engine runs the device. `kind`, `avdName` and `serial`
-  // below are Android-shaped; an iOS Simulator is identified by `udid`. The
-  // server always sends it; it is optional here so a Device built without it (a
-  // fixture, an older cached response) still type-checks. Absent means "android".
-  platform?: DevicePlatform;
+  // below are Android-shaped; an iOS Simulator is identified by `udid`. Required:
+  // the server always sends it (routes/devices.ts's DeviceListItem), and a loaded
+  // row with no platform would put the panel back on a guessed toolbar (#3540).
+  platform: DevicePlatform;
   kind: DeviceKind;
   // Set for `kind: "emulator"`, null for `kind: "physical"`.
   avdName: string | null;

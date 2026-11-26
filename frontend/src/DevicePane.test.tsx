@@ -9,6 +9,8 @@ import type { Device } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { mockFetch } from "./test/mockFetch.js";
 import { resetStore } from "./test/resetStore.js";
+import { useDashboardStore } from "./store/index.js";
+import { DEVICES_POLL_MS } from "./SidebarDevices.js";
 
 // The two terminal states the socket can never recover from — STOPPED
 // (row exists, status "killed" → routes/device.ts 404s every connect) and
@@ -116,6 +118,7 @@ function makeDevice(overrides: Partial<Device> = {}): Device {
     hostId: "local",
     projectId: null,
     name: "My Pixel",
+    platform: "android",
     kind: "emulator",
     avdName: "pixel_7",
     serial: null,
@@ -129,6 +132,10 @@ function makeDevice(overrides: Partial<Device> = {}): Device {
 describe("DevicePane (issue #1326)", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   let unexpectedCalls: string[];
+  // What GET /api/devices answers. The pane polls its own row (#3540), so by
+  // default the server echoes whatever the test seeded into the store; a test
+  // that wants the row to arrive (or not) through the poll sets this instead.
+  let serverDevices: Device[] | null;
 
   beforeEach(() => {
     FakeWebSocket.instances = [];
@@ -142,8 +149,10 @@ describe("DevicePane (issue #1326)", () => {
     webglSupport.value = true;
     decoderWriter.close.mockClear();
     resetStore({ devices: [], devicesLoaded: true });
+    serverDevices = null;
     ({ fetchMock, unexpectedCalls } = mockFetch({
-      "GET /api/devices": () => jsonResponse(200, []),
+      "GET /api/devices": () =>
+        jsonResponse(200, serverDevices ?? useDashboardStore.getState().devices),
       "POST /api/devices/:id/start": () => jsonResponse(200, makeDevice({ status: "active" })),
       "POST /api/devices/:id/action": () => jsonResponse(200, { screenshot: "iVBORw0KGgo=" }),
     }));
@@ -677,13 +686,14 @@ describe("DevicePane (issue #1326)", () => {
 
   it("disables the Start button and relabels it while the start is in flight", async () => {
     resetStore({ devices: [makeDevice({ status: "killed" })], devicesLoaded: true });
-    // The pane itself never fetches — the click's POST /start is the first
-    // request. Hold it open so the in-flight state is observable.
-    let resolveStart!: (r: Response) => void;
-    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (resolveStart = r)));
-
     const user = userEvent.setup();
     render(<DevicePane params={{ deviceId: 7 }} />);
+    // The pane's own mount-time GET /api/devices goes first (#3540); the
+    // click's POST /start is the next request. Hold it open so the in-flight
+    // state is observable.
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/devices", expect.anything()));
+    let resolveStart!: (r: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => (resolveStart = r)));
     const button = screen.getByRole("button", { name: /Start device/ });
     await user.click(button);
 
@@ -857,20 +867,123 @@ describe("DevicePane (issue #1326)", () => {
     expect(FakeWebSocket.instances).toHaveLength(3);
   }
 
-  describe("iOS input profile and platform-aware toolbar", () => {
-    it("renders the Android toolbar when platform is missing", () => {
-      const device = makeDevice();
-      delete (device as Partial<Device>).platform;
-      resetStore({ devices: [device], devicesLoaded: true });
+  describe("toolbar while the row is not resolved (#3540)", () => {
+    const iosRow = () =>
+      makeDevice({ platform: "ios", avdName: null, udid: "17CD1308-0F2B-4652-8986-3F9612A09F8E" });
+    const androidButtons = [
+      "Back",
+      "Recent apps",
+      "Power",
+      "Volume down",
+      "Volume up",
+      "Rotate device",
+    ];
+
+    it("(a) shows only the iOS controls for an iOS row in the store", () => {
+      resetStore({ devices: [iosRow()], devicesLoaded: true });
       render(<DevicePane params={{ deviceId: 7 }} />);
 
-      expect(screen.getByRole("toolbar", { name: "Android device controls" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Recent apps" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Rotate device" })).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Lock" })).not.toBeInTheDocument();
+      expect(screen.getByRole("toolbar", { name: "iOS device controls" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Home" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Lock" })).toBeInTheDocument();
+      for (const name of androidButtons) {
+        expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+      }
     });
 
+    it("(b) renders no platform buttons and routes no keys while the list is not loaded", () => {
+      resetStore({ devices: [], devicesLoaded: false });
+      // The poll never resolves here, so the row stays unknown for the test.
+      fetchMock.mockImplementation(() => new Promise(() => {}));
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+
+      expect(screen.getByRole("toolbar", { name: "Device controls" })).toBeInTheDocument();
+      for (const name of [...androidButtons, "Home", "Lock"]) {
+        expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+      }
+      expect(screen.getByRole("button", { name: "Download screenshot" })).toBeInTheDocument();
+
+      const canvas = document.querySelector("canvas")!;
+      const enter = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" });
+      const letter = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "a",
+        code: "KeyA",
+      });
+      act(() => {
+        canvas.dispatchEvent(enter);
+        canvas.dispatchEvent(letter);
+      });
+      expect(enter.defaultPrevented).toBe(false);
+      expect(socket.sent).toEqual([]);
+    });
+
+    it("(c) loads its own row and switches to the iOS toolbar when it arrives", async () => {
+      resetStore({ devices: [], devicesLoaded: false });
+      serverDevices = [iosRow()];
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      // Before the poll lands: unknown, so no Android controls first.
+      expect(screen.getByRole("toolbar", { name: "Device controls" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+
+      expect(
+        await screen.findByRole("toolbar", { name: "iOS device controls" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+      expect(fetchMock).toHaveBeenCalledWith("/api/devices", expect.anything());
+    });
+
+    it("skips its own poll while another poller requested the list recently", async () => {
+      resetStore({ devices: [iosRow()], devicesLoaded: true, devicesFetchedAt: Date.now() });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      await act(async () => {});
+
+      expect(fetchMock).not.toHaveBeenCalledWith("/api/devices", expect.anything());
+    });
+
+    it("does not stack a second request while its own is still pending", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        resetStore({ devices: [], devicesLoaded: false });
+        fetchMock.mockImplementation(() => new Promise(() => {}));
+        render(<DevicePane params={{ deviceId: 7 }} />);
+        await act(async () => {
+          vi.advanceTimersByTime(3 * DEVICES_POLL_MS);
+        });
+
+        const listCalls = fetchMock.mock.calls.filter(([url]) => url === "/api/devices");
+        expect(listCalls).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("uses the platform from the panel params before the row loads", () => {
+      resetStore({ devices: [], devicesLoaded: false });
+      fetchMock.mockImplementation(() => new Promise(() => {}));
+      render(<DevicePane params={{ deviceId: 7, platform: "ios" }} />);
+
+      expect(screen.getByRole("toolbar", { name: "iOS device controls" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
+    });
+
+    it("(d) still renders the Android toolbar for an Android row, over a stale params platform", () => {
+      resetStore({ devices: [makeDevice({ platform: "android" })], devicesLoaded: true });
+      // A loaded row always wins over the platform saved in the panel params.
+      render(<DevicePane params={{ deviceId: 7, platform: "ios" }} />);
+
+      expect(screen.getByRole("toolbar", { name: "Android device controls" })).toBeInTheDocument();
+      for (const name of androidButtons) {
+        expect(screen.getByRole("button", { name })).toBeInTheDocument();
+      }
+      expect(screen.queryByRole("button", { name: "Lock" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("iOS input profile and platform-aware toolbar", () => {
     it("renders the iOS toolbar and sends button messages for Home and Lock", () => {
       localStorage.removeItem("crs.deviceFrame");
       resetStore({

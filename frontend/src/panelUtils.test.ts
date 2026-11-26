@@ -635,6 +635,7 @@ describe("openDevicePanel (PR #1324)", () => {
     hostId: "local",
     projectId: null,
     name: "My Pixel",
+    platform: "android",
     kind: "emulator",
     avdName: "pixel_7",
     serial: null,
@@ -664,8 +665,18 @@ describe("openDevicePanel (PR #1324)", () => {
         id: "device-1",
         component: "device",
         title: "My Pixel",
-        params: { deviceId: 1 },
+        params: { deviceId: 1, platform: "android" },
       }),
+    );
+  });
+
+  it("carries the device's platform in the panel params (#3540)", () => {
+    const api = mockDockviewApi();
+
+    openDevicePanel(api, { ...TEST_DEVICE, platform: "ios" }, DESKTOP_LAYOUT);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { deviceId: 1, platform: "ios" } }),
     );
   });
 

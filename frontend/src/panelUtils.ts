@@ -1092,7 +1092,10 @@ export function openDevicePanel(api: DockviewApi, device: Device, layout: Layout
     {
       component: "device",
       title: device.name || device.avdName || device.serial || undefined,
-      params: { deviceId: device.id },
+      // The platform rides in the params (and so in the saved layout) so the
+      // pane picks the right toolbar and input profile before its row is in
+      // the store (#3540) — the devices list only loads while a poller runs.
+      params: { deviceId: device.id, platform: device.platform },
     },
     layout,
   );

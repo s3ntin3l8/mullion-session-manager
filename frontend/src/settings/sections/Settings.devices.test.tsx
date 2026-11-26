@@ -12,6 +12,22 @@ import { mockFetch } from "../../test/mockFetch.js";
 import { resetStore } from "../../test/resetStore.js";
 import * as dd from "../../test/dropdown.js";
 
+// The emulator row most tests list (issue #1326's "My Pixel").
+const emulatorRow = (over: Partial<Device> = {}): Device => ({
+  id: 1,
+  hostId: "local",
+  projectId: null,
+  name: "My Pixel",
+  platform: "android",
+  kind: "emulator",
+  avdName: "pixel_7",
+  serial: null,
+  status: "active",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  live: null,
+  ...over,
+});
+
 // Issue #1326 — same fake-in-memory-backend shape as Settings.bridges.test.tsx:
 // exercises Settings -> Devices against a fake GET/POST/DELETE /api/devices
 // backend (through the real `devices` store slice, not a mocked one), so the
@@ -174,6 +190,7 @@ describe("Settings -> Devices (issue #1326)", () => {
           hostId: "local",
           projectId: null,
           name: body.name ?? null,
+          platform: "android",
           kind: isPhysical ? "physical" : "emulator",
           avdName: isPhysical ? null : (body.avdName ?? null),
           serial: isPhysical ? (body.address ?? null) : null,
@@ -207,6 +224,7 @@ describe("Settings -> Devices (issue #1326)", () => {
           hostId: "local",
           projectId: null,
           name: body.name ?? null,
+          platform: "android",
           kind: "physical",
           avdName: null,
           serial: body.connectAddress ?? (cached?.connectAddress as string | undefined) ?? null,
@@ -333,6 +351,7 @@ describe("Settings -> Devices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -401,6 +420,7 @@ describe("Settings -> Devices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -434,20 +454,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   });
 
   it("a stopped row is still listed, dimmed, with Start + Delete (no Stop)", async () => {
-    devicesDb = [
-      {
-        id: 1,
-        hostId: "local",
-        projectId: null,
-        name: "My Pixel",
-        kind: "emulator",
-        avdName: "pixel_7",
-        serial: null,
-        status: "killed",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        live: null,
-      },
-    ];
+    devicesDb = [emulatorRow({ status: "killed" })];
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
     const row = await screen.findByTestId("device-row-1");
@@ -461,20 +468,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   });
 
   it("Stop on an active row posts /stop and leaves it listed as stopped", async () => {
-    devicesDb = [
-      {
-        id: 1,
-        hostId: "local",
-        projectId: null,
-        name: "My Pixel",
-        kind: "emulator",
-        avdName: "pixel_7",
-        serial: null,
-        status: "active",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        live: null,
-      },
-    ];
+    devicesDb = [emulatorRow()];
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
@@ -494,20 +488,7 @@ describe("Settings -> Devices (issue #1326)", () => {
   });
 
   it("Start on a stopped row posts /start and flips it back to active", async () => {
-    devicesDb = [
-      {
-        id: 1,
-        hostId: "local",
-        projectId: null,
-        name: "My Pixel",
-        kind: "emulator",
-        avdName: "pixel_7",
-        serial: null,
-        status: "killed",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        live: null,
-      },
-    ];
+    devicesDb = [emulatorRow({ status: "killed" })];
     const user = userEvent.setup();
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 
@@ -535,6 +516,7 @@ describe("Settings -> Devices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "physical",
         avdName: null,
         serial: "192.168.1.23:37251",
@@ -838,6 +820,7 @@ describe("Settings -> Devices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "physical",
         avdName: null,
         serial: "192.168.1.23:37251",
@@ -883,6 +866,7 @@ describe("Settings -> Devices (issue #1326)", () => {
     hostId: "local",
     projectId: null,
     name: "My Pixel",
+    platform: "android",
     kind: "physical",
     avdName: null,
     serial: "192.168.1.23:37251",
@@ -1010,6 +994,7 @@ describe("Settings -> Devices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Emulator",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,

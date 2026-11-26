@@ -112,8 +112,10 @@ export function SidebarDevices({
   // the mount-time fetch — no separate effect needed.
   //
   // Hermes review (PR #1341) — `.catch` is required here, not optional:
-  // this component is always mounted (unlike DevicesSection, only mounted
-  // while Settings is open), so an uncaught rejection on a transient
+  // this component stays mounted for as long as its view is open (it is NOT
+  // the app-wide poller it once was: the right sidebar's Devices view and the
+  // phone's Devices tab mount it, and an open DevicePane polls its own row,
+  // #3540), so an uncaught rejection on a transient
   // /api/devices failure (e.g. a server restart) would otherwise fire every
   // DEVICES_POLL_MS for as long as the tab stays visible.
   //

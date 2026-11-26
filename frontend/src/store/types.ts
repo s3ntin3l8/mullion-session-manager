@@ -696,6 +696,13 @@ export interface DevicesSlice {
   // prune a restored device panel whose row was DELETED without
   // mass-closing every device panel while the list is still loading.
   devicesLoaded: boolean;
+  // When the request behind the last APPLIED devices list was issued
+  // (Date.now(), 0 = never). An open DevicePane skips its own poll tick when
+  // some poller requested the list this recently, so N panes and the sidebar
+  // cost about one host fan-out per tick between them, not one each (#3540).
+  // Issue time, not arrival time: a lone pane on a slow host must not skip
+  // its own next tick because its last answer arrived late.
+  devicesFetchedAt: number;
   refreshDevices: () => Promise<void>;
   createDevice: (avdName: string, name?: string, hostId?: string) => Promise<Device>;
   createIosDevice: (udid: string, name?: string, hostId?: string) => Promise<Device>;

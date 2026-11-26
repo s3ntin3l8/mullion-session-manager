@@ -25,6 +25,9 @@ import {
   WifiOffIcon,
 } from "./ui/icons.js";
 import { useDashboardStore } from "./store/index.js";
+import { usePolling } from "./hooks/usePolling.js";
+import { DEVICES_POLL_MS } from "./SidebarDevices.js";
+import type { DevicePlatform } from "./api/index.js";
 import { Spinner } from "./ui/Spinner.js";
 import { devicesApi } from "./api/device.js";
 import { keyboardEventToHidUsage } from "./deviceHidKeyMap.js";
@@ -33,6 +36,10 @@ import type { ExitedMessage } from "../../src/shared/ws-protocol.js";
 
 export interface DevicePaneParams {
   deviceId: number;
+  // Which platform's toolbar and input profile the pane uses, set by
+  // openDevicePanel from the row it opened (#3540). Optional: a layout saved
+  // before it existed has none, and the store row then decides alone.
+  platform?: DevicePlatform;
 }
 
 type ConnectionStatus = "connecting" | "open" | "reconnecting" | "failed" | "unsupported";
@@ -208,14 +215,48 @@ export function DevicePane(props: {
   const deviceStatus = useDashboardStore(
     (s) => s.devices.find((d) => d.id === props.params.deviceId)?.status,
   );
-  const devicePlatform = useDashboardStore(
-    (s) => s.devices.find((d) => d.id === props.params.deviceId)?.platform ?? "android",
+  // The platform, or null while it is unknown. A loaded row decides; before
+  // the row is in the store the panel's own params do (a layout saved before
+  // #3540 has none). Never a silent Android default for a row that simply
+  // isn't loaded yet (#3540): an iOS panel would render the Android toolbar
+  // and send it Android key events.
+  const rowPlatform = useDashboardStore(
+    (s) => s.devices.find((d) => d.id === props.params.deviceId)?.platform,
   );
+  const devicePlatform: DevicePlatform | null = rowPlatform ?? props.params.platform ?? null;
   const platformRef = useRef(devicePlatform);
   useEffect(() => {
     platformRef.current = devicePlatform;
   }, [devicePlatform]);
   const devicesLoaded = useDashboardStore((s) => s.devicesLoaded);
+  // The pane keeps its own row fresh. The devices list is otherwise polled
+  // only by SidebarDevices and Settings → Devices, which are mounted only
+  // while their view is open — with the right sidebar on another view the row
+  // never loaded, so the platform, "stopped" and "removed" all went blind
+  // (#3540). GET /api/devices fans out to every agent host, so a tick is
+  // skipped while this pane's last request is still pending or while any
+  // poller (the sidebar, another pane) has applied a list within the
+  // interval: N panes then cost one fan-out per tick between them.
+  const refreshDevices = useDashboardStore((s) => s.refreshDevices);
+  const devicesPollInFlight = useRef(false);
+  usePolling(
+    () => {
+      const fetchedAt = useDashboardStore.getState().devicesFetchedAt;
+      // 0 = never fetched: explicit, not left to the clock being far from 0.
+      const fresh = fetchedAt !== 0 && Date.now() - fetchedAt < (DEVICES_POLL_MS * 3) / 4;
+      if (devicesPollInFlight.current || fresh) {
+        return;
+      }
+      devicesPollInFlight.current = true;
+      void refreshDevices()
+        .catch(() => {})
+        .finally(() => {
+          devicesPollInFlight.current = false;
+        });
+    },
+    DEVICES_POLL_MS,
+    { pauseWhenHidden: true, deps: [refreshDevices] },
+  );
   const [starting, setStarting] = useState(false);
   const [showFrame, setShowFrame] = useState(
     () => readString(STORAGE_KEYS.deviceFrame, "on") !== "off",
@@ -640,6 +681,8 @@ export function DevicePane(props: {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      // Platform not known yet: route nothing rather than guess Android.
+      if (platformRef.current === null) return;
       if (platformRef.current === "ios") {
         const chord =
           (event.ctrlKey || event.metaKey) && !event.altKey && !event.getModifierState("AltGraph");
@@ -792,15 +835,18 @@ export function DevicePane(props: {
   }, [props.params.deviceId]);
 
   const isIos = devicePlatform === "ios";
+  const isAndroid = devicePlatform === "android";
   const controlsDisabled = status !== "open" || stopped || removed;
   return (
     <div className="browser-pane">
       <div
         className="device-toolbar"
         role="toolbar"
-        aria-label={isIos ? "iOS device controls" : "Android device controls"}
+        aria-label={
+          isIos ? "iOS device controls" : isAndroid ? "Android device controls" : "Device controls"
+        }
       >
-        {isIos ? (
+        {isIos && (
           <div className="device-toolbar-group" aria-label="Device buttons">
             <button
               onPointerDown={(event) => event.preventDefault()}
@@ -821,7 +867,8 @@ export function DevicePane(props: {
               <PowerIcon {...TOOLBAR_ICON} />
             </button>
           </div>
-        ) : (
+        )}
+        {isAndroid && (
           <>
             <div className="device-toolbar-group" aria-label="Navigation">
               <button
@@ -884,7 +931,7 @@ export function DevicePane(props: {
           </>
         )}
         <div className="device-toolbar-group" aria-label="Display">
-          {!isIos && (
+          {isAndroid && (
             <button
               onPointerDown={(event) => event.preventDefault()}
               title="Rotate device"

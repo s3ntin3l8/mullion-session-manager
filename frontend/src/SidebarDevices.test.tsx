@@ -84,6 +84,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "Old Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -108,6 +109,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -147,6 +149,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "",
+        platform: "android",
         kind: "emulator",
         avdName: "",
         serial: "",
@@ -168,6 +171,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -211,6 +215,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "Agent Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -246,6 +251,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -281,6 +287,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -315,6 +322,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -339,6 +347,7 @@ describe("SidebarDevices (issue #1326)", () => {
 
   it("disables Start and Stop and says so when the device's host is unreachable", async () => {
     const base = {
+      platform: "android" as const,
       hostId: "host-b",
       projectId: null,
       name: null,
@@ -389,6 +398,7 @@ describe("SidebarDevices (issue #1326)", () => {
   // error tests below.
   it("shows a failed stop message only on the row it happened to", async () => {
     const shared = {
+      platform: "android" as const,
       hostId: "local",
       projectId: null,
       kind: "emulator" as const,
@@ -429,6 +439,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -458,6 +469,7 @@ describe("SidebarDevices (issue #1326)", () => {
   // and must never leak into a neighbour's row.
   it("keeps a failed start's error on the failing row and off every other row", async () => {
     const shared = {
+      platform: "android" as const,
       hostId: "local",
       projectId: null,
       kind: "emulator" as const,
@@ -497,6 +509,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -540,6 +553,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,
@@ -581,6 +595,7 @@ describe("SidebarDevices (issue #1326)", () => {
         hostId: "local",
         projectId: null,
         name: "My Pixel",
+        platform: "android",
         kind: "emulator",
         avdName: "pixel_7",
         serial: null,

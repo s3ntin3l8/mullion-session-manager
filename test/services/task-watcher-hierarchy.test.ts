@@ -559,7 +559,9 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
       for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(11 * 60_000);
       // 3 attempts at the short interval, then nothing until the long one.
       expect(mockGetIssueSummary).toHaveBeenCalledTimes(3);
-    });
+      // 55 fake minutes run every watcher tick in between: ~7 s alone, and past
+      // the default 20 s under a full suite on a loaded shared host (#3542).
+    }, 60_000);
 
     it("tolerates a failing fetch and leaves the columns null", async () => {
       const projectId = await createProject();

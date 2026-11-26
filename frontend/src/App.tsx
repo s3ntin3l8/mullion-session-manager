@@ -293,8 +293,9 @@ export function App() {
       // devices/devicesLoaded — the device-panel prune sweep below. `devices`
       // gets a fresh array identity every DEVICES_POLL_MS just like sessions
       // does, so this costs the same already-acknowledged periodic
-      // re-render sessions costs (the two polls start together, so in
-      // practice they land on the same tick rather than doubling up).
+      // re-render sessions costs — once per poller per tick: the sidebar's
+      // poll and each open DevicePane's (#3540) start at their own mount
+      // time, so they need not land on the same tick.
       devices: s.devices,
       devicesLoaded: s.devicesLoaded,
       projectsLoaded: s.projectsLoaded,

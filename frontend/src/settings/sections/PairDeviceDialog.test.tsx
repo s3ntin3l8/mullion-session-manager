@@ -41,6 +41,7 @@ const pairedDevice: Device = {
   hostId: "local",
   projectId: null,
   name: null,
+  platform: "android",
   kind: "physical",
   avdName: null,
   serial: "192.168.1.23:37251",
