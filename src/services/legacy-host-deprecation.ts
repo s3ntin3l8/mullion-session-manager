@@ -35,12 +35,13 @@ export const LEGACY_ENROLLMENT_SECRET_WARNING =
 /**
  * Issue #3477 — what the primary logs at startup when the fleet enrollment
  * secret is set AND the legacy gate is off. The path is not merely deprecated
- * then: it is refused, and an operator whose agents stop enrolling needs to
- * read that off the boot log rather than guess.
+ * then: it no longer CREATES a host, and an operator whose agents stop
+ * enrolling needs to read that off the boot log rather than guess. The hosts
+ * that already exist may still register — the gate stops new ones.
  */
 export const LEGACY_ENROLLMENT_SECRET_REFUSED_WARNING =
-  "MULLION_ENROLLMENT_SECRET is set — deprecated and refused: use automation tokens " +
-  "instead; set MULLION_ALLOW_LEGACY_HOSTS=true to accept fleet-secret enrollment again.";
+  "MULLION_ENROLLMENT_SECRET is set — deprecated and refused for new hosts: use automation " +
+  "tokens instead; set MULLION_ALLOW_LEGACY_HOSTS=true to accept fleet-secret enrollment again.";
 
 /** What the primary logs once, when the first host enrolls with the fleet secret. */
 export const LEGACY_FLEET_ENROLLMENT_WARNING =
@@ -53,8 +54,30 @@ export const LEGACY_FLEET_ENROLLMENT_WARNING =
  */
 export const LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING =
   "a host tried to enroll with the fleet secret — refused: the fleet-wide enrollment " +
-  "secret is deprecated (use automation tokens instead); set MULLION_ALLOW_LEGACY_HOSTS=true " +
-  "to accept it again.";
+  "secret is deprecated (use automation tokens instead) and the gate refuses to create new " +
+  "legacy hosts; set MULLION_ALLOW_LEGACY_HOSTS=true to accept them again.";
+
+/**
+ * Issue #3477 — the same refusal, but the peer address was outside
+ * MULLION_ENROLLMENT_ALLOWED_CIDRS. It is a separate notice because the
+ * operator has to tell the two apart: one is a host that does not exist
+ * yet, the other a host that may not register from where it is.
+ */
+export const LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING =
+  "a host tried to enroll with the fleet secret from an address outside " +
+  "MULLION_ENROLLMENT_ALLOWED_CIDRS — refused: the fleet-wide enrollment secret is " +
+  "deprecated (use automation tokens instead) and the gate refuses to create new legacy " +
+  "hosts; allow the address, or set MULLION_ALLOW_LEGACY_HOSTS=true.";
+
+/**
+ * Issue #3477 — what the primary logs once, when a host that already exists
+ * re-registers with the fleet secret. The gate does not stop that — the host
+ * is already on the fleet-secret path — but the path is on its way out, so
+ * the operator sees that their fleet still depends on it.
+ */
+export const LEGACY_FLEET_ENROLLMENT_REUSED_WARNING =
+  "a host that already existed re-registered with the fleet secret — deprecated: use " +
+  "automation tokens or a one-time pairing code instead; removal is planned.";
 
 /**
  * Issue #3477 — the 400 that POST /api/hosts answers with while the legacy
@@ -106,9 +129,32 @@ export function noteLegacyFleetEnrollment(app: FastifyInstance): void {
  * off, so it fires exactly when a host was turned away — and says once per
  * process why, because a fleet of agents re-registering on every boot would
  * otherwise fill the log with the same line.
+ *
+ * `addressNotAllowed` picks the variant for a peer outside
+ * MULLION_ENROLLMENT_ALLOWED_CIDRS: the operator has to tell the two apart
+ * (a host that does not exist yet, versus a host that may not register from
+ * where it is), and both are refused with the same 401 the caller sees.
  */
-export function refuseLegacyFleetEnrollment(app: FastifyInstance): void {
-  emitOnce(app, LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING);
+export function refuseLegacyFleetEnrollment(
+  app: FastifyInstance,
+  opts: { addressNotAllowed?: boolean } = {},
+): void {
+  emitOnce(
+    app,
+    opts.addressNotAllowed
+      ? LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING
+      : LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING,
+  );
+}
+
+/**
+ * Report the first fleet-secret registration that was served by a host row
+ * that already existed (issue #3477). The gate does not stop that — the
+ * host is already on the fleet-secret path — but the path is on its way
+ * out, so the operator sees that their fleet still depends on it.
+ */
+export function noteLegacyFleetHostReuse(app: FastifyInstance): void {
+  emitOnce(app, LEGACY_FLEET_ENROLLMENT_REUSED_WARNING);
 }
 
 /**

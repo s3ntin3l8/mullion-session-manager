@@ -302,10 +302,11 @@ export const schema = {
     // Issue #3477 — the legacy host kinds (a host added by token through
     // POST /api/hosts, and fleet-secret enrollment through
     // POST /api/internal/register) are deprecated (decision #3320). Off by
-    // default: with it off, those two entry points are refused, so no NEW
-    // legacy host can appear. What already exists keeps working — renewals,
-    // the outbound channel, a per-host token claiming a row created earlier,
-    // and a legacy agent registering on every boot.
+    // default: with it off, those two entry points no longer CREATE a host,
+    // so no NEW legacy host can appear. What already exists keeps working —
+    // renewals, the outbound channel, a per-host token claiming a row created
+    // earlier, a legacy agent registering on every boot, and an agent that
+    // enrolled with the fleet secret (it is served by the row it owns).
     //
     // On by default in the test harness instead (see test/setup.ts): the bulk
     // of the suite creates its hosts through POST /api/hosts, and the flag's

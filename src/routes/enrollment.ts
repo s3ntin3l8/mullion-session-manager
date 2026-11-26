@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   claimHost,
   clearHostSession,
+  enrollExistingLegacyHost,
   enrollHost,
   recordHostSelfReport,
   renewMachineCredential,
@@ -13,6 +14,7 @@ import {
 import { refreshHostProtocolSoon } from "../services/host-agents.js";
 import {
   noteLegacyFleetEnrollment,
+  noteLegacyFleetHostReuse,
   refuseLegacyFleetEnrollment,
 } from "../services/legacy-host-deprecation.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
@@ -235,30 +237,58 @@ export async function enrollmentRoute(app: FastifyInstance) {
       // Issue #1059 — both fixed-length (server-configured secret vs
       // inbound bearer); same assumption as auth.ts / internal.ts.
       if (enrollmentSecret && timingSafeTokenMatch(token, enrollmentSecret)) {
-        // Issue #3477 — the legacy gate. The fleet-wide enrollment secret is
-        // deprecated (use automation tokens instead), so with
-        // MULLION_ALLOW_LEGACY_HOSTS off the fleet-secret branch is refused.
-        //
-        // The refusal is the SAME 401 an unknown credential gets, and it is
-        // answered BEFORE the CIDR gate below: a 403 there would tell the
-        // caller that its secret was the right one, which is exactly what
-        // this refusal must not.
-        //
-        // Only NEW legacy hosts are refused. A host that already exists keeps
-        // working with the gate off: it claims its own row with its own
-        // token (the branch above), renews its session, and keeps its
-        // outbound channel.
-        if (!app.config.MULLION_ALLOW_LEGACY_HOSTS) {
-          refuseLegacyFleetEnrollment(app);
-          return reply.unauthorized("invalid registration credential");
-        }
-        const allowedCidrs = app.config.MULLION_ENROLLMENT_ALLOWED_CIDRS;
+        // The CIDR gate, evaluated once and used by both paths below.
         // request.raw.socket.remoteAddress, not request.ip — see
         // getRawRemoteAddress's own doc comment. `.ip` is XFF-forgeable the
         // moment trustProxy is enabled, which would let any external caller
         // bypass this CIDR gate on a grant env.ts itself calls "arbitrary-
         // command-execution trust" (AS7).
-        if (allowedCidrs && !isIpAllowed(getRawRemoteAddress(request), allowedCidrs)) {
+        const allowedCidrs = app.config.MULLION_ENROLLMENT_ALLOWED_CIDRS;
+        const addressAllowed =
+          !allowedCidrs || isIpAllowed(getRawRemoteAddress(request), allowedCidrs);
+        // Issue #3441 — the auto-approve allow-list is scoped to the legacy
+        // fleet-secret path, and it applies to the row a registration
+        // REUSES as much as to a row it creates, so it is evaluated once
+        // here and handed to both.
+        const autoApproveCidrs = app.config.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS.trim();
+        const autoApproved =
+          autoApproveCidrs !== "" && isIpAllowed(getRawRemoteAddress(request), autoApproveCidrs);
+
+        // Issue #3477 — the legacy gate. The fleet-wide enrollment secret is
+        // deprecated (use automation tokens instead), so with
+        // MULLION_ALLOW_LEGACY_HOSTS off the fleet-secret branch refuses to
+        // CREATE a legacy host.
+        //
+        // What it does NOT refuse is the host that already exists: an agent
+        // that enrolled with the fleet secret holds no identity of its own,
+        // so it presents that secret on every boot, and the primary has to
+        // answer with a session or the whole fleet goes dark on the next
+        // restart. Such a registration maps to the row the agent already
+        // owns (matched by the address it advertises) and is served by it —
+        // no second row is created.
+        //
+        // Every refusal answers the SAME 401 an unknown credential gets. The
+        // CIDR gate is evaluated above, but its own 403 is never answered on
+        // this path: a 403 would tell the caller that its secret was the
+        // right one, which is exactly what this refusal must not. A peer
+        // outside the allowed addresses is refused the same way, so that
+        // answer never says "your secret was right" either.
+        if (!app.config.MULLION_ALLOW_LEGACY_HOSTS) {
+          const reused = addressAllowed
+            ? enrollExistingLegacyHost(app, input, peer, { approved: autoApproved })
+            : null;
+          if (!reused) {
+            refuseLegacyFleetEnrollment(app, { addressNotAllowed: !addressAllowed });
+            return reply.unauthorized("invalid registration credential");
+          }
+          noteLegacyFleetHostReuse(app);
+          app.reconfigureRemoteEventSubscriptions({ forceReconnect: [reused.hostId] });
+          refreshHostProtocolSoon(app, reused.hostId);
+          app.reconfigureSshAgentFanout();
+          app.reconfigureControlRelayFanout();
+          return respond(reused);
+        }
+        if (!addressAllowed) {
           return reply.forbidden("peer address not in MULLION_ENROLLMENT_ALLOWED_CIDRS");
         }
         // Issue #3476 — the fleet-wide enrollment secret is deprecated (use
@@ -266,9 +296,6 @@ export async function enrollmentRoute(app: FastifyInstance) {
         // succeeds exactly as before, this only says so — once per process,
         // so a fleet of agents enrolling does not fill the log.
         noteLegacyFleetEnrollment(app);
-        const autoApproveCidrs = app.config.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS.trim();
-        const autoApproved =
-          autoApproveCidrs !== "" && isIpAllowed(getRawRemoteAddress(request), autoApproveCidrs);
         const enrolled = enrollHost(app, input, peer, { approved: autoApproved });
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
         refreshHostProtocolSoon(app, enrolled.hostId);

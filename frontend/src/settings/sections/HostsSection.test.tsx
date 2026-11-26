@@ -674,6 +674,10 @@ describe("HostsSection", () => {
   it.each([
     { allowLegacyHosts: true, expectVisible: true },
     { allowLegacyHosts: false, expectVisible: false },
+    // A primary that predates the gate — or a bundle cached from before it —
+    // does not report the field at all. "Not reported" is not "open", so the
+    // entry stays hidden: the server would refuse the request anyway.
+    { allowLegacyHosts: undefined, expectVisible: false },
   ])(
     "offers the advanced token-host disclosure only when the server reports the legacy gate on (allowLegacyHosts: $allowLegacyHosts)",
     async ({ allowLegacyHosts, expectVisible }) => {

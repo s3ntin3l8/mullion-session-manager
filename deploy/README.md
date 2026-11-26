@@ -1387,6 +1387,14 @@ there, and every agent booted with the matching
 them (`POST /api/hosts/:id/approve`). For automation-token pairing, tokens
 with `requireApproval` similarly wait in **Awaiting approval** until approved.
 
+That fleet-secret self-registration is deprecated: it only creates a host
+while the primary runs with `MULLION_ALLOW_LEGACY_HOSTS=true`. With the
+default configuration the primary answers the agent's registration with a
+**401** and no host row is created — mint a one-time pairing code per agent
+instead (see "Deprecated host kinds" below). Agents that enrolled with the
+fleet secret before the gate keep registering with it: their registration is
+served by the row they already own.
+
 **Updating an agent:** as of issue #647 / roadmap 7.8, an agent has its own
 self-update surface — see "Layout and updates" above and
 [`docs/multi-host.md`](../docs/multi-host.md)'s "Agent updates" section.
@@ -1457,30 +1465,45 @@ create one, not on the hosts themselves:
   (deprecated)_ entry is shown only while the server reports the gate open
   (`GET /api/server-info` → `allowLegacyHosts`), so the operator is never
   walked into a refusal.
-- **Fleet-secret enrollment is refused.** The fleet-wide secret
-  (`MULLION_ENROLLMENT_SECRET`) no longer enrolls a new host row:
+- **Fleet-secret enrollment no longer creates a host.** The fleet-wide secret
+  (`MULLION_ENROLLMENT_SECRET`) does not enroll a new host row:
   `POST /api/internal/register` answers the same **401** an unknown credential
   gets — the refusal tells the caller nothing about the secret — and the
   primary logs the reason once per process.
 
-**What keeps working with the gate off.** Every host that already exists on the
-**claim** path: its renewals, its outbound channel, a per-host token claiming
-a row created earlier, and a legacy agent registering on every boot with its
-own row's token are all unchanged — the claim path is how an existing host
-proves itself, and it is not gated.
+**What keeps working with the gate off.** Every host that already exists: its
+renewals, its outbound channel, a per-host token claiming a row created
+earlier, a legacy agent registering on every boot with its own row's token —
+and an agent that enrolled with the **fleet secret**, which still registers
+with it on every boot. Such a registration is served by the row the agent
+already owns (the row is matched by the address it advertises), so no second
+row appears. The claim path is how an existing host proves itself, and it is
+not gated.
 
-**What the gate does break.** An agent that enrolled with the **fleet secret**
-can no longer register with it, on its next boot included. Move such an agent
-to a pairing code (or an automation token) first: the row it enrolled stays,
-but the agent can no longer get a session from the primary.
+**What the gate does break.** A host that does not exist yet cannot be
+created through a legacy path: `POST /api/hosts` answers 400 and a
+fleet-secret enrollment answers 401. Mint a one-time pairing code instead
+(_Add host_ → **Generate pairing code**, or an automation token) and redeem
+it on the agent.
+
+**A fleet-secret agent that asks for an identity.** An agent that enrolled
+with the fleet secret and now runs a release that persists a machine identity
+(v0.3.59 or later) presents the fleet secret once more and asks for a
+credential: the primary hands it one **on the row it already owns**, so the
+host leaves the fleet-secret path and no second row appears. (With the gate
+open, the old behaviour stands: that registration creates a second row.) A row
+that already holds an identity is never taken over by a fleet secret (issue
+[#3439](https://github.com/s3ntin3l8/mullion-session-manager/issues/3439)) —
+an agent that lost its state file has to be re-paired from Settings → Hosts
+instead.
 
 Set `MULLION_ALLOW_LEGACY_HOSTS=true` to keep the old behaviour exactly as it
 is today — the same requests, the same answers, the same rows.
 
 **Schedule.** The gate is here now; the legacy paths are **removed** in the
-next minor release, together with the flag. Nothing that exists stops working
-when the gate lands — the gate is what to plan for, and the removal is what to
-plan for after it.
+next minor release, together with the flag. The hosts that exist keep working
+when the gate lands — the gate is what to plan for, and the removal is what
+to plan for after it.
 
 ## What still needs a real, live check
 
