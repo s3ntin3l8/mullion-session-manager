@@ -20,19 +20,25 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
   // resolution order doesn't have to match request order: without this
   // guard, a slow response from a poll tick issued BEFORE a create/delete's
   // own follow-up refresh could resolve AFTER it and overwrite the store with
-  // stale (pre-mutation) data. A response is applied unless a NEWER-issued
-  // one has already landed. Not "only the latest issued": with N pollers out
-  // of phase a new GET starts every 4000/N ms, and a list slower than that
-  // (a remote host's live() can take up to its 5 s timeout) would then never
-  // land at all.
+  // stale (pre-mutation) data. Two rules:
+  // - a response is dropped once a NEWER-issued one has landed. Not "only
+  //   the latest issued": with several pollers out of phase a list slower
+  //   than the gap between their ticks (a remote host's live() can take up
+  //   to its 5 s timeout) would then never land at all (#3540);
+  // - a response issued before a mutation's own follow-up refresh is always
+  //   dropped (`mutationFloor`), so a stopped or deleted row never comes back
+  //   for a moment from a list read before the mutation.
   let latestRefreshId = 0;
   let latestAppliedId = 0;
+  let mutationFloor = 0;
 
   // Shared tail for every mutation below: re-fetch, best-effort, so a
   // transient GET failure never masquerades as a mutation failure (the
   // mutation already succeeded server-side by this point) — either poller's
   // next tick heals the store within DEVICES_POLL_MS regardless.
   const refreshAfterMutation = () => {
+    // The id the refreshDevices() call below is about to take.
+    mutationFloor = latestRefreshId + 1;
     void get()
       .refreshDevices()
       .catch(() => {});
@@ -41,13 +47,15 @@ export const createDevicesSlice: StateCreator<DashboardState, [], [], DevicesSli
   return {
     devices: [],
     devicesLoaded: false,
+    devicesFetchedAt: 0,
 
     refreshDevices: async () => {
       const requestId = ++latestRefreshId;
+      const requestedAt = Date.now();
       const devices = await api.listDevices();
-      if (requestId > latestAppliedId) {
+      if (requestId > latestAppliedId && requestId >= mutationFloor) {
         latestAppliedId = requestId;
-        set({ devices, devicesLoaded: true });
+        set({ devices, devicesLoaded: true, devicesFetchedAt: requestedAt });
       }
     },
 

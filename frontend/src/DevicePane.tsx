@@ -233,13 +233,28 @@ export function DevicePane(props: {
   // only by SidebarDevices and Settings → Devices, which are mounted only
   // while their view is open — with the right sidebar on another view the row
   // never loaded, so the platform, "stopped" and "removed" all went blind
-  // (#3540). Each open pane adds one GET per DEVICES_POLL_MS; the slice
-  // drops a response only when a newer-issued one has already landed.
+  // (#3540). GET /api/devices fans out to every agent host, so a tick is
+  // skipped while this pane's last request is still pending or while any
+  // poller (the sidebar, another pane) has applied a list within the
+  // interval: N panes then cost one fan-out per tick between them.
   const refreshDevices = useDashboardStore((s) => s.refreshDevices);
-  usePolling(() => refreshDevices().catch(() => {}), DEVICES_POLL_MS, {
-    pauseWhenHidden: true,
-    deps: [refreshDevices],
-  });
+  const devicesPollInFlight = useRef(false);
+  usePolling(
+    () => {
+      const fetchedAt = useDashboardStore.getState().devicesFetchedAt;
+      if (devicesPollInFlight.current || Date.now() - fetchedAt < (DEVICES_POLL_MS * 3) / 4) {
+        return;
+      }
+      devicesPollInFlight.current = true;
+      void refreshDevices()
+        .catch(() => {})
+        .finally(() => {
+          devicesPollInFlight.current = false;
+        });
+    },
+    DEVICES_POLL_MS,
+    { pauseWhenHidden: true, deps: [refreshDevices] },
+  );
   const [starting, setStarting] = useState(false);
   const [showFrame, setShowFrame] = useState(
     () => readString(STORAGE_KEYS.deviceFrame, "on") !== "off",

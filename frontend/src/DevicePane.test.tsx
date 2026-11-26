@@ -10,6 +10,7 @@ import { jsonResponse } from "./test/jsonResponse.js";
 import { mockFetch } from "./test/mockFetch.js";
 import { resetStore } from "./test/resetStore.js";
 import { useDashboardStore } from "./store/index.js";
+import { DEVICES_POLL_MS } from "./SidebarDevices.js";
 
 // The two terminal states the socket can never recover from — STOPPED
 // (row exists, status "killed" → routes/device.ts 404s every connect) and
@@ -935,6 +936,31 @@ describe("DevicePane (issue #1326)", () => {
       expect(fetchMock).toHaveBeenCalledWith("/api/devices", expect.anything());
     });
 
+    it("skips its own poll while another poller requested the list recently", async () => {
+      resetStore({ devices: [iosRow()], devicesLoaded: true, devicesFetchedAt: Date.now() });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      await act(async () => {});
+
+      expect(fetchMock).not.toHaveBeenCalledWith("/api/devices", expect.anything());
+    });
+
+    it("does not stack a second request while its own is still pending", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        resetStore({ devices: [], devicesLoaded: false });
+        fetchMock.mockImplementation(() => new Promise(() => {}));
+        render(<DevicePane params={{ deviceId: 7 }} />);
+        await act(async () => {
+          vi.advanceTimersByTime(3 * DEVICES_POLL_MS);
+        });
+
+        const listCalls = fetchMock.mock.calls.filter(([url]) => url === "/api/devices");
+        expect(listCalls).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("uses the platform from the panel params before the row loads", () => {
       resetStore({ devices: [], devicesLoaded: false });
       fetchMock.mockImplementation(() => new Promise(() => {}));
@@ -944,16 +970,10 @@ describe("DevicePane (issue #1326)", () => {
       expect(screen.queryByRole("button", { name: "Back" })).not.toBeInTheDocument();
     });
 
-    it("lets a loaded row override a stale platform in the params", () => {
+    it("(d) still renders the Android toolbar for an Android row, over a stale params platform", () => {
       resetStore({ devices: [makeDevice({ platform: "android" })], devicesLoaded: true });
+      // A loaded row always wins over the platform saved in the panel params.
       render(<DevicePane params={{ deviceId: 7, platform: "ios" }} />);
-
-      expect(screen.getByRole("toolbar", { name: "Android device controls" })).toBeInTheDocument();
-    });
-
-    it("(d) still renders the Android toolbar for an Android row", () => {
-      resetStore({ devices: [makeDevice({ platform: "android" })], devicesLoaded: true });
-      render(<DevicePane params={{ deviceId: 7 }} />);
 
       expect(screen.getByRole("toolbar", { name: "Android device controls" })).toBeInTheDocument();
       for (const name of androidButtons) {

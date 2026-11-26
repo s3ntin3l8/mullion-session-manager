@@ -464,7 +464,13 @@ itself opens (or focuses) that device's panel via `openDevicePanel`
 panel pointed at a stopped device is just a 404ing websocket. The view
 polls while it is open (even at zero devices), so a device created purely
 through the CLI/MCP surface below (no panel ever opened) still appears without
-a reload.
+a reload. The view is mounted only while it is the right sidebar's active view,
+so an open device panel also polls the list for its own row (#3540): its
+platform, and its stopped/removed overlays, must not depend on which sidebar
+view is showing. It skips a tick while its own request is pending or while any
+poller requested the list within the last three quarters of the interval, so
+several panes plus the sidebar cost about one `GET /api/devices` (and one
+agent-host fan-out) per tick between them.
 
 Settings → Devices is the lifecycle surface — create, pair, and, on _every_
 row regardless of status: start, stop, edit a physical device's adb address,
@@ -616,8 +622,17 @@ stream kind ([#3273](https://github.com/s3ntin3l8/mullion-session-manager/issues
 ### Toolbar and gestures (issue #1419, #3204)
 
 `DevicePane.tsx` carries a platform-aware toolbar (`role="toolbar"`,
-`aria-label="iOS device controls"` or `"Android device controls"`) above the
-video:
+`aria-label="iOS device controls"`, `"Android device controls"`, or
+`"Device controls"` while the platform is unknown) above the video. The
+platform comes from the device's row once the list is loaded, and until then
+from the panel's own params: `openDevicePanel` puts `platform` in them, so it
+is also saved with the workspace layout (#3540). A layout saved before that has
+no `platform` param, so the panel waits for its row.
+
+- **Unknown** (neither row nor params yet) — **Display** only (Download
+  screenshot, Copy screenshot, Show/hide device frame): no platform buttons,
+  and keyboard input is not routed at all rather than guessed as Android.
+  Pointer, wheel and paste send platform-neutral messages and still work.
 
 - **Android** — **Navigation** (Back sends `back`; Home and Recent apps send
   `keyEvent`s `KEYCODE_HOME`/`KEYCODE_APP_SWITCH`), **Device buttons** (Power,

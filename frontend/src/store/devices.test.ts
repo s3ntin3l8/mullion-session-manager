@@ -61,4 +61,27 @@ describe("devices slice: refreshDevices ordering (#3540)", () => {
 
     expect(useDashboardStore.getState().devices).toEqual([row(4)]);
   });
+
+  it("never applies a list requested before a mutation, even while the mutation's own refresh is pending", async () => {
+    const beforeStop = deferred();
+    const afterStop = deferred();
+    vi.spyOn(api, "listDevices")
+      .mockReturnValueOnce(beforeStop.promise)
+      .mockReturnValueOnce(afterStop.promise);
+    vi.spyOn(api, "stopDevice").mockResolvedValue(undefined as never);
+    useDashboardStore.setState({ devices: [row(3)], devicesLoaded: true });
+    const { refreshDevices, stopDevice } = useDashboardStore.getState();
+
+    const poll = refreshDevices();
+    await stopDevice(3);
+    // The pre-stop poll lands first, while the stop's refresh is in flight.
+    beforeStop.resolve([{ ...row(3), status: "active" }]);
+    await poll;
+    expect(useDashboardStore.getState().devices).toEqual([row(3)]);
+
+    afterStop.resolve([{ ...row(3), status: "killed" }]);
+    await vi.waitFor(() =>
+      expect(useDashboardStore.getState().devices).toEqual([{ ...row(3), status: "killed" }]),
+    );
+  });
 });
