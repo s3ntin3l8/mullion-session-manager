@@ -50,6 +50,7 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.MULLION_ENROLLMENT_SECRET = SECRET;
+    process.env.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS = "127.0.0.1/32";
     app = await buildApp();
   });
   afterAll(async () => {
@@ -58,6 +59,7 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
     delete process.env.MULLION_ENROLLMENT_SECRET;
+    delete process.env.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS;
   });
   afterEach(() => {
     // Stops the fake-timer sweep before the real timers come back.

@@ -32,6 +32,8 @@ export async function pushTerminalPaletteToHost(
 
 /** Pushes the cached palette to every enrolled remote host. */
 export async function pushTerminalPaletteToHosts(app: FastifyInstance): Promise<void> {
-  const hosts = listHosts(app).filter((h) => h.id !== LOCAL_HOST_ID && hasReachablePath(app, h));
+  const hosts = listHosts(app).filter(
+    (h) => h.id !== LOCAL_HOST_ID && !h.approvalPending && hasReachablePath(app, h),
+  );
   await Promise.all(hosts.map((h) => pushTerminalPaletteToHost(app, h.id)));
 }

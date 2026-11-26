@@ -47,6 +47,7 @@ async function setup(opts: { baseUrl: string | null; channel: "up" | "down" | "n
       baseUrl: opts.baseUrl,
       machineCredentialEnc: app.encryption.encryptString("machine-credential"),
       authTokenEnc: opts.baseUrl ? app.encryption.encryptString("t".repeat(64)) : null,
+      approvedAt: new Date(),
     })
     .run();
   const openChannel = vi.fn().mockRejectedValue(new Error("channel limit"));

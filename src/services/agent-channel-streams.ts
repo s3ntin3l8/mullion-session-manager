@@ -3,6 +3,8 @@ import type { WebSocket as NodeWebSocket } from "ws";
 import type { ConnectedAgentChannel } from "../shared/agent-channel.js";
 import { ChannelSocket } from "./channel-socket.js";
 import { createRequestSink, type ChannelSink, type HostTransport } from "./agent-channel-tunnel.js";
+import { isHostIdApproved } from "./host-registry.js";
+import { HOST_AWAITING_APPROVAL_MESSAGE } from "./remote-host-errors.js";
 import type { MuxChannel } from "./ssh-agent-mux.js";
 import {
   AGENT_CHANNEL_MAX_HEAD_BYTES,
@@ -121,6 +123,9 @@ export function openStreamOnTransport(
     return failedChannelStream(
       "outbound channel is not connected (not falling back to the advertised URL)",
     );
+  }
+  if (!isHostIdApproved(app, transport.channel.hostId)) {
+    return failedChannelStream(HOST_AWAITING_APPROVAL_MESSAGE);
   }
   return openChannelStream(app, transport.channel, kind, query, identity);
 }

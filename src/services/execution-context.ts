@@ -10,7 +10,8 @@ import { realpathSync } from "node:fs";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
-import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
+import { LOCAL_HOST_ID, getHostRow, isHostApproved } from "./host-registry.js";
+import { HOST_AWAITING_APPROVAL_MESSAGE } from "./remote-host-errors.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 import { resolveSessionHostId } from "./session-host.js";
 import { isSiblingWorktreeCwd } from "./session-cwd.js";
@@ -20,7 +21,8 @@ import { isRemoteWorktree } from "./remote-worktree-cache.js";
 export type ExecutionContextRef =
   { projectId: number; sessionId: number } | { projectId: number; projectDefault: true };
 
-export type ExecutionContextErrorCode = "invalid_context" | "host_unavailable" | "unsupported";
+export type ExecutionContextErrorCode =
+  "invalid_context" | "host_unavailable" | "host_awaiting_approval" | "unsupported";
 
 export interface ExecutionContextError {
   code: ExecutionContextErrorCode;
@@ -108,6 +110,9 @@ export async function resolveExecutionContext(
   const host = getHostRow(app, hostId);
   if (!host || (hostId !== LOCAL_HOST_ID && !host.baseUrl && !host.machineCredentialEnc)) {
     return fail("host_unavailable", `Host ${hostId} is not available`);
+  }
+  if (!isHostApproved(host)) {
+    return fail("host_awaiting_approval", HOST_AWAITING_APPROVAL_MESSAGE);
   }
   const flavour =
     hostId === LOCAL_HOST_ID ? pathFlavour(process.platform) : pathFlavour(host.platform);
@@ -218,8 +223,13 @@ function agentReason(err: HostRequestError): string {
   return err.message;
 }
 
-export function executionContextErrorStatus(code: ExecutionContextErrorCode): 400 | 501 | 503 {
-  return code === "invalid_context" ? 400 : code === "unsupported" ? 501 : 503;
+export function executionContextErrorStatus(
+  code: ExecutionContextErrorCode,
+): 400 | 409 | 501 | 503 {
+  if (code === "invalid_context") return 400;
+  if (code === "host_awaiting_approval") return 409;
+  if (code === "unsupported") return 501;
+  return 503;
 }
 
 /** A session's recorded (host, cwd) for a read-only, self-validating caller

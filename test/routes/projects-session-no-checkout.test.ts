@@ -26,7 +26,12 @@ describe("session on a host its project has no checkout on", () => {
     const app = await buildApp();
     app.db
       .insert(hosts)
-      .values({ id: "no-checkout-host", name: "nc", baseUrl: "http://127.0.0.1:1" })
+      .values({
+        id: "no-checkout-host",
+        name: "nc",
+        baseUrl: "http://127.0.0.1:1",
+        approvedAt: new Date(),
+      })
       .run();
     const projectId = app.db
       .insert(projects)

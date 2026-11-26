@@ -213,7 +213,7 @@ export function attachAggregatedEventsSocket(app: FastifyInstance, socket: Socke
   // connection's lifetime.
   const upstreams: NodeWebSocket[] = [];
   for (const host of listHosts(app)) {
-    if (host.isLocal) continue;
+    if (host.isLocal || host.approvalPending) continue;
     const upstream = relayRemoteEventsHost(app, socket, host.id);
     if (upstream) upstreams.push(upstream);
   }

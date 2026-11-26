@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { FsDirsError, listLocalDirectories } from "../services/fs-dirs.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import { HostRequestError, getRemoteHostClient } from "../services/remote-host-client.js";
+import { HostAwaitingApprovalError } from "../services/remote-host-errors.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 
 function replyFsDirsError(reply: FastifyReply, error: FsDirsError) {
@@ -37,6 +38,7 @@ export async function fsRoute(app: FastifyInstance): Promise<void> {
         try {
           return await getRemoteHostClient(app, hostId).listDirectories(path, showHidden);
         } catch (err) {
+          if (err instanceof HostAwaitingApprovalError) return reply.conflict(err.message);
           if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
           app.log.warn({ hostId, err }, "host unreachable, folder listing unavailable");
           return reply.serviceUnavailable(`Host ${hostId} is unreachable`);

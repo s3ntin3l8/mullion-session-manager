@@ -942,6 +942,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
     primary = await buildAndListen({
       DATABASE_URL: `file:${enrollmentPrimaryDb}`,
       MULLION_ENROLLMENT_SECRET: "fleet-wide-secret", // pragma: allowlist secret
+      MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: "127.0.0.1/32",
     });
   });
 
@@ -1369,6 +1370,7 @@ describe("graceful agent deregistration (issue #248 / roadmap 7.3)", () => {
     primary = await buildAndListen({
       DATABASE_URL: `file:${deregisterPrimaryDb}`,
       MULLION_ENROLLMENT_SECRET: "fleet-wide-secret", // pragma: allowlist secret
+      MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: "127.0.0.1/32",
     });
   });
 

@@ -84,7 +84,9 @@ function reenableAgentBundles(app: FastifyInstance): void {
   // fan-out — every registered host except the primary itself (handled
   // directly above) and any row with no address and no outbound channel
   // (never actually reachable).
-  const agentHosts = listHosts(app).filter((h) => !h.isLocal && hasReachablePath(app, h));
+  const agentHosts = listHosts(app).filter(
+    (h) => !h.isLocal && !h.approvalPending && hasReachablePath(app, h),
+  );
   for (const host of agentHosts) {
     void removeHostBundle(app, host.id, false)
       .then((hostResult) => {

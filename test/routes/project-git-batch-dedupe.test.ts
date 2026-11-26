@@ -22,7 +22,10 @@ let seq = 0;
 
 async function seed(app: Awaited<ReturnType<typeof buildApp>>, cwds: string[]) {
   const hostId = `dd-host-${++seq}`;
-  app.db.insert(hosts).values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1" }).run();
+  app.db
+    .insert(hosts)
+    .values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1", approvedAt: new Date() })
+    .run();
   const projectId = app.db
     .insert(projects)
     .values({ name: "dd-p", cwd: "/remote/proj", hostId })

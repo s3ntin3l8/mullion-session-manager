@@ -276,7 +276,7 @@ export function consumeHostPairing(
     };
     const registration = claimed[0].targetHostId
       ? rePairHost(app, claimed[0].targetHostId, pairingInput, peer)
-      : createPairedHost(app, pairingInput, peer);
+      : createPairedHost(app, pairingInput, peer, { approved: !claimed[0].requireApproval });
     if (!registration) return null;
     tx.update(hostPairings)
       .set({ redeemedHostId: registration.hostId })

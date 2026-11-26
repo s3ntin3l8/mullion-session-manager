@@ -115,7 +115,9 @@ export async function bundleSyncRoute(app: FastifyInstance) {
     // every registered host except the primary itself (which this route just
     // handled directly, above) and any row with no address and no outbound
     // channel (never actually reachable).
-    const agentHosts = listHosts(app).filter((h) => !h.isLocal && hasReachablePath(app, h));
+    const agentHosts = listHosts(app).filter(
+      (h) => !h.isLocal && !h.approvalPending && hasReachablePath(app, h),
+    );
     await Promise.all(
       agentHosts.map(async (host) => {
         const hostResult = await removeHostBundle(app, host.id, true);

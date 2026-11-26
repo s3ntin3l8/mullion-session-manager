@@ -15,7 +15,7 @@ import { noteLegacyFleetEnrollment } from "../services/legacy-host-deprecation.j
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
-import { isIpAllowed } from "../services/cidr.js";
+import { isIpAllowed, isValidCidrsCsv } from "../services/cidr.js";
 
 // Issue #245 / roadmap 7.1 — the primary-side half of agent-initiated
 // registration — plus, below, issue #248 / roadmap 7.3's graceful
@@ -126,6 +126,14 @@ function respond(result: HostRegistration) {
 }
 
 export async function enrollmentRoute(app: FastifyInstance) {
+  const configuredAutoApproveCidrs = app.config.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS.trim();
+  if (configuredAutoApproveCidrs !== "" && !isValidCidrsCsv(configuredAutoApproveCidrs)) {
+    app.log.warn(
+      { value: app.config.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS },
+      "MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS is not a valid IPv4 CIDR list; fleet-secret enrollments will require manual approval",
+    );
+  }
+
   app.post<{ Body: RegisterBody }>(
     "/api/internal/register",
     { schema: registerSchema, config: { rateLimit: REGISTER_RATE_LIMIT } },
@@ -238,7 +246,10 @@ export async function enrollmentRoute(app: FastifyInstance) {
         // succeeds exactly as before, this only says so — once per process,
         // so a fleet of agents enrolling does not fill the log.
         noteLegacyFleetEnrollment(app);
-        const enrolled = enrollHost(app, input, peer);
+        const autoApproveCidrs = app.config.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS.trim();
+        const autoApproved =
+          autoApproveCidrs !== "" && isIpAllowed(getRawRemoteAddress(request), autoApproveCidrs);
+        const enrolled = enrollHost(app, input, peer, { approved: autoApproved });
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
         refreshHostProtocolSoon(app, enrolled.hostId);
         app.reconfigureSshAgentFanout();

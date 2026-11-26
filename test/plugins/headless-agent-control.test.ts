@@ -48,6 +48,7 @@ const AGENT_ENV = [
   "PROJECTS_ROOTS",
   "SESSIONS_DIR",
   "MULLION_ENROLLMENT_SECRET",
+  "MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS",
 ];
 
 describe("headless enrolled agent: ongoing control operations (issue #2691)", () => {
@@ -59,6 +60,7 @@ describe("headless enrolled agent: ongoing control operations (issue #2691)", ()
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
+    process.env.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS = "127.0.0.1/32";
     primary = await buildApp();
     await primary.listen({ port: 0, host: "127.0.0.1" });
     const port = (primary.server.address() as { port: number }).port;
@@ -70,6 +72,7 @@ describe("headless enrolled agent: ongoing control operations (issue #2691)", ()
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
     delete process.env.MULLION_ENROLLMENT_SECRET;
+    delete process.env.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS;
     agent = await buildApp();
     await agent.ready();
   });

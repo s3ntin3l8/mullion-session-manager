@@ -17,7 +17,7 @@ import {
   waitForSession,
   type WaitSnapshot,
 } from "../services/session-wait.js";
-import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { LOCAL_HOST_ID, listHosts } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { deliverPrompt } from "../services/session-prompt.js";
 import { adoptSurvivingSession } from "../services/session-adopt.js";
@@ -114,11 +114,18 @@ export function projectCoordinates(app: FastifyInstance, projectId: number): boo
 /** The projects a session of `source` may start children in (the rule of
  * services/cross-project.ts), never including the source itself. */
 export function allowedSpawnTargets(app: FastifyInstance, source: ProjectRow): ProjectRow[] {
+  const approvedHosts = new Set(
+    listHosts(app)
+      .filter((h) => !h.approvalPending)
+      .map((h) => h.id),
+  );
   return app.db
     .select()
     .from(projects)
     .all()
-    .filter((p) => p.id !== source.id && crossProjectAllowed(source, p));
+    .filter(
+      (p) => p.id !== source.id && crossProjectAllowed(source, p) && approvedHosts.has(p.hostId),
+    );
 }
 
 /** 409 text for ops that need the child's live PTY when its host has none

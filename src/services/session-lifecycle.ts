@@ -33,7 +33,8 @@ import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
 import { forceRemoveCheckout, previewRemover } from "./checkout-removal.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
-import { LOCAL_HOST_ID } from "./host-registry.js";
+import { LOCAL_HOST_ID, getHostRow, isHostApproved } from "./host-registry.js";
+import { HOST_AWAITING_APPROVAL_MESSAGE } from "./remote-host-errors.js";
 import { isOutcomeUnknown } from "./remote-host-errors.js";
 import { resolveHostBaseRef, resolveRepoRef, viaRemote } from "./host-git.js";
 import {
@@ -542,6 +543,7 @@ export type CreateSessionResult =
   // the field. `detail` names the host and the missing option and points at
   // the host's Update action. Refused before any worktree or process exists.
   | { ok: false; reason: "host-unsupported"; detail: string }
+  | { ok: false; reason: "host-awaiting-approval"; detail: string }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
   // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
   // is bound by the same reserved-key rules as a dock control. See
@@ -1055,6 +1057,12 @@ function preparingCheckout(app: FastifyInstance, project: ProjectRow, hostId: st
  * pointing at an existing worktree), so it is used as-is and the map is not
  * consulted for it.
  */
+function isKnownHostUnapproved(app: FastifyInstance, hostId: string): boolean {
+  if (hostId === LOCAL_HOST_ID || !app.db) return false;
+  const row = getHostRow(app, hostId);
+  return row !== undefined && !isHostApproved(row);
+}
+
 function resolveSessionPlacement(
   app: FastifyInstance,
   project: ProjectRow,
@@ -1062,11 +1070,22 @@ function resolveSessionPlacement(
   needs: LaunchNeeds,
 ):
   | { ok: true; placement: SessionPlacement }
-  | { ok: false; reason: "host-unknown-project" | "no-target-host"; detail: string }
+  | {
+      ok: false;
+      reason: "host-unknown-project" | "no-target-host" | "host-awaiting-approval";
+      detail: string;
+    }
   | { ok: false; reason: "preparing-checkout"; projectId: number; hostId: string; detail: string } {
   const hostCwds = parseHostCwds(project.hostCwds);
 
   if (params.target !== undefined && params.hostId === undefined) {
+    if (params.target.hostId !== undefined && isKnownHostUnapproved(app, params.target.hostId)) {
+      return {
+        ok: false,
+        reason: "host-awaiting-approval",
+        detail: HOST_AWAITING_APPROVAL_MESSAGE,
+      };
+    }
     const targeted = resolveTargetHost(app, {
       project: {
         hostId: project.hostId,
@@ -1263,6 +1282,13 @@ async function createSessionRecordInner(
   }
   const placement = placementResult.placement;
   const placementHost = placement.hostId;
+  if (isKnownHostUnapproved(app, placementHost)) {
+    return {
+      ok: false,
+      reason: "host-awaiting-approval",
+      detail: HOST_AWAITING_APPROVAL_MESSAGE,
+    };
+  }
   rb.hostId = placementHost;
 
   // Issue #2569 — whichever way the host was chosen, it must negotiate what

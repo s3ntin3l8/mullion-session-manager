@@ -46,6 +46,12 @@ export interface PlacementCandidate {
   /** Whether this is the primary's own host (the "local" one). */
   isLocal: boolean;
   /**
+   * Issue #3441 — whether an operator has approved this host for execution.
+   * Optional so tests building candidates directly default to approved;
+   * `collectCandidates` populates `!host.approvalPending`.
+   */
+  approved?: boolean;
+  /**
    * Online per the heartbeat. Only "online" is eligible: a degraded host
    * has already missed a ping, and an offline or pending one has never
    * answered.
@@ -594,6 +600,7 @@ export function notOnlineReason(candidate: PlacementCandidate): string {
  * disagree.
  */
 function exclusionReason(candidate: PlacementCandidate, context: PlacementContext): string | null {
+  if (candidate.approved === false) return "awaiting approval";
   const capacity = candidate.isLocal ? context.localCapacity : candidate.capacity;
   // Issue #2239 — checked FIRST: the role is static, while a sleeping laptop
   // is usually also offline, and "burst host" is the reason worth showing.
@@ -788,6 +795,7 @@ function collectCandidates(
     return {
       hostId: host.id,
       isLocal,
+      approved: !host.approvalPending,
       // Only "online" is eligible. The local host reads as online by
       // construction (host-heartbeat.ts says so explicitly); a remote host
       // that has never been reached reads as "pending".
@@ -1003,6 +1011,10 @@ function refuseForFlags(
   const why = new Set<string>();
   for (const candidate of passing) {
     const capacity = candidate.isLocal ? collected.localCapacity : candidate.capacity;
+    if (candidate.approved === false) {
+      why.add("a matching host is awaiting approval");
+      continue;
+    }
     if (platformFlagState(candidate.platform, context.platforms) === "unknown") {
       why.add("a host that has not reported its platform yet may match once it is online");
     }
@@ -1165,7 +1177,8 @@ function refusalReasons(
 ): string[] {
   const why = new Set<string>();
   for (const candidate of matching) {
-    if (!candidate.online) why.add(notOnlineReason(candidate));
+    if (candidate.approved === false) why.add("a matching host is awaiting approval");
+    else if (!candidate.online) why.add(notOnlineReason(candidate));
     else if (candidate.drained) why.add("a matching host is parked/drained");
     else if ((candidate.isLocal ? localCapacity : candidate.capacity) === null) {
       why.add("a matching host has no capacity reading yet");
@@ -1308,6 +1321,7 @@ export function resolveTargetHost(
     // target it counts too — it may turn out to be one.
     const mightMatch = collected.candidates.some(
       (candidate) =>
+        candidate.approved !== false &&
         (candidate.projectCwd !== null || candidate.needsCheckout === true) &&
         platformFlagState(candidate.platform, flagPlatforms) !== "forbidden" &&
         // A host known to lack the CLI never gains it by waiting.

@@ -164,6 +164,7 @@ export async function detectCheckouts(
 
   for (const host of listHosts(app)) {
     if (host.id === project.hostId) continue;
+    if (host.approvalPending) continue;
     if (onlyHostId !== undefined && host.id !== onlyHostId) continue;
     if (mapped[host.id] !== undefined) continue;
     if (host.drained || !isOnline(app, host)) continue;

@@ -116,6 +116,11 @@ export const hosts = sqliteTable("hosts", {
   // handshake. With machineCredentialRotatedAt it tells a paired host that
   // never took delivery of its credential from a healthy outbound-only one.
   channelFirstConnectedAt: integer("channel_first_connected_at", { mode: "timestamp" }),
+  // Issue #3441 — when this host was approved for execution. Null means
+  // "awaiting approval" (created via fleet-secret enrollment or a pairing code
+  // minted by an automation token with requireApproval). Unapproved hosts are
+  // excluded from placement and spawn targets and direct operations fail 409.
+  approvedAt: integer("approved_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

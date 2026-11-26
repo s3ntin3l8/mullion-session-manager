@@ -406,6 +406,9 @@ function originalHostAvailability(
   const host = listHosts(app).find((h) => h.id === hostId);
   if (host === undefined)
     return { available: true, state: { phrase: "available", waitsFor: "host" } };
+  if (host.approvalPending) {
+    return { available: false, state: { phrase: "awaiting approval", waitsFor: "host" } };
+  }
   if (host.drained) {
     return { available: false, state: { phrase: "parked", waitsFor: "host" } };
   }

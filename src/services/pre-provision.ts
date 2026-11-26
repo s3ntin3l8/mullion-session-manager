@@ -57,6 +57,7 @@ export function preProvisionTargets(
   const constraints = parsePlacementConstraints(project.placementConstraints);
   const out: string[] = [];
   for (const host of listHosts(app)) {
+    if (host.approvalPending) continue;
     if (onlyHostId !== undefined && host.id !== onlyHostId) continue;
     if (mode !== "all" && !mode.includes(host.id)) continue;
     if (host.id === project.hostId || Object.hasOwn(mapped, host.id)) continue;

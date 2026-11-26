@@ -70,6 +70,10 @@ export interface Host {
   // Issue #3435 — newest unacknowledged `replaced` identity event within 30
   // days, else null. Absent from an older primary.
   recentIdentityReplacement?: HostRecentIdentityReplacement | null;
+  // Issue #3441 — host enrolled without an operator present, awaiting approval.
+  approvalPending?: boolean;
+  // Issue #3441 — peer address recorded when a pending host enrolled/paired.
+  enrollmentPeer?: string | null;
   health: HostHealthStatus;
   // Why the host is degraded when the primary knows ("channel saturated"). Absent from an older primary.
   healthReason?: string | null;

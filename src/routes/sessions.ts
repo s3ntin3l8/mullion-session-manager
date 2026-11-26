@@ -874,9 +874,10 @@ export async function sessionsRoute(app: FastifyInstance) {
           // online and mapped for the project.
           return reply.conflict(result.detail);
         }
-        if (result.reason === "host-unsupported") {
+        if (result.reason === "host-unsupported" || result.reason === "host-awaiting-approval") {
           // Issue #2569 — the host's agent would drop a field this launch
           // asked for; the detail names it and points at the host's Update.
+          // Issue #3441 — an unapproved host refuses direct spawns with 409.
           return reply.conflict(result.detail);
         }
         if (result.reason === "cwd-outside-project") {

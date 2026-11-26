@@ -14,6 +14,8 @@ import type { PlacementCapability } from "../../../../src/shared/constants.js";
 function stubFetch(opts: {
   rotate?: () => Response;
   acknowledge?: () => Response;
+  approve?: () => Response;
+  deleteHost?: () => Response;
   createPairing?: (body: unknown) => Response | Promise<Response>;
   createHost?: (body: unknown) => Response;
   revoke?: () => Response;
@@ -49,6 +51,12 @@ function stubFetch(opts: {
       }
       if (url.endsWith("/identity-events/acknowledge") && method === "POST" && opts.acknowledge) {
         return Promise.resolve(opts.acknowledge());
+      }
+      if (url.endsWith("/approve") && method === "POST" && opts.approve) {
+        return Promise.resolve(opts.approve());
+      }
+      if (url.startsWith("/api/hosts/") && method === "DELETE" && opts.deleteHost) {
+        return Promise.resolve(opts.deleteHost());
       }
       // Per-host update status etc.: unavailable here, which the section swallows.
       return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
@@ -452,6 +460,58 @@ describe("HostsSection", () => {
       expect(screen.queryByTestId("host-identity-replaced-h1")).not.toBeInTheDocument(),
     );
     expect(screen.getByTestId("host-row-h1")).not.toHaveClass("stacked");
+  });
+
+  it("shows Awaiting approval with peer address, Approve, and Reject on pending hosts (issue #3441)", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h-pending",
+          name: "new-worker",
+          baseUrl: null,
+          health: "online",
+          approvalPending: true,
+          enrollmentPeer: "10.0.0.55",
+        }),
+        makeHost({
+          id: "h-reject",
+          name: "bad-worker",
+          baseUrl: null,
+          approvalPending: true,
+          enrollmentPeer: "10.0.0.99",
+        }),
+      ],
+    });
+    const calls = stubFetch({
+      approve: () => {
+        useDashboardStore.setState((state) => ({
+          hosts: state.hosts.map((h) =>
+            h.id === "h-pending" ? { ...h, approvalPending: false, enrollmentPeer: null } : h,
+          ),
+        }));
+        return jsonResponse(200, { ok: true });
+      },
+      deleteHost: () => jsonResponse(204, null),
+    });
+
+    render(<HostsSection />);
+
+    expect(screen.getByTestId("host-approval-pending-h-pending")).toHaveTextContent(
+      "Awaiting approval",
+    );
+    expect(screen.getByTestId("host-approval-detail-h-pending")).toHaveTextContent("10.0.0.55");
+
+    const pendingDetail = screen.getByTestId("host-approval-detail-h-pending");
+    await user.click(within(pendingDetail).getByRole("button", { name: "Approve" }));
+    await vi.waitFor(() => expect(calls).toContain("POST /api/hosts/h-pending/approve"));
+    await vi.waitFor(() =>
+      expect(screen.queryByTestId("host-approval-pending-h-pending")).not.toBeInTheDocument(),
+    );
+
+    const rejectDetail = screen.getByTestId("host-approval-detail-h-reject");
+    await user.click(within(rejectDetail).getByRole("button", { name: "Reject" }));
+    await vi.waitFor(() => expect(calls).toContain("DELETE /api/hosts/h-reject"));
   });
 
   const code = "a".repeat(64);
