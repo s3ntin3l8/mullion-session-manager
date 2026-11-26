@@ -9,6 +9,12 @@
     "tooling": 0,
     "total": 47
   },
+  "pins": {
+    "test/plugins/control-socket.test.ts": 627,
+    "test/routes/internal.test.ts": 616,
+    "test/routes/sessions.test.ts": 394,
+    "test/services/task-reconciler.test.ts": 690
+  },
   "files": {
     "frontend/src/api/types.ts": 1467,
     "frontend/src/BrowserPanel.test.tsx": 1266,
