@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.69](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.68...v0.3.69) (2026-11-26)
+
+
+### Features
+
+* **hosts:** flag legacy host kinds as deprecated ([149b331](https://github.com/s3ntin3l8/mullion-session-manager/commit/149b3314978a09f7c478776a466d4f63bf759194))
+* **hosts:** one Re-pair action replaces the rotate entries and Add host issues a pairing code ([fcc7647](https://github.com/s3ntin3l8/mullion-session-manager/commit/fcc7647c0289118a87434da8f4d4955fea6665f6))
+
+
+### Bug Fixes
+
+* **devices:** an agent host's device panel socket fails with a reason instead of stalling silently ([#3533](https://github.com/s3ntin3l8/mullion-session-manager/issues/3533)) ([b5278b5](https://github.com/s3ntin3l8/mullion-session-manager/commit/b5278b5aac2ad61132134482696938461643b522))
+* **devices:** tolerate an idb_companion cold start of up to 60 s ([#3531](https://github.com/s3ntin3l8/mullion-session-manager/issues/3531)) ([149d5fd](https://github.com/s3ntin3l8/mullion-session-manager/commit/149d5fda0a3279c007d149606e3666b854ab0596))
+* **hooks:** hook handlers stamp latches with emitHookEvent's clock, not a fresh Date.now() ([#3528](https://github.com/s3ntin3l8/mullion-session-manager/issues/3528)) ([844783e](https://github.com/s3ntin3l8/mullion-session-manager/commit/844783e0b73a51efa023349df8ce5aa1d9a8d29e))
+* **hosts:** a Windows host's session environment shows its PATH intact and no fallback warning ([#3523](https://github.com/s3ntin3l8/mullion-session-manager/issues/3523)) ([2e3b15f](https://github.com/s3ntin3l8/mullion-session-manager/commit/2e3b15fb818c3885186638a64cb8a16e6406322b))
+* **hosts:** retry a timed-out interactive-PATH resolve instead of keeping the fallback for the agent's lifetime ([#3534](https://github.com/s3ntin3l8/mullion-session-manager/issues/3534)) ([4846b29](https://github.com/s3ntin3l8/mullion-session-manager/commit/4846b2983490c16128991f7c370e916164e954d9))
+
 ## [0.3.68](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.67...v0.3.68) (2026-11-25)
 
 
