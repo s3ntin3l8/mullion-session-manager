@@ -25,7 +25,12 @@ import { recordSessionsDir } from "../services/sessions-dir-history.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { prunePortPreviews } from "../services/browser-destinations.js";
 import { adoptActiveTaskSessions } from "../services/session-adopt.js";
-import { adoptSurvivingHookTokens } from "../services/hook-token-adopt.js";
+import {
+  adoptSurvivingHookTokens,
+  adoptedHookTokenIds,
+  recheckAdoptedHookTokens,
+  type RecheckAdoptedHookTokensResult,
+} from "../services/hook-token-adopt.js";
 import { detectCodexRateLimits } from "../services/codex-rate-limit.js";
 import { reconcileTasks } from "../services/task-reconciler.js";
 import { fitsSunPath, maxSunPathBytes } from "../cli/sun-path.mjs";
@@ -116,6 +121,22 @@ function readStaleBusyMs(app: FastifyInstance): number {
 // for throttling well below that tick's rate, i.e. a much longer interval
 // between scans, not a faster one).
 const DEV_SERVER_DETECT_INTERVAL_MS = 10_000;
+
+// Issue #3206 — how often an agent-role host re-checks the scopes it ADOPTED
+// at boot, so a session whose scope died after that sweep stops resolving its
+// hook token.
+//
+// A fixed cadence, deliberately its OWN timer rather than piggybacked onto the
+// reconcile timer: that one is primary-only (it reads DB settings), while
+// this one runs on the agent role, which has no database at all. 30s is the
+// same order as the default reconcile interval (settings.ts's
+// `reconcileIntervalSeconds`), so the extra `systemctl --user list-units`
+// spawn per tick is no heavier than the sweep the primary already does on the
+// same cadence.
+//
+// Exported so the test that drives the tick does not hard-code the number
+// (the cadence IS the behaviour under test).
+export const HOOK_TOKEN_RECHECK_INTERVAL_MS = 30_000;
 
 // Issue #404 — the DB-side half of the plain-session dev-server-detection
 // feature: finds every session eligible for a rescan (a terminal or a dock
@@ -513,6 +534,55 @@ function secureFallbackDir(dir: string): void {
   if ((st.mode & 0o777) !== 0o700) chmodSync(dir, 0o700);
 }
 
+/**
+ * Re-checks the liveness of every scope this process ADOPTED, and forgets the
+ * token of an id whose scope is confirmed dead (issue #3206).
+ *
+ * The agent boot path's timer calls this; the test that pins the invariant
+ * calls it too — the same reason `findEligibleDevServerSessions` above is
+ * exported.
+ *
+ * The liveness question is the one the boot sweep asked, asked again through
+ * the same seam: `PtyManager.isMasterAliveStateBatch` → the host's own scope
+ * backend (`ScopeBackend.isAliveBatch`). It FAILS CLOSED — only a confident
+ * "dead" drops a token, an "unknown" keeps it — and it is READ-ONLY towards
+ * the sessions: it never stops, terminates, respawns or reattaches anything.
+ *
+ * A failed re-check is a LOST TICK, not a broken state: the service forgets
+ * nothing unless it got a confident "dead", so every token stays registered
+ * and the next tick tries again.
+ */
+export async function recheckAdoptedHookTokensForApp(
+  app: FastifyInstance,
+): Promise<RecheckAdoptedHookTokensResult> {
+  try {
+    const result = await recheckAdoptedHookTokens({
+      isAliveBatch: (ids) => app.pty.isMasterAliveStateBatch(ids),
+      // An id this process TRACKS is the manager's own: it registered the
+      // token itself when it rebuilt the session, and its `kill()` path is
+      // what drops that token. The re-check must keep its hands off it —
+      // a tick that lands inside a re-spawn window would otherwise
+      // unregister a LIVE session's token (the scope listing still answers
+      // "dead" for the scope that is coming back).
+      isTracked: (id) => app.pty.get(id) !== undefined,
+    });
+    if (result.forgotten.length > 0) {
+      // Session ids only — never a token value (see the service's own doc
+      // comment).
+      app.log.info(
+        { sessionIds: result.forgotten },
+        "forgot the hook tokens of adopted sessions whose scope died",
+      );
+    }
+    return result;
+  } catch (err) {
+    app.log.error({ err }, "re-check of adopted hook tokens failed");
+    // A failed re-check is a LOST TICK, not a broken state: nothing was
+    // forgotten, so every adopted id still has its token registered.
+    return { forgotten: [], retained: adoptedHookTokenIds() };
+  }
+}
+
 // Decorates app.pty with the session manager (see src/services/pty-manager.ts
 // for what it actually does and why). Attach-clients it spawns are only
 // killed on process shutdown here — never on browser disconnect, which is
@@ -908,6 +978,10 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // entirely). An agent still gets app.pty for local session spawn/attach;
   // it just isn't the one deciding "exited" for anything.
   let devServerDetectTimer: ReturnType<typeof setInterval> | null = null;
+  // Issue #3206 — the agent-role re-check of the ADOPTED scopes' liveness.
+  // Only the agent role arms it (the adoption is agent-role only), but the
+  // variable lives here so the onClose hook below can clear it.
+  let hookTokenRecheckTimer: ReturnType<typeof setInterval> | null = null;
   if (app.config.MULLION_ROLE === "primary") {
     armReconcileTimer(readReconcileIntervalMs(app));
     app.addHook("onReady", () => {
@@ -1027,6 +1101,31 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
           app.log.error({ err }, "boot adoption of surviving hook tokens failed");
         });
     });
+
+    // Issue #3206 — the sweep above is a SNAPSHOT: it registers the tokens
+    // of the scopes that were alive when it ran, and nothing took them back
+    // out. An ADOPTED id has no `Session` object in this process (the
+    // session was never rebuilt — that is what the adoption is), so the
+    // manager's own `kill()` path, the only thing that used to drop a
+    // token, never saw it: a session whose scope died after the sweep kept
+    // its token resolvable until this process exited.
+    //
+    // So the boot path RE-CHECKS the adopted scopes on a timer and forgets
+    // the token of an id whose scope is confirmed dead. The liveness
+    // question is the same one the sweep asked, asked again through the
+    // same seam (`ScopeBackend.isAliveBatch` → the host's own backend), and
+    // it FAILS CLOSED: only a confident "dead" drops a token, an "unknown"
+    // keeps it (see `recheckAdoptedHookTokens`'s own doc comment).
+    //
+    // Read-only towards the sessions, like the sweep itself: the re-check
+    // asks the backend for liveness and forgets a token, and never stops,
+    // terminates, respawns or reattaches anything.
+    hookTokenRecheckTimer = setInterval(() => {
+      void recheckAdoptedHookTokensForApp(app);
+    }, HOOK_TOKEN_RECHECK_INTERVAL_MS);
+    // unref() so this timer alone never keeps the process alive — same
+    // reasoning as the reconcile timer above.
+    hookTokenRecheckTimer.unref();
   }
 
   // Dismissed in GHAS as alert #124 (js/missing-rate-limiting) — CodeQL
@@ -1039,6 +1138,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   app.addHook("onClose", () => {
     if (reconcileTimer) clearInterval(reconcileTimer);
     if (devServerDetectTimer) clearInterval(devServerDetectTimer);
+    if (hookTokenRecheckTimer) clearInterval(hookTokenRecheckTimer);
     unsubscribeResume();
     keepAwake.stop();
     manager.killAll();

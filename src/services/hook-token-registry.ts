@@ -19,6 +19,11 @@ import { timingSafeTokenMatch } from "./crypto-utils.js";
 // (`src/services/session-github-token.ts`), which is likewise process state
 // keyed by a per-session secret.
 //
+// Being PROCESS state is also why the registry has to be able to DROP an
+// entry for a session id this process does not track (issue #3206): the
+// session it ADOPTED at boot has no `Session` object to carry its token, so
+// the drop is by (token, id) — see `forgetHookToken` below.
+//
 // Deliberately resolved via a linear scan + `timingSafeTokenMatch` rather
 // than a plain `Map.get(token)` — see the `Session.hookToken` field's own doc
 // comment and `crypto-utils.ts` for why a constant-time compare matters even
@@ -40,17 +45,30 @@ export function registerHookToken(token: string, sessionId: string): void {
 }
 
 /**
- * Drops `token` — the session it belonged to is gone, so nothing may
- * present it again.
+ * Drops the entry for `token` — the session it belonged to is gone, so
+ * nothing may present it again — but ONLY while that entry still belongs to
+ * `sessionId`.
  *
- * Deliberately NOT called from `PtyManager.kill()`: that path also runs on
+ * **Why the id is part of the contract (issue #3206).** The registry is
+ * PROCESS state (see this module's header), so it holds entries this process
+ * does not track: a session it ADOPTED at boot (issue #3166,
+ * `src/services/hook-token-adopt.ts`) has no `Session` object to carry its
+ * token, so the only way to take such an entry back out is by (token, id).
+ * Requiring the id also keeps the drop PRECISE: a token that has since been
+ * re-registered for a different session is left alone, so a stale forget can
+ * never unregister a live session's token.
+ *
+ * **What it does NOT do.** It does not delete the persisted `<id>.token`
+ * file, and it does not end the session: `PtyManager.kill()` calls it on
  * every graceful shutdown/redeploy, which is NOT terminal for the session —
  * the dtach master and the agent process inside it survive, still holding
  * that exact token in their environment (see kill()'s own doc comment, and
- * the persistence of the token to `<id>.token` that makes it survive).
+ * the persistence of the token to `<id>.token` that makes it survive). The
+ * next `getOrCreate()` for that id re-reads the same token and re-registers
+ * it, so the drop is a "not resolvable RIGHT NOW" mark, not a revocation.
  */
-export function forgetHookToken(token: string): void {
-  hookTokens.delete(token);
+export function forgetHookToken(token: string, sessionId: string): void {
+  if (hookTokens.get(token) === sessionId) hookTokens.delete(token);
 }
 
 /**

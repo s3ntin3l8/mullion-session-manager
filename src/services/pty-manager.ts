@@ -4689,7 +4689,10 @@ export class PtyManager {
     // requested (on reattach), so it's re-added to this map then. Only
     // remove the map entry now, so resolveToken() can't match hook
     // messages against a token whose in-memory Session is momentarily gone.
-    if (session) forgetHookToken(session.hookToken);
+    // The session id rides along (issue #3206): the registry is process
+    // state, so the drop is by (token, id) and only takes the entry out
+    // while it still belongs to THIS session.
+    if (session) forgetHookToken(session.hookToken, session.id);
   }
 
   /**

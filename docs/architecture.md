@@ -68,6 +68,27 @@ host does not track — re-attaching it needs the session's row, which lives
 on the primary. That half is the primary-side reconciler's job (see
 [#3175](https://github.com/s3ntin3l8/mullion-session-manager/issues/3175)).
 
+**A dead scope's token stops resolving (issue #3206).** The boot sweep above
+is a SNAPSHOT, and the registry it writes into is PROCESS state, so something
+has to take an entry back out when the scope behind it dies. `PtyManager.kill()`
+used to be that something — but it only knows the sessions THIS PROCESS
+TRACKS, and an adopted id deliberately has no `Session` object (the session
+was never rebuilt), so nothing ever dropped an adopted token: a session whose
+scope died after the sweep kept its token resolvable until the process
+exited. The registry can now drop an entry for an id it does not track —
+`forgetHookToken(token, sessionId)` forgets by (token, id), so a stale forget
+can never unregister a live session's token — and the agent boot path
+re-checks the adopted scopes on a timer (`recheckAdoptedHookTokens` in
+`src/services/hook-token-adopt.ts`, called by `src/plugins/pty.ts`), asking
+the SAME liveness question the sweep asked and forgetting the token of an id
+whose scope is confirmed dead. It fails CLOSED: only a confident "dead" drops
+a token, an "unknown" (a systemctl failure, an id this instance cannot place,
+a socket probe that timed out) keeps it, because the agent inside a scope
+that is merely unconfirmed is exactly the party presenting that token. Like
+the sweep, the re-check is strictly read-only — it never stops, terminates,
+respawns or reattaches anything, and ownership stays resolved by the scope's
+socket path, never by unit name.
+
 The scope's unit name (`crs-session-<instanceId>-<id>`,
 `session-process.ts`'s `scopeUnitName`) is namespaced per Mullion instance
 (issue #1140) since the underlying systemd `--user` namespace is

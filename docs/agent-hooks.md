@@ -116,6 +116,15 @@ accepted again instead of being refused with "unknown or invalid token". A
 session whose scope is gone (or whose token file is missing or malformed) is
 not re-registered, and its token stays refused.
 
+That registration is a snapshot, so the agent host keeps re-checking it
+(issue #3206): every 30 seconds it asks the host's scope backend which of the
+scopes it adopted are still alive, and forgets the token of an id whose scope
+is confirmed dead — so a session that dies long after the restart stops
+resolving its token instead of holding it until the process exits. Only a
+confident "dead" drops a token: a scope whose liveness cannot be confirmed
+keeps it, and a session this host has since re-opened keeps the token the
+manager registered for it.
+
 ### Delivery handshakes (a retried `Stop`)
 
 Most hooks are fire-and-forget: connect, write, close, and the socket says
