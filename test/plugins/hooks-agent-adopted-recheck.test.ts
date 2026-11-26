@@ -12,6 +12,7 @@ import {
   HOOK_TOKEN_RECHECK_INTERVAL_MS,
   recheckAdoptedHookTokensForApp,
 } from "../../src/plugins/pty.js";
+import { adoptedHookTokenIds } from "../../src/services/hook-token-adopt.js";
 
 // Issue #3206 — an ADOPTED hook token must stop resolving once its scope
 // dies.
@@ -110,6 +111,17 @@ const { deriveInstanceId } = await import("../../src/services/session-process.js
 const LIVE_TOKEN = "a1".repeat(24);
 
 /**
+ * The SECOND scope's token — a different secret, so a handshake for one
+ * scope can never resolve to the other.
+ */
+const SECOND_TOKEN = "b2".repeat(24);
+
+/** The persisted token of the scope with this id — one secret per scope. */
+function tokenFor(id: string): string {
+  return id === "1" ? LIVE_TOKEN : SECOND_TOKEN;
+}
+
+/**
  * The boot sweep's log lines (src/plugins/pty.ts).
  *
  * `SWEEP_FINISHED` fires whenever the sweep RAN, whatever it decided — so it
@@ -186,17 +198,49 @@ async function expectHandshakeRefused(app: FastifyInstance): Promise<void> {
 describe("an adopted hook token stops resolving once its scope dies (issue #3206)", () => {
   let sessionsDir: string;
   let projectsRoot: string;
-  let scopeServer: net.Server | null = null;
+  /** The live scopes this host owns: id -> the server serving its socket. */
+  const scopeServers = new Map<string, net.Server>();
+  /** The ids of the scopes that are still alive. */
+  const aliveScopeIds = new Set<string>();
 
   /** Opens a socket something is serving — the "a live scope is a socket
    *  with a master behind it" model both scope backends use. */
-  async function listenAt(socketPath: string): Promise<void> {
+  async function listenAt(id: string): Promise<void> {
     const server = net.createServer();
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(socketPath, () => resolve());
+      server.listen(path.join(sessionsDir, `${id}.sock`), () => resolve());
     });
-    scopeServer = server;
+    scopeServers.set(id, server);
+  }
+
+  /**
+   * The systemd listing the Linux backend reads: one row per live scope.
+   *
+   * Ownership is resolved from the dtach socket path in the Description
+   * (never from the unit name), so each row names a socket inside this
+   * instance's own dir.
+   */
+  function scopeListing(): string {
+    const instanceId = deriveInstanceId(sessionsDir);
+    return [...aliveScopeIds]
+      .map(
+        (id) =>
+          `crs-session-${instanceId}-${id}.scope loaded active running dtach -n ${path.join(sessionsDir, `${id}.sock`)} /bin/bash -lc agent`,
+      )
+      .join("\n");
+  }
+
+  /**
+   * Adds a scope this host owns and that is ALIVE: a persisted token file
+   * (what a pre-restart process left behind), a live socket, and a row in
+   * the systemd listing.
+   */
+  async function addAliveScope(id: string): Promise<void> {
+    fs.writeFileSync(path.join(sessionsDir, `${id}.token`), tokenFor(id));
+    await listenAt(id);
+    aliveScopeIds.add(id);
+    childState.scopeListing = scopeListing();
   }
 
   /**
@@ -207,16 +251,7 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "hook-recheck-sessions-"));
     projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "hook-recheck-projects-"));
 
-    fs.writeFileSync(path.join(sessionsDir, "1.token"), LIVE_TOKEN);
-    await listenAt(path.join(sessionsDir, "1.sock"));
-
-    // The systemd listing the Linux backend reads. Ownership is resolved
-    // from the dtach socket path in the Description (never from the unit
-    // name), so this row names a socket inside this instance's own dir.
-    const instanceId = deriveInstanceId(sessionsDir);
-    childState.scopeListing = [
-      `crs-session-${instanceId}-1.scope loaded active running dtach -n ${path.join(sessionsDir, "1.sock")} /bin/bash -lc agent`,
-    ].join("\n");
+    await addAliveScope("1");
   }
 
   /**
@@ -276,15 +311,17 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
   }
 
   /**
-   * The scope this host owned is GONE: its unit is no longer in the listing
-   * and its socket has nobody serving it any more.
+   * The scope is GONE: its unit is no longer in the listing and its socket
+   * has nobody serving it any more. The OTHER scopes this host owns stay
+   * alive — that is what leaves the re-check something to ask about.
    */
-  async function killScope(): Promise<void> {
-    childState.scopeListing = "";
-    const server = scopeServer;
-    scopeServer = null;
+  async function killScope(id = "1"): Promise<void> {
+    aliveScopeIds.delete(id);
+    childState.scopeListing = scopeListing();
+    const server = scopeServers.get(id);
+    scopeServers.delete(id);
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
-    fs.rmSync(path.join(sessionsDir, "1.sock"), { force: true });
+    fs.rmSync(path.join(sessionsDir, `${id}.sock`), { force: true });
     await expireListingCache();
   }
 
@@ -308,9 +345,11 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     delete process.env.PROJECTS_ROOTS;
     childState.scopeListing = "";
     childState.listingFails = false;
-    const server = scopeServer;
-    scopeServer = null;
-    if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    for (const server of scopeServers.values()) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    scopeServers.clear();
+    aliveScopeIds.clear();
     fs.rmSync(sessionsDir, { recursive: true, force: true });
     fs.rmSync(projectsRoot, { recursive: true, force: true });
   });
@@ -401,15 +440,19 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     // The tracked state flips WHILE the liveness answer is in flight: the
     // exact shape of that window.
     let tracked = false;
-    vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(
-      async (ids: string[]): Promise<Record<string, ScopeLiveness>> => {
+    const liveness = vi
+      .spyOn(app.pty, "isMasterAliveStateBatch")
+      .mockImplementation(async (ids: string[]): Promise<Record<string, ScopeLiveness>> => {
         tracked = true;
         return Object.fromEntries(ids.map((id) => [id, "dead" as const]));
-      },
-    );
+      });
     vi.spyOn(app.pty, "get").mockImplementation((id: string) =>
       tracked && id === "1" ? ({} as Session) : undefined,
     );
+
+    // Before the re-check the bookkeeping holds this id: the boot sweep
+    // adopted it, so it is what the re-check works on.
+    expect(adoptedHookTokenIds()).toContain("1");
 
     const result = await recheck(app);
 
@@ -417,6 +460,19 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     // manager now, and the manager's own kill() path is what drops it.
     expect(result.forgotten).not.toContain("1");
     expect(result.retained).toContain("1");
+
+    // And the bookkeeping no longer holds it: an id the manager owns is
+    // not this process's to ask about any more. A re-check that kept the
+    // id would keep asking about a session that is not ours.
+    expect(adoptedHookTokenIds()).not.toContain("1");
+
+    // So a second re-check has nothing left to ask about — it does not
+    // even consult the backend.
+    const callsAfterFirst = liveness.mock.calls.length;
+    const second = await recheck(app);
+    expect(second.forgotten).toEqual([]);
+    expect(second.retained).toEqual([]);
+    expect(liveness.mock.calls.length).toBe(callsAfterFirst);
 
     // And it still resolves: the live session's hook handshakes are
     // accepted, exactly as they were before the re-check ran.
@@ -434,6 +490,17 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
     let app: FastifyInstance | null = null;
     let closed = false;
     try {
+      // A SECOND adopted scope that stays ALIVE across the close. The
+      // first tick forgets only the dead scope, so the adoption
+      // bookkeeping still holds an id afterwards — and a tick that
+      // outlived the app would ask the backend about that id.
+      //
+      // Without it the bookkeeping would be EMPTY after the first tick,
+      // the re-check would return before it ever asked the backend, and
+      // the assertion at the end could not fail — a leaked timer would be
+      // invisible.
+      await addAliveScope("2");
+
       app = await buildApp();
       await readyAndAwaitSweep(app);
       const logs = vi.spyOn(app.log, "info");
@@ -452,7 +519,10 @@ describe("an adopted hook token stops resolving once its scope dies (issue #3206
       );
       await expectHandshakeRefused(app);
 
-      // The app's close clears the timer: no further tick runs.
+      // The app's close clears the timer: no further tick runs. The
+      // still-adopted second scope is what a leaked tick would ask the
+      // backend about, so this assertion DOES fail without the
+      // `clearInterval` in the app's `onClose` hook.
       const liveness = vi.spyOn(app.pty, "isMasterAliveStateBatch");
       await app.close();
       closed = true;
