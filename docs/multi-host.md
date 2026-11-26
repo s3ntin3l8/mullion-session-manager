@@ -218,11 +218,18 @@ in `machine_credential`.
   `agent-identity.json` under the agent's `SESSIONS_DIR`. A container or
   image-based agent whose data dir does not survive a restart (an ephemeral
   container, a re-imaged VM) has no identity at boot, so it enrolls with the
-  fleet secret and the primary creates a **new** host row each time, leaving
-  the previous one offline. Mount `SESSIONS_DIR` on a volume or other
-  persistent storage. The agent logs once at info level when it registers
-  without a stored identity ("no stored identity found at the state path");
-  seeing that on every restart means the state path is not persistent.
+  fleet secret: with the legacy gate open (`MULLION_ALLOW_LEGACY_HOSTS=true`)
+  the primary creates a **new** host row each time, leaving the previous one
+  offline; with the gate closed (the default) that enrollment is **refused**
+  (401), so a container fleet that relied on it goes dark on the next
+  recreate instead of registering a second time. A row is matched by an
+  exact address compare either way: with the gate open a changed address
+  means a second row, with the gate closed it means a refusal until the row
+  carries the address the agent now advertises (see the gate section below).
+  Mount `SESSIONS_DIR` on a volume or other persistent storage. The agent
+  logs once at info level when it registers without a stored identity ("no
+  stored identity found at the state path"); seeing that on every restart
+  means the state path is not persistent.
   The primary never merges these rows by URL or hostname (that is the
   hijack risk the identity removed). Instead `GET /api/hosts` marks the newer
   row with `possibleDuplicateOf`: older enrolled rows with the same advertised
@@ -679,6 +686,20 @@ with it on every boot. Such a registration is served by the row the agent
 already owns (the row is matched by the address it advertises), so no second
 row appears. The claim path is how an existing host proves itself, and it is
 not gated.
+
+**That match is on the advertised address, exactly.** The address is what the
+agent advertises — by default `http://<hostname>:<port>`, or whatever
+`MULLION_AGENT_ADVERTISE_URL` names — so a host that renamed its box, that
+came back as a container with another address, or whose Base URL an operator
+edited in Settings no longer matches its row. Its registration is then
+refused with the same 401, for as long as the mismatch lasts, and the
+primary's log says so (once per process; it names the row it expects when it
+can tell). The row is still there; only the address on it is stale. Put the
+address the agent now advertises on the row — Settings → Hosts → **Edit**
+(`PATCH /api/hosts/:id { "baseUrl": "…" }`) — or pair the host again with a
+one-time pairing code. Flipping `MULLION_ALLOW_LEGACY_HOSTS` back on works
+too, but it lets the agent through as a **new** host — a second row for a
+box the operator already has.
 
 **What the gate does break.** A host that does not exist yet cannot be
 created through a legacy path: `POST /api/hosts` answers 400 and a

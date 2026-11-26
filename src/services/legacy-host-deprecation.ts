@@ -19,11 +19,13 @@ import type { FastifyInstance } from "fastify";
  *   host-side half: it says so at the moment a host actually enrolls, so an
  *   operator watching the log sees the path still in use.
  *
- * And, since issue #3477, two more:
+ * And, since issue #3477, three more:
  *
  * - the once-per-process warning on the first REFUSED fleet-secret
  *   enrollment — the gate is on and the operator needs to know why the fleet
- *   stopped answering;
+ *   stopped answering (it has a variant per cause: a peer outside the
+ *   allowed CIDRs, and a host whose advertised address no longer matches
+ *   its row);
  * - the message the create-host route answers 400 with.
  */
 
@@ -51,11 +53,19 @@ export const LEGACY_FLEET_ENROLLMENT_WARNING =
 /**
  * Issue #3477 — what the primary logs once, when it refuses the first
  * fleet-secret enrollment because the legacy gate is off.
+ *
+ * It names TWO ways out, because the refusal cannot tell them apart: the
+ * host may be new (the gate did its job), or it may be a host that already
+ * exists but no longer advertises the address on its row (the row is there;
+ * the address on it is stale). Flipping the flag is only the right advice
+ * for the first — for the second it would create a SECOND row for a host
+ * the operator already has.
  */
 export const LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING =
   "a host tried to enroll with the fleet secret — refused: the fleet-wide enrollment " +
   "secret is deprecated (use automation tokens instead) and the gate refuses to create new " +
-  "legacy hosts; set MULLION_ALLOW_LEGACY_HOSTS=true to accept them again.";
+  "legacy hosts; set MULLION_ALLOW_LEGACY_HOSTS=true to accept them again, or check that the " +
+  "host still advertises the address it enrolled with (Settings → Hosts → Edit).";
 
 /**
  * Issue #3477 — the same refusal, but the peer address was outside
@@ -68,6 +78,27 @@ export const LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING =
   "MULLION_ENROLLMENT_ALLOWED_CIDRS — refused: the fleet-wide enrollment secret is " +
   "deprecated (use automation tokens instead) and the gate refuses to create new legacy " +
   "hosts; allow the address, or set MULLION_ALLOW_LEGACY_HOSTS=true.";
+
+/**
+ * Issue #3477 — the refusal above, but the fleet has a legacy host that
+ * reports the same hostname as the agent that was turned away: the host
+ * changed its address (a container recreated at a new IP, a Base URL the
+ * operator edited in Settings), so it no longer matches the row it enrolled
+ * with. The row exists — only the address on it is stale — and flipping the
+ * gate is the wrong advice for it: the fix is to put the address the agent
+ * now advertises on the row (Settings → Hosts → Edit, PATCH
+ * /api/hosts/:id { baseUrl }) or to pair the host again.
+ *
+ * A separate notice, because the operator has to tell the two apart: one is
+ * a host that does not exist yet, the other a host that is known but no
+ * longer at the address on its row.
+ */
+export const LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_MISMATCH_WARNING =
+  "a host tried to enroll with the fleet secret at an address no host row holds — refused: the " +
+  "fleet-wide enrollment secret is deprecated (use automation tokens instead) and the gate refuses " +
+  "to create new legacy hosts; a host that already exists has to advertise the address it enrolled " +
+  "with (update it in Settings → Hosts → Edit, or PATCH /api/hosts/:id { baseUrl }), or set " +
+  "MULLION_ALLOW_LEGACY_HOSTS=true to accept fleet-secret enrollment again.";
 
 /**
  * Issue #3477 — what the primary logs once, when a host that already exists
@@ -115,6 +146,22 @@ function emitOnce(app: FastifyInstance, message: string): void {
 }
 
 /**
+ * The same once-per-process dedupe, but the line carries a context payload —
+ * the host id the operator needs to find the row in Settings. The dedupe
+ * stays on the MESSAGE, so a fleet of twenty agents still produces one line;
+ * that line names the host it is about.
+ */
+function emitOnceWith(
+  app: FastifyInstance,
+  message: string,
+  context: Record<string, unknown>,
+): void {
+  if (emitted.has(message)) return;
+  emitted.add(message);
+  app.log.warn(context, message);
+}
+
+/**
  * Report the first fleet-secret enrollment. Called from the fleet-secret
  * branch of routes/enrollment.ts, so it fires exactly when a host enrolled
  * with the fleet-wide secret.
@@ -134,17 +181,27 @@ export function noteLegacyFleetEnrollment(app: FastifyInstance): void {
  * MULLION_ENROLLMENT_ALLOWED_CIDRS: the operator has to tell the two apart
  * (a host that does not exist yet, versus a host that may not register from
  * where it is), and both are refused with the same 401 the caller sees.
+ *
+ * `addressMismatchHostId` picks the variant for a host whose advertised
+ * address no longer matches its row — the row exists, but at another address
+ * — and names that row. The advice is different there: flipping the flag is
+ * not what such a host needs, its row needs the address it now advertises.
  */
 export function refuseLegacyFleetEnrollment(
   app: FastifyInstance,
-  opts: { addressNotAllowed?: boolean } = {},
+  opts: { addressNotAllowed?: boolean; addressMismatchHostId?: string } = {},
 ): void {
-  emitOnce(
-    app,
-    opts.addressNotAllowed
-      ? LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING
-      : LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING,
-  );
+  if (opts.addressNotAllowed) {
+    emitOnce(app, LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING);
+    return;
+  }
+  if (opts.addressMismatchHostId) {
+    emitOnceWith(app, LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_MISMATCH_WARNING, {
+      hostId: opts.addressMismatchHostId,
+    });
+    return;
+  }
+  emitOnce(app, LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING);
 }
 
 /**
@@ -152,9 +209,13 @@ export function refuseLegacyFleetEnrollment(
  * that already existed (issue #3477). The gate does not stop that — the
  * host is already on the fleet-secret path — but the path is on its way
  * out, so the operator sees that their fleet still depends on it.
+ *
+ * `hostId` names the row in the log line: an operator with twenty agents
+ * has to be able to tell WHICH host still depends on the fleet secret, and
+ * the row id is what Settings → Hosts lists it under.
  */
-export function noteLegacyFleetHostReuse(app: FastifyInstance): void {
-  emitOnce(app, LEGACY_FLEET_ENROLLMENT_REUSED_WARNING);
+export function noteLegacyFleetHostReuse(app: FastifyInstance, hostId: string): void {
+  emitOnceWith(app, LEGACY_FLEET_ENROLLMENT_REUSED_WARNING, { hostId });
 }
 
 /**

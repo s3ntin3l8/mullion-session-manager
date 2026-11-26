@@ -1339,6 +1339,12 @@ The legacy per-host-token path in that table only works while the row holds **no
 live identity (a revoked or expired one). Since issue #3439 a row with a live
 identity refuses a claim, so replacing _that_ agent needs the re-pair above.
 
+_Re-enroll a fleet-secret agent as a fresh host_ needs the legacy gate open
+(`MULLION_ALLOW_LEGACY_HOSTS=true`): with the gate off (the default) the
+enrollment is refused (401) unless the agent still advertises the address on
+its old row — then that row serves it (and gets the identity) instead of a
+new host appearing.
+
 There is deliberately no operator "rotate machine credential" endpoint:
 renewal rotates it already (the previous credential stays valid for 24 h so a
 lost response cannot lock the agent out), and revoke is the response to a
@@ -1479,6 +1485,20 @@ with it on every boot. Such a registration is served by the row the agent
 already owns (the row is matched by the address it advertises), so no second
 row appears. The claim path is how an existing host proves itself, and it is
 not gated.
+
+**That match is on the advertised address, exactly.** The address is what the
+agent advertises — by default `http://<hostname>:<port>`, or whatever
+`MULLION_AGENT_ADVERTISE_URL` names — so a host that renamed its box, that
+came back as a container with another address, or whose Base URL an operator
+edited in Settings no longer matches its row. Its registration is then
+refused with the same 401, for as long as the mismatch lasts, and the
+primary's log says so (once per process; it names the row it expects when it
+can tell). The row is still there; only the address on it is stale. Put the
+address the agent now advertises on the row — Settings → Hosts → **Edit**
+(`PATCH /api/hosts/:id { "baseUrl": "…" }`) — or pair the host again with a
+one-time pairing code. Flipping `MULLION_ALLOW_LEGACY_HOSTS` back on works
+too, but it lets the agent through as a **new** host — a second row for a
+box the operator already has.
 
 **What the gate does break.** A host that does not exist yet cannot be
 created through a legacy path: `POST /api/hosts` answers 400 and a

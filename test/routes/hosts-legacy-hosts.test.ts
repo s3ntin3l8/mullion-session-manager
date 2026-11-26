@@ -8,6 +8,7 @@ import { createHost, enrollHost, getHostRow, listHosts } from "../../src/service
 import {
   LEGACY_ENROLLMENT_SECRET_REFUSED_WARNING,
   LEGACY_ENROLLMENT_SECRET_WARNING,
+  LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_MISMATCH_WARNING,
   LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING,
   LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING,
   LEGACY_FLEET_ENROLLMENT_REUSED_WARNING,
@@ -94,8 +95,8 @@ describe("the legacy host gate: MULLION_ALLOW_LEGACY_HOSTS (issue #3477)", () =>
       // The reason is logged ONCE per process, however many agents are
       // turned away.
       await register(FLEET_SECRET);
-      const notices = warn.mock.calls.filter(
-        ([msg]) => String(msg) === LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING,
+      const notices = warn.mock.calls.filter((call) =>
+        call.map(String).includes(LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING),
       );
       expect(notices).toHaveLength(1);
       expect(notices[0][0]).toContain("MULLION_ALLOW_LEGACY_HOSTS");
@@ -217,8 +218,8 @@ describe("the legacy host gate: MULLION_ALLOW_LEGACY_HOSTS (issue #3477)", () =>
       // The row is untouched.
       expect(getHostRow(app, seeded.hostId)).toBeDefined();
 
-      const notices = warn.mock.calls.filter(
-        ([msg]) => String(msg) === LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING,
+      const notices = warn.mock.calls.filter((call) =>
+        call.map(String).includes(LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_WARNING),
       );
       expect(notices).toHaveLength(1);
       expect(notices[0][0]).toContain("MULLION_ENROLLMENT_ALLOWED_CIDRS");
@@ -234,7 +235,7 @@ describe("the legacy host gate: MULLION_ALLOW_LEGACY_HOSTS (issue #3477)", () =>
     try {
       const warn = vi.spyOn(app.log, "warn");
       const baseUrl = "http://127.0.0.6:1";
-      enrollHost(app, { hostname: "noticed-box", baseUrl });
+      const seeded = enrollHost(app, { hostname: "noticed-box", baseUrl });
       const register = () =>
         app.inject({
           method: "POST",
@@ -244,10 +245,82 @@ describe("the legacy host gate: MULLION_ALLOW_LEGACY_HOSTS (issue #3477)", () =>
 
       await register();
       await register();
-      const notices = warn.mock.calls.filter(
-        ([msg]) => String(msg) === LEGACY_FLEET_ENROLLMENT_REUSED_WARNING,
+      const notices = warn.mock.calls.filter((call) =>
+        call.map(String).includes(LEGACY_FLEET_ENROLLMENT_REUSED_WARNING),
       );
       expect(notices).toHaveLength(1);
+      // The line names the row: an operator with twenty agents has to be
+      // able to tell WHICH host still depends on the fleet secret.
+      expect(notices[0][0]).toMatchObject({ hostId: seeded.hostId });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses a fleet-secret host whose address no longer matches its row, and says which row", async () => {
+    delete process.env.MULLION_ALLOW_LEGACY_HOSTS;
+    process.env.MULLION_ENROLLMENT_SECRET = FLEET_SECRET;
+    const app = await buildApp();
+    try {
+      const warn = vi.spyOn(app.log, "warn");
+      // The host enrolled BEFORE the gate, at the address it had then.
+      const seeded = enrollHost(app, {
+        hostname: "moved-box",
+        baseUrl: "http://127.0.0.7:1",
+      });
+
+      // It comes back at another address — a container recreated at a new
+      // IP, or a Base URL the operator edited in Settings. The row it owns
+      // is matched by an exact address compare, so it no longer finds it.
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: {
+          token: FLEET_SECRET,
+          baseUrl: "http://127.0.0.8:1",
+          hostname: "moved-box",
+        },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.json().message).toBe("invalid registration credential");
+      // The row is untouched — nothing was taken over, nothing was created.
+      expect(getHostRow(app, seeded.hostId)!.baseUrl).toBe("http://127.0.0.7:1");
+      expect(listHosts(app).filter((h) => h.baseUrl === "http://127.0.0.8:1")).toHaveLength(0);
+
+      // The log names the OTHER fix: the row exists, its address is stale.
+      const notices = warn.mock.calls.filter((call) =>
+        call.map(String).includes(LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_MISMATCH_WARNING),
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0][0]).toMatchObject({ hostId: seeded.hostId });
+      expect(String(notices[0][1])).toContain("Settings");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps the plain refusal for a host that does not exist at all", async () => {
+    delete process.env.MULLION_ALLOW_LEGACY_HOSTS;
+    process.env.MULLION_ENROLLMENT_SECRET = FLEET_SECRET;
+    const app = await buildApp();
+    try {
+      const warn = vi.spyOn(app.log, "warn");
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: { token: FLEET_SECRET, baseUrl: "http://127.0.0.9:1", hostname: "unknown-box" },
+      });
+      expect(res.statusCode).toBe(401);
+      const notices = warn.mock.calls.filter((call) =>
+        call.map(String).includes(LEGACY_FLEET_ENROLLMENT_REFUSED_WARNING),
+      );
+      expect(notices).toHaveLength(1);
+      // The mismatch variant must not be used for a host nobody knows.
+      expect(
+        warn.mock.calls.filter((call) =>
+          call.map(String).includes(LEGACY_FLEET_ENROLLMENT_REFUSED_ADDRESS_MISMATCH_WARNING),
+        ),
+      ).toHaveLength(0);
     } finally {
       await app.close();
     }

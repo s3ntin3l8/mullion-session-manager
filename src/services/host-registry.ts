@@ -866,6 +866,47 @@ function findLegacyEnrolledHost(app: FastifyInstance, baseUrl: string): HostRow 
 }
 
 /**
+ * Issue #3477 — the legacy row a REFUSED fleet-secret registration may
+ * belong to.
+ *
+ * The gate-off reuse matches a row by the address the agent advertises, and
+ * that compare is exact (findLegacyEnrolledHost). A host that changed its
+ * address — a container recreated at a new IP, a Base URL the operator edited
+ * in Settings — therefore no longer finds its row, and its registration is
+ * refused with the same 401 a brand-new host gets. The refusal then reads as
+ * "this host does not exist yet", which is the wrong story for a host the
+ * operator can see in Settings.
+ *
+ * This lookup finds the row such a host most likely owns: a legacy enrolled
+ * row (no machine identity, not revoked) that advertises an address and
+ * reports the SAME self-reported hostname. A hostname is not an identity —
+ * the rule findPossibleDuplicates follows, for the same reason: two agents
+ * may share one (a cloned image, a compose service name) — so this is a
+ * heuristic, and it picks only the WORDING of an operator-side log line.
+ * The refusal itself is the same 401 either way, and nothing is created,
+ * taken over or changed by looking.
+ */
+export function findLegacyEnrolledHostByHostname(
+  app: FastifyInstance,
+  hostname: string,
+): HostRow | undefined {
+  const wanted = hostname.trim();
+  const rows = app.db
+    .select()
+    .from(hosts)
+    .where(
+      and(
+        eq(hosts.origin, "enrolled"),
+        isNull(hosts.machineCredentialRevokedAt),
+        isNull(hosts.machineCredentialEnc),
+        isNotNull(hosts.baseUrl),
+      ),
+    )
+    .all();
+  return rows.find((row) => reportedHostname(row) === wanted);
+}
+
+/**
  * Issue #3477 — reuse an enrolled row instead of creating one: refresh it
  * from the agent's self-report and hand it a fresh session. The same
  * operations enrollHost's own dedupe performs, in the same order.

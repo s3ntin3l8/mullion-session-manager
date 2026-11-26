@@ -4,6 +4,7 @@ import {
   clearHostSession,
   enrollExistingLegacyHost,
   enrollHost,
+  findLegacyEnrolledHostByHostname,
   recordHostSelfReport,
   renewMachineCredential,
   rotateSession,
@@ -267,6 +268,13 @@ export async function enrollmentRoute(app: FastifyInstance) {
         // owns (matched by the address it advertises) and is served by it —
         // no second row is created.
         //
+        // That match is an exact one on the advertised address, so a host
+        // that changed its address (a container recreated at a new IP, a
+        // Base URL edited in Settings) does not find its row either, and
+        // is refused like a host that does not exist. The refusal is the
+        // same 401 either way; only the operator-side log names the
+        // difference.
+        //
         // Every refusal answers the SAME 401 an unknown credential gets. The
         // CIDR gate is evaluated above, but its own 403 is never answered on
         // this path: a 403 would tell the caller that its secret was the
@@ -278,10 +286,24 @@ export async function enrollmentRoute(app: FastifyInstance) {
             ? enrollExistingLegacyHost(app, input, peer, { approved: autoApproved })
             : null;
           if (!reused) {
-            refuseLegacyFleetEnrollment(app, { addressNotAllowed: !addressAllowed });
+            // Issue #3477 — the refusal has two causes, and the operator has
+            // to be able to tell them apart: a host that does not exist yet
+            // (the gate did its job), and a host that DOES exist but no
+            // longer at the address on its row (a container recreated at a
+            // new IP, a Base URL edited in Settings). The second one is
+            // found by the hostname the agent reports — a heuristic that
+            // only picks the wording of the log line, never the answer the
+            // caller gets.
+            const mismatched = addressAllowed
+              ? findLegacyEnrolledHostByHostname(app, input.hostname)
+              : undefined;
+            refuseLegacyFleetEnrollment(app, {
+              addressNotAllowed: !addressAllowed,
+              addressMismatchHostId: mismatched?.id,
+            });
             return reply.unauthorized("invalid registration credential");
           }
-          noteLegacyFleetHostReuse(app);
+          noteLegacyFleetHostReuse(app, reused.hostId);
           app.reconfigureRemoteEventSubscriptions({ forceReconnect: [reused.hostId] });
           refreshHostProtocolSoon(app, reused.hostId);
           app.reconfigureSshAgentFanout();
