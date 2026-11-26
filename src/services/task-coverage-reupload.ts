@@ -460,6 +460,21 @@ export async function holdForStuckCoverageStatus(
     fallbackMessage: string;
     /** True when the hold has a more actionable cause (a red check): never re-upload. */
     skip?: boolean;
+    /**
+     * How the message names the stuck status.
+     *
+     * "the non-required check" is right in the `unstable` arm: that is where a
+     * NON-REQUIRED pending check is what holds the PR. The `blocked` arm
+     * cannot say the same — a status that holds a PR at
+     * `mergeable_state: "blocked"` is normally a REQUIRED one (that is the
+     * whole premise of #2971), and branch protection is not readable with the
+     * scopes this App holds, so it asks for the neutral "the check" instead.
+     *
+     * Required, not defaulted: the noun depends on WHICH arm is holding the
+     * PR, and a default would let a new arm assert "non-required" by
+     * omission.
+     */
+    statusNoun: string;
   },
 ): Promise<{ message: string; reason?: MergeNeedsHumanReason }> {
   if (args.skip) return { message: args.fallbackMessage };
@@ -467,7 +482,7 @@ export async function holdForStuckCoverageStatus(
   if (outcome.kind === "no-stall") return { message: args.fallbackMessage };
 
   const pending =
-    `the non-required check "${outcome.stall.statusName}" has been pending for ` +
+    `${args.statusNoun} "${outcome.stall.statusName}" has been pending for ` +
     `${outcome.stall.pendingMinutes} minute(s) on a head whose Actions checks are all green`;
   // Codecov is the provider this exists for; another app's status is the same
   // kind of stall, but calling it a Codecov stall would be a lie.
