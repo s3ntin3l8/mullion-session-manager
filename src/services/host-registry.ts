@@ -208,7 +208,7 @@ export function isHostApproved(row: Pick<HostRow, "id" | "approvedAt">): boolean
 export function isHostIdApproved(app: FastifyInstance, hostId: string): boolean {
   if (hostId === LOCAL_HOST_ID || !app.db) return true;
   const row = getHostRow(app, hostId);
-  return row ? isHostApproved(row) : true;
+  return row !== undefined && isHostApproved(row);
 }
 
 export function approveHost(

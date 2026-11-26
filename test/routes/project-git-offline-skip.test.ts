@@ -25,7 +25,10 @@ async function seed(app: Awaited<ReturnType<typeof buildApp>>) {
   // ready first; a tracker assigned earlier would be replaced by it.
   await app.ready();
   const hostId = `off-host-${++seq}`;
-  app.db.insert(hosts).values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1" }).run();
+  app.db
+    .insert(hosts)
+    .values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1", approvedAt: new Date() })
+    .run();
   const projectId = app.db
     .insert(projects)
     .values({ name: `off-p-${seq}`, cwd: `/remote/off-${seq}`, hostId })

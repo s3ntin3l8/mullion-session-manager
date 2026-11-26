@@ -34,7 +34,10 @@ describe("unreachable-host throttle wiring", () => {
   });
 
   async function seedRemote(app: Awaited<ReturnType<typeof buildApp>>, hostId: string) {
-    app.db.insert(hosts).values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1" }).run();
+    app.db
+      .insert(hosts)
+      .values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1", approvedAt: new Date() })
+      .run();
     const projectId = app.db
       .insert(projects)
       .values({ name: `p-${hostId}`, cwd: os.tmpdir(), hostId })

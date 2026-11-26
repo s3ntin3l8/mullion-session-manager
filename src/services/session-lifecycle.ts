@@ -33,7 +33,7 @@ import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
 import { forceRemoveCheckout, previewRemover } from "./checkout-removal.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
-import { LOCAL_HOST_ID, isHostIdApproved } from "./host-registry.js";
+import { LOCAL_HOST_ID, getHostRow, isHostApproved } from "./host-registry.js";
 import { HOST_AWAITING_APPROVAL_MESSAGE } from "./remote-host-errors.js";
 import { isOutcomeUnknown } from "./remote-host-errors.js";
 import { resolveHostBaseRef, resolveRepoRef, viaRemote } from "./host-git.js";
@@ -1057,6 +1057,12 @@ function preparingCheckout(app: FastifyInstance, project: ProjectRow, hostId: st
  * pointing at an existing worktree), so it is used as-is and the map is not
  * consulted for it.
  */
+function isKnownHostUnapproved(app: FastifyInstance, hostId: string): boolean {
+  if (hostId === LOCAL_HOST_ID || !app.db) return false;
+  const row = getHostRow(app, hostId);
+  return row !== undefined && !isHostApproved(row);
+}
+
 function resolveSessionPlacement(
   app: FastifyInstance,
   project: ProjectRow,
@@ -1073,7 +1079,7 @@ function resolveSessionPlacement(
   const hostCwds = parseHostCwds(project.hostCwds);
 
   if (params.target !== undefined && params.hostId === undefined) {
-    if (params.target.hostId !== undefined && !isHostIdApproved(app, params.target.hostId)) {
+    if (params.target.hostId !== undefined && isKnownHostUnapproved(app, params.target.hostId)) {
       return {
         ok: false,
         reason: "host-awaiting-approval",
@@ -1276,7 +1282,7 @@ async function createSessionRecordInner(
   }
   const placement = placementResult.placement;
   const placementHost = placement.hostId;
-  if (!isHostIdApproved(app, placementHost)) {
+  if (isKnownHostUnapproved(app, placementHost)) {
     return {
       ok: false,
       reason: "host-awaiting-approval",

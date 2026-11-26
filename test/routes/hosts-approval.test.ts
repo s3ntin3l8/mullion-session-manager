@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -12,8 +12,10 @@ import {
   createHost,
   enrollHost,
   getHostRow,
+  isHostIdApproved,
   listHosts,
 } from "../../src/services/host-registry.js";
+import { enrollmentRoute } from "../../src/routes/enrollment.js";
 import {
   resolveExecutionContext,
   executionContextErrorStatus,
@@ -375,5 +377,28 @@ describe("host approval gate (issue #3441)", () => {
     // Direct enrollHost() defaults to approvedAt = null
     const direct = enrollHost(app, { hostname: "direct-enroll", wantsMachineCredential: true });
     expect(getHostRow(app, direct.hostId)!.approvedAt).toBeNull();
+  });
+
+  it("fails closed for unknown hostIds and bare db.insert(hosts) without approvedAt", () => {
+    expect(isHostIdApproved(app, "nonexistent-host-id")).toBe(false);
+    app.db.insert(hosts).values({ id: "bare-insert", name: "bare-insert" }).run();
+    const row = getHostRow(app, "bare-insert")!;
+    expect(row.approvedAt).toBeNull();
+    expect(isHostIdApproved(app, "bare-insert")).toBe(false);
+  });
+
+  it("warns once at boot when MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS is invalid", async () => {
+    const warn = vi.fn();
+    const fakeApp = {
+      config: { MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: "10.0.0.1, not-a-cidr" },
+      log: { warn },
+      post: vi.fn(),
+    } as unknown as FastifyInstance;
+    await enrollmentRoute(fakeApp);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      { value: "10.0.0.1, not-a-cidr" },
+      expect.stringContaining("MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS"),
+    );
   });
 });

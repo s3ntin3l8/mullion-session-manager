@@ -120,7 +120,7 @@ export const hosts = sqliteTable("hosts", {
   // "awaiting approval" (created via fleet-secret enrollment or a pairing code
   // minted by an automation token with requireApproval). Unapproved hosts are
   // excluded from placement and spawn targets and direct operations fail 409.
-  approvedAt: integer("approved_at", { mode: "timestamp" }).$defaultFn(() => new Date()),
+  approvedAt: integer("approved_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

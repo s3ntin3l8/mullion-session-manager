@@ -268,7 +268,7 @@ describe("POST /api/projects/:id/git-branch-pull (issue #3068)", () => {
     async function remoteProject(app: FastifyInstance, hostId: string) {
       app.db
         .insert(hosts)
-        .values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1" })
+        .values({ id: hostId, name: hostId, baseUrl: "http://127.0.0.1:1", approvedAt: new Date() })
         .run();
       return app.db
         .insert(projects)
