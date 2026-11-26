@@ -263,8 +263,12 @@ describe("check-max-file-lines.mjs", () => {
   }
 
   /** Write the fixture's baseline. */
-  function writeBaseline(files: Record<string, number>, limit = LIMIT): void {
-    fs.writeFileSync(baselinePath, JSON.stringify({ limit, files }));
+  function writeBaseline(
+    files: Record<string, number>,
+    limit = LIMIT,
+    pins?: Record<string, number>,
+  ): void {
+    fs.writeFileSync(baselinePath, JSON.stringify({ limit, files, ...(pins ? { pins } : {}) }));
   }
 
   /** Run the guard against the fixture tree. */
@@ -379,6 +383,38 @@ describe("check-max-file-lines.mjs", () => {
     const result = await runCheck();
     expect(result.code).toBe(0);
   });
+
+  it("passes a pinned file at or below its pin", async () => {
+    writeCodeLines("src/pinned.ts", 400);
+    writeBaseline({}, LIMIT, { "src/pinned.ts": 400 });
+    const result = await runCheck();
+    expect(result.code).toBe(0);
+  });
+
+  it("fails a pinned file when its pin is below the file's size", async () => {
+    writeCodeLines("src/pinned.ts", 401);
+    writeBaseline({}, LIMIT, { "src/pinned.ts": 400 });
+    const result = await runCheck();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("src/pinned.ts");
+    expect(result.stderr).toContain("400");
+  });
+
+  it("reports a pinned file that shrank below its pin, without failing", async () => {
+    writeCodeLines("src/pinned.ts", 350);
+    writeBaseline({}, LIMIT, { "src/pinned.ts": 400 });
+    const result = await runCheck();
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("src/pinned.ts");
+  });
+
+  it("reports a stale pin whose file is gone, without failing", async () => {
+    writeCodeLines("src/small.ts", 10);
+    writeBaseline({}, LIMIT, { "src/deleted.ts": 400 });
+    const result = await runCheck();
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("src/deleted.ts");
+  });
 });
 
 describe("check-max-file-lines.mjs: the repository's own baseline", () => {
@@ -391,15 +427,26 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
     const baseline = JSON.parse(fs.readFileSync(BASELINE, "utf8")) as {
       limit: number;
       files: Record<string, number>;
+      pins?: Record<string, number>;
     };
     expect(baseline.limit).toBe(LIMIT);
     expect(Object.keys(baseline.files).length).toBeGreaterThan(0);
-    for (const [file, size] of Object.entries(baseline.files)) {
+    for (const [file, size] of [
+      ...Object.entries(baseline.files),
+      ...Object.entries(baseline.pins ?? {}),
+    ]) {
       expect(Number.isInteger(size)).toBe(true);
       expect(size).toBeGreaterThan(0);
       // A repo-relative path — not an absolute one, and not one that escapes.
       expect(file.startsWith("/")).toBe(false);
       expect(file).not.toContain("..");
+    }
+    const pins = baseline.pins ?? {};
+    expect(Object.keys(pins).filter((f) => f in baseline.files)).toEqual([]);
+    for (const [file, size] of Object.entries(pins)) {
+      expect(AUDIT_ROOTS.some((root) => file.startsWith(`${root}/`))).toBe(true);
+      expect(SOURCE_EXTENSIONS.has(path.extname(file))).toBe(true);
+      expect(size).toBeLessThanOrEqual(baseline.limit);
     }
   });
 
@@ -527,11 +574,16 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
 
   async function runCheck(
     extraArgs: string[] = [],
+    pins?: Record<string, number>,
   ): Promise<{ code: number; stdout: string; stderr: string }> {
     const baselinePath = path.join(repo, "baseline.json");
     fs.writeFileSync(
       baselinePath,
-      JSON.stringify({ limit: LIMIT, files: { "src/big.ts": LIMIT + 100 } }),
+      JSON.stringify({
+        limit: LIMIT,
+        files: { "src/big.ts": LIMIT + 100 },
+        ...(pins ? { pins } : {}),
+      }),
     );
     try {
       const { stdout, stderr } = await execFileAsync("node", [
@@ -698,5 +750,68 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
     const result = await runCheck(["--strict"]);
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("WARNING");
+  });
+
+  it("fails when a pinned file grows past its pin, even below its reference-commit size", async () => {
+    git(["init", "-q", "-b", "main"]);
+    write("src/big.ts", LIMIT + 100);
+    write("test/split.test.ts", LIMIT + 500);
+    commit("base");
+
+    git(["checkout", "-q", "-b", "feature"]);
+    write("test/split.test.ts", 450);
+    commit("grow past pin while still below merge-base size");
+
+    const result = await runCheck([], { "test/split.test.ts": 400 });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("test/split.test.ts");
+    expect(result.stderr).toContain("400");
+    expect(result.stderr).toContain("pins");
+  });
+
+  it("passes a pinned file at its pin even when its reference-commit size is larger", async () => {
+    git(["init", "-q", "-b", "main"]);
+    write("src/big.ts", LIMIT + 100);
+    write("test/split.test.ts", LIMIT + 500);
+    commit("base");
+
+    git(["checkout", "-q", "-b", "feature"]);
+    write("test/split.test.ts", 400);
+    commit("split file to pinned size");
+
+    const result = await runCheck([], { "test/split.test.ts": 400 });
+    expect(result.code).toBe(0);
+  });
+
+  it("fails when a pinned file grows past its reference-commit size even if the pin is higher", async () => {
+    git(["init", "-q", "-b", "main"]);
+    write("src/big.ts", LIMIT + 100);
+    write("test/split.test.ts", 350);
+    commit("base");
+
+    git(["checkout", "-q", "-b", "feature"]);
+    write("test/split.test.ts", 380);
+    commit("grow past reference size");
+
+    const result = await runCheck([], { "test/split.test.ts": 400 });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("test/split.test.ts");
+    expect(result.stderr).toContain("350");
+  });
+
+  it("keeps unpinned files measured as max(baseline, reference) alongside pins", async () => {
+    git(["init", "-q", "-b", "main"]);
+    // src/big.ts at the reference commit is larger than runCheck's baseline
+    // entry (LIMIT + 100), so it only passes if max(baseline, reference) holds.
+    write("src/big.ts", LIMIT + 300);
+    write("test/split.test.ts", 400);
+    commit("base");
+
+    git(["checkout", "-q", "-b", "feature"]);
+    write("src/other.ts", 10);
+    commit("unrelated");
+
+    const result = await runCheck([], { "test/split.test.ts": 400 });
+    expect(result.code).toBe(0);
   });
 });

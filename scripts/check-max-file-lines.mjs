@@ -65,6 +65,14 @@
 // than by this check; that is why the baseline is a committed file and not a
 // generated one.
 //
+// A file that has been split below the global limit can also be PINNED via
+// `pins` in `max-file-lines.baseline.json`:
+//
+//   ceiling(file) = min(pin, size at the reference commit)
+//
+// (or `pin` alone when no reference commit exists). That prevents a split file
+// from growing back toward its pre-split reference-commit size.
+//
 // The counting is shared with the audit that motivates this check
 // (`scripts/lib/audit-loc-core.mjs`), so the numbers the reports quote and the
 // numbers this enforces are the same numbers.
@@ -136,6 +144,7 @@ function warn(message) {
  * @typedef {object} Baseline
  * @property {number} limit
  * @property {Record<string, number>} files
+ * @property {Record<string, number>} pins
  */
 
 /**
@@ -152,7 +161,7 @@ function readBaseline(file) {
         `fails — the baseline is what records the existing offenders at their ` +
         `current size.`,
     );
-    return { limit: FALLBACK_LIMIT, files: {} };
+    return { limit: FALLBACK_LIMIT, files: {}, pins: {} };
   }
   let parsed;
   try {
@@ -168,7 +177,12 @@ function readBaseline(file) {
   for (const [key, value] of Object.entries(parsed.files ?? {})) {
     if (typeof value === "number") files[key] = value;
   }
-  return { limit, files };
+  /** @type {Record<string, number>} */
+  const pins = {};
+  for (const [key, value] of Object.entries(parsed.pins ?? {})) {
+    if (typeof value === "number") pins[key] = value;
+  }
+  return { limit, files, pins };
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -322,6 +336,29 @@ const stale = [];
 
 for (const c of counts) {
   const recorded = baseline.files[c.path];
+  const pin = baseline.pins[c.path];
+
+  if (pin !== undefined) {
+    const atReference = codeLinesAtReference(options.root, reference, c.path);
+    const ceiling = atReference === null ? pin : Math.min(pin, atReference);
+    if (c.code > ceiling) {
+      failures.push({
+        path: c.path,
+        code: c.code,
+        ceiling,
+        reason:
+          c.code > pin
+            ? "grew past its pinned ceiling"
+            : "grew past the size it had at the reference commit",
+      });
+      continue;
+    }
+    if (c.code < pin) {
+      shrinkable.push({ path: c.path, code: c.code, ceiling: pin });
+    }
+    continue;
+  }
+
   // A file under the limit can never fail: its floor is the limit itself, so
   // the ceiling is at least the limit and the file is below it. That is the
   // overwhelming majority of the tree, and asking git about each one would
@@ -365,7 +402,7 @@ for (const c of counts) {
 }
 
 const counted = new Set(counts.map((c) => c.path));
-for (const file of Object.keys(baseline.files)) {
+for (const file of new Set([...Object.keys(baseline.files), ...Object.keys(baseline.pins)])) {
   if (!counted.has(file)) stale.push(file);
 }
 
@@ -385,6 +422,12 @@ if (failures.length > 0) {
       "recorded commit. A size that goes DOWN is the ratchet turning over:\n" +
       "record that in the baseline file, where a reviewer sees it in the diff.",
   );
+  if (failures.some((f) => f.reason === "grew past its pinned ceiling")) {
+    console.error(
+      "Lower the pins entry in scripts/max-file-lines.baseline.json to the file's\n" +
+        "new size when the file was deliberately re-measured; otherwise split it.",
+    );
+  }
   process.exit(1);
 }
 
