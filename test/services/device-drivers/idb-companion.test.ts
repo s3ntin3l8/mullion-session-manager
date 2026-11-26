@@ -9,7 +9,12 @@ import {
   StderrRingBuffer,
   type IdbCompanionSpawn,
 } from "../../../src/services/device-drivers/idb-companion.js";
-import { createIdbGrpcClient } from "../../../src/services/device-drivers/idb-grpc.js";
+// grpc-js's own table of channel keys; it drops an unknown key silently.
+import { recognizedOptions } from "@grpc/grpc-js/build/src/channel-options.js";
+import {
+  createIdbGrpcClient,
+  IDB_CHANNEL_OPTIONS,
+} from "../../../src/services/device-drivers/idb-grpc.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FAKE_COMPANION_SCRIPT = path.resolve(here, "./fake-idb-companion.mjs");
@@ -40,6 +45,14 @@ async function waitForPidDead(pid: number, timeoutMs = 3000): Promise<boolean> {
 }
 
 describe("idb-grpc client", () => {
+  it("caps reconnect backoff with channel keys grpc-js recognises (#3527)", () => {
+    // A misspelt key is ignored and quietly restores the 120 s backoff.
+    for (const key of Object.keys(IDB_CHANNEL_OPTIONS)) {
+      expect(recognizedOptions).toHaveProperty([key]);
+    }
+    expect(IDB_CHANNEL_OPTIONS["grpc.max_reconnect_backoff_ms"]).toBeLessThanOrEqual(1_000);
+  });
+
   it("rejects invalid ports so only valid loopback ports can be targeted", () => {
     expect(() => createIdbGrpcClient(0)).toThrow(RangeError);
     expect(() => createIdbGrpcClient(-1)).toThrow(RangeError);

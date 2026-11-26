@@ -10,7 +10,10 @@ import { createIdbGrpcClient, type IdbGrpcClient } from "./idb-grpc.js";
 
 const UDID_PATTERN = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
-const DEFAULT_START_TIMEOUT_MS = 15_000;
+/** A cold start (the first companion right after a simulator boot) refuses
+ * connections for well over 15 s on a real Mac (#3527); every refusal inside
+ * this bound is retried. */
+const DEFAULT_START_TIMEOUT_MS = 60_000;
 const DEFAULT_READY_POLL_INTERVAL_MS = 100;
 const DEFAULT_DESCRIBE_TIMEOUT_MS = 1_000;
 const DEFAULT_STOP_GRACE_MS = 2_000;
@@ -27,11 +30,20 @@ export type IdbCompanionSpawn = (
 
 export type IdbCompanionExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
 
+/** Per-call overrides for start()/restart(). */
+export interface IdbCompanionStartOptions {
+  /** Readiness bound for this start in ms (defaults to the instance's
+   * startTimeoutMs). */
+  timeoutMs?: number;
+}
+
 export interface IdbCompanionOptions {
   udid: string;
   executablePath: string;
   spawn?: IdbCompanionSpawn;
-  /** Readiness timeout for start() in ms (default 15_000). */
+  /** Overall readiness bound for start() in ms (default 60_000). Every failed
+   * describe() probe inside it (UNAVAILABLE while the companion is still
+   * starting) is retried. */
   startTimeoutMs?: number;
   /** Poll interval between describe() readiness probes in ms (default 100). */
   readyPollIntervalMs?: number;
@@ -41,6 +53,10 @@ export interface IdbCompanionOptions {
   stderrMaxBytes?: number;
   /** Override for stale-companion cleanup (defaults to ps-based matching). */
   killStaleCompanions?: (udid: string) => Promise<void>;
+  /** Override for the gRPC client factory (tests substitute a fake). */
+  createClient?: (port: number) => IdbGrpcClient;
+  /** Override for the loopback port allocator (tests avoid real sockets). */
+  allocatePort?: () => Promise<number>;
   /** Optional listener invoked when the companion exits unexpectedly. */
   onExit?: IdbCompanionExitListener;
 }
@@ -293,6 +309,8 @@ export class IdbCompanion {
   private readonly readyPollIntervalMs: number;
   private readonly stopGraceMs: number;
   private readonly killStaleFn: (udid: string) => Promise<void>;
+  private readonly createClientFn: (port: number) => IdbGrpcClient;
+  private readonly allocatePortFn: () => Promise<number>;
   private readonly stderrBuffer: StderrRingBuffer;
   private readonly exitListeners = new Set<IdbCompanionExitListener>();
 
@@ -320,6 +338,8 @@ export class IdbCompanion {
     this.killStaleFn =
       options.killStaleCompanions ??
       ((u) => killStaleIdbCompanions(u, this.executablePath, this.stopGraceMs));
+    this.createClientFn = options.createClient ?? createIdbGrpcClient;
+    this.allocatePortFn = options.allocatePort ?? allocateLoopbackPort;
     if (options.onExit) {
       this.exitListeners.add(options.onExit);
     }
@@ -353,7 +373,7 @@ export class IdbCompanion {
     };
   }
 
-  async start(): Promise<void> {
+  async start(options: IdbCompanionStartOptions = {}): Promise<void> {
     if (this.starting) {
       throw new Error(`idb_companion for ${this.udid} is already starting`);
     }
@@ -361,13 +381,14 @@ export class IdbCompanion {
       return;
     }
 
+    const timeoutMs = options.timeoutMs ?? this.startTimeoutMs;
     this.starting = true;
     this.stopping = false;
     this.stderrBuffer.clear();
 
     try {
       await this.killStaleFn(this.udid);
-      const port = await allocateLoopbackPort();
+      const port = await this.allocatePortFn();
 
       const child = this.spawnFn(
         this.executablePath,
@@ -420,10 +441,10 @@ export class IdbCompanion {
         });
       });
 
-      const client = createIdbGrpcClient(port);
+      const client = this.createClientFn(port);
       this.currentClient = client;
 
-      const deadline = Date.now() + this.startTimeoutMs;
+      const deadline = Date.now() + timeoutMs;
       let lastDescribeError: Error | null = null;
       while (Date.now() < deadline) {
         if (earlyExitError) {
@@ -469,7 +490,7 @@ export class IdbCompanion {
       await this.killChildAndWait(child);
       const causeSuffix = lastDescribeError ? ` (${lastDescribeError.message})` : "";
       throw new Error(
-        `idb_companion for ${this.udid} failed to become ready within ${this.startTimeoutMs}ms${causeSuffix}${this.formatStderrSuffix()}`,
+        `idb_companion for ${this.udid} failed to become ready within ${timeoutMs}ms${causeSuffix}${this.formatStderrSuffix()}`,
       );
     } catch (err) {
       if (this.child) {
@@ -492,9 +513,9 @@ export class IdbCompanion {
     await this.killChildAndWait(child);
   }
 
-  async restart(): Promise<void> {
+  async restart(options: IdbCompanionStartOptions = {}): Promise<void> {
     await this.stop();
-    await this.start();
+    await this.start(options);
   }
 
   private async killChildAndWait(child: ChildProcess): Promise<void> {

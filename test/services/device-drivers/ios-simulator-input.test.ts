@@ -435,6 +435,8 @@ describe("IosSimulatorDriver input (in-process companion)", () => {
 
     await d1.tap(300, 600);
     expect(c1.handle.restart).toHaveBeenCalledTimes(2);
+    // A warm restart for stale HID keeps a short bound, not the 60 s cold start.
+    expect(c1.handle.restart).toHaveBeenLastCalledWith({ timeoutMs: 15_000 });
     expect(c1.hidStreams).toHaveLength(2);
     expect(c1.hidStreams[1]!.written).toEqual([
       { press: { action: { touch: { point: { x: 100, y: 200 } } }, direction: "DOWN" } },
