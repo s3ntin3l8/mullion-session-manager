@@ -62,6 +62,7 @@ import {
 // own hook runner, so nothing here is ever instrumented by the coverage
 // run.
 import { deliverStop } from "./forwarder-delivery.mjs";
+import { startBackgroundStop } from "./forwarder-background.mjs";
 
 // Bounded below claude-code.ts's own PermissionRequest hook `timeout`
 // (PERMISSION_REQUEST_TIMEOUT_SECONDS, 300s) so THIS process controls the
@@ -260,7 +261,8 @@ async function forward() {
   // until its budget expires. Every other hook keeps the fire-and-forget
   // behaviour below — connect, write, exit.
   if (kind === "Stop") {
-    await deliverStop(socketPath, token, messages);
+    if (agent === "mcode") await startBackgroundStop(socketPath, token, messages);
+    else await deliverStop(socketPath, token, messages);
     return nudge ? { type: "postToolUse", additionalContext: nudge } : null;
   }
 

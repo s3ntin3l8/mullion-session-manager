@@ -146,6 +146,19 @@ landed is acknowledged again but never dispatched a second time. A client
 that gets no reply at all cannot know whether its first attempt landed, so
 it must not retry against a socket that does not answer in this protocol.
 
+The forwarder makes up to six attempts, with backoffs of 2, 5, 10, 20 and
+30 seconds and a five-second timeout per attempt (at most about 97 seconds).
+Claude Code, Codex and agy declare a 120-second Stop hook timeout. mcode
+clamps hook timeouts to ten seconds, so its Stop command replaces the hook
+shell with `exec` and hands the complete delivery to a detached worker over
+IPC before attempting it. The hook returns immediately; the worker inherits
+no hook stdin/stdout/stderr pipes and reuses the handed-off delivery id for
+every attempt. It remains in the session scope and checks the agent PID
+every 250ms, exiting when the agent exits, on delivery, or at the retry bound.
+Retries therefore survive the hook runner but do not hold up agent exit or
+continue after session teardown (issue #3189). A Stop is still best-effort:
+an outage beyond the bound, or agent exit before delivery, can lose it.
+
 Every message after the handshake is validated JSON, one object per line,
 against a `kind`-discriminated shape. This table (rewritten against the
 current code — issue: extend surfaced session statuses; the previous

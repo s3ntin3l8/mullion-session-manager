@@ -610,6 +610,14 @@ export`/`import --standalone`, re-keying the imported session to the
   agent host restarting, the session's token not registered again yet) is
   not lost, and a retried one never reaches the session twice (issue #3174 —
   see [`agent-hooks.md`](agent-hooks.md#delivery-handshakes-a-retried-stop));
+  mcode's ten-second hook ceiling cannot cover that retry bound, so its
+  Stop command uses `exec` and the forwarder hands the entire delivery
+  (including its stable delivery id) to `forwarder-background.mjs` over IPC.
+  This detached worker holds no hook output pipes, stays in the session
+  scope, and exits on delivery, at the retry bound (about 97 seconds), or
+  when its agent PID disappears (checked every 250ms). Agent exit therefore
+  never waits for the retry; delivery remains best-effort if the agent
+  exits first or the outage exceeds the bound (issue #3189).
   `opencode-plugin.js` is OpenCode's own bridge,
   auto-injected as a per-session plugin directory referenced from
   `OPENCODE_CONFIG_CONTENT`, with the TUI launched `--standalone` (OpenCode
