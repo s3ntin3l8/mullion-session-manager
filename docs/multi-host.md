@@ -1550,6 +1550,20 @@ does not report simulator support — update its agent."`. For `platform: "ios"`
   (#3273) when the host negotiated `channel-streams`, and the agent's
   advertised address otherwise; before #3273 a host reachable only over the
   channel could not serve it at all.
+- **No relay step hangs silently (#3526).** Each step is bounded and ends in an
+  `{"type":"error","message":…}` to the panel and a warning in the primary's
+  log naming `hostId` and `deviceId`: the get-or-create (10 s), the upstream's
+  open (15 s from the panel's socket arriving) and its first keyframe (6 s from
+  the open). When no keyframe comes, the proxy asks the agent for the device's
+  live status (bounded at 5 s). A `streaming` or `error` device gets one more
+  chance (a keyframe request and a second check 4 s later, since a stream that
+  is reopening reports `error` until its next keyframe), then the error names
+  the state ("reports device 3 streaming but sent this panel no video",
+  "failed: …", "is not running …"), within 20 s of the open. A device the agent
+  reports as `starting` or `booting` keeps the panel waiting, rechecked every
+  6 s, for up to 3 minutes from the panel's socket arriving. An upstream the agent closes before any
+  video is reported too. The panel shows the reason and stops reconnecting,
+  so the reason stays on screen until Retry.
 - **When the host is offline.** `GET /api/devices` still succeeds when an agent
   is down and marks its rows `hostUnreachable: true` with `live: null` (the UI
   shows `"unavailable — host unreachable"` and disables Start/Stop). Mutating

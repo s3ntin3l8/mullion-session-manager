@@ -576,6 +576,41 @@ describe("DevicePane (issue #1326)", () => {
     });
   });
 
+  it("releases a held touch on the failing socket when the server reports an error (#3526)", () => {
+    resetStore({ devices: [makeDevice()], devicesLoaded: true });
+    render(<DevicePane params={{ deviceId: 7 }} />);
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.open());
+    const canvas = document.querySelector("canvas")!;
+    Object.defineProperty(canvas, "setPointerCapture", { value: vi.fn() });
+    Object.defineProperty(canvas, "hasPointerCapture", { value: () => false });
+    vi.spyOn(canvas, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 300,
+      bottom: 600,
+      width: 300,
+      height: 600,
+      toJSON: () => ({}),
+    });
+    const down = new Event("pointerdown", { bubbles: true, cancelable: true });
+    Object.assign(down, {
+      pointerId: 5,
+      pointerType: "touch",
+      button: 0,
+      clientX: 90,
+      clientY: 480,
+    });
+    act(() => canvas.dispatchEvent(down));
+
+    act(() =>
+      socket.emit("message", { data: JSON.stringify({ type: "error", message: "no video" }) }),
+    );
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({ type: "touchUp" });
+  });
+
   it("releases a held touch at its last point when the pane unmounts", () => {
     resetStore({ devices: [makeDevice()], devicesLoaded: true });
     const { unmount } = render(<DevicePane params={{ deviceId: 7 }} />);
@@ -704,6 +739,39 @@ describe("DevicePane (issue #1326)", () => {
 
     act(() => socket.emit("message", { data: keyframe() }));
     await waitFor(() => expect(screen.queryByText("Waiting for video…")).toBeNull());
+  });
+
+  it("shows the server's error reason instead of 'Waiting for video…', and does not reconnect over it (#3526)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      resetStore({ devices: [makeDevice()], devicesLoaded: true });
+      render(<DevicePane params={{ deviceId: 7 }} />);
+      const socket = FakeWebSocket.instances[0];
+      act(() => socket.open());
+      expect(screen.getByText("Waiting for video…")).toBeTruthy();
+
+      const reason = "Host macbook reports device 7 streaming but sent this panel no video";
+      act(() =>
+        socket.emit("message", { data: JSON.stringify({ type: "error", message: reason }) }),
+      );
+      expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+      // The server's own close follows: it must not schedule a reconnect that
+      // would clear the reason on its "open".
+      act(() => socket.emit("close"));
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(screen.getByText(reason)).toBeTruthy();
+      expect(screen.getByText("Disconnected")).toBeTruthy();
+      expect(screen.queryByText("Waiting for video…")).toBeNull();
+
+      // Retry starts over.
+      act(() => screen.getByRole("button", { name: /Retry now/ }).click());
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders with WebGL when supported, and falls back to the bitmap renderer when not", () => {

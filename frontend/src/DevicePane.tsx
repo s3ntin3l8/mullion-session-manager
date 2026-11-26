@@ -457,14 +457,21 @@ export function DevicePane(props: {
               void navigator.clipboard?.writeText(message.text).catch(() => {});
             }
           } else if (message?.type === "error") {
-            // getOrCreate() failed right after the upgrade (routes/
-            // device.ts) — most likely a scope left running from before a
-            // restart (device-manager.ts's own isScopeAlive comment).
-            // Shown, not silently dropped: this is actionable (the message
-            // names the exact `systemctl --user stop` command), unlike a
+            // The server could not attach this socket and says why (routes/
+            // device.ts): getOrCreate() failed, or — for a device on an agent
+            // host — the relay timed out or the agent sent no video (#3526).
+            // Shown, not silently dropped: it is actionable, unlike a
             // one-bad-packet decode error.
             setLastError(message.message);
             setStatus("failed");
+            // A held finger is released on this socket while it is still
+            // open (with `ws` detached, the touchUp would wait for the next
+            // connection). Then detaching `ws` makes this socket's own
+            // "close" a no-op: a reconnect would reset the error on its
+            // "open" and put the panel back on "Waiting for video…" (#3526).
+            // Retry starts over.
+            releaseActivePointer();
+            ws = null;
             socket.close();
           }
           return;
