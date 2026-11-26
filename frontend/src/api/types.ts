@@ -1342,6 +1342,11 @@ export interface ServerInfo {
   // /api/previews/:slug/token) and appends it to a preview iframe's URL only
   // when this is true.
   previewAuthRequired: boolean;
+  // Issue #3477 — whether the legacy host paths (a host added by token,
+  // fleet-secret enrollment) are still accepted. The Hosts UI offers the
+  // entry that creates them only when this is true. Optional: a server that
+  // predates the gate does not report it, and "not reported" is not "open".
+  allowLegacyHosts?: boolean;
   // Phase 2.5 Task Master (Thin Slice) — the single source of truth for
   // whether autonomous behavior (claim/approve/reject) is available; the
   // Tasks panel and local board always render regardless (see

@@ -38,6 +38,7 @@ import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
+import { LEGACY_HOST_CREATE_REFUSED_MESSAGE } from "../services/legacy-host-deprecation.js";
 import { HOST_AWAITING_APPROVAL_MESSAGE } from "../services/remote-host-errors.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
@@ -318,6 +319,18 @@ export async function hostsRoute(app: FastifyInstance) {
     "/api/hosts",
     { schema: createHostSchema },
     async (request, reply) => {
+      // Issue #3477 — the legacy host kinds are gated (decision #3320). With
+      // MULLION_ALLOW_LEGACY_HOSTS off, a host may no longer be added by
+      // token: the row this route creates is the manual-token kind, and the
+      // replacement is a one-time pairing code (the _Add host_ flow) or an
+      // automation token, which mints one.
+      //
+      // Only NEW legacy hosts are refused. Everything that already exists
+      // keeps working with the gate off — a row created earlier still claims
+      // with its own token, renewals and the outbound channel are untouched.
+      if (!app.config.MULLION_ALLOW_LEGACY_HOSTS) {
+        return reply.badRequest(LEGACY_HOST_CREATE_REFUSED_MESSAGE);
+      }
       const { name, baseUrl } = request.body;
       if (
         baseUrl !== undefined &&

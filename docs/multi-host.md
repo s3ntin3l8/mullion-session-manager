@@ -600,9 +600,10 @@ For automated fleets that want to avoid a standing fleet-wide `MULLION_ENROLLMEN
 ## Deprecated host kinds
 
 Three ways of putting a host on a primary are deprecated (issue #3476, decision
-[#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)). The
-setup paths described above still work — the primary accepts all three exactly
-as before — but each one is on its way out:
+[#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)). Each
+one is on its way out: new legacy hosts are gated behind
+`MULLION_ALLOW_LEGACY_HOSTS` (see "The gate" below), and the paths themselves
+are removed in the next minor release.
 
 | Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                                     |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -640,10 +641,40 @@ status chip — the one beside a host name in a session row or a pane tab —
 carries a "(deprecated)" qualifier for the first two kinds, and the primary
 logs a warning at startup while `MULLION_ENROLLMENT_SECRET` is set.
 
-**Schedule.** In the next minor release after this one, all three kinds are
-**gated behind `MULLION_ALLOW_LEGACY_HOSTS`** — without it the primary stops
-accepting them. In the minor release after that, they are **removed**. Nothing
-stops working before the gate; the gate is what to plan for.
+**The gate (`MULLION_ALLOW_LEGACY_HOSTS`, off by default).** The gate stops
+**new** legacy hosts from appearing. It sits on the two entry points that
+create one, not on the hosts themselves:
+
+- **Adding a host by token is refused.** `POST /api/hosts` answers **400** and
+  names the replacements — the _Add host_ flow (a one-time pairing code) and
+  automation tokens. In the UI, the _Advanced: host the primary dials directly
+  (deprecated)_ entry is shown only while the server reports the gate open
+  (`GET /api/server-info` → `allowLegacyHosts`), so the operator is never
+  walked into a refusal.
+- **Fleet-secret enrollment is refused.** The fleet-wide secret
+  (`MULLION_ENROLLMENT_SECRET`) no longer enrolls a new host row:
+  `POST /api/internal/register` answers the same **401** an unknown credential
+  gets — the refusal tells the caller nothing about the secret — and the
+  primary logs the reason once per process.
+
+**What keeps working with the gate off.** Every host that already exists on the
+**claim** path: its renewals, its outbound channel, a per-host token claiming
+a row created earlier, and a legacy agent registering on every boot with its
+own row's token are all unchanged — the claim path is how an existing host
+proves itself, and it is not gated.
+
+**What the gate does break.** An agent that enrolled with the **fleet secret**
+can no longer register with it, on its next boot included. Move such an agent
+to a pairing code (or an automation token) first: the row it enrolled stays,
+but the agent can no longer get a session from the primary.
+
+Set `MULLION_ALLOW_LEGACY_HOSTS=true` to keep the old behaviour exactly as it
+is today — the same requests, the same answers, the same rows.
+
+**Schedule.** The gate is here now; the legacy paths are **removed** in the
+next minor release, together with the flag. Nothing that exists stops working
+when the gate lands — the gate is what to plan for, and the removal is what to
+plan for after it.
 
 ## Automatic placement
 

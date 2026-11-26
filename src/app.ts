@@ -118,9 +118,9 @@ export async function buildApp() {
   await app.register(githubApiBasePlugin);
 
   // Issue #3476 — the fleet-wide enrollment secret is deprecated (use
-  // automation tokens instead; the removal is planned). Nothing changes
-  // here: the secret still enrolls hosts exactly as before, this only says
-  // so — once per process, as the process boots.
+  // automation tokens instead; the removal is planned). Issue #3477 added the
+  // gate: with MULLION_ALLOW_LEGACY_HOSTS off the secret is refused, and the
+  // notice says so — once per process, as the process boots.
   warnLegacyEnrollmentSecretAtBoot(app);
 
   // Multi-host support (issue #26). "primary" (default) is today's full

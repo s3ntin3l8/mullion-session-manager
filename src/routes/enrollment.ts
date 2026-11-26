@@ -11,7 +11,10 @@ import {
   type RegisterAgentInput,
 } from "../services/host-registry.js";
 import { refreshHostProtocolSoon } from "../services/host-agents.js";
-import { noteLegacyFleetEnrollment } from "../services/legacy-host-deprecation.js";
+import {
+  noteLegacyFleetEnrollment,
+  refuseLegacyFleetEnrollment,
+} from "../services/legacy-host-deprecation.js";
 import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
@@ -232,6 +235,23 @@ export async function enrollmentRoute(app: FastifyInstance) {
       // Issue #1059 — both fixed-length (server-configured secret vs
       // inbound bearer); same assumption as auth.ts / internal.ts.
       if (enrollmentSecret && timingSafeTokenMatch(token, enrollmentSecret)) {
+        // Issue #3477 — the legacy gate. The fleet-wide enrollment secret is
+        // deprecated (use automation tokens instead), so with
+        // MULLION_ALLOW_LEGACY_HOSTS off the fleet-secret branch is refused.
+        //
+        // The refusal is the SAME 401 an unknown credential gets, and it is
+        // answered BEFORE the CIDR gate below: a 403 there would tell the
+        // caller that its secret was the right one, which is exactly what
+        // this refusal must not.
+        //
+        // Only NEW legacy hosts are refused. A host that already exists keeps
+        // working with the gate off: it claims its own row with its own
+        // token (the branch above), renews its session, and keeps its
+        // outbound channel.
+        if (!app.config.MULLION_ALLOW_LEGACY_HOSTS) {
+          refuseLegacyFleetEnrollment(app);
+          return reply.unauthorized("invalid registration credential");
+        }
         const allowedCidrs = app.config.MULLION_ENROLLMENT_ALLOWED_CIDRS;
         // request.raw.socket.remoteAddress, not request.ip — see
         // getRawRemoteAddress's own doc comment. `.ip` is XFF-forgeable the

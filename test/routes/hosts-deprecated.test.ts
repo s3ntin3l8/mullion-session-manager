@@ -4,8 +4,9 @@ import { enrollHost, revokeMachineIdentity } from "../../src/services/host-regis
 
 // Issue #3476 — the legacy host kinds are FLAGGED, not refused. This issue
 // only produces the signal (HostSummary.deprecatedKind) and says so in the
-// UI; the gating (MULLION_ALLOW_LEGACY_HOSTS) and the removal are later
-// issues.
+// UI; the gate that refuses NEW legacy hosts (MULLION_ALLOW_LEGACY_HOSTS,
+// issue #3477) and the removal are separate issues — a flagged host keeps
+// working either way.
 describe("GET /api/hosts: the legacy host kinds are flagged (issue #3476)", () => {
   it("flags a legacy agent and a manual-token host, and nothing on a host with a live identity", async () => {
     const app = await buildApp();

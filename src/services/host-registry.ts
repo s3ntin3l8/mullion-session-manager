@@ -89,8 +89,9 @@ export interface HostSummary {
   // stored): "legacy-agent" is an agent without a machine identity that the
   // primary has to dial at its stored address, "manual-token" is a host whose
   // agent still authenticates with the row's own static per-host token
-  // (MULLION_AGENT_TOKEN). Nothing is refused or gated on this yet — the
-  // gating lands in a later release (MULLION_ALLOW_LEGACY_HOSTS).
+  // (MULLION_AGENT_TOKEN). Nothing is refused on this flag itself — the gate
+  // (MULLION_ALLOW_LEGACY_HOSTS, issue #3477) sits on the entry points that
+  // create a legacy host, not on the hosts that already exist.
   deprecatedKind: DeprecatedHostKind | null;
   // Issue #3441 — when this host was approved for execution (null = awaiting
   // approval; `local` is always approved by construction).
