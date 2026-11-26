@@ -669,6 +669,16 @@ describe("openDevicePanel (PR #1324)", () => {
     );
   });
 
+  it("carries the device's platform in the panel params (#3540)", () => {
+    const api = mockDockviewApi();
+
+    openDevicePanel(api, { ...TEST_DEVICE, platform: "ios" }, DESKTOP_LAYOUT);
+
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { deviceId: 1, platform: "ios" } }),
+    );
+  });
+
   it("falls back to avdName when name is null", () => {
     const api = mockDockviewApi();
 
