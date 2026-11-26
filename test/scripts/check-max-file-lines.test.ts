@@ -441,9 +441,12 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
       expect(file.startsWith("/")).toBe(false);
       expect(file).not.toContain("..");
     }
-    for (const file of Object.keys(baseline.pins ?? {})) {
+    const pins = baseline.pins ?? {};
+    expect(Object.keys(pins).filter((f) => f in baseline.files)).toEqual([]);
+    for (const [file, size] of Object.entries(pins)) {
       expect(AUDIT_ROOTS.some((root) => file.startsWith(`${root}/`))).toBe(true);
       expect(SOURCE_EXTENSIONS.has(path.extname(file))).toBe(true);
+      expect(size).toBeLessThanOrEqual(baseline.limit);
     }
   });
 
@@ -763,6 +766,7 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("test/split.test.ts");
     expect(result.stderr).toContain("400");
+    expect(result.stderr).toContain("pins");
   });
 
   it("passes a pinned file at its pin even when its reference-commit size is larger", async () => {
@@ -797,18 +801,15 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
 
   it("keeps unpinned files measured as max(baseline, reference) alongside pins", async () => {
     git(["init", "-q", "-b", "main"]);
-    write("src/big.ts", LIMIT + 100);
+    // src/big.ts at the reference commit is larger than runCheck's baseline
+    // entry (LIMIT + 100), so it only passes if max(baseline, reference) holds.
+    write("src/big.ts", LIMIT + 300);
     write("test/split.test.ts", 400);
     commit("base");
 
     git(["checkout", "-q", "-b", "feature"]);
     write("src/other.ts", 10);
     commit("unrelated");
-
-    git(["checkout", "-q", "main"]);
-    write("src/big.ts", LIMIT + 300);
-    commit("main grew big.ts");
-    git(["checkout", "-q", "feature"]);
 
     const result = await runCheck([], { "test/split.test.ts": 400 });
     expect(result.code).toBe(0);

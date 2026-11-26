@@ -422,6 +422,12 @@ if (failures.length > 0) {
       "recorded commit. A size that goes DOWN is the ratchet turning over:\n" +
       "record that in the baseline file, where a reviewer sees it in the diff.",
   );
+  if (failures.some((f) => f.reason === "grew past its pinned ceiling")) {
+    console.error(
+      "Lower the pins entry in scripts/max-file-lines.baseline.json to the file's\n" +
+        "new size when the file was deliberately re-measured; otherwise split it.",
+    );
+  }
   process.exit(1);
 }
 
