@@ -237,7 +237,7 @@ describe("HostsSection token rotation", () => {
             shell: "/bin/zsh",
             interactiveResolve: "fallback",
             reason: "timeout",
-            retryAt: 1_800_000_000_000,
+            retryAt: Date.now() + 4 * 60_000,
             path: ["/usr/bin", "/bin"],
             recoveredKeys: [],
           },
@@ -269,7 +269,7 @@ describe("HostsSection token rotation", () => {
     });
     render(<HostsSection />);
     const warning = screen.getByTestId("host-session-env-warning-h1");
-    expect(warning).toHaveTextContent("PATH recovery fell back: timeout — will retry");
+    expect(warning).toHaveTextContent("PATH recovery fell back: timeout — will retry in 4m");
     expect(screen.getByTestId("host-session-env-h1")).not.toHaveAttribute("open");
     expect(screen.getByText("/usr/bin")).toBeInTheDocument();
     expect(screen.getByTestId("host-session-env-h2")).toHaveTextContent("not reported");

@@ -14,6 +14,7 @@ import {
   type PingState,
 } from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
+import { formatRelativeUntil } from "../../relativeTime.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { CloseIcon, GearIcon, HostsIcon, MoonIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
@@ -118,7 +119,7 @@ function HostSessionEnvDetail({ host }: { host: Host }) {
             }
           >
             ⚠ PATH recovery fell back{env.reason ? `: ${env.reason}` : ""}
-            {env.retryAt ? " — will retry" : ""}
+            {env.retryAt ? ` — will retry ${formatRelativeUntil(env.retryAt)}` : ""}
           </span>
         )}
       </summary>
