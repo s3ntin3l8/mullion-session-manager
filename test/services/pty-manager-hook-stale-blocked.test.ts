@@ -183,6 +183,25 @@ describe("PtyManager", () => {
         expect(session.toInfo().gateState).toBe("idle");
       });
 
+      // Hermes review round 3, PR #3528 — the deferred turn-end ping's settle
+      // window (resolveDeferredTurnEnd -> agentIdle) runs on the same clock.
+      it("settles the deferred agentIdle ping on emitHookEvent's pinned now", async () => {
+        const session = manager.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+        await waitForSpawn(session);
+        const now = Date.now() - 5_000;
+
+        session.emitHookEvent({ kind: "progress", phase: "done" }, now);
+        session.tick(now + 3_000);
+
+        expect(session.toInfo().attention).toBe(true);
+      });
+
       it("fix: sticky needs_input (D4) — the stale sweep does NOT drop a hookNotification-confirmed flag with no dedicated latch behind it (deliberately left to keystroke/notification_resolved only)", async () => {
         const session = manager.getOrCreate({
           id: "1",

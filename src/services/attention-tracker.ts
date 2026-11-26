@@ -518,12 +518,12 @@ export class AttentionTracker {
    * cancel (every `done` message unconditionally resets it before calling
    * back in here, regardless of whether the PRIOR latch's ping fired,
    * settled, or was cancelled). */
-  resolveDeferredTurnEnd(): void {
+  resolveDeferredTurnEnd(now: number = Date.now()): void {
     if (this.lastTurnEndedAt === null) return;
     if (this.turnEndPingSent) return;
     if (filterOutstandingBackgroundTasks(this.backgroundTasks).length > 0) return;
     this.turnEndPingSent = true;
-    this.emitAttentionSignalDeferred("agentIdle", {});
+    this.emitAttentionSignalDeferred("agentIdle", {}, [], now);
   }
 
   /** Drops every pending deferred emit with no attempt to emit anything —

@@ -2442,13 +2442,13 @@ export class Session {
       markStateDirty: () => self.stateFile.schedule(),
       clearIfConfirmedKind: (kind) => self.attention.clearIfConfirmedKind(kind, self.hookNow),
       clearAttention: () => self.attention.clearAttention(self.hookNow),
-      resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(),
+      resolveDeferredTurnEnd: () => self.attention.resolveDeferredTurnEnd(self.hookNow),
       setBackgroundTasks: (tasks) => self.attention.setBackgroundTasks(tasks, self.hookNow),
       bumpSubagentActivity: (agentId, kind) => self.bumpSubagentActivity(agentId, kind),
       recordSubagentStart: (agentId, agentType, now) =>
         self.recordSubagentStart(agentId, agentType, now),
       recordSubagentStop: (agentId, summary, now) => self.recordSubagentStop(agentId, summary, now),
-      registerPendingGate: (id, prompt) => self.registerPendingGate(id, prompt, self.hookNow),
+      registerPendingGate: (gid, prompt) => self.registerPendingGate(gid, prompt, self.hookNow),
       resolveGate: (gateId, decision, reason) => self.resolveGate(gateId, decision, reason),
       pendingGateIds: () => self.pendingGateIds(),
     };
