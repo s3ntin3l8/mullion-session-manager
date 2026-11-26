@@ -238,7 +238,10 @@ export async function enrollmentRoute(app: FastifyInstance) {
         // succeeds exactly as before, this only says so — once per process,
         // so a fleet of agents enrolling does not fill the log.
         noteLegacyFleetEnrollment(app);
-        const enrolled = enrollHost(app, input, peer);
+        const autoApproveCidrs = app.config.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS.trim();
+        const autoApproved =
+          autoApproveCidrs !== "" && isIpAllowed(getRawRemoteAddress(request), autoApproveCidrs);
+        const enrolled = enrollHost(app, input, peer, { approved: autoApproved });
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
         refreshHostProtocolSoon(app, enrolled.hostId);
         app.reconfigureSshAgentFanout();

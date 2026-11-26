@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { eq, and, desc, gte, isNotNull, isNull, ne, notInArray, or } from "drizzle-orm";
+import { eq, and, desc, gte, inArray, isNotNull, isNull, ne, notInArray, or } from "drizzle-orm";
 import { hostIdentityEvents, hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { forgetHostWarnings } from "./host-warn-throttle.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
@@ -92,6 +92,10 @@ export interface HostSummary {
   // (MULLION_AGENT_TOKEN). Nothing is refused or gated on this yet — the
   // gating lands in a later release (MULLION_ALLOW_LEGACY_HOSTS).
   deprecatedKind: DeprecatedHostKind | null;
+  // Issue #3441 — when this host was approved for execution (null = awaiting
+  // approval; `local` is always approved by construction).
+  approvedAt: Date | null;
+  approvalPending: boolean;
   // baseUrl is null for "local" and for a "manual" host added without one
   // (Settings -> Add host, token minted by the primary) that is still
   // waiting for its agent: claimHost fills it in from the agent's own
@@ -197,6 +201,32 @@ function deprecatedKindOf(row: HostRow): DeprecatedHostKind | null {
   return null;
 }
 
+export function isHostApproved(row: Pick<HostRow, "id" | "approvedAt">): boolean {
+  return row.id === LOCAL_HOST_ID || row.approvedAt !== null;
+}
+
+export function isHostIdApproved(app: FastifyInstance, hostId: string): boolean {
+  if (hostId === LOCAL_HOST_ID || !app.db) return true;
+  const row = getHostRow(app, hostId);
+  return row ? isHostApproved(row) : true;
+}
+
+export function approveHost(
+  app: FastifyInstance,
+  id: string,
+): "approved" | "already_approved" | "not_found" {
+  const row = getHostRow(app, id);
+  if (!row) return "not_found";
+  if (isHostApproved(row)) return "already_approved";
+  const updated = app.db
+    .update(hosts)
+    .set({ approvedAt: new Date() })
+    .where(and(eq(hosts.id, id), isNull(hosts.approvedAt)))
+    .returning({ id: hosts.id })
+    .all();
+  return updated.length > 0 ? "approved" : "already_approved";
+}
+
 function toSummary(row: HostRow): HostSummary {
   return {
     id: row.id,
@@ -221,6 +251,8 @@ function toSummary(row: HostRow): HostSummary {
     paired: false,
     unclaimed: false,
     deprecatedKind: deprecatedKindOf(row),
+    approvedAt: row.approvedAt,
+    approvalPending: !isHostApproved(row),
   };
 }
 
@@ -374,6 +406,7 @@ export function createHost(app: FastifyInstance, input: CreateHostInput): HostSu
       baseUrl: input.baseUrl ?? null,
       authTokenEnc: app.encryption.encryptString(input.token),
       origin: "manual",
+      approvedAt: new Date(),
     })
     .returning()
     .all();
@@ -743,6 +776,7 @@ export function claimHost(
       // newer build recorded earlier (the same rule
       // recordHostSelfReport() applies on the renewal path).
       ...(input.platform ? { platform: input.platform } : {}),
+      approvedAt: matchedRow.approvedAt ?? new Date(),
     })
     .where(eq(hosts.id, matchedRow.id))
     .run();
@@ -775,13 +809,14 @@ export function enrollHost(
   app: FastifyInstance,
   input: RegisterAgentInput,
   peer: string | null = null,
+  opts?: { approved?: boolean },
 ): HostRegistration {
   // Issue #2568 — an agent that persists an identity is matched by host id on
   // every later registration, so baseUrl is not an identity for it: two
   // agents sharing an advertised URL each get their own row (and credential)
   // instead of re-stealing one. Only the legacy path below still dedupes.
   if (input.wantsMachineCredential || input.baseUrl === undefined) {
-    return insertEnrolledHost(app, input, peer);
+    return insertEnrolledHost(app, input, peer, opts);
   }
   const baseUrl = input.baseUrl;
   const metadata = JSON.stringify({
@@ -834,6 +869,7 @@ export function enrollHost(
         // not erase what was recorded before. An absent platform is not a
         // reset, the same rule recordHostSelfReport() applies on renewal.
         ...(input.platform ? { platform: input.platform } : {}),
+        ...(opts?.approved && existing.approvedAt === null ? { approvedAt: new Date() } : {}),
       })
       .where(eq(hosts.id, existing.id))
       .run();
@@ -841,7 +877,7 @@ export function enrollHost(
     recordHostIdentityEvent(app, existing.id, "enrolled", peer);
     return issueSession(app, existing.id);
   }
-  const inserted = insertEnrolledHost(app, input, peer);
+  const inserted = insertEnrolledHost(app, input, peer, opts);
   noteLegacyAgent(app, inserted.hostId);
   return inserted;
 }
@@ -850,6 +886,7 @@ function insertEnrolledHost(
   app: FastifyInstance,
   input: RegisterAgentInput,
   peer: string | null = null,
+  opts?: { approved?: boolean },
 ): HostRegistration {
   const metadata = JSON.stringify({
     hostname: input.hostname,
@@ -866,6 +903,7 @@ function insertEnrolledHost(
       origin: "enrolled",
       agentMetadata: metadata,
       platform: input.platform ?? null,
+      approvedAt: opts?.approved ? new Date() : null,
     })
     .run();
   recordHostIdentityEvent(app, id, "enrolled", peer);
@@ -884,6 +922,7 @@ export function createPairedHost(
   app: FastifyInstance,
   input: Omit<RegisterAgentInput, "baseUrl" | "wantsMachineCredential"> & { baseUrl?: string },
   peer: string | null = null,
+  opts?: { approved?: boolean },
 ): HostRegistration {
   const id = crypto.randomUUID();
   app.db
@@ -899,6 +938,7 @@ export function createPairedHost(
         capabilities: input.capabilities ?? null,
       }),
       platform: input.platform ?? null,
+      approvedAt: opts?.approved !== false ? new Date() : null,
     })
     .run();
   recordHostIdentityEvent(app, id, "paired", peer);
@@ -1346,6 +1386,37 @@ export function listRecentIdentityReplacements(
         peer: row.peer ?? null,
       });
     }
+  }
+  return byHost;
+}
+
+/**
+ * Issue #3441 — newest enrollment/pairing peer address for each host awaiting
+ * approval, read from `host_identity_events`.
+ */
+export function listPendingEnrollmentPeers(app: FastifyInstance): Map<string, string | null> {
+  const pendingRows = app.db
+    .select({ id: hosts.id })
+    .from(hosts)
+    .where(and(ne(hosts.id, LOCAL_HOST_ID), isNull(hosts.approvedAt)))
+    .all();
+  const byHost = new Map<string, string | null>();
+  if (pendingRows.length === 0) return byHost;
+  const ids = pendingRows.map((r) => r.id);
+  const events = app.db
+    .select()
+    .from(hostIdentityEvents)
+    .where(
+      and(
+        inArray(hostIdentityEvents.hostId, ids),
+        or(eq(hostIdentityEvents.kind, "enrolled"), eq(hostIdentityEvents.kind, "paired")),
+      ),
+    )
+    .orderBy(desc(hostIdentityEvents.at), desc(hostIdentityEvents.id))
+    .all();
+  for (const ev of events) {
+    if (!ev.hostId || byHost.has(ev.hostId)) continue;
+    byHost.set(ev.hostId, ev.peer ?? null);
   }
   return byHost;
 }

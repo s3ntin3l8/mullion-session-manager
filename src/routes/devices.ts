@@ -133,7 +133,9 @@ function cachedRemoteKinds(
 /** Every host that could hold a device: the primary and each registered agent. */
 async function listDeviceHosts(app: FastifyInstance): Promise<DeviceHostEntry[]> {
   const all = listHosts(app);
-  const remotes = all.filter((host) => !host.isLocal && host.id !== LOCAL_HOST_ID);
+  const remotes = all.filter(
+    (host) => !host.isLocal && host.id !== LOCAL_HOST_ID && !host.approvalPending,
+  );
   let cache = deviceHostsCache.get(app);
   if (!cache) deviceHostsCache.set(app, (cache = new Map()));
   // Forget a removed host's answer, so the map cannot grow without bound.

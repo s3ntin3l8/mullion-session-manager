@@ -370,6 +370,7 @@ async function sweepHost(
   hostId: string,
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
+  approvalPending = false,
 ): Promise<{ recovered: boolean; cameOnline: boolean }> {
   const sinceMark = tracker.writeMark(hostId);
   const probe = await boundedProbe(app, hostId);
@@ -377,6 +378,10 @@ async function sweepHost(
   // capacity poll: it would only queue behind the same hung transfers.
   const { recovered, cameOnline } = applyProbeResult(tracker, hostId, probe, { sinceMark });
   if (probe !== "ok") return { recovered: false, cameOnline: false };
+  // Issue #3441 — an unapproved host's health verdict is tracked so its row
+  // shows online while pending, but we do not poll capacity/agents or fire
+  // online/recovery hooks until an operator approves it.
+  if (approvalPending) return { recovered: false, cameOnline: false };
 
   // Issue #2240 — the agent CLI list is re-read when its TTL lapses. A host
   // that just came online is refreshed by `onHostOnline` instead, so the two
@@ -478,7 +483,13 @@ async function sweep(
       if (inFlight.has(host.id)) return;
       inFlight.add(host.id);
       try {
-        const result = await sweepHost(app, host.id, tracker, capacityTracker);
+        const result = await sweepHost(
+          app,
+          host.id,
+          tracker,
+          capacityTracker,
+          host.approvalPending,
+        );
         if (result.recovered) recovered.push(host.id);
         if (result.cameOnline) cameOnline.push(host.id);
       } finally {

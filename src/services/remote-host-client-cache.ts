@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { getHostRow, decryptToken } from "./host-registry.js";
+import { getHostRow, decryptToken, isHostIdApproved } from "./host-registry.js";
 import { resolveHostTransport } from "./agent-channel-tunnel.js";
 import { RemoteHostClient } from "./remote-host-client-core.js";
 
@@ -104,6 +104,7 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
     hostId,
     baseUrl: row.baseUrl,
     resolveTransport: (operation) => resolveHostTransport(app, hostId, operation),
+    isApproved: () => isHostIdApproved(app, hostId),
     // Streams ride the outbound channel through this app; without it
     // openStreamOnTransport always answers "inbound" (#2635).
     channelApp: app,

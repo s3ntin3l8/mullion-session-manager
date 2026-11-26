@@ -80,6 +80,7 @@ Set `MULLION_AGENT_ADVERTISE_URL` only for a primary that must dial this agent.
 ```bash
 MULLION_ENROLLMENT_SECRET=<the same fleet-wide secret>
 MULLION_ENROLLMENT_ALLOWED_CIDRS=10.0.0.0/8              # optional — restricts which peer IPs may enroll
+MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS=10.0.0.0/8         # optional — auto-approves matching peer IPs at enrollment
 ```
 
 `MULLION_ENROLLMENT_ALLOWED_CIDRS` checks the raw TCP peer address
@@ -560,7 +561,27 @@ credentials.
 every IP-keyed rate limiter (the app-wide bucket, register and deregister at
 20/min, and `/api/internal/pair`'s failure bucket) and
 `MULLION_ENROLLMENT_ALLOWED_CIDRS` therefore see the proxy's address rather
-than the connecting agent's; there is no separate auto-approve CIDR setting.
+than the connecting agent's; `MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS` (for the
+legacy fleet-secret path only; removed together with `MULLION_ENROLLMENT_SECRET`)
+reads that same raw TCP peer address (`getRawRemoteAddress`, never
+`X-Forwarded-For`), so a fleet-secret host enrolled from a non-matching peer
+waits in **Awaiting approval** until an operator approves it in Settings → Hosts
+(`POST /api/hosts/:id/approve`).
+
+### Host approval (hosts nobody explicitly created)
+
+Hosts created in Settings → Hosts, paired from an operator-minted code, paired
+from an automation token without `requireApproval`, or claimed with a per-host
+token are approved at creation (`hosts.approved_at`). Hosts created without an
+operator present — from an automation-token pairing code with `requireApproval`
+set, or via `MULLION_ENROLLMENT_SECRET` when the raw TCP peer does not match
+`MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS` — start with `approved_at` unset
+(`approvalPending: true`). While awaiting approval, the host may still register,
+renew its credential, and keep its outbound channel connected so it shows online
+in Settings → Hosts, but it is excluded from placement and `list_spawn_targets`,
+and direct operations or spawns targeting it fail with `409 host is awaiting
+approval`. An operator approves the host in Settings → Hosts (**Approve**) or
+removes it (**Reject**).
 
 **Do not put the user-facing hostname's SSO bypass on `/api/internal/*`.** Keep
 the unauthenticated agent endpoints isolated on their own dedicated hostname

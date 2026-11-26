@@ -1380,7 +1380,12 @@ role/group variables — keep the token in your vault
 (`ansible-vault`), not committed alongside the playbook. No task on the
 primary side is needed at all: `MULLION_ENROLLMENT_SECRET` is set once
 there, and every agent booted with the matching
-`MULLION_AGENT_ENROLLMENT_TOKEN` self-registers.
+`MULLION_AGENT_ENROLLMENT_TOKEN` self-registers. Hosts enrolled via
+`MULLION_ENROLLMENT_SECRET` land in **Awaiting approval** in Settings → Hosts
+(excluded from placement and execution) unless their raw TCP peer matches
+`MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS` on the primary or an operator approves
+them (`POST /api/hosts/:id/approve`). For automation-token pairing, tokens
+with `requireApproval` similarly wait in **Awaiting approval** until approved.
 
 **Updating an agent:** as of issue #647 / roadmap 7.8, an agent has its own
 self-update surface — see "Layout and updates" above and

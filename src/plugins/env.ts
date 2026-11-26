@@ -290,6 +290,15 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Issue #3441 — optional CIDR allow-list for auto-approving hosts enrolled
+    // via MULLION_ENROLLMENT_SECRET (legacy path only; removed together with
+    // the fleet secret). Evaluates the raw TCP peer (getRawRemoteAddress,
+    // never request.ip); matching peers are approved at enrollment instead of
+    // waiting in "Awaiting approval".
+    MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: {
+      type: "string",
+      default: "",
+    },
     // Optional in-process auth (issue #19) for the primary role: a single
     // shared token/API key, checked via src/plugins/auth.ts's global
     // onRequest gate against every HTTP route and the /ws/terminal upgrade
@@ -1204,6 +1213,7 @@ declare module "fastify" {
       MULLION_AGENT_NAME: string;
       MULLION_ENROLLMENT_SECRET: string;
       MULLION_ENROLLMENT_ALLOWED_CIDRS: string;
+      MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: string;
       MULLION_ALLOW_TAILNET_HOSTS: boolean;
       MULLION_AUTH_TOKEN: string;
       MULLION_TRUST_GATEWAY: boolean;

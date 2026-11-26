@@ -10,12 +10,15 @@ import {
   HostHasProjectsError,
   UnknownHostError,
   acknowledgeHostIdentityReplacements,
+  approveHost,
   createHost,
   deleteHost,
   getHostRow,
   hasLiveMachineIdentity,
+  isHostApproved,
   listHostIdentityEvents,
   listHosts,
+  listPendingEnrollmentPeers,
   listRecentIdentityReplacements,
   findPossibleDuplicates,
   activeSessionHostIds,
@@ -35,6 +38,7 @@ import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
+import { HOST_AWAITING_APPROVAL_MESSAGE } from "../services/remote-host-errors.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
 import { appVersion, reportedVersion } from "./server-info.js";
@@ -185,6 +189,9 @@ function pendingHostReply(app: FastifyInstance, id: string, reply: FastifyReply)
       `${row.name} hasn't registered yet — run its install command on the agent first`,
     );
   }
+  if (!isHostApproved(row)) {
+    return reply.conflict(HOST_AWAITING_APPROVAL_MESSAGE);
+  }
   return undefined;
 }
 
@@ -213,6 +220,7 @@ export async function hostsRoute(app: FastifyInstance) {
       leakedByHost.set(leak.hostId, (leakedByHost.get(leak.hostId) ?? 0) + 1);
     }
     const recentReplacements = listRecentIdentityReplacements(app);
+    const pendingEnrollmentPeers = listPendingEnrollmentPeers(app);
     // Issue #2969 — an older offline row a newer registration replaced is a
     // leftover, not an agent waiting for an upgrade: its successor already
     // has an identity, so flagging the leftover would say "upgrade" about an
@@ -300,6 +308,8 @@ export async function hostsRoute(app: FastifyInstance) {
         leakedBrowsers: leakedByHost.get(host.id) ?? 0,
         // Issue #3435 — newest unacknowledged identity replacement within 30 days.
         recentIdentityReplacement: recentReplacements.get(host.id) ?? null,
+        // Issue #3441 — peer address recorded when a pending host enrolled/paired.
+        enrollmentPeer: host.approvalPending ? (pendingEnrollmentPeers.get(host.id) ?? null) : null,
       };
     });
   });
@@ -423,6 +433,22 @@ export async function hostsRoute(app: FastifyInstance) {
     return { token };
   });
 
+  // Issue #3441 — approve a host awaiting approval so it becomes eligible for
+  // placement, spawn targets and direct operations.
+  app.post<{ Params: { id: string } }>("/api/hosts/:id/approve", async (request, reply) => {
+    const { id } = request.params;
+    const outcome = approveHost(app, id);
+    if (outcome === "not_found") return reply.notFound();
+    if (outcome === "already_approved") {
+      return reply.conflict("host is already approved");
+    }
+    app.hostHeartbeatTracker?.invalidateHost(id);
+    app.reconfigureRemoteEventSubscriptions({ forceReconnect: [id] });
+    app.reconfigureSshAgentFanout();
+    app.reconfigureControlRelayFanout();
+    return { ok: true };
+  });
+
   // Issue #2568 — final revocation of a host's machine identity. The agent
   // is rejected on its next renewal and does not fall back to its bootstrap
   // token; the operator clears the agent's state file to re-enroll it.
@@ -503,7 +529,11 @@ export async function hostsRoute(app: FastifyInstance) {
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const { id } = request.params;
-      if (id !== LOCAL_HOST_ID && !getHostRow(app, id)) return reply.notFound();
+      if (id !== LOCAL_HOST_ID) {
+        const row = getHostRow(app, id);
+        if (!row) return reply.notFound();
+        if (!isHostApproved(row)) return reply.conflict(HOST_AWAITING_APPROVAL_MESSAGE);
+      }
       return autoFillHostCwds(app, { hostId: id });
     },
   );

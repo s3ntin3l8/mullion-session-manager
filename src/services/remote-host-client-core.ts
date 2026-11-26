@@ -384,6 +384,7 @@ export class RemoteHostClient {
     sessionSecret?: string | null;
     refreshCredentials?: () => HostCredentials | null;
     resolveTransport?: (operation?: string) => HostTransport;
+    isApproved?: () => boolean;
     channelApp?: FastifyInstance;
     allowSharedNat?: boolean;
   }) {
@@ -1906,6 +1907,7 @@ export class RemoteHostClient {
     identity: string,
     query?: Record<string, string>,
   ): NodeWebSocket | null {
+    this.transport.assertApproved();
     const transport = this.transport.resolveTransport?.(AGENT_CHANNEL_STREAMS_OPERATION);
     return openStreamOnTransport(this.channelApp, transport, kind, identity, query);
   }
@@ -1921,6 +1923,21 @@ export class RemoteHostClient {
   /** ping() with "busy" (channel up, saturated) kept apart for the heartbeat. */
   async probe(): Promise<"ok" | "busy" | "down"> {
     const transport = this.requestTransport();
+    // Issue #3441 — an unapproved host receives no /internal/* requests, but
+    // its channel connection or /health still keeps its row online while pending.
+    if (!this.transport.isHostApproved()) {
+      if (transport.kind === "channel") return "ok";
+      if (transport.kind === "channel-down" || this.transport.baseUrl === "") return "down";
+      return probeHealth(
+        this.transport.baseUrl,
+        defaultRequestTimeoutMs,
+        () => this.transport.pinnedDispatcher({ allowUnapproved: true }),
+        {
+          hostId: this.hostId,
+          log: this.channelApp?.log,
+        },
+      );
+    }
     // A host bound to its outbound channel is as reachable as the channel is,
     // and one small round trip through it proves the agent answers. It never
     // probes /health (#2620): there may be no address to probe (#2572), and a

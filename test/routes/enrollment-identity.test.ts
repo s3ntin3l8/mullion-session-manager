@@ -225,6 +225,7 @@ describe("machine identity (issue #2568)", () => {
       expect(row.baseUrl).toBeNull();
       expect(row.origin).toBe("enrolled");
       expect(listHosts(app).find((h) => h.id === body.host_id)?.hasMachineIdentity).toBe(true);
+      await app.inject({ method: "POST", url: `/api/hosts/${body.host_id}/approve` });
       // Reached over its channel, so a client exists; an inbound-only call is
       // refused as unreachable instead of dialing nothing.
       const client = getRemoteHostClient(app, body.host_id);

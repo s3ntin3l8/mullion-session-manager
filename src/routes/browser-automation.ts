@@ -148,7 +148,7 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
     | { ok: true; target: BrowserTarget; page: Page | null }
     | {
         ok: false;
-        status: 400 | 404 | 501 | 502 | 503;
+        status: 400 | 404 | 409 | 501 | 502 | 503;
         message: string;
         code?: "binding_unavailable";
       };

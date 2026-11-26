@@ -54,7 +54,7 @@ export type BrowserTargetResult =
   | { ok: true; target: BrowserTarget }
   | {
       ok: false;
-      status: 400 | 501 | 503;
+      status: 400 | 409 | 501 | 503;
       message: string;
       /** `binding_unavailable`: the session's recorded target can no longer be
        * used and the session must unbind (DELETE /api/sessions/:id/browser;

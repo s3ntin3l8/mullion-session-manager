@@ -262,6 +262,8 @@ export function HostsSection() {
   const [drainError, setDrainError] = useState<string | null>(null);
   const [acknowledging, setAcknowledging] = useState<Record<string, boolean>>({});
   const [ackError, setAckError] = useState<string | null>(null);
+  const [approving, setApproving] = useState<Record<string, boolean>>({});
+  const [approvalError, setApprovalError] = useState<string | null>(null);
 
   // Issue #647 / roadmap 7.8 — per-host update state, keyed like pingStatus
   // above (one global updater's worth of state, per host, not a single flat
@@ -543,6 +545,32 @@ export function HostsSection() {
       });
   };
 
+  const handleApprove = (host: Host) => {
+    setApprovalError(null);
+    setApproving((prev) => ({ ...prev, [host.id]: true }));
+    void api
+      .approveHost(host.id)
+      .then(() => refreshHosts())
+      .catch((err: unknown) =>
+        setApprovalError(err instanceof Error ? err.message : "Could not approve host."),
+      )
+      .finally(() => {
+        setApproving((prev) => ({ ...prev, [host.id]: false }));
+      });
+  };
+
+  const handleReject = (host: Host) => {
+    setApprovalError(null);
+    setApproving((prev) => ({ ...prev, [host.id]: true }));
+    void deleteHost(host.id)
+      .catch((err: unknown) =>
+        setApprovalError(err instanceof Error ? err.message : "Could not reject host."),
+      )
+      .finally(() => {
+        setApproving((prev) => ({ ...prev, [host.id]: false }));
+      });
+  };
+
   const confirmCascadeDelete = () => {
     if (!cascadePrompt) return;
     const { id } = cascadePrompt;
@@ -713,6 +741,37 @@ export function HostsSection() {
                           {host
                             .possibleDuplicateOf!.map((id) => hostNameById.get(id) ?? id)
                             .join(", ")}
+                        </span>
+                      </>
+                    )}
+                    {host.approvalPending && (
+                      <>
+                        {" · "}
+                        <span
+                          data-testid={`host-approval-pending-${host.id}`}
+                          style={{ color: "var(--y)" }}
+                          title="This host was enrolled without an operator present and receives no work until approved."
+                        >
+                          Awaiting approval
+                        </span>
+                        <span
+                          data-testid={`host-approval-detail-${host.id}`}
+                          style={{ display: "block", marginTop: 2 }}
+                        >
+                          Enrolled from peer <code>{host.enrollmentPeer ?? "unknown"}</code>
+                          {" · "}
+                          <SecondaryButton
+                            onClick={() => handleApprove(host)}
+                            disabled={approving[host.id] === true}
+                          >
+                            Approve
+                          </SecondaryButton>{" "}
+                          <SecondaryButton
+                            onClick={() => handleReject(host)}
+                            disabled={approving[host.id] === true}
+                          >
+                            Reject
+                          </SecondaryButton>
                         </span>
                       </>
                     )}
@@ -918,6 +977,7 @@ export function HostsSection() {
       </StyledList>
 
       {ackError && <ErrorText>{ackError}</ErrorText>}
+      {approvalError && <ErrorText>{approvalError}</ErrorText>}
 
       {staleHosts.length > 0 && (
         <div style={{ marginTop: 16 }}>

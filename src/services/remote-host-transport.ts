@@ -9,7 +9,11 @@ import {
   sign,
 } from "./request-signature.js";
 import { channelDownError, requestViaChannel, type HostTransport } from "./agent-channel-tunnel.js";
-import { HostRequestError, HostUnreachableError } from "./remote-host-errors.js";
+import {
+  HostAwaitingApprovalError,
+  HostRequestError,
+  HostUnreachableError,
+} from "./remote-host-errors.js";
 import { assertAllowedUrl, getPinnedDispatcher, getPinnedWsAgent } from "./pinned-connect.js";
 import { hostUrlPolicy, type UrlGuardPolicy } from "./url-guard.js";
 
@@ -64,6 +68,7 @@ export class RemoteHostTransport {
   // agent-channel-tunnel.ts's resolveHostTransport). Absent for a client built
   // without an app (tests, tools): always inbound.
   readonly resolveTransport?: (operation?: string) => HostTransport;
+  private readonly isApproved?: () => boolean;
   private readonly urlPolicy: UrlGuardPolicy;
 
   constructor(opts: {
@@ -73,6 +78,7 @@ export class RemoteHostTransport {
     sessionSecret?: string | null;
     refreshCredentials?: () => HostCredentials | null;
     resolveTransport?: (operation?: string) => HostTransport;
+    isApproved?: () => boolean;
     allowSharedNat?: boolean;
   }) {
     this.hostId = opts.hostId;
@@ -82,7 +88,22 @@ export class RemoteHostTransport {
     this.sessionSecret = opts.sessionSecret ?? null;
     this.refreshCredentials = opts.refreshCredentials;
     this.resolveTransport = opts.resolveTransport;
+    this.isApproved = opts.isApproved;
     this.urlPolicy = hostUrlPolicy(opts.allowSharedNat === true);
+  }
+
+  /**
+   * Issue #3441 — an unapproved host receives nothing. Checked dynamically
+   * against the DB row so approving the host takes effect immediately.
+   */
+  isHostApproved(): boolean {
+    return this.isApproved ? this.isApproved() : true;
+  }
+
+  assertApproved(): void {
+    if (!this.isHostApproved()) {
+      throw new HostAwaitingApprovalError(this.hostId);
+    }
   }
 
   // Connection-time SSRF pinning (issue #250) — every outbound call, HTTP and
@@ -100,13 +121,15 @@ export class RemoteHostTransport {
     }
   }
 
-  pinnedDispatcher(): RequestInit["dispatcher"] {
+  pinnedDispatcher(opts?: { allowUnapproved?: boolean }): RequestInit["dispatcher"] {
+    if (!opts?.allowUnapproved) this.assertApproved();
     this.requireInboundAddress();
     assertAllowedUrl(this.baseUrl, this.urlPolicy);
     return getPinnedDispatcher(this.urlPolicy);
   }
 
   pinnedWsOptions() {
+    this.assertApproved();
     this.requireInboundAddress();
     assertAllowedUrl(this.baseUrl, this.urlPolicy);
     return { agent: getPinnedWsAgent(this.urlPolicy, this.wsBaseUrl) };
@@ -153,6 +176,7 @@ export class RemoteHostTransport {
     init: RequestInit | undefined,
     timeoutMs: number,
   ): Promise<Response> {
+    this.assertApproved();
     // Issue #249 / roadmap 7.5 — computed fresh on every call (a new
     // timestamp/nonce each time), never cached/reused across a retry: the
     // 401-retry in request() calls rawFetch() again from scratch specifically
@@ -196,6 +220,7 @@ export class RemoteHostTransport {
   }
 
   async request<T>(path: string, init: RequestInit | undefined, timeoutMs: number): Promise<T> {
+    this.assertApproved();
     const transport = this.requestTransport();
     if (transport.kind === "channel") {
       return requestViaChannel<T>(this.hostId, transport.channel, path, init, timeoutMs);

@@ -302,7 +302,7 @@ export function startControlRelayFanout(app: FastifyInstance): ControlRelayFanou
     if (stopped) return;
     const desiredIds = new Set(
       listHosts(app)
-        .filter((h) => !h.isLocal && hasReachablePath(app, h))
+        .filter((h) => !h.isLocal && !h.approvalPending && hasReachablePath(app, h))
         .map((h) => h.id),
     );
     const forceReconnect = new Set(opts?.forceReconnect ?? []);

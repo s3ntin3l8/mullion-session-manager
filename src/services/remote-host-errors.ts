@@ -36,6 +36,21 @@ export function isIdempotentRequest(
   return false;
 }
 
+export const HOST_AWAITING_APPROVAL_MESSAGE = "host is awaiting approval";
+
+/**
+ * Issue #3441 — raised when a direct operation or dispatch targets a host
+ * whose `approvedAt` is still null. Maps to HTTP 409.
+ */
+export class HostAwaitingApprovalError extends Error {
+  readonly statusCode = 409 as const;
+
+  constructor(readonly hostId: string) {
+    super(HOST_AWAITING_APPROVAL_MESSAGE);
+    this.name = "HostAwaitingApprovalError";
+  }
+}
+
 export class HostUnreachableError extends Error {
   /** Set when this "unreachable" was actually the SSRF guard refusing to
    * connect (issue #250), not a network failure. Without it the two are

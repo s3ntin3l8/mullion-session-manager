@@ -978,8 +978,8 @@ export async function dispatchClaimedTask(
         await release(reason);
         return { ok: false, reason: "worktree-failed", detail: reason };
       }
-      if (result.reason === "host-unsupported") {
-        // Issue #2569 — nothing was created; say which option the host lacks.
+      if (result.reason === "host-unsupported" || result.reason === "host-awaiting-approval") {
+        // Issue #2569 / #3441 — nothing was created; report why the host refused.
         await release(result.detail);
         return { ok: false, reason: "spawn-failed", detail: result.detail };
       }

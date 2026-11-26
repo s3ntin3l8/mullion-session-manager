@@ -283,7 +283,7 @@ export function startRemoteEventSubscriber(
         // every attempt, parked in an infinite warn+retry loop. An
         // outbound-only agent (#2636) has no baseUrl but is reached over its
         // channel, and the channel route reconciles when it comes up.
-        .filter((h) => !h.isLocal && hasReachablePath(app, h))
+        .filter((h) => !h.isLocal && !h.approvalPending && hasReachablePath(app, h))
         .map((h) => h.id),
     );
     const forceReconnect = new Set(opts?.forceReconnect ?? []);

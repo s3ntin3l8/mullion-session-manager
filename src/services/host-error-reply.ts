@@ -15,6 +15,7 @@
 import type { FastifyReply } from "fastify";
 import type { HostRequestError } from "./remote-host-client.js";
 import {
+  HostAwaitingApprovalError,
   isOutcomeUnknown,
   unknownOutcomeDetail,
   unknownOutcomeText,
@@ -33,6 +34,9 @@ export function replyHostUnreachable(
   err: unknown,
   what: string,
 ) {
+  if (err instanceof HostAwaitingApprovalError) {
+    return reply.conflict(err.message);
+  }
   if (isOutcomeUnknown(err)) {
     return reply.badGateway(unknownOutcomeText(what, unknownOutcomeDetail(err)));
   }

@@ -38,6 +38,12 @@ export const hostsApi = {
   unbindHost: (id: string) =>
     request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/unbind`, { method: "POST" }),
 
+  // Issue #3441 — approve a host awaiting approval.
+  approveHost: (id: string) =>
+    request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/approve`, {
+      method: "POST",
+    }),
+
   // Issue #3435 — acknowledgement of replaced machine identities.
   acknowledgeHostIdentityReplacement: (id: string) =>
     request<{ ok: boolean }>(`/api/hosts/${encodeURIComponent(id)}/identity-events/acknowledge`, {
