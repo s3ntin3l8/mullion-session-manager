@@ -242,7 +242,9 @@ export function DevicePane(props: {
   usePolling(
     () => {
       const fetchedAt = useDashboardStore.getState().devicesFetchedAt;
-      if (devicesPollInFlight.current || Date.now() - fetchedAt < (DEVICES_POLL_MS * 3) / 4) {
+      // 0 = never fetched: explicit, not left to the clock being far from 0.
+      const fresh = fetchedAt !== 0 && Date.now() - fetchedAt < (DEVICES_POLL_MS * 3) / 4;
+      if (devicesPollInFlight.current || fresh) {
         return;
       }
       devicesPollInFlight.current = true;
