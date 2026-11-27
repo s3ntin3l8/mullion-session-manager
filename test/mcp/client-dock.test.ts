@@ -239,4 +239,27 @@ describe("MullionClient dock methods", () => {
       ["projects.set_dock_config", { remove: "a" }],
     ]);
   });
+  it("getSetupRecipe / setSetupRecipe use projects.get_setup_recipe / set_setup_recipe (#3592)", async () => {
+    const ops: unknown[] = [];
+    const socketPath = await startControlServer((msg, socket) => {
+      ops.push([msg.op, msg.body]);
+      socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: {} })}\n`);
+    });
+    const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+    await client.getSetupRecipe();
+    await client.getSetupRecipe("2");
+    await client.setSetupRecipe(undefined, { recipe: "npm ci" });
+    await client.setSetupRecipe("2", { recipe: null });
+    await client.setSetupRecipe(undefined, { recipe: "npm ci", run: true, sessionId: "7" });
+    // A missing recipe is sent as missing (the op 400s), never as a clear.
+    await client.setSetupRecipe(undefined, {});
+    expect(ops).toEqual([
+      ["projects.get_setup_recipe", {}],
+      ["projects.get_setup_recipe", { projectId: "2" }],
+      ["projects.set_setup_recipe", { recipe: "npm ci" }],
+      ["projects.set_setup_recipe", { projectId: "2", recipe: null }],
+      ["projects.set_setup_recipe", { recipe: "npm ci", run: true, sessionId: "7" }],
+      ["projects.set_setup_recipe", {}],
+    ]);
+  });
 });

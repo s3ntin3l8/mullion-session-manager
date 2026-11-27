@@ -127,6 +127,8 @@ MCP tools. It is **never** enough for **full-scope** ops:
 | `task retry/start/close/archive/unarchive` / `retry_task` / `start_task` / `close_task` / `archive_task` | **full only**                                                             |
 | `task push` / `push_task_branch`                                                                         | full or session; own task only                                            |
 | `dock start/stop/list` (`docks.*`)                                                                       | full or session; own project only                                         |
+| `dock config get/set` / `get_dock_config` / `set_dock_config`                                            | full or session; own project only                                         |
+| `project setup` / `get_setup_recipe` / `set_setup_recipe`                                                | full or session; own project only                                         |
 | `agents list`                                                                                            | **full only**                                                             |
 | `device list/get/action/start/terminate/discovered`                                                      | full or session                                                           |
 | `device create` (an emulator)                                                                            | full or session                                                           |
@@ -299,6 +301,17 @@ edits the project's `.crs/dock.json` on your host, the file the dock reads. If
 you work in a separate git worktree that file is not inside your worktree, so it
 will not show up in your worktree's diff. It is validated exactly like
 Settings → Dock and refuses to overwrite an unparseable file.
+
+If a control (or a branch preview) dies in a fresh worktree because its
+dependencies are missing, set the project's **setup recipe**, the command Mullion
+runs in every new worktree and checkout: `mullion project setup --set '<cmd>'`
+(MCP `set_setup_recipe` with `{recipe}`; `get_setup_recipe` / a bare
+`mullion project setup` reads it, `--clear` / `recipe: null` removes it). It is
+validated like Settings → Edit project (trimmed, at most 4096 characters, blank =
+none). Add `--run` / `run: true` to also run it once in your session's directory
+on its host; the reply's `run` has the outcome, exit code and log tail, and the
+run replaces your session's setup log. It waits for the recipe (up to 15
+minutes).
 
 `start` runs the control's command, env and cwd from `.crs/dock.json`, a file in
 your own checkout that you can edit — no new capability beyond the shell you

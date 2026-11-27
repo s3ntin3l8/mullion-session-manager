@@ -28,6 +28,7 @@ import {
 import {
   REVIEW_REQUEST_TIMEOUT_MS,
   REVIEW_PROTOCOL_NOTE,
+  SETUP_RECIPE_RUN_REQUEST_TIMEOUT_MS,
   TASK_PUSH_REQUEST_TIMEOUT_MS,
   hasNoReviewRun,
   reviewStatusLines,
@@ -1204,6 +1205,31 @@ const projectCommands = {
     const result = await client.request("projects.dock", { projectId });
     return { json: result };
   },
+  // #3592 — `setup [<projectId>]` reads the setup recipe; `--set <cmd>` sets
+  // it, `--clear` removes it, and `--run` (with --set) also runs it once in
+  // the session's directory (the global `--session` picks it at full scope).
+  // No projectId = the session's own project.
+  async setup(client, args, opts = {}) {
+    const usage = "usage: project setup [<projectId>] [--set <cmd> [--run] | --clear]";
+    const { flags, rest } = extractFlags(args, { set: "string", clear: "boolean", run: "boolean" });
+    if (rest.length > 1) throw new CliUsageError(usage);
+    if (flags.set !== undefined && flags.clear) {
+      throw new CliUsageError("--set and --clear are mutually exclusive");
+    }
+    if (flags.run && flags.set === undefined) throw new CliUsageError("--run needs --set <cmd>");
+    const body = rest[0] !== undefined ? { projectId: rest[0] } : {};
+    if (flags.set === undefined && !flags.clear) {
+      return { json: await client.request("projects.get_setup_recipe", body) };
+    }
+    body.recipe = flags.clear ? null : flags.set;
+    if (flags.run) {
+      body.run = true;
+      if (opts.session !== undefined) body.sessionId = opts.session;
+      // The request waits for the recipe, which may take minutes.
+      client.requestTimeoutMs = SETUP_RECIPE_RUN_REQUEST_TIMEOUT_MS;
+    }
+    return { json: await client.request("projects.set_setup_recipe", body) };
+  },
   async tooling(client, args) {
     const { flags } = extractFlags(args, {
       project: "string",
@@ -1938,6 +1964,8 @@ Commands:
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download|unbind
   project list|actions|targets|dock|tooling
+  project setup [<projectId>] [--set <cmd> [--run] | --clear]   the setup recipe new worktrees
+                               run (--run also runs it once, here, and reports the result)
   preview create|get|delete|list
   dock start|stop|list
   device list|get|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|button|logs|logcat|clipboard|openurl

@@ -9,6 +9,7 @@
 
 import { createDockTools } from "./dock-tools.mjs";
 import { getDockConfig, setDockConfig } from "./dock-config-tools.mjs";
+import { getSetupRecipe, setSetupRecipe } from "./setup-recipe-tools.mjs";
 import { listTasks, getTask, retryTask, startTask, closeTask, archiveTask } from "./task-tools.mjs";
 import { browserToolResult } from "./browser-screenshot.mjs";
 import { useDevice } from "./device-use.mjs";
@@ -1360,6 +1361,8 @@ export const TOOLS = [
   stopDockSession,
   getDockConfig,
   setDockConfig,
+  getSetupRecipe,
+  setSetupRecipe,
   getScrollback,
   getSessionTranscript,
   pushTaskBranch,

@@ -29,7 +29,7 @@ defaults to you.
 session. Enough for get/rename/logs on yourself, the full `browser` surface,
 `project actions`, reading (not writing) `project tooling`, and most of the
 `device` surface. **Never** enough for full-scope ops: `session
-create`, `session kill` of anything but your own child, `dock start/stop/list`, `preview *`, `project list/dock`,
+create`, `session kill` of anything but your own child, another project's dock, `preview *`, `project list/dock`,
 writing `project tooling`, `agents list`, `device delete/pair/pair-and-connect`, `task retry/start/close/archive/unarchive`,
 `bundle status/resync/remove` — these 403, and that's expected, not a bug.
 `session list`, `task list` and `task get` are read-only and DO work: your own
@@ -37,6 +37,9 @@ project always, other projects only if yours is a coordinator and they accept it
 `session spawn-child` IS session-reachable (it targets a child of yourself,
 not an arbitrary session), and so is the rest of `device`
 (`list/get/action/start/stop/discovered`, plus an emulator `device create`).
+Your own project's dock (`dock list/start/stop/logs/switch`, `dock config
+get/set` / `get_dock_config`/`set_dock_config`) and its setup recipe (`project
+setup` / `get_setup_recipe`/`set_setup_recipe`) are session-reachable too.
 
 **The one caveat that will confuse you if you skip it:** when Mullion's
 authentication is disabled entirely on this host, the socket accepts every
@@ -70,8 +73,7 @@ the same way `--mcp-config` is for Claude Code.
   interactive `mullion session exec`, or the couple of ops with no MCP tool
   at all (`device create`/`device pair`/`device pair-and-connect`).
 
-Full-scope-only MCP tools (`start_dock_session`,
-`stop_dock_session`, `list_projects`, `create_preview`, `delete_preview`,
+Full-scope-only MCP tools (`list_projects`, `create_preview`, `delete_preview`,
 `list_previews`, `set_project_tooling`, `delete_device`, `retry_task`, `start_task`, `close_task`, `archive_task`) reply
 with a scope
 error from inside a session, same as the CLI's own — they're for an

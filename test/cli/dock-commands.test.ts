@@ -271,3 +271,55 @@ describe("mullion dock", () => {
     }
   });
 });
+
+describe("mullion project setup (#3592)", () => {
+  it("reads, sets, clears and dry-runs the setup recipe", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    await runCommand(["project", "setup"], { client, io });
+    expect(client.request).toHaveBeenLastCalledWith("projects.get_setup_recipe", {});
+    await runCommand(["project", "setup", "3"], { client, io });
+    expect(client.request).toHaveBeenLastCalledWith("projects.get_setup_recipe", {
+      projectId: "3",
+    });
+    await runCommand(["project", "setup", "--set", "npm ci"], { client, io });
+    expect(client.request).toHaveBeenLastCalledWith("projects.set_setup_recipe", {
+      recipe: "npm ci",
+    });
+    expect((client as { requestTimeoutMs?: number }).requestTimeoutMs).toBeUndefined();
+    await runCommand(["project", "setup", "3", "--clear"], { client, io });
+    expect(client.request).toHaveBeenLastCalledWith("projects.set_setup_recipe", {
+      projectId: "3",
+      recipe: null,
+    });
+    await runCommand(["project", "setup", "--set", "npm ci", "--run", "--session", "8"], {
+      client,
+      io,
+    });
+    expect(client.request).toHaveBeenLastCalledWith("projects.set_setup_recipe", {
+      recipe: "npm ci",
+      run: true,
+      sessionId: "8",
+    });
+    // The request waits for the run, longer than the runner's 15-minute budget.
+    expect((client as { requestTimeoutMs?: number }).requestTimeoutMs).toBeGreaterThan(
+      15 * 60 * 1000,
+    );
+  });
+
+  it("refuses conflicting or incomplete flags", async () => {
+    const client = fakeClient();
+    const io = fakeIo();
+    for (const bad of [
+      ["--set", "a", "--clear"],
+      ["--run"],
+      ["--clear", "--run"],
+      ["1", "2"],
+      ["--set"],
+      ["--bogus"],
+    ]) {
+      expect(await runCommand(["project", "setup", ...bad], { client, io })).toBe(2);
+    }
+    expect(client.request).not.toHaveBeenCalled();
+  });
+});

@@ -32,6 +32,7 @@ import type {
 } from "./control-socket-core.js";
 import { findRunningDockSession } from "../services/dock-control.js";
 import { dockConfigOps } from "./control-socket-dock-config.js";
+import { setupRecipeOps } from "./control-socket-setup-recipe.js";
 import { taskOps } from "./control-socket-tasks.js";
 import { readOps } from "./control-socket-reads.js";
 import {
@@ -216,6 +217,7 @@ const onField = (key: string, fn: (id: string, ctx: OpContext) => Route | ReplyP
 
 export const OPS: Record<string, OpSpec> = {
   ...dockConfigOps,
+  ...setupRecipeOps,
   ...taskOps,
   ...readOps,
   ping: {

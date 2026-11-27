@@ -113,6 +113,10 @@ runs for you:
   string, at most 4096 characters, run with `sh -c` in the new tree — e.g.
   `npm ci && (cd frontend && npm ci)`. Blank clears it; with no recipe nothing runs
   and nothing is flagged. Mullion never infers one.
+  An agent session can read and set its **own** project's recipe without full scope:
+  `mullion project setup [--set <cmd> [--run] | --clear]`, or the MCP tools
+  `get_setup_recipe` / `set_setup_recipe` (#3592). `--run` / `run: true` also runs it
+  once in the session's directory and returns the exit code and log tail.
 - **When:** after a worktree is cut for a session — an isolated child, a Task Master
   worker or reviewer, a dock preview or **Promote to worktree** — and (once the
   checkout-materialization job lands, #2243) after a clone. Not on a Task Master
