@@ -207,6 +207,27 @@ describe("a card for a retry waiting for its host (#3194)", () => {
     ).toBeInTheDocument();
   });
 
+  it("names every branch when the task was started fresh more than once", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "claimed",
+        sessionId: null,
+        abandonedBranches: JSON.stringify([
+          { hostId: "macbook", branch: "mullion/task-1-start-fresh" },
+          { hostId: "linux", branch: "mullion/task-1-start-fresh-attempt-2" },
+        ]),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(
+      screen.getByText(/Abandoned branch mullion\/task-1-start-fresh on macbook/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Abandoned branch mullion\/task-1-start-fresh-attempt-2 on linux/),
+    ).toBeInTheDocument();
+  });
+
   it("says nothing about an abandoned branch when there is none", () => {
     tasks = [makeTask({ id: 1, status: "claimed", sessionId: null })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

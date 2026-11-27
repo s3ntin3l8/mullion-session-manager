@@ -56,7 +56,7 @@ export type SessionSeverity =
   "gone" | "failed" | "blocked" | "done" | "waiting" | "busy" | "dormant";
 
 // ---------------------------------------------------------------------------
-// task-abandoned-branches.ts — AbandonedBranch
+// abandoned-branches.ts — AbandonedBranch
 // ---------------------------------------------------------------------------
 //
 // Issue #3229 — a "Start fresh" abandons a waiting retry's preserved branch:
@@ -65,9 +65,9 @@ export type SessionSeverity =
 // the claim path can derive a branch name of its own and the orphan-clear
 // can refuse to delete the abandoned one.
 //
-// The shape is shared: the backend writes and reads it (task-abandoned-
-// branches.ts, task-start-fresh.ts, task-claim.ts) and the frontend shows it
-// on the board card and in the task sidebar.
+// The shape is shared: the backend writes and reads it (the shared codec in
+// ./abandoned-branches.ts, task-start-fresh.ts, task-claim.ts) and the
+// frontend shows it on the board card and in the task sidebar.
 export interface AbandonedBranch {
   /** The host the branch was abandoned on — where its commits live. */
   hostId: string | null;

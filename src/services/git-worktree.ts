@@ -684,7 +684,7 @@ const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+(-.+)?$/;
  * schema.
  *
  * Issue #3229 — `opts.avoid` names branches this task must NOT get back
- * (the ones a "Start fresh" abandoned — see task-abandoned-branches.ts).
+ * (the ones a "Start fresh" abandoned — see shared/abandoned-branches.ts).
  * The base name is used as-is when it is not among them; otherwise the
  * claim gets a name of its own, an `-attempt-<n>` suffix, so the abandoned
  * branch keeps the commits on it. The suffix number grows with every

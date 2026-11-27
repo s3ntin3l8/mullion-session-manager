@@ -23,7 +23,7 @@ import {
   abandonedBranchesOf,
   parseAbandonedBranches,
   serializeAbandonedBranches,
-} from "../../src/services/task-abandoned-branches.js";
+} from "../../src/shared/abandoned-branches.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import { RemoteHostClient } from "../../src/services/remote-host-client.js";
 import * as remoteHostClientModule from "../../src/services/remote-host-client.js";

@@ -21,13 +21,21 @@
 //
 // The column holds JSON (`tasks.abandonedBranches`), so this module is the
 // one place that knows its shape: the writer (task-start-fresh.ts), the
-// reader (task-claim.ts's claim path) and the guard
-// (git-worktree.ts's clearOrphanedTaskWorktree) all speak it.
+// reader (task-claim.ts's claim path) and the guard (git-worktree.ts's
+// clearOrphanedTaskWorktree) all speak it — and so does the FRONTEND,
+// which shows the abandoned branches on the board card and in the task
+// sidebar. The codec therefore lives here, in the directory both workspaces
+// already import from, rather than in a byte-identical copy on each side:
+// two copies are two things that can drift, and a drift here means the UI
+// silently stops naming a branch the backend still holds.
+//
+// The shape itself (AbandonedBranch) stays in ./types.js with the rest of
+// the shared API surface; only the codec — the part that has to agree
+// byte-for-byte between the two workspaces — lives here.
 
-import type { AbandonedBranch } from "../shared/types.js";
+import type { AbandonedBranch } from "./types.js";
 
-/** One abandoned branch: its name, and the host it was abandoned on. */
-export type { AbandonedBranch } from "../shared/types.js";
+export type { AbandonedBranch } from "./types.js";
 
 /**
  * The row's recorded abandonments, oldest first. Never throws: a row

@@ -56,7 +56,7 @@ import { dependencyGate, parseBlockedBy, refreshTaskBlockers } from "./task-depe
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
-import { abandonedBranchNames, abandonedBranchesOf } from "./task-abandoned-branches.js";
+import { abandonedBranchNames, abandonedBranchesOf } from "../shared/abandoned-branches.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
 import {
   resolveAgentCommand,

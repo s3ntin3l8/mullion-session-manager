@@ -19,7 +19,7 @@ import {
 } from "../needsHuman.js";
 import { MergeBlockedThreadsDetail } from "../MergeBlockedThreadsDetail.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
-import { describeAbandonedBranch } from "../lib/abandonedBranches.js";
+import { describeAbandonedBranches } from "../lib/abandonedBranches.js";
 import { isPlainClick, openEpicInSidebar } from "../lib/sidebarLinks.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
@@ -113,7 +113,9 @@ export function TaskCard({
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
   // #3229 — a "Start fresh" abandoned a branch on a host: it stays there,
   // with the worker's commits, and the operator has to be able to find it.
-  const abandonedBranch = describeAbandonedBranch(task.abandonedBranches);
+  // A task can be started fresh MORE THAN ONCE, so every one of those
+  // branches is named — not just the newest.
+  const abandonedBranches = describeAbandonedBranches(task.abandonedBranches);
 
   // Matched client-side against the project's unfiltered PR list, same
   // posture as Sidebar.tsx's own matchedPr (its doc comment explains why:
@@ -803,12 +805,14 @@ export function TaskCard({
       )}
       {/* #3229 — the branch a "Start fresh" abandoned, and the host it was
           left on: the commits are still there, and the operator has to know
-          where to look for them. */}
-      {abandonedBranch !== null && (
-        <div className="task-card-hint task-card-abandoned-branch">
-          Abandoned branch {abandonedBranch} — its commits stay there
+          where to look for them. One line per abandonment — a task can be
+          started fresh more than once, and every one of those branches
+          holds work of its own. */}
+      {abandonedBranches.map((branch) => (
+        <div key={branch} className="task-card-hint task-card-abandoned-branch">
+          Abandoned branch {branch} — its commits stay there
         </div>
-      )}
+      ))}
       {/* Issue #1038 — once a round badge is showing above (autoReturnRounds
           > 0), it already covers "still working" (capped-but-not-announced)
           or "needs a human" (capped-and-announced); this generic hint would

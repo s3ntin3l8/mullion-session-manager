@@ -1,7 +1,8 @@
 // #3229 — the branches a "Start fresh" abandoned (the column the board card
 // and the task sidebar read).
 import { describe, it, expect } from "vitest";
-import { describeAbandonedBranch, parseAbandonedBranches } from "./abandonedBranches.js";
+import { parseAbandonedBranches } from "../../../src/shared/abandoned-branches.js";
+import { describeAbandonedBranches } from "./abandonedBranches.js";
 
 describe("parseAbandonedBranches", () => {
   it("reads the recorded abandonments, oldest first", () => {
@@ -26,22 +27,25 @@ describe("parseAbandonedBranches", () => {
   });
 });
 
-describe("describeAbandonedBranch", () => {
-  it("names the branch and the host it was left on", () => {
+describe("describeAbandonedBranches", () => {
+  it("names EVERY abandoned branch and the host it was left on, oldest first", () => {
     const raw = JSON.stringify([
       { hostId: "macbook", branch: "mullion/task-1-a" },
       { hostId: "linux", branch: "mullion/task-1-a-attempt-2" },
     ]);
-    expect(describeAbandonedBranch(raw)).toBe("mullion/task-1-a-attempt-2 on linux");
+    expect(describeAbandonedBranches(raw)).toEqual([
+      "mullion/task-1-a on macbook",
+      "mullion/task-1-a-attempt-2 on linux",
+    ]);
   });
 
   it("names the branch alone when it was abandoned on this machine", () => {
     const raw = JSON.stringify([{ hostId: null, branch: "mullion/task-1-a" }]);
-    expect(describeAbandonedBranch(raw)).toBe("mullion/task-1-a");
+    expect(describeAbandonedBranches(raw)).toEqual(["mullion/task-1-a"]);
   });
 
   it("has nothing to say when nothing was abandoned", () => {
-    expect(describeAbandonedBranch(null)).toBeNull();
-    expect(describeAbandonedBranch("[]")).toBeNull();
+    expect(describeAbandonedBranches(null)).toEqual([]);
+    expect(describeAbandonedBranches("[]")).toEqual([]);
   });
 });

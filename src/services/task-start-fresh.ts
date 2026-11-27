@@ -19,7 +19,7 @@ import {
   abandonedBranchesOf,
   serializeAbandonedBranches,
   type AbandonedBranch,
-} from "./task-abandoned-branches.js";
+} from "../shared/abandoned-branches.js";
 import { enqueueTask } from "./task-claim.js";
 import { recordTaskTransition } from "./task-state.js";
 
