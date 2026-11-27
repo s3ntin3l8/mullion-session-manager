@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.70](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.69...v0.3.70) (2026-11-27)
+
+
+### Features
+
+* **hosts:** hosts nobody created wait for approval ([7c79c78](https://github.com/s3ntin3l8/mullion-session-manager/commit/7c79c78757af87381477a338a99d0972774868d9))
+* **hosts:** legacy host kinds need MULLION_ALLOW_LEGACY_HOSTS ([71ae807](https://github.com/s3ntin3l8/mullion-session-manager/commit/71ae807f7bc0ae2635563c46f342a127074a6cbd))
+
+
+### Bug Fixes
+
+* **devices:** an iOS panel no longer renders the Android toolbar before its row loads ([#3542](https://github.com/s3ntin3l8/mullion-session-manager/issues/3542)) ([7805b04](https://github.com/s3ntin3l8/mullion-session-manager/commit/7805b047bfa3d5a8f9d1c157a75c8ed2b912d009))
+* **devices:** name the channel's frame cap when a device frame is too big ([d69b9fc](https://github.com/s3ntin3l8/mullion-session-manager/commit/d69b9fc243f0a2b4dbf05ff431014b90dbee6d90))
+* **dock:** a dock control that fails to start on a remote host says why ([#3565](https://github.com/s3ntin3l8/mullion-session-manager/issues/3565)) ([de61689](https://github.com/s3ntin3l8/mullion-session-manager/commit/de61689754ac51fb571752c4a621eec0c5f93273))
+* **dock:** merge the duplicate hostLabel from [#3560](https://github.com/s3ntin3l8/mullion-session-manager/issues/3560) and [#3565](https://github.com/s3ntin3l8/mullion-session-manager/issues/3565) that broke main ([#3571](https://github.com/s3ntin3l8/mullion-session-manager/issues/3571)) ([d40478d](https://github.com/s3ntin3l8/mullion-session-manager/commit/d40478d8d09bcddc6736f0724a5787276361ca1f))
+* **dock:** show where a control runs and stop Run on from contradicting a running control ([#3560](https://github.com/s3ntin3l8/mullion-session-manager/issues/3560)) ([9473e47](https://github.com/s3ntin3l8/mullion-session-manager/commit/9473e47ff87843d95d567739b20872eaced2472d))
+* **hooks:** an adopted hook token stops resolving once its scope dies ([fe72652](https://github.com/s3ntin3l8/mullion-session-manager/commit/fe72652d44d1ecbde2454ccc563a873c1055a865))
+* **hooks:** mcode's 10s hook timeout ceiling caps the Stop retry below the forwarder's bound ([7c6a021](https://github.com/s3ntin3l8/mullion-session-manager/commit/7c6a02116b8d595b45d6f9852c42119f8344c1c9))
+* **hosts:** a redirect from a login gateway is opaque on the enrollment path ([9502c17](https://github.com/s3ntin3l8/mullion-session-manager/commit/9502c1768998e0862368a9ccf047c984b03f0338))
+* **hosts:** the "replaced" identity event has no producer after the claim takeover closed ([acbab58](https://github.com/s3ntin3l8/mullion-session-manager/commit/acbab584c809cc31f264c1d73e2313a7de00efb8))
+* **previews:** a branch preview passes its port without tripping the reserved PORT key ([#3564](https://github.com/s3ntin3l8/mullion-session-manager/issues/3564)) ([96030b1](https://github.com/s3ntin3l8/mullion-session-manager/commit/96030b197f4582a65fbecbd8374cd07c932ec2a1))
+* **sessions:** production comments still point at the removed pty-manager.test.ts ([bf60d79](https://github.com/s3ntin3l8/mullion-session-manager/commit/bf60d7937c712547f1b3ab68ee57e9ba8de657dd))
+* **storage:** give Docker prunes a 15-minute timeout instead of the 30 s read timeout ([#3563](https://github.com/s3ntin3l8/mullion-session-manager/issues/3563)) ([007b075](https://github.com/s3ntin3l8/mullion-session-manager/commit/007b075f9e2d9e36aaadef4dac797f46aad1383c))
+* **tasks:** a "Start fresh" retry collides with the branch it abandoned ([#3550](https://github.com/s3ntin3l8/mullion-session-manager/issues/3550)) ([56e6c28](https://github.com/s3ntin3l8/mullion-session-manager/commit/56e6c286fdcf400890649a701eb5b78cff60213d))
+* **tasks:** a waiting retry's give-up exemption must survive a degraded origin lookup ([2180e48](https://github.com/s3ntin3l8/mullion-session-manager/commit/2180e4802dcec3852960825a657d3e26e608d882))
+* **tasks:** re-upload coverage for a stuck non-Actions status on a blocked PR ([9c066af](https://github.com/s3ntin3l8/mullion-session-manager/commit/9c066aff87c076c127c5d7b4e347fc66c8c6635e))
+
 ## [0.3.69](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.68...v0.3.69) (2026-11-26)
 
 
