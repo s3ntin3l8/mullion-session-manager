@@ -521,11 +521,12 @@ describeOnLinux("deploy/install.sh", () => {
       expect(kept).toMatch(/^MULLION_AGENT_TOKEN=fixture-old-tok$/m);
       expect(kept).not.toContain("fixture-new-tok");
 
-      const enrolled = await run(
-        "MULLION_ROLE=agent\nMULLION_PRIMARY_URL=https://p.example\nMULLION_ENROLLMENT_TOKEN=fixture-enroll\n",
-        { MULLION_AGENT_TOKEN: "fixture-new-tok" }, // pragma: allowlist secret
-      );
-      expect(enrolled).not.toContain("fixture-new-tok");
+      // A paired agent's .env has only the primary URL; it must keep its
+      // credential path and not get a manual token injected.
+      const paired = await run("MULLION_ROLE=agent\nMULLION_PRIMARY_URL=https://p.example\n", {
+        MULLION_AGENT_TOKEN: "fixture-new-tok", // pragma: allowlist secret
+      });
+      expect(paired).not.toContain("fixture-new-tok");
     });
 
     it("treats a quoted-empty or comment-only token as no credential, and keeps the rest of the file", async () => {
@@ -685,7 +686,7 @@ describeOnLinux("deploy/install.sh", () => {
       expect(env).toMatch(/^PROJECTS_ROOTS=\/home\/dev\/projects$/m);
       expect(env).toMatch(/^MULLION_AGENT_TOKEN=fixture-agent-tok$/m);
       expect(env).toMatch(/^MULLION_PRIMARY_URL=$/m);
-      expect(env).toMatch(/^MULLION_ENROLLMENT_TOKEN=$/m);
+      expect(env).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
       expect(stderr).not.toMatch(/WARNING/);
     });
 
@@ -715,42 +716,44 @@ describeOnLinux("deploy/install.sh", () => {
       expect(readEnvFile(defaults)).not.toMatch(/^(HOST|PORT|MULLION_AGENT_ADVERTISE_URL)=/m); // #2572
     });
 
-    it("writes the self-registration credential path with no warnings", async () => {
+    it("writes the primary URL, advertise URL and name with no warnings", async () => {
       const mullionHome = freshMullionHome();
       skipDownload(mullionHome);
+      // A paired host: the generated .env's SESSIONS_DIR holds the identity.
+      const pairedDir = path.join(mullionHome, "data", "sessions");
+      fs.mkdirSync(pairedDir, { recursive: true });
+      fs.writeFileSync(path.join(pairedDir, "agent-identity.json"), "{}");
       const { stderr } = await runScript(["--role", "agent", mullionHome], {
         env: {
           MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
           MULLION_AGENT_PRIMARY_URL: "https://primary.example.com",
-          MULLION_AGENT_ENROLLMENT_TOKEN: "fixture-enroll-tok", // pragma: allowlist secret
           MULLION_AGENT_ADVERTISE_URL: "https://agent.example.com",
           MULLION_AGENT_NAME: "agent-1",
         },
       });
       const env = readEnvFile(mullionHome);
       expect(env).toMatch(/^MULLION_PRIMARY_URL=https:\/\/primary\.example\.com$/m);
-      expect(env).toMatch(/^MULLION_ENROLLMENT_TOKEN=fixture-enroll-tok$/m);
+      // Issue #3577 — the removed bootstrap variable is never written.
+      expect(env).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
       expect(env).toMatch(/^MULLION_AGENT_ADVERTISE_URL=https:\/\/agent\.example\.com$/m);
       expect(env).toMatch(/^MULLION_AGENT_NAME=agent-1$/m);
-      expect(env).toMatch(/^MULLION_AGENT_TOKEN=$/m);
       expect(stderr).not.toMatch(/WARNING/);
     });
 
-    // Mirrors src/app.ts's actual boot condition (hasManualToken ||
-    // (hasPrimaryUrl && hasEnrollmentToken)) rather than "is anything set at
-    // all" — an enrollment token with no primary URL is still an incomplete
-    // path that fails to boot, so the warning must still fire.
-    it("still warns when only the enrollment token is set, without a primary URL", async () => {
+    // Mirrors src/app.ts's actual boot condition (hasManualToken || (hasPrimaryUrl
+    // && a stored agent-identity.json)) rather than "is anything set at all" —
+    // a primary URL with no paired identity is still a fail-closed boot, so the
+    // warning must fire.
+    it("still warns when only a primary URL is set (no paired identity)", async () => {
       const mullionHome = freshMullionHome();
       skipDownload(mullionHome);
       const { stderr } = await runScript(["--role", "agent", mullionHome], {
         env: {
           MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
-          MULLION_AGENT_ENROLLMENT_TOKEN: "fixture-enroll-tok", // pragma: allowlist secret
+          MULLION_AGENT_PRIMARY_URL: "https://primary.example.com",
         },
       });
       expect(stderr).toMatch(/WARNING: this agent has no complete credential path/);
-      expect(stderr).not.toMatch(/WARNING: PROJECTS_ROOTS is empty/);
     });
 
     it("writes a value containing shell metacharacters literally, without executing it", async () => {

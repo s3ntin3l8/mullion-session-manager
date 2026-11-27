@@ -23,6 +23,7 @@ const { closeDb } = await import("../../src/db/client.js");
 const { hosts } = await import("../../src/db/schema.js");
 const { identityStatePath, loadAgentIdentity } =
   await import("../../src/services/agent-identity.js");
+const { redeemPairingCode } = await import("../../src/services/agent-pairing-redeem.js");
 const { resolveBackend } = await import("../../src/services/session-backend.js");
 
 // Issue #2691 — ongoing operations of a HEADLESS enrolled agent. The #2452
@@ -41,13 +42,7 @@ async function waitUntil(check: () => boolean, timeoutMs = 10_000): Promise<void
   throw new Error("condition never became true");
 }
 
-const AGENT_ENV = [
-  "MULLION_ROLE",
-  "MULLION_PRIMARY_URL",
-  "MULLION_ENROLLMENT_TOKEN",
-  "PROJECTS_ROOTS",
-  "SESSIONS_DIR",
-];
+const AGENT_ENV = ["MULLION_ROLE", "MULLION_PRIMARY_URL", "PROJECTS_ROOTS", "SESSIONS_DIR"];
 
 describe("headless enrolled agent: ongoing control operations (issue #2691)", () => {
   let primary: FastifyInstance;
@@ -60,13 +55,25 @@ describe("headless enrolled agent: ongoing control operations (issue #2691)", ()
     primary = await buildApp();
     await primary.listen({ port: 0, host: "127.0.0.1" });
     const port = (primary.server.address() as { port: number }).port;
-    const { seedHost } = await import("../helpers/hosts.js");
-    await seedHost(primary, { name: "headless-agent", token: "claim-secret" });
 
+    // Issue #3577 — an agent gets its identity only from a pairing code now.
+    // Mint one, redeem it against the real listening primary, then boot the
+    // agent with that identity and no token at all.
     sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "headless-agent-sessions-"));
+    const paired = await primary.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      payload: { label: "headless-agent" },
+    });
+    await redeemPairingCode({
+      primaryUrl: `http://127.0.0.1:${port}`,
+      code: (paired.json() as { code: string }).code,
+      sessionsDir,
+      name: "headless-agent",
+    });
+
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_PRIMARY_URL = `http://127.0.0.1:${port}`;
-    process.env.MULLION_ENROLLMENT_TOKEN = "claim-secret"; // pragma: allowlist secret
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
     agent = await buildApp();

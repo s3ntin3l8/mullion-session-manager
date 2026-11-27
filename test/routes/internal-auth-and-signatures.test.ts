@@ -37,27 +37,34 @@ beforeEach(() => {
 
 describe("internal routes: empty MULLION_AGENT_TOKEN guard (issue #245)", () => {
   let projectsRoot: string;
+  let sessionsDir: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     projectsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-empty-token-root-"));
+    sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "internal-empty-token-sessions-"));
     process.env.MULLION_ROLE = "agent";
     process.env.PROJECTS_ROOTS = projectsRoot;
     // No MULLION_AGENT_TOKEN — mirrors an enrolled agent before (or
     // without) any successful self-registration, when app.agentSession is
-    // also still undefined. Needs SOME path to boot per src/app.ts's
-    // fail-closed check; port 1 fails fast (connection refused) so the
-    // plugin's fire-and-forget registerWithRetry() doesn't hang the test
-    // or make a real network call.
+    // also still undefined. Issue #3577: booting needs a stored identity;
+    // port 1 fails fast (connection refused) so the plugin's fire-and-forget
+    // registerWithRetry() doesn't hang the test or make a real network call.
+    const { identityStatePath } = await import("../../src/services/agent-identity.js");
+    process.env.SESSIONS_DIR = sessionsDir;
+    fs.writeFileSync(
+      identityStatePath(sessionsDir),
+      JSON.stringify({ hostId: "host-1", machineCredential: "a1".repeat(32) }),
+    );
     process.env.MULLION_PRIMARY_URL = "http://127.0.0.1:1";
-    process.env.MULLION_ENROLLMENT_TOKEN = "unused-in-this-test";
   });
 
   afterAll(() => {
     fs.rmSync(projectsRoot, { recursive: true, force: true });
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
     delete process.env.MULLION_ROLE;
     delete process.env.PROJECTS_ROOTS;
+    delete process.env.SESSIONS_DIR;
     delete process.env.MULLION_PRIMARY_URL;
-    delete process.env.MULLION_ENROLLMENT_TOKEN;
   });
 
   it("rejects a request with an empty Authorization Bearer value when no static token is configured", async () => {

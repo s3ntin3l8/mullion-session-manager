@@ -225,14 +225,14 @@ export async function enrollmentRoute(app: FastifyInstance) {
   // Settings host list reflects "offline" within this request's own
   // round-trip instead of waiting on host-heartbeat.ts's 3-missed-ping
   // window. Authenticated by the caller's own current session credential —
-  // never the bootstrap token — via the same read-only check rotateSession
+  // never a bootstrap token — via the same read-only check rotateSession
   // uses (verifyHostSession), just without minting a new session (the whole
   // point of this call is "I'm going away," not "give me a fresh
   // credential"). A manually-registered, static-Bearer-only agent has no
   // session and therefore never calls this at all (agent-enrollment.ts's
-  // plugin body is a no-op without MULLION_PRIMARY_URL +
-  // MULLION_ENROLLMENT_TOKEN) — it degrades to heartbeat-only detection
-  // with no error, per #248's own verification requirement.
+  // plugin body is a no-op without MULLION_PRIMARY_URL + a stored
+  // agent-identity.json) — it degrades to heartbeat-only detection with no
+  // error, per #248's own verification requirement.
   //
   // Deliberately status-only: this marks the host offline immediately but
   // does NOT cascade-terminate its live sessions the way

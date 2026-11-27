@@ -7,14 +7,14 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { identityStatePath, loadAgentIdentity } from "../../src/services/agent-identity.js";
+import { redeemPairingCode } from "../../src/services/agent-pairing-redeem.js";
 import { setDotenvPathForTests } from "../../src/plugins/env.js";
-import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2452 — headless enrollment end to end: a REAL primary behind a fetch
-// adapter, an agent that advertises no URL, and repeated agent daemon restarts.
-// The agent is stateless apart from agent-identity.json in SESSIONS_DIR, so
-// every restart (and a "re-image" that lost the file) is exercised for what it
-// does to the primary's host table.
+// adapter and repeated agent daemon restarts. Issue #3577 removed the
+// MULLION_ENROLLMENT_TOKEN bootstrap, so the identity now always comes from a
+// one-time pairing code (redeemed through the same fetch adapter); booting
+// without one is a fail-closed error, not a fresh enrollment.
 const tmpDb = path.join(os.tmpdir(), `agent-restart-reenroll-${process.pid}.db`);
 
 async function waitUntil(check: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -79,11 +79,28 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
     statePath = identityStatePath(sessionsDir);
   }
 
-  // Boot the agent daemon the way the installed .env does: no advertised URL.
-  async function bootAgent(enrollmentToken = "claim-secret") {
+  // The only enrollment path left (issue #3577): redeem a one-time pairing
+  // code against the primary through the same fetch adapter.
+  async function pair(label: string) {
+    const res = await primary.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      payload: { label },
+    });
+    expect(res.statusCode).toBe(200);
+    return redeemPairingCode({
+      primaryUrl: "http://primary.invalid",
+      code: (res.json() as { code: string }).code,
+      sessionsDir,
+      name: label,
+    });
+  }
+
+  // Boot the agent daemon the way the installed .env does: no advertised URL
+  // and no token in the environment, only the paired identity.
+  async function bootAgent() {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
-    process.env.MULLION_ENROLLMENT_TOKEN = enrollmentToken;
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
     const agent = await buildApp();
@@ -105,53 +122,53 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
     if (sessionsDir) fs.rmSync(sessionsDir, { recursive: true, force: true });
   });
 
-  it("enrolls once, then every restart and upgrade reuses the same host row by identity", async () => {
+  it("boots from a paired identity, renews it, and every restart reuses the same host row", async () => {
     newSessionsDir();
     stubPrimaryFetch();
     const before = enrolledRows().length;
-    const { seedHost } = await import("../helpers/hosts.js");
-    await seedHost(primary, { name: "restart-1", token: "claim-secret-1" });
-
-    await bootAgent("claim-secret-1");
-    await waitUntil(() => loadAgentIdentity(statePath) !== null);
-    const first = loadAgentIdentity(statePath)!;
-    expect(registerBodies[0]).toMatchObject({
-      token: "claim-secret-1",
-      wantsMachineCredential: true,
-    });
-    expect(registerBodies[0].baseUrl).toBeUndefined();
+    await pair("restart-1");
+    const paired = loadAgentIdentity(statePath)!;
     expect(enrolledRows()).toHaveLength(before + 1);
+
+    await bootAgent();
+    await waitUntil(
+      () => loadAgentIdentity(statePath)?.machineCredential !== paired.machineCredential,
+    );
+    const first = loadAgentIdentity(statePath)!;
+    expect(first.hostId).toBe(paired.hostId);
+    expect(registerBodies[0]).toMatchObject({
+      hostId: paired.hostId,
+      machineCredential: paired.machineCredential,
+    });
+    expect(registerBodies[0].token).toBeUndefined();
+    expect(registerBodies[0].baseUrl).toBeUndefined();
 
     let previous = first;
     for (let restart = 0; restart < 3; restart++) {
       await agents.pop()!.close();
       registerBodies.length = 0;
-      // The rerun's environment carries a ROTATED enrollment token: an
-      // enrolled agent must keep using its identity, never the bootstrap token.
-      await bootAgent(restart === 2 ? "rotated-claim-secret" : "claim-secret-1"); // pragma: allowlist secret
+      await bootAgent();
       await waitUntil(
         () => loadAgentIdentity(statePath)?.machineCredential !== previous.machineCredential,
       );
       const now = loadAgentIdentity(statePath)!;
-      expect(now.hostId).toBe(first.hostId);
-      expect(now.machineCredential).not.toBe(previous.machineCredential);
+      expect(now.hostId).toBe(paired.hostId);
       expect(registerBodies[0]).toMatchObject({
-        hostId: first.hostId,
+        hostId: paired.hostId,
         machineCredential: previous.machineCredential,
       });
       expect(registerBodies[0].token).toBeUndefined();
       previous = now;
     }
     expect(enrolledRows()).toHaveLength(before + 1);
-    expect(enrolledRows().find((h) => h.id === first.hostId)?.baseUrl ?? null).toBeNull();
+    expect(enrolledRows().find((h) => h.id === paired.hostId)?.baseUrl ?? null).toBeNull();
   });
 
-  it("stays out of the primary's table after an operator revoke, and does not fall back to the bootstrap token", async () => {
+  it("stays out of the primary's table after an operator revoke, with no fallback credential", async () => {
     newSessionsDir();
     stubPrimaryFetch();
-    const { seedHost } = await import("../helpers/hosts.js");
-    await seedHost(primary, { name: "restart-2", token: "claim-secret-2" });
-    await bootAgent("claim-secret-2");
+    const paired = await pair("restart-2");
+    await bootAgent();
     await waitUntil(() => loadAgentIdentity(statePath) !== null);
     const identity = loadAgentIdentity(statePath)!;
     const rows = enrolledRows().length;
@@ -163,7 +180,7 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
 
     await agents.pop()!.close();
     registerBodies.length = 0;
-    const agent = await bootAgent("claim-secret-2");
+    const agent = await bootAgent();
     // The agent's own retry state, not a timing window: the rejection is
     // terminal, so it is not retrying (no failed attempt, no backoff pending).
     await waitUntil(() => agent.agentEnrollment?.state === "rejected");
@@ -174,233 +191,71 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
     // The state file is the operator's to clear; the row count is unchanged.
     expect(loadAgentIdentity(statePath)).toEqual(identity);
     expect(enrolledRows()).toHaveLength(rows);
+    expect(identity.hostId).toBe(paired.hostId);
   });
 
-  it("re-enrolls as a NEW host (never taking another identity) when the state file is lost", async () => {
+  it("refuses to boot with no identity, naming the pairing command and the doc section", async () => {
+    newSessionsDir();
+    process.env.MULLION_ROLE = "agent";
+    process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
+    process.env.PROJECTS_ROOTS = os.tmpdir();
+    process.env.SESSIONS_DIR = sessionsDir;
+
+    await expect(buildApp()).rejects.toThrow(/refusing to boot an agent/i);
+    await expect(buildApp()).rejects.toThrow(/MULLION_AGENT_PAIRING_CODE_STDIN=1/);
+    await expect(buildApp()).rejects.toThrow(/MULLION_AGENT_PAIRING_FORCE=1/);
+    await expect(buildApp()).rejects.toThrow(/Automating agent deploys/);
+  });
+
+  it("refuses to boot when a lost identity file leaves nothing to register with", async () => {
     newSessionsDir();
     stubPrimaryFetch();
-    const { seedHost } = await import("../helpers/hosts.js");
-    await seedHost(primary, { name: "restart-3a", token: "claim-secret-3a" });
-    await bootAgent("claim-secret-3a");
+    await pair("restart-3");
+    await bootAgent();
     await waitUntil(() => loadAgentIdentity(statePath) !== null);
-    const lost = loadAgentIdentity(statePath)!;
-
     await agents.pop()!.close();
-    fs.rmSync(statePath);
-    await seedHost(primary, { name: "restart-3b", token: "claim-secret-3b" });
-    await bootAgent("claim-secret-3b");
-    await waitUntil(() => loadAgentIdentity(statePath) !== null);
-    const fresh = loadAgentIdentity(statePath)!;
 
-    expect(fresh.hostId).not.toBe(lost.hostId);
-    expect(fresh.machineCredential).not.toBe(lost.machineCredential);
-    // The orphaned credential is still only good for its own row.
-    const stale = await primary.inject({
-      method: "POST",
-      url: "/api/internal/register",
-      payload: {
-        hostId: fresh.hostId,
-        machineCredential: lost.machineCredential,
-        baseUrl: "http://10.3.0.1:4000",
-        hostname: "box",
-      },
-    });
-    expect(stale.statusCode).toBe(401);
+    // A "re-image" that loses the file must not silently enroll as a new host:
+    // there is no bootstrap token any more, so the agent fails closed.
+    fs.rmSync(statePath);
+    await expect(buildApp()).rejects.toThrow(/refusing to boot an agent/i);
+    expect(loadAgentIdentity(statePath)).toBeNull();
   });
 
-  // deploy/README.md, "Bring a revoked per-host agent back". A rejected agent is
-  // terminal in memory, install.sh never rewrites an existing .env and the
-  // agent lets .env win over the process environment, so the new token reaches
-  // the agent only through a fresh .env AND a restart of the agent unit.
-  //
-  // The daemon boots through the REAL env plugin: setDotenvPathForTests makes
-  // loadDotenvOverrides() read the install's .env (the production precedence,
-  // .env over the process environment) instead of a hand-written copy of that
-  // load, and a restart is closing the agent app and building a new one.
-  describe("bringing a revoked per-host agent back (deploy/README.md recipe)", () => {
-    let home: string;
-    const envPath = () => path.join(home, ".env");
-    // install.sh's .env for an agent: written once, from the role's variables.
-    const writeEnvFile = (token: string) =>
-      fs.writeFileSync(
-        envPath(),
-        `MULLION_ROLE=agent\nMULLION_PRIMARY_URL=http://primary.invalid\nMULLION_ENROLLMENT_TOKEN=${token}\n`,
-        { mode: 0o600 },
+  // Issue #3577 — an old install's .env still carries the removed variable.
+  // It must be ignored: the agent boots on its paired identity and never sends
+  // the leftover value anywhere.
+  it("ignores a leftover MULLION_ENROLLMENT_TOKEN in .env and still boots and renews", async () => {
+    newSessionsDir();
+    stubPrimaryFetch();
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-leftover-home-"));
+    const leftover = "leftover-enrollment-token-4b9d"; // pragma: allowlist secret
+    fs.writeFileSync(
+      path.join(home, ".env"),
+      `MULLION_PRIMARY_URL=http://primary.invalid\nMULLION_ENROLLMENT_TOKEN=${leftover}\n`,
+      { mode: 0o600 },
+    );
+    await pair("leftover");
+    const paired = loadAgentIdentity(statePath)!;
+
+    process.env.MULLION_HOME = home;
+    setDotenvPathForTests(path.join(home, ".env"));
+    try {
+      const agent = await bootAgent();
+      await waitUntil(
+        () => loadAgentIdentity(statePath)?.machineCredential !== paired.machineCredential,
       );
-    // `systemctl --user restart`: the unit starts again with the Ansible task's
-    // environment, and the install's .env wins over it.
-    async function startAgentUnit(ansibleToken: string) {
-      process.env.MULLION_HOME = home;
-      process.env.PROJECTS_ROOTS = os.tmpdir();
-      process.env.SESSIONS_DIR = sessionsDir;
-      process.env.MULLION_ROLE = "agent";
-      process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
-      process.env.MULLION_ENROLLMENT_TOKEN = ansibleToken;
-      setDotenvPathForTests(envPath());
-      try {
-        const agent = await buildApp();
-        agents.push(agent);
-        await agent.ready();
-        return agent;
-      } finally {
-        setDotenvPathForTests(null);
-      }
-    }
-
-    it("a rotated token in the role variables alone does nothing; a fresh .env needs a restart to reach a rejected agent", async () => {
-      newSessionsDir();
-      home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-recipe-home-"));
-      stubPrimaryFetch();
-      const created = (await seedHostResponse(primary, { name: "recipe" })).json() as {
-        id: string;
-        token: string;
-      };
-      writeEnvFile(created.token);
-
-      await startAgentUnit(created.token);
-      await waitUntil(() => loadAgentIdentity(statePath) !== null);
-      expect(loadAgentIdentity(statePath)!.hostId).toBe(created.id);
-
-      // The operator revokes, then rotates; the agent unit restarts (a reboot)
-      // and finds itself rejected: terminal in memory.
-      await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/revoke` });
-      const newToken = (
-        await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/rotate-token` })
-      ).json().token as string;
-      expect(newToken).not.toBe(created.token);
-      await agents.pop()!.close();
-      registerBodies.length = 0;
-      const rejected = await startAgentUnit(created.token);
-      await waitUntil(() => rejected.agentEnrollment?.state === "rejected");
-
-      // Recipe steps 1-2 WITHOUT the restart: identity gone, fresh .env with the
-      // new token. The running agent does not notice: still rejected, nothing
-      // sent to the primary.
-      fs.rmSync(statePath);
-      fs.rmSync(envPath());
-      writeEnvFile(newToken);
-      const sent = registerBodies.length;
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      expect(rejected.agentEnrollment?.state).toBe("rejected");
-      expect(registerBodies).toHaveLength(sent);
-      expect(loadAgentIdentity(statePath)).toBeNull();
-      await agents.pop()!.close(); // step 3 starts here: the unit stops...
-
-      // ...and starts again. The role variable still carries the OLD token, as
-      // an unrotated inventory would; the fresh .env wins.
-      registerBodies.length = 0;
-      const back = await startAgentUnit(created.token);
-      await waitUntil(() => back.agentEnrollment?.state === "registered");
-      expect(registerBodies[0]).toMatchObject({ token: newToken });
-      expect(registerBodies.every((b) => b.token !== created.token)).toBe(true);
-      expect(loadAgentIdentity(statePath)!.hostId).toBe(created.id);
-      fs.rmSync(home, { recursive: true, force: true });
-    });
-
-    it("the old recipe (identity cleared, .env kept) leaves the agent presenting the dead token", async () => {
-      newSessionsDir();
-      home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-recipe-old-home-"));
-      stubPrimaryFetch();
-      const created = (await seedHostResponse(primary, { name: "recipe-old" })).json() as {
-        id: string;
-        token: string;
-      };
-      writeEnvFile(created.token);
-      await startAgentUnit(created.token);
-      await waitUntil(() => loadAgentIdentity(statePath) !== null);
-      await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/revoke` });
-      const newToken = (
-        await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/rotate-token` })
-      ).json().token as string;
-      await agents.pop()!.close();
-
-      fs.rmSync(statePath);
-      registerBodies.length = 0;
-      const stuck = await startAgentUnit(newToken);
-      await waitUntil(() => (stuck.agentEnrollment?.failedAttempts ?? 0) >= 1);
-      expect(registerBodies.every((b) => b.token === created.token)).toBe(true);
-      expect(stuck.agentEnrollment?.state).toBe("registering");
-      expect(loadAgentIdentity(statePath)).toBeNull();
-      fs.rmSync(home, { recursive: true, force: true });
-    });
-
-    // Issue #3143 — a rotated bootstrap token with no stored identity: the
-    // generic retry warn fires on every attempt, the specific hint once. The
-    // fetch stub holds the FIRST register call until the log spy is installed
-    // (the registration loop starts fire-and-forget from onReady).
-    function gatedPrimaryFetch() {
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => (release = resolve));
-      const presented: unknown[] = [];
-      vi.stubGlobal("fetch", async (url: string | URL, init?: RequestInit) => {
-        const target = new URL(String(url));
-        const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
-        if (target.pathname === "/api/internal/register") {
-          presented.push(body.token);
-          await gate;
-        }
-        const res = await primary.inject({
-          method: (init?.method ?? "GET") as "GET" | "POST",
-          url: target.pathname,
-          payload: init?.body ? body : undefined,
-        });
-        return new Response(res.body, {
-          status: res.statusCode,
-          headers: { "content-type": "application/json" },
-        });
+      expect(agent.config).not.toHaveProperty("MULLION_ENROLLMENT_TOKEN");
+      expect(registerBodies.length).toBeGreaterThanOrEqual(1);
+      expect(registerBodies[0]).toMatchObject({
+        hostId: paired.hostId,
+        machineCredential: paired.machineCredential,
       });
-      return { release, presented };
+      expect(registerBodies[0].token).toBeUndefined();
+      expect(JSON.stringify(registerBodies)).not.toContain(leftover);
+    } finally {
+      setDotenvPathForTests(null);
+      fs.rmSync(home, { recursive: true, force: true });
     }
-
-    const warnMessages = (spy: { mock: { calls: unknown[][] } }) =>
-      spy.mock.calls.map((c) => c.filter((a) => typeof a === "string").join(" "));
-
-    it("logs the rotated-bootstrap-token hint once, while the generic retry warn fires every attempt", async () => {
-      newSessionsDir();
-      home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hint-home-"));
-      const staleToken = "stale-bootstrap-token-9f3a"; // pragma: allowlist secret
-      writeEnvFile(staleToken);
-      const { release, presented } = gatedPrimaryFetch();
-
-      const agent = await startAgentUnit(staleToken);
-      const warn = vi.spyOn(agent.log, "warn");
-      release();
-      // Backoff is 1 s after the first failure, so the second 401 lands soon.
-      await waitUntil(() => (agent.agentEnrollment?.failedAttempts ?? 0) >= 2, 8000);
-
-      expect(presented.length).toBeGreaterThanOrEqual(2);
-      const messages = warnMessages(warn);
-      const hints = messages.filter((m) => m.includes("bootstrap token"));
-      expect(hints).toHaveLength(1);
-      expect(hints[0]).toContain("MULLION_ENROLLMENT_TOKEN");
-      expect(hints[0]).not.toContain(staleToken);
-      expect(messages.filter((m) => m.includes("registration failed, retrying")).length).toBe(
-        agent.agentEnrollment?.failedAttempts,
-      );
-      expect(JSON.stringify(warn.mock.calls)).not.toContain(staleToken);
-      fs.rmSync(home, { recursive: true, force: true });
-    });
-
-    it("does not log the hint when the .env token changed and the retry succeeds", async () => {
-      newSessionsDir();
-      home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hint-fresh-home-"));
-      const created = (await seedHostResponse(primary, { name: "hint-fresh" })).json() as {
-        id: string;
-        token: string;
-      };
-      writeEnvFile("stale-bootstrap-token-9f3a"); // pragma: allowlist secret
-      const { release, presented } = gatedPrimaryFetch();
-
-      const agent = await startAgentUnit("stale-bootstrap-token-9f3a"); // pragma: allowlist secret
-      const warn = vi.spyOn(agent.log, "warn");
-      // The operator pastes the freshly rotated token before the agent's 401.
-      writeEnvFile(created.token);
-      release();
-      await waitUntil(() => agent.agentEnrollment?.state === "registered");
-
-      expect(presented).toEqual(["stale-bootstrap-token-9f3a", created.token]);
-      expect(warnMessages(warn).filter((m) => m.includes("bootstrap token"))).toHaveLength(0);
-      fs.rmSync(home, { recursive: true, force: true });
-    });
   });
 });

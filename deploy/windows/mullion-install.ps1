@@ -24,13 +24,14 @@
 # tray app's "Install Mullion" button, a provisioning script):
 #
 #   - no prompt, ever; every input is a parameter or an environment variable;
-#   - the enrollment token (the per-host token from Settings -> Hosts -> Add
-#     host, or the primary's fleet-wide secret) is read from
-#     MULLION_AGENT_ENROLLMENT_TOKEN, or from
-#     the first line of stdin with -TokenFromStdin -- NEVER a parameter, which
-#     any process on the machine can read from the process list;
+#   - an agent is enrolled by a one-time pairing code (MULLION_AGENT_PAIRING_CODE
+#     or MULLION_AGENT_PAIRING_CODE_STDIN=1 for mullion-install.sh; see
+#     deploy/README.md). The legacy enrollment token is GONE (issue #3577):
+#     MULLION_AGENT_ENROLLMENT_TOKEN, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN and
+#     -TokenFromStdin are accepted only so an old caller does not break, print
+#     one notice, and are otherwise ignored;
 #   - a FRESH install given no token at all (no MULLION_AGENT_TOKEN, no
-#     enrollment token, no -PrimaryUrl) generates a per-agent token for manual
+#     pairing code, no -PrimaryUrl) generates a per-agent token for manual
 #     registration (Settings -> Hosts -> Add host on the primary), keeps it in
 #     the .env and reports it ONCE: as "agentToken" on the final -Json line, or
 #     as one line of text. A re-run reports none, unless the existing .env has
@@ -68,6 +69,8 @@ param(
   [int]$Port,
   [string]$Version,
   [string]$Repo = 's3ntin3l8/mullion-session-manager',
+  # Deprecated and ignored (issue #3577): kept only so an old caller that still
+  # passes it exits 0 instead of failing on an unknown parameter.
   [switch]$TokenFromStdin,
   [switch]$Json,
   [switch]$Uninstall,
@@ -573,8 +576,16 @@ Emit 'fetch' 'ok' "$base/mullion-install.sh"
 
 # --- install -------------------------------------------------------------------
 
-$token = $env:MULLION_AGENT_ENROLLMENT_TOKEN
-if ($TokenFromStdin) { $token = [Console]::In.ReadLine() }
+# Issue #3577 -- the agent-side enrollment-token bootstrap is gone. Accept an
+# old caller's variables/switch, print ONE notice, and never read, log, or pass
+# the value on. (The pairing code that replaces it travels through
+# MULLION_AGENT_PAIRING_CODE / MULLION_AGENT_PAIRING_CODE_STDIN straight to
+# mullion-install.sh.)
+if ($TokenFromStdin -or $env:MULLION_AGENT_ENROLLMENT_TOKEN -or $env:MULLION_AGENT_ENROLLMENT_TOKEN_STDIN) {
+  Emit 'install' 'log' ('MULLION_AGENT_ENROLLMENT_TOKEN/-_STDIN and -TokenFromStdin are ignored: the ' +
+    'agent-side enrollment-token bootstrap has been removed. Pair this host with a one-time ' +
+    'pairing code instead (see deploy/README.md, "Automating agent deploys").')
+}
 
 # No credential at all: generate the per-agent token for manual registration.
 # An existing .env is left as it is by the installer except that a caller's
@@ -582,8 +593,8 @@ if ($TokenFromStdin) { $token = [Console]::In.ReadLine() }
 # only when there is no .env, or the one there has no credential (a first run
 # that failed halfway, say). One that has a credential is never touched.
 function Test-EnvCredential([string]$EnvFile) {
-  # What src/app.ts needs: a non-blank MULLION_AGENT_TOKEN, or both a primary
-  # URL and an enrollment token.
+  # What src/app.ts needs: a non-blank MULLION_AGENT_TOKEN, or a primary URL
+  # (whose credential is the paired agent-identity.json, not an .env value).
   $vals = @{}
   foreach ($line in @(Get-Content -LiteralPath $EnvFile -ErrorAction SilentlyContinue)) {
     if ($line -match '^\s*([A-Za-z_]+)=(.*)$') {
@@ -597,13 +608,13 @@ function Test-EnvCredential([string]$EnvFile) {
     }
   }
   if ($vals['MULLION_AGENT_TOKEN']) { return $true }
-  return [bool]($vals['MULLION_PRIMARY_URL'] -and $vals['MULLION_ENROLLMENT_TOKEN'])
+  return [bool]$vals['MULLION_PRIMARY_URL']
 }
 $envFile = Join-Path $InstallRoot '.env'
 $hasCredential = (Test-Path -LiteralPath $envFile) -and (Test-EnvCredential $envFile)
 $agentToken = $env:MULLION_AGENT_TOKEN
 $generatedToken = $null
-if (-not $agentToken -and -not $token -and -not $PrimaryUrl -and -not $hasCredential) {
+if (-not $agentToken -and -not $PrimaryUrl -and -not $hasCredential) {
   $bytes = New-Object byte[] 32
   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
   $rng.GetBytes($bytes)
@@ -653,7 +664,6 @@ if ($PrimaryUrl) { Set-ChildEnv 'MULLION_AGENT_PRIMARY_URL' $PrimaryUrl }
 if ($ProjectsRoots) { Set-ChildEnv 'MULLION_AGENT_PROJECTS_ROOTS' $ProjectsRoots }
 if ($AgentName) { Set-ChildEnv 'MULLION_AGENT_NAME' $AgentName }
 if ($AdvertiseUrl) { Set-ChildEnv 'MULLION_AGENT_ADVERTISE_URL' $AdvertiseUrl }
-if ($token) { Set-ChildEnv 'MULLION_AGENT_ENROLLMENT_TOKEN' $token }
 if ($agentToken) { Set-ChildEnv 'MULLION_AGENT_TOKEN' $agentToken }
 if ($BindHost) { Set-ChildEnv 'MULLION_AGENT_HOST' $BindHost }
 if ($Port -gt 0) { Set-ChildEnv 'MULLION_AGENT_PORT' ([string]$Port) }

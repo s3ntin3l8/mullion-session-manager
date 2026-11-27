@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import type * as SuspendDetectModule from "../../src/services/suspend-detect.js";
 import { buildApp } from "../../src/app.js";
+import { identityStatePath } from "../../src/services/agent-identity.js";
 
 // Issue #245 / roadmap 7.1 — the agent-side half of self-registration.
 // Exercises agentEnrollmentPlugin's real onReady/timer wiring with a
@@ -69,9 +70,14 @@ describe("agentEnrollmentPlugin", () => {
     sessionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-enrollment-sessions-"));
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
-    process.env.MULLION_ENROLLMENT_TOKEN = "bootstrap-secret";
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
+    // A paired agent: src/app.ts refuses to boot an enrolling agent without
+    // this file (issue #3577).
+    fs.writeFileSync(
+      identityStatePath(sessionsDir),
+      JSON.stringify({ hostId: "host-1", machineCredential: "a1".repeat(32) }),
+    );
     resumeListeners.length = 0;
   });
 
@@ -80,7 +86,6 @@ describe("agentEnrollmentPlugin", () => {
     fs.rmSync(sessionsDir, { recursive: true, force: true });
     delete process.env.MULLION_ROLE;
     delete process.env.MULLION_PRIMARY_URL;
-    delete process.env.MULLION_ENROLLMENT_TOKEN;
     delete process.env.PROJECTS_ROOTS;
     delete process.env.SESSIONS_DIR;
     delete process.env.MULLION_HOME;
@@ -105,8 +110,11 @@ describe("agentEnrollmentPlugin", () => {
 
       const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       const body = JSON.parse(init.body as string);
-      expect(body.token).toBe("bootstrap-secret");
-      expect(body.hostId).toBeUndefined();
+      expect(body).toMatchObject({
+        hostId: "host-1",
+        machineCredential: "a1".repeat(32),
+      });
+      expect(body.token).toBeUndefined();
     } finally {
       await app.close();
     }
@@ -127,7 +135,7 @@ describe("agentEnrollmentPlugin", () => {
       await waitUntil(() => app.agentSession !== undefined);
       const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
       expect(body).not.toHaveProperty("baseUrl");
-      expect(body.wantsMachineCredential).toBe(true);
+      expect(body.wantsMachineCredential).toBeUndefined();
     } finally {
       await app.close();
     }
@@ -257,13 +265,13 @@ describe("agentEnrollmentPlugin", () => {
       const allWarnings = warnMessages.join("\n");
       expect(allWarnings).not.toContain("login.example.com");
       expect(allWarnings).not.toContain("super-secret");
-      expect(allWarnings).not.toContain("bootstrap-secret");
+      expect(allWarnings).not.toContain("a1".repeat(32));
     } finally {
       await app.close();
     }
   });
 
-  it("falls back to the bootstrap token when a renewal is rejected, not just retrying the stale session", async () => {
+  it("falls back to identity re-registration when a renewal fails transiently", async () => {
     fetchMock
       // Initial registration — short TTL so renewal fires almost
       // immediately (renewal is scheduled at max(ttl/2, 1s)).
@@ -275,10 +283,9 @@ describe("agentEnrollmentPlugin", () => {
           expires_at: new Date(Date.now() + 2_000).toISOString(),
         }),
       )
-      // Renewal attempt — the primary rejects it (e.g. session expired on
-      // its side too, or the DB was lost).
-      .mockResolvedValueOnce(new Response(null, { status: 401 }))
-      // Bootstrap re-registration fallback — must succeed.
+      // Renewal attempt — a transient failure (the primary restarting).
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      // Identity re-registration fallback — must succeed.
       .mockResolvedValue(
         jsonResponse(200, {
           host_id: "host-3",
@@ -298,14 +305,19 @@ describe("agentEnrollmentPlugin", () => {
       const renewalCallBody = JSON.parse(
         (fetchMock.mock.calls[1][1] as RequestInit).body as string,
       );
-      expect(renewalCallBody.token).toBe("sess-3-initial");
+      expect(renewalCallBody).toMatchObject({
+        hostId: "host-1",
+        machineCredential: "a1".repeat(32),
+      });
       const fallbackCallBody = JSON.parse(
         (fetchMock.mock.calls[2][1] as RequestInit).body as string,
       );
-      // The fallback re-registers with the bootstrap credential, never the
-      // now-rejected session id — that's the whole point of the fallback.
-      expect(fallbackCallBody.token).toBe("bootstrap-secret");
-      expect(fallbackCallBody.hostId).toBeUndefined();
+      // The fallback re-registers with the same stored identity.
+      expect(fallbackCallBody).toMatchObject({
+        hostId: "host-1",
+        machineCredential: "a1".repeat(32),
+      });
+      expect(fallbackCallBody.token).toBeUndefined();
     } finally {
       await app.close();
     }
@@ -313,7 +325,6 @@ describe("agentEnrollmentPlugin", () => {
 
   it("is a no-op for an agent with only a static MULLION_AGENT_TOKEN configured (today's flow, unchanged)", async () => {
     delete process.env.MULLION_PRIMARY_URL;
-    delete process.env.MULLION_ENROLLMENT_TOKEN;
     process.env.MULLION_AGENT_TOKEN = "static-token";
 
     const app = await buildApp();
@@ -373,25 +384,21 @@ describe("agentEnrollmentPlugin", () => {
       fs.rmSync(mullionHome, { recursive: true, force: true });
     });
 
-    // The bullet #1719 was written for: an agent whose credential was
-    // rotated while it slept must re-establish a valid credential instead of
-    // failing permanently. Before #1719 the bootstrap token was read from the
-    // env file ONCE, at boot, so a rotated value was retried forever and the
-    // agent was stranded until someone restarted it.
-    it("re-reads the env file and retries with a ROTATED bootstrap credential after a 401", async () => {
-      // The operator rotated the secret on the primary and updated the
-      // agent's own .env — the file the launchd launcher sources.
+    // Issue #3577: the enrolling agent's credential is
+    // agent-identity.json, which rotates through the primary's renewal
+    // response — there is no bootstrap token in the env file to re-read.
+    it("never reads a leftover MULLION_ENROLLMENT_TOKEN from the env file", async () => {
       fs.writeFileSync(
         path.join(mullionHome, ".env"),
-        "MULLION_ENROLLMENT_TOKEN=rotated-secret\n", // pragma: allowlist secret
+        "MULLION_ENROLLMENT_TOKEN=leftover-secret\n", // pragma: allowlist secret
         "utf8",
       );
 
-      fetchMock.mockResolvedValueOnce(new Response(null, { status: 401 })).mockResolvedValue(
+      fetchMock.mockResolvedValue(
         jsonResponse(200, {
-          host_id: "host-rotated",
-          session_id: "sess-rotated",
-          session_secret: "secret-rotated", // pragma: allowlist secret
+          host_id: "host-1",
+          session_id: "sess-leftover",
+          session_secret: "secret-leftover", // pragma: allowlist secret
           expires_at: new Date(Date.now() + 60_000).toISOString(),
         }),
       );
@@ -399,39 +406,13 @@ describe("agentEnrollmentPlugin", () => {
       const app = await buildApp();
       try {
         await app.ready();
-        await waitUntil(() => app.agentSession !== undefined, 10_000);
-
-        expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-        const firstBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-        const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
-        // The first attempt used the credential this process booted with…
-        expect(firstBody.token).toBe("bootstrap-secret");
-        // …and the retry used the ROTATED one, picked up from the env file —
-        // with no restart of the agent.
-        expect(secondBody.token).toBe("rotated-secret");
-      } finally {
-        await app.close();
-      }
-    });
-
-    it("keeps retrying the SAME credential when the env file has not changed", async () => {
-      fs.writeFileSync(
-        path.join(mullionHome, ".env"),
-        "MULLION_ENROLLMENT_TOKEN=bootstrap-secret\n",
-        "utf8",
-      );
-
-      fetchMock.mockResolvedValue(new Response(null, { status: 401 }));
-
-      const app = await buildApp();
-      try {
-        await app.ready();
-        await waitUntil(() => fetchMock.mock.calls.length >= 2, 10_000);
-
-        const firstBody = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-        const secondBody = JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string);
-        expect(firstBody.token).toBe("bootstrap-secret");
-        expect(secondBody.token).toBe("bootstrap-secret");
+        await waitUntil(() => app.agentSession !== undefined);
+        const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+        expect(body).toMatchObject({
+          hostId: "host-1",
+          machineCredential: "a1".repeat(32),
+        });
+        expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("leftover-secret");
       } finally {
         await app.close();
       }
@@ -463,10 +444,13 @@ describe("agentEnrollmentPlugin", () => {
 
         await waitUntil(() => fetchMock.mock.calls.length >= 1, 5000);
         const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-        // The revalidation renews the EXISTING session (its id), not a fresh
-        // bootstrap registration.
-        expect(body.token).toBe("sess-resume");
-        expect(body.hostId).toBe("host-resume");
+        // The revalidation renews by the stored identity, not by waiting for
+        // the renewal tick.
+        expect(body).toMatchObject({
+          hostId: "host-1",
+          machineCredential: "a1".repeat(32),
+        });
+        expect(body.token).toBeUndefined();
       } finally {
         await app.close();
       }
@@ -479,7 +463,6 @@ describe("agentEnrollmentPlugin", () => {
       // app.config. A rotated token would leave the agent unable to serve
       // the primary until it restarted.
       delete process.env.MULLION_PRIMARY_URL;
-      delete process.env.MULLION_ENROLLMENT_TOKEN;
       process.env.MULLION_AGENT_TOKEN = "static-token-1";
       fs.writeFileSync(
         path.join(mullionHome, ".env"),

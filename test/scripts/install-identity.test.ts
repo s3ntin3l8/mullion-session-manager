@@ -21,17 +21,16 @@ const execFileAsync = promisify(execFile);
 const INSTALL_SCRIPT = fileURLToPath(new URL("../../deploy/install.sh", import.meta.url));
 const describeOnLinux = process.platform === "linux" ? describe : describe.skip;
 
-const ENROLL_TOKEN = "fixture-enroll-tok"; // pragma: allowlist secret
-const ROTATED_TOKEN = "fixture-rotated-tok"; // pragma: allowlist secret
+const LEFTOVER_TOKEN = "fixture-leftover-tok"; // pragma: allowlist secret
 const IDENTITY = JSON.stringify({
   hostId: "host-fixture-1",
   machineCredential: "ab".repeat(32), // pragma: allowlist secret
 });
-// A headless Ansible role: self-registration inputs, no URL, host or port.
+// A headless Ansible role: pairing inputs, no host or port. Issue #3577: the
+// removed MULLION_AGENT_ENROLLMENT_TOKEN is no longer part of it.
 const ansibleEnv = {
   MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
   MULLION_AGENT_PRIMARY_URL: "https://primary.example.com",
-  MULLION_AGENT_ENROLLMENT_TOKEN: ENROLL_TOKEN,
   MULLION_AGENT_NAME: "agent-1",
 };
 
@@ -147,12 +146,13 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
   const identityFile = (home: string) => path.join(home, "data", "sessions", "agent-identity.json");
   const envFile = (home: string) => fs.readFileSync(path.join(home, ".env"), "utf8");
 
-  it("leaves agent-identity.json byte- and mtime-identical across a rerun, an upgrade and a rotated variable", async () => {
+  it("leaves agent-identity.json byte- and mtime-identical across a rerun, an upgrade and a removed variable", async () => {
     const home = freshHome();
     await run(home);
 
-    // The agent enrolls after the first install. Pin the mtime in the past so
-    // any rewrite, even a byte-identical one, is detectable.
+    // The agent enrolls (via a pairing code) after the first install. Pin the
+    // mtime in the past so any rewrite, even a byte-identical one, is
+    // detectable.
     const file = identityFile(home);
     fs.writeFileSync(file, IDENTITY, { mode: 0o600 });
     const past = new Date("2024-01-01T00:00:00Z");
@@ -162,14 +162,14 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     await run(home); // Ansible reconverge
     await run(home, { ...ansibleEnv, MULLION_INSTALL_TAG: "v9.9.10" }); // upgrade
     expect(fs.readlinkSync(path.join(home, "current"))).toMatch(/releases\/9\.9\.10$/);
-    await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN: ROTATED_TOKEN });
+    // Issue #3577 — an old role variable, now ignored, changes nothing.
+    await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN: LEFTOVER_TOKEN });
 
     expect(fs.readFileSync(file, "utf8")).toBe(IDENTITY);
     expect(fs.statSync(file).mtimeMs).toBe(past.getTime());
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
-    // The .env keeps ownership of the bootstrap credential.
     expect(envFile(home)).toBe(envBefore);
-    expect(envFile(home)).not.toContain(ROTATED_TOKEN);
+    expect(envFile(home)).not.toContain(LEFTOVER_TOKEN);
   });
 
   it("writes no URL, host or port for a headless install, and keeps that on a rerun", async () => {
@@ -183,29 +183,32 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     expect(envFile(home)).toBe(env);
   });
 
-  it("keeps the enrollment secret out of every process argument and the install log", async () => {
+  // Issue #3577 / acceptance criteria — an old Ansible variable must not break
+  // a converge, must not become a credential, and must never be echoed.
+  it("ignores MULLION_AGENT_ENROLLMENT_TOKEN: exit 0, one notice per run, no token in .env or a log", async () => {
     const home = freshHome();
-    const first = await run(home);
-    const second = await run(home, { ...ansibleEnv, MULLION_INSTALL_TAG: "v9.9.10" });
+    const first = await run(home, {
+      ...ansibleEnv,
+      MULLION_AGENT_ENROLLMENT_TOKEN: LEFTOVER_TOKEN,
+    });
+    const second = await run(home, {
+      ...ansibleEnv,
+      MULLION_INSTALL_TAG: "v9.9.10",
+      MULLION_AGENT_ENROLLMENT_TOKEN: LEFTOVER_TOKEN,
+    });
+
+    // run() rejects on a non-zero exit, so a resolved promise IS exit 0.
+    for (const result of [first, second]) {
+      expect(result.stderr.match(/are ignored/g) ?? []).toHaveLength(1);
+      expect(result.stdout + result.stderr).not.toContain(LEFTOVER_TOKEN);
+    }
+    const env = envFile(home);
+    expect(env).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
+    expect(env).not.toContain(LEFTOVER_TOKEN);
+    expect(fs.statSync(path.join(home, ".env")).mode & 0o777).toBe(0o600);
     const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
     expect(commands).toContain("systemctl"); // the shims really were exercised
-    expect(commands).not.toContain(ENROLL_TOKEN);
-    expect(first.stdout + first.stderr + second.stdout + second.stderr).not.toContain(ENROLL_TOKEN);
-    // It is only ever in the owner-only .env.
-    expect(envFile(home)).toContain(`MULLION_ENROLLMENT_TOKEN=${ENROLL_TOKEN}`);
-    expect(fs.statSync(path.join(home, ".env")).mode & 0o777).toBe(0o600);
-  });
-
-  it("changes the bootstrap credential only when Ansible removes the .env, and still leaves the identity", async () => {
-    const home = freshHome();
-    await run(home);
-    fs.writeFileSync(identityFile(home), IDENTITY);
-
-    fs.rmSync(path.join(home, ".env"));
-    await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN: ROTATED_TOKEN });
-
-    expect(envFile(home)).toMatch(new RegExp(`^MULLION_ENROLLMENT_TOKEN=${ROTATED_TOKEN}$`, "m"));
-    expect(fs.readFileSync(identityFile(home), "utf8")).toBe(IDENTITY);
+    expect(commands).not.toContain(LEFTOVER_TOKEN);
   });
 
   it("keeps a legacy inbound install's settings on a rerun (advertised URL, host and port)", async () => {
@@ -227,33 +230,34 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     expect(again).toMatch(/^HOST=0\.0\.0\.0$/m);
     expect(again).toMatch(/^PORT=4000$/m);
     expect(again).toMatch(/^MULLION_AGENT_ADVERTISE_URL=https:\/\/agent\.example\.com$/m);
-    expect(again).toMatch(/^MULLION_ENROLLMENT_TOKEN=fixture-enroll-tok$/m);
+    expect(again).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
   });
 
-  // Issue #2703 — the stdin token input (the Windows bootstrap's -TokenFromStdin,
-  // for the shell installer) and the restart of a running unit.
-  const { MULLION_AGENT_ENROLLMENT_TOKEN: _omit, ...noTokenEnv } = ansibleEnv;
-
-  it("reads the enrollment token from the first line of stdin, never from an argument or the log", async () => {
+  // Issue #2703 — the stdin input contract, and the restart of a running unit.
+  it("ignores MULLION_AGENT_ENROLLMENT_TOKEN_STDIN, writes no token, and never exposes the piped value", async () => {
     const home = freshHome();
     const result = await run(
       home,
-      { ...noTokenEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "1" },
-      `${ROTATED_TOKEN}\r\nsecond line ignored\n`,
+      { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "1" },
+      `${LEFTOVER_TOKEN}\r\nsecond line ignored\n`,
     );
-    expect(envFile(home)).toMatch(new RegExp(`^MULLION_ENROLLMENT_TOKEN=${ROTATED_TOKEN}$`, "m"));
-    expect(envFile(home)).not.toContain("second line");
+    const env = envFile(home);
+    expect(env).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
+    expect(env).not.toContain(LEFTOVER_TOKEN);
+    expect(env).not.toContain("second line");
+    expect(result.stderr.match(/are ignored/g) ?? []).toHaveLength(1);
     const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
-    expect(commands).not.toContain(ROTATED_TOKEN);
-    expect(result.stdout + result.stderr).not.toContain(ROTATED_TOKEN);
+    expect(commands).not.toContain(LEFTOVER_TOKEN);
+    expect(result.stdout + result.stderr).not.toContain(LEFTOVER_TOKEN);
   });
 
-  it("refuses an empty stdin token instead of writing a credential-less .env", async () => {
+  it("does not consume or reject empty stdin for the removed enrollment-token flag", async () => {
     const home = freshHome();
-    await expect(
-      run(home, { ...noTokenEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "1" }, "\n"),
-    ).rejects.toMatchObject({ stderr: expect.stringContaining("stdin carried no token") });
-    expect(fs.existsSync(path.join(home, ".env"))).toBe(false);
+    // Once an empty first line was an error; now the flag is ignored, so this
+    // resolves (exit 0) and still writes the usual .env.
+    await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "1" }, "\n");
+    expect(fs.existsSync(path.join(home, ".env"))).toBe(true);
+    expect(envFile(home)).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
   });
 
   it("restarts a running unit when it rewrote the .env, and leaves an untouched .env's unit alone", async () => {
@@ -274,9 +278,13 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     await run(home); // .env kept as is
     expect(restarts()).toBe(0);
 
-    fs.rmSync(path.join(home, ".env")); // the revoked-agent recipe
-    await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN: ROTATED_TOKEN });
+    fs.rmSync(path.join(home, ".env"));
+    await run(home, {
+      ...ansibleEnv,
+      MULLION_AGENT_TOKEN: "fixture-restart-tok", // pragma: allowlist secret
+    });
     expect(restarts()).toBe(1);
+    expect(envFile(home)).toMatch(/^MULLION_AGENT_TOKEN=fixture-restart-tok$/m);
   });
 
   it("redeems MULLION_AGENT_PAIRING_CODE_STDIN=1 into agent-identity.json with no code or enrollment token in .env or argv", async () => {
@@ -309,13 +317,13 @@ fs.writeFileSync(
 
     const result = await run(
       home,
-      { ...noTokenEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
+      { ...ansibleEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" },
       `${pairingCode}\r\nignored second line\n`,
     );
 
     const env = envFile(home);
     expect(env).toMatch(/^MULLION_PRIMARY_URL=https:\/\/primary\.example\.com$/m);
-    expect(env).toMatch(/^MULLION_ENROLLMENT_TOKEN=$/m);
+    expect(env).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
     expect(env).not.toContain(pairingCode);
     expect(result.stderr).not.toMatch(/WARNING: this agent has no complete credential path/);
     expect(result.stdout + result.stderr).not.toContain(pairingCode);
@@ -336,7 +344,7 @@ fs.writeFileSync(
   it("refuses an empty stdin pairing code instead of writing a credential-less .env", async () => {
     const home = freshHome();
     await expect(
-      run(home, { ...noTokenEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, "\n"),
+      run(home, { ...ansibleEnv, MULLION_AGENT_PAIRING_CODE_STDIN: "1" }, "\n"),
     ).rejects.toMatchObject({ stderr: expect.stringContaining("stdin carried no pairing code") });
     expect(fs.existsSync(path.join(home, ".env"))).toBe(false);
   });
@@ -826,14 +834,16 @@ const arg = (name) => {
     }
   });
 
-  it("reads the enrollment token from stdin when MULLION_AGENT_ENROLLMENT_TOKEN_STDIN is a YAML boolean", async () => {
+  it("ignores MULLION_AGENT_ENROLLMENT_TOKEN_STDIN even as a YAML boolean", async () => {
     const home = freshHome();
-    await run(
+    const result = await run(
       home,
-      { ...noTokenEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "True" },
-      `${ROTATED_TOKEN}\r\nsecond line ignored\n`,
+      { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "True" },
+      `${LEFTOVER_TOKEN}\r\nsecond line ignored\n`,
     );
-    expect(envFile(home)).toMatch(new RegExp(`^MULLION_ENROLLMENT_TOKEN=${ROTATED_TOKEN}$`, "m"));
+    expect(envFile(home)).not.toMatch(/^MULLION_ENROLLMENT_TOKEN=/m);
+    expect(envFile(home)).not.toContain(LEFTOVER_TOKEN);
+    expect(result.stderr.match(/are ignored/g) ?? []).toHaveLength(1);
   });
 
   // The primary role's own boolean-ish flag had the same gap, and its

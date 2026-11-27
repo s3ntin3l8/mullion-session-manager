@@ -212,7 +212,6 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         "  name: e.MULLION_AGENT_NAME || null,",
         "  projects: e.MULLION_AGENT_PROJECTS_ROOTS || null,",
         "  advertise: e.MULLION_AGENT_ADVERTISE_URL || null,",
-        "  token: e.MULLION_AGENT_ENROLLMENT_TOKEN || null,",
         "  agentToken: e.MULLION_AGENT_TOKEN || null,",
         "  host: e.MULLION_AGENT_HOST || null,",
         "  port: e.MULLION_AGENT_PORT || null,",
@@ -300,19 +299,18 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           name: "my pc",
           projects: "C:/src,D:/work",
           advertise: "http://10.0.0.5:3000",
-          token: "s3cr3t-token",
           // A Git Bash that was already installed is not pinned into the .env.
           gitBash: null,
         });
-        // The token travels in the environment only, never in the command line
-        // or in what the script prints.
-        expect(res.stdout).not.toContain("s3cr3t-token");
+        // Issue #3577 — the removed enrollment token is never forwarded.
+        expect(rec.token).toBeUndefined();
+        expect(res.stdout + res.stderr).not.toContain("s3cr3t-token");
       },
       180_000,
     );
 
     it.skipIf(!gitBash || !hasNode26)(
-      "takes the enrollment token from the first line of stdin",
+      "accepts the removed -TokenFromStdin switch and forwards no token",
       async () => {
         const release = fakeRelease();
         const res = await bootstrap(
@@ -327,7 +325,11 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! }, input: "from-stdin\nignored\n" },
         );
         expect(res.code).toBe(0);
-        expect(JSON.parse(fs.readFileSync(release.record, "utf8")).token).toBe("from-stdin");
+        // Issue #3577 — the switch is accepted so an old caller still exits 0,
+        // but the value is never read, logged, or passed to the installer.
+        expect(res.events.some((e) => e.detail.includes("ignored"))).toBe(true);
+        expect(JSON.parse(fs.readFileSync(release.record, "utf8")).token).toBeUndefined();
+        expect(res.stdout + res.stderr).not.toContain("from-stdin");
       },
       180_000,
     );
@@ -400,11 +402,6 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           env0?: boolean;
         }> = [
           { name: "agent token", args: [], env: { MULLION_AGENT_TOKEN: "given-by-caller" } },
-          {
-            name: "enrollment token",
-            args: [],
-            env: { MULLION_AGENT_ENROLLMENT_TOKEN: "enroll-tok" },
-          },
           { name: "primary url", args: ["-PrimaryUrl", "https://primary.example"], env: {} },
           { name: "existing .env with a credential", args: [], env: {}, env0: true },
         ];

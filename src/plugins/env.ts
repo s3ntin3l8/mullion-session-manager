@@ -234,21 +234,13 @@ export const schema = {
     // split by which role reads them (an agent has no use for the two
     // primary-only ones and vice versa — see src/app.ts's role split).
     //
-    // Agent side — where to find the primary and what bootstrap credential
-    // to present. Deliberately a SEPARATE variable from MULLION_AGENT_TOKEN
-    // above, not a reuse of it: this is an *outbound* one-time-use bootstrap
-    // credential (POST /api/internal/register only), never checked against
-    // an *inbound* request the way MULLION_AGENT_TOKEN is — conflating the
-    // two would mean one leaked agent env file grants Bearer access to
-    // every OTHER agent's /internal/ws/attach (arbitrary command execution
-    // fleet-wide), the exact opposite of "a different token per agent"
-    // (docs/multi-host.md). An enrolled agent has no MULLION_AGENT_TOKEN at
-    // all — its inbound credential is the session the primary issues here.
+    // Agent side — where to find the primary. The credential itself is the
+    // persisted `agent-identity.json` under SESSIONS_DIR (redeemed once from
+    // a pairing code, issue #3437); there is no bootstrap token in the
+    // environment any more (issue #3577). An enrolled agent has no
+    // MULLION_AGENT_TOKEN at all — its inbound credential is the session the
+    // primary issues on registration.
     MULLION_PRIMARY_URL: {
-      type: "string",
-      default: "",
-    },
-    MULLION_ENROLLMENT_TOKEN: {
       type: "string",
       default: "",
     },
@@ -1038,14 +1030,16 @@ export function loadDotenvOverrides(path = ".env"): NodeJS.Dict<string> {
 // long-running process can pick up a value an operator changed while it was
 // running.
 //
-// WHY THIS EXISTS: an agent's bootstrap credential is read from this file
-// once, at boot. If an admin rotates the credential on the primary while the
-// agent's laptop is ASLEEP, the agent comes back holding a value the primary
-// no longer accepts — and retries it forever, because nothing ever re-reads
-// the file. The agent is then permanently stranded until someone restarts it.
-// This helper is what lets the agent notice the new value and recover
-// WITHOUT a redeploy — the whole point of #1719's "re-establishes a valid
-// credential instead of failing permanently" bullet.
+// WHY THIS EXISTS: an agent's static MULLION_AGENT_TOKEN is read from this
+// file once, at boot. If an admin rotates it on the primary while the agent's
+// laptop is ASLEEP, the agent comes back holding a value the primary no longer
+// presents — and nothing ever re-reads the file, so the inbound gate rejects
+// the primary until someone restarts the agent. (The enrolling agent's own
+// machine credential lives in agent-identity.json, not here: it rotates
+// through the primary's renewal response — issue #3577.) This helper is what
+// lets the agent notice the new value and recover WITHOUT a redeploy — the
+// whole point of #1719's "re-establishes a valid credential instead of
+// failing permanently" bullet.
 //
 // WHICH FILE: the same file the launcher sources. scripts/run-with-env.sh
 // (the launchd job's exec target) reads "$MULLION_HOME/.env", so that is the
@@ -1176,7 +1170,6 @@ declare module "fastify" {
       MULLION_UPLOAD_RETENTION_DAYS: number;
       FILE_TRANSFER_MAX_BYTES: number;
       MULLION_PRIMARY_URL: string;
-      MULLION_ENROLLMENT_TOKEN: string;
       MULLION_AGENT_ADVERTISE_URL: string;
       MULLION_AGENT_NAME: string;
       MULLION_ALLOW_TAILNET_HOSTS: boolean;
