@@ -254,6 +254,11 @@
 .dock-group-header {
   display: flex;
   align-items: center;
+  /* #3589 — only `.dock-group-tools` (the host selector and Preview, as one
+     unit) can move down: onto a second line under the name when the rail
+     is too narrow for both. Before, each piece took a line of its own. */
+  flex-wrap: wrap;
+  row-gap: 2px;
   gap: 6px;
   padding: 0 2px;
   min-width: 0;
@@ -280,8 +285,8 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
+  flex: 0 1 auto;
+  min-width: 4em;
 }
 /* The GitHub glance row, folded onto the project header's own line instead
    of its own 26px row below it — a project section is now a rail row's
@@ -295,7 +300,11 @@
   padding: 0 6px;
   margin: 0;
   gap: 5px;
-  flex: 0 1 auto;
+  /* #3589 — takes the room left on the name's line and never more, so it
+     never pushes anything onto a line of its own; it gives way before the
+     project's name does. */
+  flex: 1 1 0;
+  overflow: hidden;
   max-width: 55%;
   min-width: 0;
 }
@@ -542,9 +551,6 @@ button.dock-group-empty:hover {
   border-radius: 6px;
   font-size: 0.75rem;
 }
-.dock-group-header {
-  flex-wrap: wrap;
-}
 .preview-config-tabs {
   display: flex;
   gap: 8px;
@@ -663,8 +669,56 @@ button.dock-group-empty:hover {
   padding: 4px 12px;
 }
 
+/* #3589 — under the project header (or the sidebar view's picker), never
+   inside it: a full-width line in the header wrapped it onto three rows. */
 .dock-host-picker-hint {
   font-size: 0.6875rem;
   color: var(--dim);
-  flex-basis: 100%;
+  padding: 0 4px 2px 22px;
+}
+.dock-sidebar-view > .dock-host-picker-hint {
+  padding: 0 12px 4px;
+}
+
+/* #3589 — the host selector and Preview, side by side and never squeezed:
+   beside the name when the rail has room, else together on the next line. */
+.dock-group-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.dock-group-tools .dock-host-picker {
+  flex: 0 0 auto;
+}
+/* The header's field at Preview's 22px height, not a settings form's 30px. */
+.dock-group-tools .settings-dropdown.small .ui-dropdown-field {
+  height: 22px;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 20px;
+}
+.dock-group-tools .project-preview-menu .kebab-trigger-btn {
+  height: 22px;
+  padding: 0 8px;
+}
+
+/* #3589 — a running dev server's "Open in browser", on its own row. */
+.dock-monitor-open-browser {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.dock-monitor-open-browser:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: var(--fg);
 }

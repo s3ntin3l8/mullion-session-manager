@@ -64,7 +64,9 @@ export default defineConfig({
     // shared press, overlay and material rules, styles/motion.test.ts;
     // launcher-projects.css: the Add project form keeps its content height,
     // launchers/LauncherProjects.test.tsx; tablet.css: the browser toolbars'
-    // coarse touch floor, styles/tablet.browserToolbar.test.ts).
+    // coarse touch floor, styles/tablet.browserToolbar.test.ts; dock.css and
+    // empty-states.css: the Dock header's one row and the browser toolbar's
+    // icon buttons, dock/DockHeaderAndRow.test.tsx).
     css: {
       include: [
         /styles\/tokens\.css/,
@@ -80,6 +82,8 @@ export default defineConfig({
         /styles\/index\.css/,
         /styles\/terminal\.css/,
         /styles\/tablet\.css/,
+        /styles\/dock\.css/,
+        /styles\/empty-states\.css/,
       ],
     },
     maxWorkers,

@@ -2903,6 +2903,9 @@ button.github-panel-row.gh-issue-row {
   justify-content: center;
   width: 22px;
   height: 22px;
+  /* #3589 — the global `button` rule's 5px 10px padding left a 22px button
+     2px for its icon, which drew as an empty dot. */
+  padding: 0;
   border-radius: 5px;
   color: var(--muted);
   background: transparent;

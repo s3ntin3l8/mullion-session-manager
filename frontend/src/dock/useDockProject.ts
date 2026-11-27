@@ -9,6 +9,7 @@ import type {
 import { useDashboardStore } from "../store/index.js";
 import { CheckoutPrepareError } from "../store/slices/sessions.js";
 import { useShallow } from "zustand/react/shallow";
+import { usePolling } from "../hooks/usePolling.js";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "../dockerServiceStatus.js";
 import type { CustomSelectOption } from "../ui/CustomSelect.js";
@@ -22,8 +23,11 @@ import {
   holdVanishedDockerControls,
   isDockPreviewPath,
   resolveRememberedValueFromRunning,
+  REMOTE_CHECKOUT_VALUE_PREFIX,
+  remoteSelectorDisplay,
   resolveSelectedValue,
   runningSessionFor,
+  runsDevServer,
 } from "./dockHelpers.js";
 import type { DockerStackGroup } from "./dockHelpers.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
@@ -80,6 +84,16 @@ const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS + 5_000;
 const EARLY_EXIT_WINDOW_MS = 2 * 60_000;
 const EARLY_EXIT_LINES = 40;
 
+// #3589 — how often a running command's detected port is looked up, so its
+// row can offer "Open in browser" soon after the port shows in its output.
+const DETECTED_PORT_POLL_MS = 5_000;
+
+function sameEntries(a: ReadonlyMap<number, string>, b: ReadonlyMap<number, string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
+}
+
 /** #3557 — a control's run that ended right after it started: what the log
  * pane shows in place of the stream that is gone. */
 export interface DockEndedReport {
@@ -101,6 +115,12 @@ export interface DockControlCardView {
   showSelector: boolean;
   selectedValue: string;
   worktreeOptions: CustomSelectOption[];
+  /** #3589 — opens the built-in browser on this row's server: the Preview
+   * menu's "Dev server" when the row's port is the dev server's (it follows
+   * the row to its host), else the port detected in the run's output (the
+   * Browser quick pick's entry for it). Null when it is not running or has
+   * no known port. */
+  openInBrowser: (() => void) | null;
   updateAvailable: boolean;
   dockerStatus: DockerStatusPresentation | null;
   held: boolean;
@@ -162,10 +182,14 @@ export function useDockProject(
   {
     surface,
     onOpenSession,
+    onOpenBrowser,
   }: {
     surface: DockSurface;
     // Issue #2069 — "Open holder" on a port-in-use row.
     onOpenSession?: (session: Session) => void;
+    // #3589 — what the Preview menu's "Dev server" item does; a running row
+    // whose port is the dev server's offers it as "Open in browser".
+    onOpenBrowser?: () => void;
   },
 ) {
   // P1 perf fix — run once PER PROJECT in the dock, so a
@@ -489,6 +513,43 @@ export function useDockProject(
   });
   const liveEphemeralControls = [...optimisticEphemeralControls, ...reconstructedEphemeralControls];
   const configuredControls = controls.filter((c) => c.source !== "docker");
+
+  // #3589 — which running commands on this server have a port the server
+  // detected in their output: the Browser quick pick's "Running services"
+  // (`dock:<sessionId>`, services/browser-destinations.ts). A row's "Open in
+  // browser" opens that entry. Polled while one runs, since the port shows up
+  // in the output after the start; only where a surface can open a browser.
+  const localRunningIds = configuredControls
+    .map((c) => runningFor(c))
+    .filter((s): s is Session => s !== undefined && s.resolvedHostId === LOCAL_HOST_ID)
+    .map((s) => s.id);
+  const localRunningSignature = localRunningIds.join(",");
+  const [detectedDestinations, setDetectedDestinations] = useState<ReadonlyMap<number, string>>(
+    () => new Map(),
+  );
+  usePolling(
+    (isCancelled) => {
+      void api
+        .getBrowserDestinations(projectId)
+        .then((result) => {
+          if (isCancelled()) return;
+          const next = new Map<number, string>();
+          for (const d of result.destinations) {
+            if (d.kind === "dock") next.set(Number(d.key.slice("dock:".length)), d.key);
+          }
+          setDetectedDestinations((prev) => (sameEntries(prev, next) ? prev : next));
+        })
+        .catch(() => {
+          // Best effort: without the answer a row offers only the dev server.
+        });
+    },
+    DETECTED_PORT_POLL_MS,
+    {
+      deps: [projectId, localRunningSignature],
+      enabled: onOpenBrowser !== undefined && localRunningIds.length > 0,
+      pauseWhenHidden: true,
+    },
+  );
   const discoveredControls = controls.filter((c) => c.source === "docker");
   const { groups: dockerStackGroups, ungrouped: ungroupedDockerControls } = groupDockerControls(
     [...liveEphemeralControls, ...heldMerge.controls],
@@ -773,6 +834,17 @@ export function useDockProject(
         ? hostLabel(running.resolvedHostId)
         : null;
 
+    // #3589 — the selector's options are the project's own host's checkouts.
+    // A row running elsewhere shows where it runs instead: the branch it
+    // was started on, or that host's path, never this host's.
+    const display = remoteSelectorDisplay({
+      selectedValue,
+      options: allOptions,
+      running,
+      remoteHostRoot: rowHostId !== undefined ? project?.hostCwds?.[rowHostId] : undefined,
+      remote: rowHostId !== undefined,
+    });
+
     const dockIdentity = dockerSessionIdentity(control);
     const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
     // #3557 — the selector's paths are on the project's own host; another host
@@ -972,7 +1044,40 @@ export function useDockProject(
         }
       })();
     };
+    // #3589 — the dev server (the Preview menu's own "Dev server", which
+    // follows the control to its host), or else the port detected in this
+    // run's output, opened as the quick pick opens it.
+    const detectedKey = running ? detectedDestinations.get(running.id) : undefined;
+    const openInBrowser: (() => void) | null =
+      !running || !onOpenBrowser
+        ? null
+        : runsDevServer(control, project, configuredControls.length === 1)
+          ? onOpenBrowser
+          : detectedKey !== undefined
+            ? () =>
+                void api
+                  .openDestinationPreview(projectId, detectedKey)
+                  .then((preview) =>
+                    useDashboardStore.getState().requestOpenPreview({
+                      projectId,
+                      slug: preview.slug,
+                      branch: null,
+                      targetName: control.title,
+                    }),
+                  )
+                  .catch((err: unknown) =>
+                    useDashboardStore
+                      .getState()
+                      .reportError(
+                        "Could not open preview",
+                        err instanceof Error ? err.message : String(err),
+                      ),
+                  )
+            : null;
     const changeWorktree = (newValue: string) => {
+      // Picking the remote checkout the row already runs from (#3589) is not
+      // a switch: there is nothing to relaunch.
+      if (newValue.startsWith(REMOTE_CHECKOUT_VALUE_PREFIX)) return;
       useDashboardStore.getState().setDockControlWorktree?.(projectId, control.id, newValue);
       relaunch(newValue);
     };
@@ -986,8 +1091,9 @@ export function useDockProject(
       running,
       runHostLabel,
       showSelector: controlShowSelector,
-      selectedValue,
-      worktreeOptions: allOptions,
+      selectedValue: display.value,
+      worktreeOptions: display.options,
+      openInBrowser,
       updateAvailable,
       dockerStatus,
       held: heldMerge.heldIds.has(control.id),

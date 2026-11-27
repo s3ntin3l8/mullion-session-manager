@@ -1,5 +1,8 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import {
+  devServerPort,
+  remoteSelectorDisplay,
+  runsDevServer,
   cwdForOtherHost,
   lastOutputLines,
   dockerSessionIdentity,
@@ -900,5 +903,105 @@ describe("lastOutputLines", () => {
   it("keeps the last lines, without the trailing blank screen", () => {
     expect(lastOutputLines("a\r\nb  \nc\n\n\n", 2)).toEqual(["b", "c"]);
     expect(lastOutputLines("", 5)).toEqual([]);
+  });
+});
+
+describe("devServerPort (#3589)", () => {
+  it("reads a bare port, a URL's port, or the scheme's default", () => {
+    expect(devServerPort("5173")).toBe(5173);
+    expect(devServerPort("http://localhost:3000/app")).toBe(3000);
+    expect(devServerPort("localhost:8080")).toBe(8080);
+    expect(devServerPort("https://dev.example.com")).toBe(443);
+    expect(devServerPort("http://dev.example.com")).toBe(80);
+  });
+  it("is null with no address to read", () => {
+    expect(devServerPort(null)).toBeNull();
+    expect(devServerPort(undefined)).toBeNull();
+    expect(devServerPort("  ")).toBeNull();
+    expect(devServerPort("http://[bad")).toBeNull();
+  });
+});
+
+describe("runsDevServer (#3589)", () => {
+  const project = { devServerUrl: "http://localhost:5173", detectedDevServerPort: null };
+  const control = (over: Partial<DockControl> = {}): DockControl => ({
+    id: "dev",
+    title: "dev",
+    command: "npm run dev",
+    ...over,
+  });
+  it("matches the control's port against the dev server's", () => {
+    expect(runsDevServer(control({ port: 5173 }), project, false)).toBe(true);
+    expect(runsDevServer(control({ port: 9000 }), project, false)).toBe(false);
+  });
+  it("falls back to the detected port only for the project's sole command", () => {
+    const detected = { ...project, detectedDevServerPort: "5173" };
+    expect(runsDevServer(control(), detected, true)).toBe(true);
+    expect(runsDevServer(control(), detected, false)).toBe(false);
+  });
+  it("never for a Compose service, a project without a dev server, or no project", () => {
+    expect(runsDevServer(control({ port: 5173, source: "docker" }), project, true)).toBe(false);
+    expect(runsDevServer(control({ port: 5173 }), { ...project, devServerUrl: null }, true)).toBe(
+      false,
+    );
+    expect(runsDevServer(control({ port: 5173 }), null, true)).toBe(false);
+  });
+});
+
+describe("remoteSelectorDisplay (#3589)", () => {
+  const options = [
+    { value: "/home/x/app", label: "/home/x/app", branch: "" },
+    { value: "/home/x/app/.mullion-worktrees/f", label: "f", branch: "f" },
+    { value: "branch:g", label: "g (preview)", branch: "g" },
+  ];
+  const running = makeSession({ id: 1, cwd: "/Users/x/app" });
+  it("leaves a row that is not running elsewhere alone", () => {
+    const local = { selectedValue: "/home/x/app", options, running, remoteHostRoot: undefined };
+    expect(remoteSelectorDisplay({ ...local, remote: false })).toEqual({
+      value: "/home/x/app",
+      options,
+    });
+    expect(remoteSelectorDisplay({ ...local, remote: true, running: undefined }).value).toBe(
+      "/home/x/app",
+    );
+  });
+  it("keeps a selection that names a branch", () => {
+    const shown = remoteSelectorDisplay({
+      selectedValue: "branch:g",
+      options,
+      running,
+      remote: true,
+      remoteHostRoot: "/Users/x/app",
+    });
+    expect(shown.value).toBe("branch:g");
+  });
+  it("shows the remote session's own directory, else that host's root", () => {
+    const shown = remoteSelectorDisplay({
+      selectedValue: "/home/x/app",
+      options,
+      running,
+      remote: true,
+      remoteHostRoot: "/Users/x/root",
+    });
+    expect(shown.options[0]).toEqual({ value: shown.value, label: "/Users/x/app" });
+    expect(shown.options.map((o) => o.value)).not.toContain("/home/x/app");
+
+    const noCwd = remoteSelectorDisplay({
+      selectedValue: "/home/x/app",
+      options,
+      running: makeSession({ id: 1, cwd: "/home/x/app" }),
+      remote: true,
+      remoteHostRoot: "/Users/x/root",
+    });
+    expect(noCwd.options[0].label).toBe("/Users/x/root");
+
+    const unknown = remoteSelectorDisplay({
+      selectedValue: "/home/x/app",
+      options,
+      running: makeSession({ id: 1, cwd: null }),
+      remote: true,
+      remoteHostRoot: undefined,
+    });
+    expect(unknown.options[0].label).toBe("Main checkout");
   });
 });

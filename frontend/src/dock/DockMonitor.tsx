@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import type { DockControl, Session } from "../api/index.js";
 import {
   ContainerIcon,
+  GlobeIcon,
   RefreshIcon,
   KillIcon,
   PlayTriangleIcon,
@@ -45,6 +46,7 @@ export function DockMonitor({
   selectedValue,
   worktreeOptions,
   onWorktreeChange,
+  onOpenInBrowser = null,
   updateAvailable,
   dockerStatus,
   held = false,
@@ -82,6 +84,9 @@ export function DockMonitor({
   selectedValue: string;
   worktreeOptions: CustomSelectOption[];
   onWorktreeChange: (newValue: string) => void;
+  // #3589 — opens this row's dev server in the built-in browser (the Preview
+  // menu's "Dev server" address); null hides the button.
+  onOpenInBrowser?: (() => void) | null;
   updateAvailable: boolean;
   dockerStatus: DockerStatusPresentation | null;
   // PR2b — this control briefly vanished from discovery (a compose recreate
@@ -330,6 +335,21 @@ export function DockMonitor({
                 onChange={onWorktreeChange}
               />
             </span>
+          )}
+          {onOpenInBrowser && (
+            <button
+              type="button"
+              className="dock-monitor-open-browser"
+              aria-label={`Open ${control.title} in browser`}
+              title="Open in browser"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenInBrowser();
+              }}
+              onKeyDown={(e) => e.stopPropagation()}
+            >
+              <GlobeIcon size={12} />
+            </button>
           )}
           {control.docker && (
             <span

@@ -1129,7 +1129,11 @@ button.sb-chip--label[aria-pressed="true"] {
   font-size: 0.6875rem;
   line-height: 1.3;
   font-weight: 500;
-  white-space: nowrap;
+  /* #3589 — a label longer than max-width wraps inside the bubble rather
+     than running past its edge (the Dock host selector's reason is a
+     sentence); a short one still sits on one line. */
+  white-space: normal;
+  overflow-wrap: break-word;
   pointer-events: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }

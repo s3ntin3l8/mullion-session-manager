@@ -11,7 +11,7 @@ import { DockGithubRow } from "./DockGithubRow.js";
 import { DockMonitor } from "./DockMonitor.js";
 import { DockLogPane } from "./DockLogPane.js";
 import { DockStackHeader } from "./DockStackHeader.js";
-import { DockHostPicker } from "./DockHostPicker.js";
+import { DockHostPicker, DockPreviewsOffNote } from "./DockHostPicker.js";
 import { useDockProject } from "./useDockProject.js";
 
 // How long `pendingSelectKeyRef` exempts a just-requested row from the
@@ -133,7 +133,11 @@ export function DockProjectGroup({
     controlView,
     stackActions,
     endedFor,
-  } = useDockProject(projectId, { surface: "bottom-dock", onOpenSession });
+  } = useDockProject(projectId, {
+    surface: "bottom-dock",
+    onOpenSession,
+    onOpenBrowser: () => onOpenBrowser(projectId),
+  });
 
   // ---- Collapsible project section (unified-rail dock rework) ----
   // Expanded by default; persisted per project per workspace so a user's
@@ -389,6 +393,7 @@ export function DockProjectGroup({
         selectedValue={view.selectedValue}
         worktreeOptions={view.worktreeOptions}
         onWorktreeChange={view.changeWorktree}
+        onOpenInBrowser={view.openInBrowser}
         updateAvailable={view.updateAvailable}
         dockerStatus={view.dockerStatus}
         held={view.held}
@@ -449,13 +454,17 @@ export function DockProjectGroup({
             onOpen={() => onOpenGitHub(projectId)}
           />
         )}
-        {hostPicker && <DockHostPicker picker={hostPicker} />}
-        <ProjectPreviewMenu
-          projectId={projectId}
-          onOpenDefault={() => onOpenBrowser(projectId)}
-          onBlank={onOpenBlankBrowser}
-          onManage={() => onManagePreviews?.(projectId)}
-        />
+        {/* #3589 — the host selector and Preview side by side, one row with the
+            project's name: they never wrap onto lines of their own. */}
+        <div className="dock-group-tools">
+          {hostPicker && <DockHostPicker picker={hostPicker} />}
+          <ProjectPreviewMenu
+            projectId={projectId}
+            onOpenDefault={() => onOpenBrowser(projectId)}
+            onBlank={onOpenBlankBrowser}
+            onManage={() => onManagePreviews?.(projectId)}
+          />
+        </div>
         {onRemove && (
           <button
             className="dock-column-remove"
@@ -467,6 +476,7 @@ export function DockProjectGroup({
           </button>
         )}
       </div>
+      {hostPicker && <DockPreviewsOffNote picker={hostPicker} />}
       {!collapsed && (
         <div className="dock-group-rows">
           {/* Passive detection (GET /api/projects) of a dev server a dock
