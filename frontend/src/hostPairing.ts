@@ -24,10 +24,11 @@ export type PairingStage = "pending" | "paired" | "unclaimed" | "connected" | "e
 
 export function derivePairingStage(
   pairing: Pick<HostPairingSummary, "state" | "host_id">,
-  hosts: Pick<Host, "id" | "health" | "unclaimed">[],
+  hosts: Pick<Host, "id" | "health" | "unclaimed" | "machineIdentityRevoked">[],
 ): PairingStage {
   if (pairing.state !== "paired") return pairing.state;
   const host = hosts.find((h) => h.id === pairing.host_id);
+  if (host?.machineIdentityRevoked === true) return "revoked";
   if (host?.unclaimed) return "unclaimed";
   return host?.health === "online" ? "connected" : "paired";
 }
@@ -38,7 +39,7 @@ export const PAIRING_STAGE_LABEL: Record<PairingStage, string> = {
   unclaimed: "Paired, never connected",
   connected: "connected",
   expired: "expired",
-  revoked: "cancelled",
+  revoked: "revoked",
 };
 
 export const HELPER_DOWNLOAD_URL = "https://github.com/s3ntin3l8/mullion-helper/releases/latest";

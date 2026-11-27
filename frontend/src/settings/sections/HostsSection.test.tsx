@@ -407,9 +407,45 @@ describe("HostsSection", () => {
     ]) {
       expect(menu.getByText(action, { exact: action !== "Park host" })).toBeInTheDocument();
     }
+    expect(screen.queryByText("Identity revoked")).not.toBeInTheDocument();
     expect(menu.queryByText(/rotate token and discard/i)).not.toBeInTheDocument();
     expect(menu.queryAllByText("Rotate token")).toHaveLength(rotates ? 1 : 0);
   });
+
+  it.each([null, "http://worker.test"])(
+    "shows a revoked identity and recovery actions (address: %s)",
+    async (baseUrl) => {
+      const user = userEvent.setup();
+      useDashboardStore.setState({
+        hosts: [
+          makeHost({
+            id: "h1",
+            baseUrl,
+            health: "pending",
+            paired: true,
+            machineIdentityRevoked: true,
+            hasMachineIdentity: false,
+            hasLiveMachineIdentity: false,
+          }),
+        ],
+      });
+      stubFetch({});
+      render(<HostsSection />);
+
+      const row = within(screen.getByTestId("host-row-h1"));
+      expect(row.getByText("Identity revoked")).toHaveAttribute(
+        "title",
+        expect.stringMatching(/agent can no longer connect.*Re-pair/),
+      );
+      expect(row.queryByText(/paired — waiting for the agent to connect/)).not.toBeInTheDocument();
+      await user.click(row.getByRole("button", { name: "More…" }));
+      const menu = within(screen.getByRole("menu"));
+      for (const action of ["View config", "Edit", "Park host", "Re-pair", "Delete host"]) {
+        expect(menu.getByText(action, { exact: action !== "Park host" })).toBeInTheDocument();
+      }
+      expect(menu.queryByText("Revoke identity")).not.toBeInTheDocument();
+    },
+  );
 
   it("can revoke a manual host that has no machine identity", async () => {
     const user = userEvent.setup();

@@ -673,13 +673,15 @@ export function HostsSection() {
                       </>
                     )}
                     {host.baseUrl ??
-                      (host.health === "online"
-                        ? "connected over the outbound channel"
-                        : host.paired
-                          ? "paired — waiting for the agent to connect"
-                          : host.hasMachineIdentity
-                            ? "outbound only — waiting for the agent to connect"
-                            : "waiting for the agent to register")}
+                      (host.machineIdentityRevoked === true
+                        ? "Re-pair to reconnect the agent"
+                        : host.health === "online"
+                          ? "connected over the outbound channel"
+                          : host.paired
+                            ? "paired — waiting for the agent to connect"
+                            : host.hasMachineIdentity
+                              ? "outbound only — waiting for the agent to connect"
+                              : "waiting for the agent to register")}
                     {host.legacyAgent && (
                       <>
                         {" · "}
@@ -947,14 +949,18 @@ export function HostsSection() {
                           onClick: () => setPairing({ host }),
                           opensOverlay: true,
                         },
-                        {
-                          key: "revoke",
-                          label: "Revoke identity",
-                          armLabel: "Click again to revoke",
-                          icon: <CloseIcon size={14} style={{ color: "var(--muted)" }} />,
-                          confirm: true,
-                          onClick: () => handleRevoke(host),
-                        },
+                        ...(host.machineIdentityRevoked === true
+                          ? []
+                          : [
+                              {
+                                key: "revoke",
+                                label: "Revoke identity",
+                                armLabel: "Click again to revoke",
+                                icon: <CloseIcon size={14} style={{ color: "var(--muted)" }} />,
+                                confirm: true,
+                                onClick: () => handleRevoke(host),
+                              },
+                            ]),
                         {
                           key: "delete",
                           label:

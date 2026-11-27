@@ -199,6 +199,14 @@ export function deprecatedKindTitle(host: Host): string | null {
 // Self-corrects on the next sweep; not fixed here since doing so would
 // need a queue/version-vector for a narrow race window.
 export function deriveHostStatus(host: Host, click: PingState): HostStatusDisplay {
+  if (host.machineIdentityRevoked === true) {
+    return {
+      dot: "off",
+      label: "Identity revoked",
+      color: "var(--dim)",
+      title: "The agent can no longer connect. Re-pair this host to let it connect again.",
+    };
+  }
   if (click.status === "checking") {
     return { dot: undefined, label: "testing…", color: "var(--dim)" };
   }

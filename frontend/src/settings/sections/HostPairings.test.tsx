@@ -52,6 +52,33 @@ describe("HostPairings (issue #2449)", () => {
     await vi.waitFor(() => expect(screen.queryByTestId("pairing-row-p1")).toBeNull());
   });
 
+  it.each(["pending", "online"] as const)(
+    "shows a revoked identity instead of paired or connected (%s)",
+    async (health) => {
+      useDashboardStore.setState({
+        hosts: [makeHost({ id: "h1", health, machineIdentityRevoked: true, unclaimed: true })],
+      });
+      pairings = [
+        {
+          id: "p1",
+          label: null,
+          state: "paired",
+          expires_at: "2030-01-01T00:00:00Z",
+          created_at: "2030-01-01T00:00:00Z",
+          host_id: "h1",
+        },
+      ];
+      render(<HostPairings />);
+      expect(await screen.findByTestId("pairing-stage-p1")).toHaveTextContent(/^revoked$/);
+      expect(screen.getByTestId("pairing-row-p1")).toHaveTextContent(
+        /agent can no longer connect.*Re-pair/,
+      );
+      expect(
+        screen.queryByText(/Identity issued|Agent connected|not reachable yet/),
+      ).not.toBeInTheDocument();
+    },
+  );
+
   it("distinguishes paired from connected", async () => {
     pairings = [
       {

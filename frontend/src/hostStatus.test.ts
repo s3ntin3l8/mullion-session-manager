@@ -11,9 +11,37 @@ import {
 } from "./hostStatus.js";
 import { makeHost } from "./test/fixtures.js";
 
+import { namedHostStatus } from "./lib/hostStatusWords.js";
+
 const NO_CLICK: PingState = { status: "unknown", lastCheckedAtSnapshot: null };
 
 describe("deriveHostStatus (issue #246)", () => {
+  it("shows a revoked identity with recovery guidance on named hosts", () => {
+    const host = makeHost({
+      health: "pending",
+      paired: true,
+      machineIdentityRevoked: true,
+      hasMachineIdentity: false,
+      hasLiveMachineIdentity: false,
+    });
+    const display = deriveHostStatus(host, NO_CLICK);
+    expect(display.label).toBe("Identity revoked");
+    expect(display.title).toMatch(/agent can no longer connect/);
+    expect(display.title).toMatch(/Re-pair/);
+    expect(namedHostStatus(host).display).toEqual(display);
+    expect(deriveHostStatus(host, { ...NO_CLICK, status: "checking" })).toEqual(display);
+  });
+
+  it.each([undefined, false])("does not call a non-revoked identity revoked (%s)", (revoked) => {
+    const host = makeHost({
+      health: "online",
+      machineIdentityRevoked: revoked,
+      hasLiveMachineIdentity: true,
+    });
+    expect(deriveHostStatus(host, NO_CLICK).label).toBe("online");
+    expect(namedHostStatus(host).display?.label).not.toBe("Identity revoked");
+  });
+
   it("shows nothing for a pending host with no click", () => {
     expect(deriveHostStatus(makeHost({ health: "pending" }), NO_CLICK)).toEqual({
       dot: undefined,
