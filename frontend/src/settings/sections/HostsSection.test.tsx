@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HostsSection } from "./HostsSection.js";
+import { HostStatusLabel } from "../../HostStatusLabel.js";
 import { useDashboardStore } from "../../store/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { makeHost, makeServerInfo } from "../../test/fixtures.js";
@@ -162,6 +163,90 @@ describe("HostsSection", () => {
     const label = screen.getByText("Not registered — set primary URL");
     expect(label).toHaveAttribute("title", expect.stringMatching(/MULLION_PRIMARY_URL/));
     expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
+  });
+
+  // Issue #3573 — the row shows the same chip as the places that name a host,
+  // so a deprecated host says so where the operator looks.
+  it("qualifies a manual-token host's chip as deprecated on the row (issue #3573)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          legacyAgent: true,
+          deprecatedKind: "manual-token",
+          mullionVersion: "0.3.50",
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    const chip = screen.getByText("outdated agent · manual token (deprecated)");
+    expect(chip).toHaveAttribute("title", expect.stringContaining("Deprecated:"));
+    // The hover names the credential that has to change.
+    expect(chip).toHaveAttribute("title", expect.stringContaining("MULLION_AGENT_TOKEN"));
+    expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
+  });
+
+  it("shows a chip for a manual-token host that is not a legacy agent (issue #3573)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          legacyAgent: false,
+          deprecatedKind: "manual-token",
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    const chip = screen.getByText("manual token (deprecated)");
+    expect(chip).toHaveAttribute("title", expect.stringContaining("Deprecated:"));
+  });
+
+  it("shows no chip for a host with a live machine identity (issue #3573)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+          legacyAgent: false,
+          deprecatedKind: null,
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    expect(screen.queryByText(/deprecated/)).toBeNull();
+    expect(screen.queryByText(/Outdated agent/)).toBeNull();
+  });
+
+  it("shows the same chip and hover as the places that name a host (issue #3573)", () => {
+    // The row and the sidebar read the same chip from one shared function,
+    // so they cannot drift apart again.
+    stubFetch({});
+    const host = makeHost({
+      id: "h",
+      name: "macbook",
+      baseUrl: "http://192.168.2.92:3000",
+      legacyAgent: false,
+      deprecatedKind: "manual-token",
+    });
+    useDashboardStore.setState({ hosts: [host] });
+    render(<HostsSection />);
+    const rowChip = screen.getByText("manual token (deprecated)");
+
+    const label = render(<HostStatusLabel host={host} />);
+    const labelChip = within(label.container).getByText("manual token (deprecated)");
+
+    expect(labelChip.textContent).toBe(rowChip.textContent);
+    expect(labelChip.getAttribute("title")).toBe(rowChip.getAttribute("title"));
   });
 
   it("sends a cleared address as null for a host with a machine identity (issue #3091)", async () => {

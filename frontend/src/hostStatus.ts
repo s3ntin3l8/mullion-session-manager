@@ -63,14 +63,31 @@ export function legacyAgentFix(host: Host): "upgrade" | "register" {
 }
 
 /**
+ * Issue #3573 — the two wordings for a flagged agent, in one place: the short
+ * chip beside a host name ("outdated agent") and the Settings row's longer
+ * one, which adds the suffix that says what to do ("— upgrade").
+ *
+ * The suffix is applied by legacyChip, so the Settings row gets its longer
+ * wording FROM the shared function instead of building a second copy of it.
+ */
+const LEGACY_AGENT_LABEL = {
+  upgrade: { short: "outdated agent", suffix: "upgrade" },
+  register: { short: "not registered", suffix: "set primary URL" },
+} as const;
+
+/** The longer wording: the chip, capitalized, plus the suffix that says what to do. */
+function legacyAgentLongText(short: string, suffix: string): string {
+  return `${short.charAt(0).toUpperCase()}${short.slice(1)} — ${suffix}`;
+}
+
+/**
  * The words shown for a flagged agent, from the same decision as the hover so
  * the two cannot disagree. `short` is the chip beside a host name; `long` is
  * the Settings row's label.
  */
 export function legacyAgentLabels(host: Host): { short: string; long: string } {
-  return legacyAgentFix(host) === "register"
-    ? { short: "not registered", long: "Not registered — set primary URL" }
-    : { short: "outdated agent", long: "Outdated agent — upgrade" };
+  const { short, suffix } = LEGACY_AGENT_LABEL[legacyAgentFix(host)];
+  return { short, long: legacyAgentLongText(short, suffix) };
 }
 
 /**
@@ -177,6 +194,76 @@ export function deprecatedKindTitle(host: Host): string | null {
     default:
       return null;
   }
+}
+
+/**
+ * Issue #3573 — the chip a host on a legacy path gets, and the hover that
+ * goes with it: the text and the title, in one place.
+ */
+export interface LegacyChip {
+  /** The chip's visible text. */
+  text: string;
+  /** The chip's hover text. */
+  title: string;
+}
+
+export interface LegacyChipOptions {
+  /**
+   * The primary's own version. Only Settings has the host list that carries
+   * it, so the sidebar, pane-tab and session-row hovers omit "this server
+   * runs vX" (same reason legacyAgentTitle takes it as an argument).
+   */
+  primaryVersion?: string | null;
+  /**
+   * The Settings row's longer wording ("Outdated agent — upgrade"). The
+   * suffix is applied HERE, by the shared function, so the row is not a
+   * second copy of the label logic.
+   */
+  long?: boolean;
+}
+
+/**
+ * Issue #3573 — the chip for a host that is on a legacy path, or null when it
+ * is on the current one.
+ *
+ * ONE producer for every surface that shows the chip. The Settings → Hosts
+ * row used to build its own from the legacy-agent words, so a host on a
+ * deprecated path read "Outdated agent — upgrade" there — no "(deprecated)",
+ * no mention of the static token — while the places that name a host read
+ * the qualified chip. The row now gets its chip from here, like every other
+ * surface, and the two cannot drift apart again.
+ *
+ * The deprecation qualifier wins when the host has one: the kind is what has
+ * to change (a static token), and the hover says what replaces it. Such a
+ * host reads the SAME chip on every surface — the qualifier IS the chip, so
+ * no surface adds the legacy suffix to it (the hover still says what to do).
+ * A host that is on no legacy path at all gets no chip.
+ */
+export function legacyChip(host: Host, options: LegacyChipOptions = {}): LegacyChip | null {
+  const deprecatedLabel = deprecatedKindLabel(host);
+  const deprecatedNote = deprecatedKindTitle(host);
+  if (deprecatedLabel) {
+    // A host that is BOTH a legacy agent and a manual-token host keeps the
+    // agent words AND the kind in the chip; the hover adds the agent's own
+    // explanation next to the deprecation note.
+    const legacyNote =
+      host.legacyAgent === true ? legacyAgentTitle(host, options.primaryVersion) : null;
+    return {
+      text: deprecatedLabel,
+      title: [legacyNote, deprecatedNote].filter(Boolean).join(" "),
+    };
+  }
+  if (host.legacyAgent !== true) return null;
+  const labels = legacyAgentLabels(host);
+  // The Settings row keeps its longer wording ("Outdated agent — upgrade"):
+  // the suffix is added HERE, by the shared function, out of the same words
+  // the short chip is built from — so the row is not a second copy of the
+  // label logic.
+  const { suffix } = LEGACY_AGENT_LABEL[legacyAgentFix(host)];
+  return {
+    text: options.long ? legacyAgentLongText(labels.short, suffix) : labels.short,
+    title: legacyAgentTitle(host, options.primaryVersion),
+  };
 }
 
 // Issue #246 — the primary's background heartbeat sweep (host.health) is

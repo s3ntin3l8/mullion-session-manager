@@ -1441,9 +1441,9 @@ that row is stale (offline for `hosts.staleAfterDays`) or flagged a duplicate �
 both entries delete the row.
 
 The host's status chip — the one beside a host name in a session row or a pane
-tab — carries a "(deprecated)" qualifier for the first two kinds, and the
-primary logs a warning at startup if `MULLION_ENROLLMENT_SECRET` is still set in
-`.env` or the environment.
+tab, and the one on the Settings → Hosts row — carries a "(deprecated)"
+qualifier for the first two kinds, and the primary logs a warning at startup if
+`MULLION_ENROLLMENT_SECRET` is still set in `.env` or the environment.
 
 **What keeps working.** Every existing host row keeps working: its renewals,
 its outbound channel, and a pre-provisioned host claiming its own row with its

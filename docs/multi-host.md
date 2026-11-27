@@ -2446,13 +2446,15 @@ manually added host that never registered one), so it never opens the outbound
 channel. The primary has to dial the agent's stored `baseUrl`, which is an
 address only the home network can route.
 
-**How to see it.** Settings → Hosts shows **Outdated agent — upgrade** on the
-row. Wherever the app names a host (the sidebar project header, pane tabs and
-session rows) it shows `outdated agent (deprecated)` beside the name — the
-"(deprecated)" qualifier marks the setup as on its way out (see "Deprecated host
-kinds"). An agent that already reports v0.3.59 or later reads **Not registered
-— set primary URL** (`not registered (deprecated)` as the chip) instead, because
-upgrading would change nothing for it; see Fix. A host whose agent authenticates
+**How to see it.** Wherever the app names a host — the Settings → Hosts row,
+the sidebar project header, pane tabs and session rows — it shows the legacy
+agent's chip: `outdated agent (deprecated)` beside the name, or **Outdated agent
+— upgrade** on the Settings row for a host that is not on a deprecated path yet
+(the suffix says what to do). The "(deprecated)" qualifier marks the setup as on
+its way out (see "Deprecated host kinds"). An agent that already reports
+v0.3.59 or later reads **Not registered — set primary URL** on the Settings row
+(`not registered (deprecated)` as the chip) instead, because upgrading would
+change nothing for it; see Fix. A host whose agent authenticates
 with the row's own static token (`MULLION_AGENT_TOKEN`) reads
 `manual token (deprecated)` — the kind is ADDED to the chip, not swapped in: a
 host that is both (no machine identity AND a static token) reads

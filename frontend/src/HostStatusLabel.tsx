@@ -1,10 +1,5 @@
 import type { Host } from "./api/index.js";
-import {
-  deprecatedKindLabel,
-  deprecatedKindTitle,
-  legacyAgentLabels,
-  legacyAgentTitle,
-} from "./hostStatus.js";
+import { legacyChip } from "./hostStatus.js";
 import { namedHostStatus, PARKED_WORD } from "./lib/hostStatusWords.js";
 
 /**
@@ -19,19 +14,16 @@ import { namedHostStatus, PARKED_WORD } from "./lib/hostStatusWords.js";
  */
 export function HostStatusLabel({ host }: { host: Host }) {
   const { display, parked } = namedHostStatus(host);
-  const legacy = host.legacyAgent === true;
-  // Issue #3476 — the deprecation qualifier. One chip, never two: the
+  // Issue #3476 / #3573 — the deprecation qualifier and the legacy-agent
+  // words come from ONE shared function (legacyChip), so this label and the
+  // Settings → Hosts row cannot drift apart. One chip, never two: the
   // deprecation label carries the legacy-agent words itself when the host IS
   // a legacy agent (so a host that is both a manual-token host and a legacy
   // agent keeps both facts visible), and it stands alone when the host is
   // not one. The hover gains the sentence that says what is deprecated and
   // what replaces it.
-  const deprecated = deprecatedKindLabel(host);
-  const deprecatedNote = deprecatedKindTitle(host);
-  const chipText = deprecated ?? (legacy ? legacyAgentLabels(host).short : null);
-  const chipTitle =
-    [legacy ? legacyAgentTitle(host) : null, deprecatedNote].filter(Boolean).join(" ") || undefined;
-  if (!display?.label && !parked && !chipText) return null;
+  const chip = legacyChip(host);
+  if (!display?.label && !parked && !chip) return null;
   return (
     <span className="host-derived-status">
       {display?.label && (
@@ -46,14 +38,14 @@ export function HostStatusLabel({ host }: { host: Host }) {
           {display.label}
         </span>
       )}
-      {chipText && (
-        <span className="host-derived-status-legacy" title={chipTitle}>
-          {chipText}
+      {chip && (
+        <span className="host-derived-status-legacy" title={chip.title}>
+          {chip.text}
         </span>
       )}
       {/* Not painted (a flex container), but keeps "unreachable parked" as
           two words in the text content an accessible name is matched to. */}
-      {(display?.label || chipText) && parked && " "}
+      {(display?.label || chip?.text) && parked && " "}
       {parked && (
         <span
           className="host-derived-status-parked"
