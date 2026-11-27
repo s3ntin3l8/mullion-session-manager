@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import {
   ChannelSocket,
   ChannelStreamFailure,
+  CHANNEL_FAILURE_NOTICE_TIMEOUT_MS,
   CHANNEL_FAILURE_TOO_LARGE,
 } from "../../src/services/channel-socket.js";
-import type { MuxChannel } from "../../src/services/ssh-agent-mux.js";
+import { CHANNEL_WINDOW_BYTES, type MuxChannel } from "../../src/services/ssh-agent-mux.js";
 import {
   AGENT_CHANNEL_MAX_BUFFERED_BYTES,
   AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES,
@@ -137,6 +138,7 @@ describe("ChannelSocket (#2571)", () => {
     // the cap instead of reporting a bare disconnect.
     const f = fakeChannel(1 << 20);
     const s = new ChannelSocket({ expectHead: false });
+    s.notices = true;
     s.bind(f.ch);
     const local: Error[] = [];
     s.on("error", (e: Error) => local.push(e));
@@ -156,6 +158,121 @@ describe("ChannelSocket (#2571)", () => {
     expect(remote[0]).toBeInstanceOf(ChannelStreamFailure);
     expect((remote[0] as ChannelStreamFailure).code).toBe(CHANNEL_FAILURE_TOO_LARGE);
     // The notice is consumed by the transport, never handed to the stream.
+    expect(messages).toEqual([]);
+    expect(peer.readyState).toBe(peer.CLOSED);
+  });
+
+  it("puts the notice ahead of a backlog the window cannot carry (#3402)", () => {
+    // The ordinary video state, with the real constants: a 300 KiB frame
+    // does not fit the 256 KiB window, so a tail of it stays queued and the
+    // window is shut. A notice queued BEHIND that backlog would never reach
+    // the wire, and the panel would see the bare disconnect this fix is
+    // about.
+    const f = fakeChannel(CHANNEL_WINDOW_BYTES);
+    const s = new ChannelSocket({ expectHead: false });
+    s.notices = true;
+    s.bind(f.ch);
+    s.send(Buffer.alloc(300 * 1024, 1));
+    expect(f.ch.sendWindow).toBe(0);
+    // The tail of the frame is still queued.
+    expect(s.bufferedAmount).toBe(300 * 1024 + 5 - CHANNEL_WINDOW_BYTES);
+
+    const local: Error[] = [];
+    s.on("error", (e: Error) => local.push(e));
+    s.send(Buffer.alloc(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1, 2));
+    expect(local[0]).toBeInstanceOf(ChannelStreamFailure);
+    // The stream is closing, but the notice still waits for the window.
+    expect(s.readyState).toBe(s.CLOSING);
+    const noticeBytes =
+      Buffer.byteLength(
+        JSON.stringify({ code: CHANNEL_FAILURE_TOO_LARGE, reason: "message too large" }),
+      ) + 5;
+    expect(s.bufferedAmount).toBe(300 * 1024 + 5 - CHANNEL_WINDOW_BYTES + noticeBytes);
+
+    // The window opens: the notice goes out FIRST, ahead of the backlog.
+    f.grant(64 * 1024);
+    const out = Buffer.concat(f.sent);
+    const noticeAt = CHANNEL_WINDOW_BYTES;
+    expect(out[noticeAt]).toBe(2); // the failure-notice flag
+    const length = out.readUInt32BE(noticeAt + 1);
+    expect(JSON.parse(out.subarray(noticeAt + 5, noticeAt + 5 + length).toString("utf8"))).toEqual({
+      code: CHANNEL_FAILURE_TOO_LARGE,
+      reason: "message too large",
+    });
+    // The queued tail is dropped with the stream, not written after it.
+    expect(out.length).toBe(noticeAt + 5 + length);
+    expect(s.readyState).toBe(s.CLOSED);
+  });
+
+  it("does not drop a pending notice when the stream is closed (#3402)", () => {
+    // The caller's own teardown (the panel closing the relay) must not take
+    // the notice with it: the peer still hears why the stream died.
+    const f = fakeChannel(0);
+    const s = new ChannelSocket({ expectHead: false });
+    s.notices = true;
+    s.bind(f.ch);
+    s.send(Buffer.alloc(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1));
+    expect(s.readyState).toBe(s.CLOSING);
+    s.close();
+    // The close waits for the notice, so the channel is still open.
+    expect(s.readyState).toBe(s.CLOSING);
+    expect(f.raw.close).not.toHaveBeenCalled();
+    // The window opens: the notice goes out and the stream ends.
+    f.grant(64 * 1024);
+    expect(Buffer.concat(f.sent)[0]).toBe(2);
+    expect(s.readyState).toBe(s.CLOSED);
+  });
+
+  it("closes the stream when the peer never drains the notice (#3402)", () => {
+    // A peer that never drains must not hold the stream open for good: the
+    // notice has a bound, and the stream ends without it.
+    vi.useFakeTimers();
+    try {
+      const f = fakeChannel(0);
+      const s = new ChannelSocket({ expectHead: false });
+      s.notices = true;
+      s.bind(f.ch);
+      s.send(Buffer.alloc(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1));
+      expect(s.readyState).toBe(s.CLOSING);
+      expect(f.sent).toHaveLength(0);
+      vi.advanceTimersByTime(CHANNEL_FAILURE_NOTICE_TIMEOUT_MS);
+      expect(s.readyState).toBe(s.CLOSED);
+      expect(f.raw.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends no notice to a peer that did not ask for one (#3402)", () => {
+    // A peer that predates the notice reads the frame as ordinary stream
+    // data, so it is only ever sent to a peer that advertised it.
+    const f = fakeChannel(1 << 20);
+    const s = new ChannelSocket({ expectHead: false });
+    s.bind(f.ch);
+    const local: Error[] = [];
+    s.on("error", (e: Error) => local.push(e));
+    s.send(Buffer.alloc(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1));
+    expect(local[0]).toBeInstanceOf(ChannelStreamFailure);
+    expect(f.sent).toHaveLength(0);
+    expect(s.readyState).toBe(s.CLOSED);
+  });
+
+  it("fails the stream on a notice it cannot read (#3402)", () => {
+    // A notice the transport cannot parse is still a failure: the stream is
+    // over either way, and the bytes never reach the stream's consumers.
+    const g = fakeChannel(1 << 20);
+    const peer = new ChannelSocket({ expectHead: false });
+    peer.bind(g.ch);
+    const remote: Error[] = [];
+    peer.on("error", (e: Error) => remote.push(e));
+    const messages: unknown[] = [];
+    peer.on("message", (d: Buffer) => messages.push(d));
+    const header = Buffer.alloc(5);
+    header[0] = 2; // the failure-notice flag
+    header.writeUInt32BE(7, 1);
+    peer.ingest(Buffer.concat([header, Buffer.from("not json")]));
+    expect(remote[0]).toBeInstanceOf(ChannelStreamFailure);
+    expect((remote[0] as ChannelStreamFailure).code).toBe("channel-failed");
     expect(messages).toEqual([]);
     expect(peer.readyState).toBe(peer.CLOSED);
   });

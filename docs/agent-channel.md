@@ -132,20 +132,24 @@ and the device panel's socket ride the channel when the host negotiated
 (`src/services/agent-channel-streams.ts`):
 
 1. The primary opens a channel and sends an open head line: `{"stream":
-"attach"|"events"|"control-relay"|"ssh-agent"|"preview"|"configured-preview"|"device","query":{...},"resumed":true?}`.
+"attach"|"events"|"control-relay"|"ssh-agent"|"preview"|"configured-preview"|"device","query":{...},"resumed":true?,"notices":true}`.
    `query` is the query string of the matching `/internal/ws/*` route — for
    `device` that is the query of `/internal/ws/device/:id` plus the `id` the
-   route takes from its path.
-2. The agent answers one accept head line, `{"status":200,"resumed"?}`, or a
-   refusal (`400` for an attach that fails validation, `404` for an unknown
-   stream) and closes the channel.
+   route takes from its path. `notices` says the primary reads the FAILURE
+   NOTICE (step 3), so the agent may tell it why a stream died.
+2. The agent answers one accept head line, `{"status":200,"resumed"?,"notices":true}`,
+   or a refusal (`400` for an attach that fails validation, `404` for an unknown
+   stream) and closes the channel. Its `notices` says the agent reads the
+   notice, so the primary may tell IT why a stream died.
 3. After that both sides exchange WebSocket-shaped messages, framed
    `[flags:1][length:4 BE][payload]` (flag bit 0 = binary; at most 1 MiB), so
    attach keeps its text-control / binary-PTY distinction. Flag bit 1 is a
-   failure notice — a small `{code, reason}` message the transport consumes,
-   not stream data: a stream that cannot carry a message says so before it
-   dies, so the far end names the cause instead of reporting a bare
-   disconnect. This is
+   FAILURE NOTICE — a small `{code, reason}` message the transport consumes,
+   never handing it to the stream: a stream that cannot carry a message says
+   so before it dies, so the far end names the cause instead of reporting a
+   bare disconnect. The notice is only ever sent to a peer that advertised
+   `notices`, so a peer that predates it is never sent a frame it would read
+   as stream data. This is
    `src/services/channel-socket.ts`: a `ws`-surfaced view of the channel, which
    is why the existing callers (`proxyToRemoteAttach`, `relayRemoteEventsHost`,
    the event subscriber, the control-relay and ssh-agent fan-outs) are unchanged.
@@ -176,10 +180,16 @@ attach query validation is shared, not copied.
   reported to the panel by name: the agent's stream carries the reason in
   band (the failure notice above), and the primary tells the panel which
   cap it hit and on which host, instead of the generic "did not accept the
-  device socket" a refusal gets. Lowering `DEVICE_VIDEO_MAX_SIZE` on that
-  host is what brings the frames back under the bound. An agent that
-  predates the notice still fails the frame silently, and the panel sees a
-  bare disconnect. A refusal is
+  device socket" a refusal gets. The notice goes AHEAD of the frames the
+  agent already had queued, because the send window is normally exhausted
+  while video streams — a notice queued behind that backlog would never
+  reach the wire, and the panel would see the bare disconnect this fixes.
+  Lowering `DEVICE_VIDEO_MAX_SIZE` on that host is what brings the frames
+  back under the bound. A peer that predates the notice gets none: an
+  agent that predates it fails the frame silently, and a primary that
+  predates it does not advertise `notices`, so the agent sends it no
+  notice — either way the panel sees a bare disconnect, as before. A
+  refusal is
   reported to the panel with the agent's own reason (the panel gate's
   message, `kind must be emulator or physical`, …): over the channel it rides
   the accept head's message, and over the inbound transport the refusal's
@@ -205,7 +215,13 @@ attach query validation is shared, not copied.
   waiting for that window are reported as `bufferedAmount`, so the callers'
   existing backpressure (the 4 MiB terminal drop and in-place resync) works
   as it does on a socket; a stream that queues past 8 MiB is closed rather than
-  grown, and the connection-level `maxBufferedBytes` ceiling still applies.
+  grown, and the connection-level `maxBufferedBytes` ceiling still applies. A
+  message past the 1 MiB per-message cap fails the stream: the side that sent
+  it tells the peer WHY with a failure notice — written ahead of the frames it
+  had queued, since the window is normally exhausted — and the peer raises
+  that reason as an error on its own socket. A peer that never drains does
+  not hold the stream open for good: the notice has a bound, and the stream
+  ends without it.
 - **Cancellation.** A lost connection closes every channel on it, so the
   agent-side attach/events/relay handlers see `close` and detach; the
   agent's sessions themselves keep running. The primary does **not** reopen a

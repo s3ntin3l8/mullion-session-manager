@@ -750,4 +750,24 @@ describe("the device stream with the agent's own handlers (#3273)", () => {
     expect(err).toBeInstanceOf(ChannelStreamFailure);
     expect((err as ChannelStreamFailure).code).toBe(CHANNEL_FAILURE_TOO_LARGE);
   });
+
+  it("sends no failure notice to a primary that did not ask for one (#3402)", async () => {
+    // A primary that predates the notice reads the frame as an ordinary
+    // text message, so the agent only ever sends one to a primary that
+    // advertised it in its open head.
+    const r = await rig({
+      device: (socket) => {
+        socket.send(Buffer.alloc(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1));
+      },
+    });
+    const channel = await r.primaryMux.openChannel();
+    const received: Buffer[] = [];
+    channel.onData((c) => received.push(c));
+    // An open head from a primary that predates the notice: no `notices`.
+    channel.send(Buffer.from('{"stream":"device","query":{"id":"7"}}\n'));
+    await sleep(200);
+    const wire = Buffer.concat(received).toString("utf8");
+    expect(wire).toContain('"status":200');
+    expect(wire).not.toContain("message-too-large");
+  });
 });

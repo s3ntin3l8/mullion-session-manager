@@ -55,6 +55,8 @@ export function openChannelStream(
     stream: kind,
     ...(query ? { query } : {}),
     ...(resumed ? { resumed: true } : {}),
+    // The agent may tell us WHY a stream died (#3402); we read the notice.
+    notices: true,
   };
   const timer = setTimeout(() => {
     if (socket.readyState === socket.CONNECTING) {
@@ -182,6 +184,8 @@ function acceptHead(status: number, message?: string, resumed?: boolean): Buffer
     status,
     ...(message ? { message } : {}),
     ...(resumed ? { resumed: true } : {}),
+    // The primary may tell us WHY a stream died (#3402); we read the notice.
+    notices: true,
   };
   return Buffer.from(`${JSON.stringify(head)}\n`, "utf8");
 }
@@ -225,6 +229,10 @@ export function serveChannel(
     rest: Buffer,
   ): Promise<ChannelSink | null> => {
     const socket = new ChannelSocket({ expectHead: false });
+    // The primary reads the failure notice only when it advertised it in its
+    // open head (#3402): an older primary would read the notice as ordinary
+    // stream data, so it is never sent one.
+    socket.notices = head.notices === true;
     socket.bind(channel);
     const reject = (status: number, message: string): null => {
       socket.sendRaw(acceptHead(status, message));

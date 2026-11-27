@@ -13,7 +13,10 @@ import {
   KEYFRAME_STALL_MS,
 } from "../services/device-attach.js";
 import { CHANNEL_FAILURE_TOO_LARGE, ChannelStreamFailure } from "../services/channel-socket.js";
-import { AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES } from "../shared/agent-channel.js";
+import {
+  AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES,
+  formatByteLimit,
+} from "../shared/agent-channel.js";
 
 // The primary's half of the device panel: `/ws/device/:deviceId` serves the
 // panel's socket for a device on THIS host, and proxies it to the agent that
@@ -163,19 +166,6 @@ function readRefusalReason(res: IncomingMessage): Promise<string | null> {
 
 /** A relay step that did not finish in time. */
 class RelayTimeoutError extends Error {}
-
-/**
- * The channel's per-message limit in the words the panel sees ("1 MiB").
- *
- * A raw byte count means nothing at a glance, and the tunnel already names
- * its own limits this way ("request body exceeds the 2 MiB limit of the
- * outbound channel to this host").
- */
-function messageCapText(bytes: number): string {
-  if (bytes >= 1024 * 1024 && bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)} MiB`;
-  if (bytes >= 1024 && bytes % 1024 === 0) return `${bytes / 1024} KiB`;
-  return `${bytes} bytes`;
-}
 
 /** `promise`, failed with a RelayTimeoutError after `ms`. The promise itself is
  *  not cancelled: a late outcome is ignored. */
@@ -470,7 +460,7 @@ export async function proxyToRemoteDevice(
         "remote device stream exceeds the outbound channel's message limit",
       );
       fail(
-        `Host ${hostId}'s device stream exceeded the ${messageCapText(
+        `Host ${hostId}'s device stream exceeded the ${formatByteLimit(
           AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES,
         )} limit of the outbound channel to this host`,
       );

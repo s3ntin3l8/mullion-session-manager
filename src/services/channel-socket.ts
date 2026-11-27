@@ -16,8 +16,10 @@ import {
 // whose accept head it has already queued.
 //
 // Wire format after the head line, in both directions: a sequence of
-// `[flags:1][length:4 BE][payload]` messages, flags bit 0 = binary. The text /
-// binary distinction survives because attach depends on it. Flow control is
+// `[flags:1][length:4 BE][payload]` messages. Flag bit 0 = binary (the text /
+// binary distinction survives because attach depends on it); flag bit 1 = a
+// FAILURE NOTICE — the payload is a small JSON `{code, reason}`, consumed by
+// this transport and never handed to the stream's consumers. Flow control is
 // the channel's own credit window; `bufferedAmount` is what is queued behind
 // it, so a stalled link is visible to the callers' existing backpressure
 // checks and is bounded (AGENT_CHANNEL_MAX_BUFFERED_BYTES) instead of growing.
@@ -34,6 +36,12 @@ const FLAG_FAILURE = 2;
 
 /** The failure code for a message past the channel's per-message cap. */
 export const CHANNEL_FAILURE_TOO_LARGE = "message-too-large";
+
+/** How long a failure notice may wait for the peer's window before the
+ *  channel closes without it. A peer that drains gives the window back in
+ *  milliseconds; one that never drains must not hold the stream open for
+ *  good, so the notice is given a bound and the stream ends without it. */
+export const CHANNEL_FAILURE_NOTICE_TIMEOUT_MS = 5_000;
 
 /**
  * A stream that failed for a reason the far end must hear about.
@@ -84,8 +92,23 @@ export class ChannelSocket extends EventEmitter {
    * channel carried before (#2571). Meaningful once "open" has fired. */
   resumed = false;
 
+  /** True when the peer READS the failure notice (flag bit 1).
+   *
+   *  It is negotiated per stream, in the heads: the primary's open head says
+   *  it can read one, the agent's accept head says the same back. A peer
+   *  that predates the notice never sets it, so a notice is never sent to a
+   *  peer that would read it as ordinary stream data (#3402). */
+  notices = false;
+
+  /** The head line (raw bytes, written before any frame). */
+  private headQueue: Buffer[] = [];
+  /** The framed messages, in order. */
   private queue: Buffer[] = [];
   private queuedBytes = 0;
+  /** Bytes of the failure notice at the HEAD of the framed queue (0 = none). */
+  private noticeBytes = 0;
+  /** The deadline on a notice that is waiting for the peer's window. */
+  private noticeTimer: NodeJS.Timeout | null = null;
   private parseBuffer: Buffer = Buffer.alloc(0);
   private headBuffer: Buffer | null;
   private closeEmitted = false;
@@ -183,6 +206,8 @@ export class ChannelSocket extends EventEmitter {
       return false;
     }
     this.resumed = head.resumed === true;
+    // The agent reads the failure notice only when it advertised it (#3402).
+    this.notices = head.notices === true;
     this.readyState = this.OPEN;
     this.emit("open");
     return true;
@@ -192,7 +217,7 @@ export class ChannelSocket extends EventEmitter {
     while (this.readyState === this.OPEN && this.parseBuffer.length >= FRAME_HEADER_BYTES) {
       const flags = this.parseBuffer[0]!;
       const length = this.parseBuffer.readUInt32BE(1);
-      if (length > AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES) return this.failTooLarge();
+      if (length > AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES) return this.failTooLarge(false);
       if (this.parseBuffer.length < FRAME_HEADER_BYTES + length) return;
       const payload = Buffer.from(
         this.parseBuffer.subarray(FRAME_HEADER_BYTES, FRAME_HEADER_BYTES + length),
@@ -225,8 +250,8 @@ export class ChannelSocket extends EventEmitter {
       // The message cannot cross the channel. Say so IN BAND first — the far
       // end names the cap for the user instead of reporting a bare
       // disconnect — and only then let the stream die (#3402).
-      this.sendFailure(CHANNEL_FAILURE_TOO_LARGE, "message too large");
-      return this.failTooLarge();
+      this.failTooLarge(true);
+      return;
     }
     const header = Buffer.alloc(FRAME_HEADER_BYTES);
     header[0] = isBinary ? FLAG_BINARY : 0;
@@ -240,14 +265,23 @@ export class ChannelSocket extends EventEmitter {
 
   /** Bytes written before the stream proper (the agent's accept head). */
   sendRaw(bytes: Buffer): void {
-    this.enqueue(bytes);
+    // The head has its own queue: it is what the peer parses before any
+    // frame, so it must not be reordered by what follows it.
+    this.headQueue.push(bytes);
+    this.queuedBytes += bytes.length;
     this.pump();
   }
 
   close(): void {
     if (this.readyState === this.CLOSED) return;
-    if (this.bound) this.channel.close();
-    this.finish(CLOSE_NORMAL, "");
+    if (this.noticeBytes > 0) {
+      // A notice is on its way: the peer must hear WHY before the stream
+      // ends, so the close waits for it — bounded by the notice deadline,
+      // which ends the stream either way. Without this the caller's own
+      // teardown would drop the notice with the queue.
+      return;
+    }
+    this.closeNow();
   }
 
   terminate(): void {
@@ -255,6 +289,13 @@ export class ChannelSocket extends EventEmitter {
   }
 
   // --- internals --------------------------------------------------------------
+
+  /** Ends the stream now: the channel closes and the socket reports it. */
+  private closeNow(): void {
+    if (this.readyState === this.CLOSED) return;
+    if (this.bound) this.channel.close();
+    this.finish(CLOSE_NORMAL, "");
+  }
 
   private enqueue(buf: Buffer): void {
     this.queue.push(buf);
@@ -267,28 +308,58 @@ export class ChannelSocket extends EventEmitter {
    *
    * It is written BEFORE the stream closes (the close carries no reason), so
    * the far end can name the cause instead of reporting a bare disconnect. It
-   * rides the same queue as the data does, so a peer that is not draining
-   * loses it with the rest of the stream.
+   * goes AHEAD of whatever the stream already had queued — the queued data is
+   * worthless now (the stream is dying) and the send window is normally
+   * exhausted while video streams, which is the very case this fix is about,
+   * so a notice queued behind the backlog would never reach the wire. It
+   * still goes after the head line, which the peer parses first.
    */
-  private sendFailure(code: string, reason: string): void {
+  private queueFailureNotice(code: string, reason: string): void {
     const body = Buffer.from(JSON.stringify({ code, reason }), "utf8");
     const header = Buffer.alloc(FRAME_HEADER_BYTES);
     header[0] = FLAG_FAILURE;
     header.writeUInt32BE(body.length, 1);
-    this.enqueue(header);
-    this.enqueue(body);
-    this.pump();
+    this.queue.unshift(header, body);
+    this.queuedBytes += header.length + body.length;
+    this.noticeBytes = header.length + body.length;
+  }
+
+  /**
+   * The deadline on a notice that is waiting for the peer's window: a peer
+   * that never drains must not hold the stream open for good.
+   */
+  private armNoticeDeadline(): void {
+    if (this.noticeTimer) return;
+    this.noticeTimer = setTimeout(() => {
+      this.noticeTimer = null;
+      // The peer never drained: the stream ends without the notice.
+      this.closeNow();
+    }, CHANNEL_FAILURE_NOTICE_TIMEOUT_MS);
+    this.noticeTimer.unref?.();
   }
 
   private pump(): void {
-    while (this.bound && this.queue.length > 0 && !this.channel.closed) {
-      const head = this.queue[0]!;
+    while (this.bound && !this.channel.closed) {
+      // The head line first: it is what the peer parses before any frame.
+      const fromHead = this.headQueue.length > 0;
+      const list = fromHead ? this.headQueue : this.queue;
+      if (list.length === 0) return;
+      const head = list[0]!;
       const n = Math.min(WRITE_CHUNK_BYTES, head.length, this.channel.sendWindow);
       if (n <= 0) return;
       this.channel.send(head.subarray(0, n));
       this.queuedBytes -= n;
-      if (n === head.length) this.queue.shift();
-      else this.queue[0] = head.subarray(n);
+      if (n === head.length) list.shift();
+      else list[0] = head.subarray(n);
+      if (!fromHead && this.noticeBytes > 0) {
+        // The notice sits at the head of the framed queue: these are its bytes.
+        this.noticeBytes = Math.max(0, this.noticeBytes - n);
+        if (this.noticeBytes === 0) {
+          // The peer knows why the stream is over; the channel can close.
+          this.close();
+          return;
+        }
+      }
     }
   }
 
@@ -299,20 +370,46 @@ export class ChannelSocket extends EventEmitter {
 
   /**
    * Fails the stream because a message was past the channel's per-message
-   * cap. The peer knows either way: it sent the message that did not fit, or
-   * it was told (see `sendFailure`).
+   * cap.
+   *
+   * `tellPeer` says whether the peer can hear the reason: it can when it
+   * advertised the failure notice in the stream's heads (a peer that predates
+   * the notice would read the frame as ordinary stream data, so it is never
+   * sent one). The notice goes ahead of the backlog and the socket stays
+   * CLOSING — later data frames are dropped — until the notice is on the
+   * wire; only then does the channel close. The peer knows either way: it
+   * sent the message that did not fit, or it was told.
    */
-  private failTooLarge(): void {
-    this.emitError(new ChannelStreamFailure(CHANNEL_FAILURE_TOO_LARGE, "message too large"));
-    this.close();
+  private failTooLarge(tellPeer: boolean): void {
+    const failure = new ChannelStreamFailure(CHANNEL_FAILURE_TOO_LARGE, "message too large");
+    if (!tellPeer || !this.notices) {
+      this.emitError(failure);
+      this.close();
+      return;
+    }
+    // The notice is queued FIRST: it is what the peer needs, and it must be
+    // on its way before anything can close the socket underneath it.
+    this.queueFailureNotice(CHANNEL_FAILURE_TOO_LARGE, "message too large");
+    this.readyState = this.CLOSING;
+    this.emitError(failure);
+    this.pump();
+    // The window may be shut (the ordinary video state); the notice waits
+    // for it, with a bound so a peer that never drains cannot hold it.
+    this.armNoticeDeadline();
   }
 
   private finish(code: number, reason: string): void {
     if (this.closeEmitted) return;
     this.closeEmitted = true;
     this.readyState = this.CLOSED;
+    this.headQueue = [];
     this.queue = [];
     this.queuedBytes = 0;
+    this.noticeBytes = 0;
+    if (this.noticeTimer) {
+      clearTimeout(this.noticeTimer);
+      this.noticeTimer = null;
+    }
     this.emit("close", code, Buffer.from(reason));
   }
 }
