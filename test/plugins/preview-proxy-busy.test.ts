@@ -12,6 +12,7 @@ import {
 } from "../../src/services/remote-host-errors.js";
 import { createMuxConnection } from "../../src/services/ssh-agent-mux.js";
 import { bindChannelHost, unbindChannelHost } from "../../src/services/agent-channel-tunnel.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // A remote project's preview answers a saturated channel (the preview cap, or
 // no free slot) with 503 + Retry-After and an over-limit body with 413, not a
@@ -54,10 +55,10 @@ describe("preview proxy: busy and over-limit agent channel", () => {
     "answers %s explicitly rather than with a blanket 502",
     async (_n, makeErr, status, retry, body) => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "remote-busy", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "remote-busy",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const created = await app.inject({
         method: "POST",
@@ -102,10 +103,10 @@ describe("preview proxy: busy and over-limit agent channel", () => {
 
   it("answers 503 + Retry-After through the real mux and client once the preview cap is full (#2702)", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-cap", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "remote-cap",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     const created = await app.inject({

@@ -5,7 +5,7 @@ import type * as RemoteHostClientModule from "../../src/services/remote-host-cli
 import type { HostCapacityReport } from "../../src/services/host-capacity.js";
 import { buildTestApp } from "../helpers/app.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { startHostHeartbeat } from "../../src/services/host-heartbeat.js";
 import { resolveExecutionContext } from "../../src/services/execution-context.js";
 
@@ -76,7 +76,7 @@ describe("heartbeat sweep fills a host's platform from its capacity report", () 
   }
 
   function addHost(name: string): string {
-    return createHost(app, { name, baseUrl: `http://${name}.test`, token: "t" }).id;
+    return createPairedHost(app, { hostname: name, name, baseUrl: `http://${name}.test` }).hostId;
   }
 
   it("sets win32 on a NULL row, shows it in GET /api/hosts, and makes drive paths resolve", async () => {

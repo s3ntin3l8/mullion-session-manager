@@ -19,6 +19,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { desc, eq } from "drizzle-orm";
 import type { SessionBackend } from "../../src/services/session-backend.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
@@ -142,11 +143,7 @@ describe("a retry that re-places onto a matching host (#3194)", () => {
     platform: string,
     opts: { online?: boolean } = {},
   ) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
     const hostId = res.json().id as string;
     app.db.update(hosts).set({ platform }).where(eq(hosts.id, hostId)).run();
     if (opts.online !== false) {

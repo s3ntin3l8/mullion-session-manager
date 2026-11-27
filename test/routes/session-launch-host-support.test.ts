@@ -7,6 +7,7 @@ import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { eq, ne } from "drizzle-orm";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
@@ -53,11 +54,7 @@ describe("launch gating on negotiated agent support (issue #2569)", () => {
   });
 
   async function addHost(name: string, loadAverage1m: number): Promise<string> {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
     const hostId = res.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(hostId);
     app.hostCapacityTracker?.record(hostId, {

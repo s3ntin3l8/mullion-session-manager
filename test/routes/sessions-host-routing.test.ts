@@ -14,6 +14,7 @@ import type { AddressInfo } from "node:net";
 import http from "node:http";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
@@ -53,10 +54,10 @@ describe("sessions route: which host owns a session operation", () => {
       const projectId = await createProject(app);
       // A registered host that cannot be reached: the bulk live-status call
       // to it throws, which IS the "the host did not answer" case.
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "sleepy-laptop", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "sleepy-laptop",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       expect(host.statusCode).toBe(201);
       const hostId = host.json().id as string;
@@ -94,11 +95,7 @@ describe("sessions route: which host owns a session operation", () => {
       try {
         const projectId = await createProject(app);
         const addHost = async (name: string, baseUrl: string) => {
-          const res = await app.inject({
-            method: "POST",
-            url: "/api/hosts",
-            payload: { name, baseUrl, token: "t" },
-          });
+          const res = await seedHostResponse(app, { name, baseUrl, token: "t" });
           expect(res.statusCode).toBe(201);
           return res.json().id as string;
         };
@@ -148,10 +145,10 @@ describe("sessions route: which host owns a session operation", () => {
       // SAME app.
       const app = await buildApp();
       const projectId = await createProject(app);
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "sleepy-laptop", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "sleepy-laptop",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const remote = app.db
@@ -206,11 +203,7 @@ describe("sessions route: which host owns a session operation", () => {
       app: Awaited<ReturnType<typeof buildApp>>,
       name: string,
     ): Promise<string> {
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-      });
+      const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
       return res.json().id as string;
     }
 

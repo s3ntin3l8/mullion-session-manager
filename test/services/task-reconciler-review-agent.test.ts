@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
+import { seedHostResponse } from "../helpers/hosts.js";
 import {
   mockPushDeliveryFactory,
   mockHermesIntegrationFactory,
@@ -178,10 +179,10 @@ describe("reconcileTasks — review agent", () => {
       const app = await buildApp();
       const warnSpy = vi.spyOn(app.log, "warn");
 
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "Remote",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const project = await app.inject({
@@ -282,10 +283,10 @@ describe("reconcileTasks — review agent", () => {
     it("embeds the remote host's own sessionsDir in the review agent's findings path (#778)", async () => {
       const app = await buildApp();
 
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "Remote",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const project = await app.inject({
@@ -389,10 +390,10 @@ describe("reconcileTasks — review agent", () => {
       const app = await buildApp();
       const warnSpy = vi.spyOn(app.log, "warn");
 
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "Remote",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const project = await app.inject({

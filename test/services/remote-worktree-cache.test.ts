@@ -10,6 +10,7 @@ import { resolveExecutionContext } from "../../src/services/execution-context.js
 import { HostRequestError, RemoteHostClient } from "../../src/services/remote-host-client.js";
 import { resolveBackend } from "../../src/services/session-backend.js";
 import { invalidateRemoteWorktreeCache } from "../../src/services/remote-worktree-cache.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2583 — the resolver asks the agent for its worktree list whenever the
 // session's directory lies outside the checkout. That answer changes only when
@@ -40,14 +41,10 @@ describe("the remote worktree listing cache", () => {
   /** A remote host with a project on it and a session whose directory is a
    *  worktree OUTSIDE the checkout — the only shape that asks the agent. */
   async function remoteSession(worktreePath: string) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: `rwc-host-${++n}`,
-        baseUrl: "http://127.0.0.1:1",
-        token: "t".repeat(24),
-      },
+    const res = await seedHostResponse(app, {
+      name: `rwc-host-${++n}`,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t".repeat(24),
     });
     const hostId = res.json().id as string;
     const projectId = app.db

@@ -28,6 +28,7 @@ import type * as TaskReconciler from "../../src/services/task-reconciler.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -298,10 +299,10 @@ describe("projects route", () => {
     // omit-on-unreachable precedent above.
     it("omits BOTH branches and prs (not null) for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "batch-refs-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "batch-refs-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -350,10 +351,10 @@ describe("projects route", () => {
       });
       const repoId = repo.json().id as number;
 
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "batch-refs-mix-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "batch-refs-mix-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remote = await app.inject({
         method: "POST",
@@ -532,10 +533,10 @@ describe("projects route", () => {
 
     it("omits a session on an unreachable remote host from the response", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "diff-stats-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "diff-stats-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",

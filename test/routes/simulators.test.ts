@@ -8,7 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { HostRequestError, HostUnreachableError } from "../../src/services/remote-host-errors.js";
 
 const ptyMock = createNodePtyMock();
@@ -162,7 +162,11 @@ describe("GET /api/simulators and GET /internal/simulators", () => {
 
   it("lists simulators on a remote host that reports ios", async () => {
     const app = await buildTestAppOnPlatform("darwin");
-    const mac = createHost(app, { name: "mac-mini", baseUrl: "http://mac.test", token: "t" }).id;
+    const mac = createPairedHost(app, {
+      hostname: "mac-mini",
+      name: "mac-mini",
+      baseUrl: "http://mac.test",
+    }).hostId;
     devices.kinds.mockResolvedValue({ deviceKinds: ["physical"], platforms: ["android", "ios"] });
     const expected = [
       {
@@ -185,11 +189,11 @@ describe("GET /api/simulators and GET /internal/simulators", () => {
 
   it("answers 400 naming the remote host when it does not report ios", async () => {
     const app = await buildTestAppOnPlatform("darwin");
-    const linux = createHost(app, {
+    const linux = createPairedHost(app, {
+      hostname: "linux-box",
       name: "linux-box",
       baseUrl: "http://linux.test",
-      token: "t",
-    }).id;
+    }).hostId;
     devices.kinds.mockResolvedValue({ deviceKinds: ["emulator"], platforms: ["android"] });
 
     const res = await app.inject({
@@ -204,7 +208,11 @@ describe("GET /api/simulators and GET /internal/simulators", () => {
 
   it("answers 503 when the remote host is down", async () => {
     const app = await buildTestAppOnPlatform("darwin");
-    const mac = createHost(app, { name: "mac-mini", baseUrl: "http://mac.test", token: "t" }).id;
+    const mac = createPairedHost(app, {
+      hostname: "mac-mini",
+      name: "mac-mini",
+      baseUrl: "http://mac.test",
+    }).hostId;
     devices.kinds.mockRejectedValue(new HostUnreachableError(mac, new Error("ECONNREFUSED")));
 
     const res = await app.inject({
@@ -218,7 +226,11 @@ describe("GET /api/simulators and GET /internal/simulators", () => {
 
   it("forwards a remote agent's 4xx via forwardHostRequestError, maps 5xx transport failures to 503, and prompts agent update on null", async () => {
     const app = await buildTestAppOnPlatform("darwin");
-    const mac = createHost(app, { name: "mac-mini", baseUrl: "http://mac.test", token: "t" }).id;
+    const mac = createPairedHost(app, {
+      hostname: "mac-mini",
+      name: "mac-mini",
+      baseUrl: "http://mac.test",
+    }).hostId;
     devices.kinds.mockResolvedValue({ deviceKinds: [], platforms: ["ios"] });
     devices.simulators.mockRejectedValueOnce(
       new HostRequestError(mac, 400, JSON.stringify({ message: "iOS Simulator is not available" })),

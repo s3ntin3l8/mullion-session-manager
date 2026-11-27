@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 import { buildTestApp } from "../helpers/app.js";
 import { projects } from "../../src/db/schema.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import type { DiscoveredCandidate } from "../../src/services/project-config.js";
 import {
   buildOriginIndex,
@@ -62,7 +62,11 @@ describe("repo-identity", () => {
     await app.ready();
     // The DB is shared across this file's tests: start each one empty.
     app.db.delete(projects).run();
-    macId = createHost(app, { name: "mac", baseUrl: "http://mac.test", token: "t" }).id;
+    macId = createPairedHost(app, {
+      hostname: "mac",
+      name: "mac",
+      baseUrl: "http://mac.test",
+    }).hostId;
   });
 
   afterEach(async () => {

@@ -31,6 +31,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 import { resolveGitHubToken } from "../../src/services/github-integration.js";
 
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -177,10 +178,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "git-fetch-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "git-fetch-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -242,10 +243,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "git-pull-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "git-pull-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -392,10 +393,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "branch-delete-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "branch-delete-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -453,14 +454,10 @@ describe("projects route", () => {
       }
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "branch-delete-remote-success-host",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          token: AGENT_TOKEN,
-        },
+      const host = await seedHostResponse(primary, {
+        name: "branch-delete-remote-success-host",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: AGENT_TOKEN,
       });
       const project = await primary.inject({
         method: "POST",
@@ -980,10 +977,10 @@ describe("projects route", () => {
     });
 
     async function remoteProject(app: FastifyInstance, baseUrl: string) {
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: `branch-ops-host-${baseUrl.length}`, baseUrl, token: "t" },
+      const host = await seedHostResponse(app, {
+        name: `branch-ops-host-${baseUrl.length}`,
+        baseUrl,
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",

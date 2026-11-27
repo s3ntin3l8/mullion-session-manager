@@ -81,12 +81,6 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // direct/bookmarked navigation to a preview URL working with no
       // change in behavior.
       previewAuthRequired: app.config.PREVIEW_AUTH_REQUIRED,
-      // Issue #3477 — whether the legacy host paths (a host added by token,
-      // fleet-secret enrollment) are still accepted. The UI hides the entries
-      // that create them when this is false, so the operator is not offered a
-      // path the server refuses. The server-side refusal is the enforcement
-      // point; this is the mirror the UI reads.
-      allowLegacyHosts: app.config.MULLION_ALLOW_LEGACY_HOSTS,
       // Phase 2.5 Task Master (Thin Slice) — the frontend's single source of
       // truth for whether autonomous behavior (claim/approve/reject) is
       // available; the Tasks panel itself and the local board always

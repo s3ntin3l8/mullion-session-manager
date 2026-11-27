@@ -16,7 +16,7 @@ import {
 } from "../../src/services/device-host.js";
 import { HostRequestError } from "../../src/services/remote-host-errors.js";
 import { getDeviceRow, insertDevice, setDevicePort } from "../../src/services/device-store.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import type { DeviceInfo } from "../../src/services/device-drivers/types.js";
 
 // The primary's DeviceHost layer (#3200): what a remote host is sent, what the
@@ -79,7 +79,7 @@ describe("DeviceHost", () => {
   type App = Awaited<ReturnType<typeof buildTestAppOnPlatform>>;
   // `devices.host_id` is a foreign key, so a remote device needs a real host row.
   const host = (app: App, name: string) =>
-    createHost(app, { name, baseUrl: `http://${name}.test`, token: "t" }).id;
+    createPairedHost(app, { hostname: name, name, baseUrl: `http://${name}.test` }).hostId;
   const emulator = (app: App, hostId: string) =>
     insertDevice(app, {
       kind: "emulator",

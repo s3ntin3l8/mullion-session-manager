@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { buildApp } from "../../src/app.js";
 import { closeDb, getSqlite } from "../../src/db/client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-delete-mappings-${process.pid}.db`);
 const projectDirs: string[] = [];
@@ -22,10 +23,10 @@ it("clears deleted host references and leaves projects without references byte-f
   const app = await buildApp();
   try {
     const createHost = async (name: string) => {
-      const response = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+      const response = await seedHostResponse(app, {
+        name,
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       expect(response.statusCode).toBe(201);
       return response.json().id as string;

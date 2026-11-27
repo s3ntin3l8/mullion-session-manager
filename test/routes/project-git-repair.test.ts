@@ -25,6 +25,7 @@ import type * as TaskReconciler from "../../src/services/task-reconciler.js";
 // The relay's landed-check memo (issue #1630) — cleared per test so one
 // test's answer is not the next one's.
 import { gitEnv } from "../../src/services/git-env.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -336,10 +337,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "git-repair-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "git-repair-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -393,14 +394,10 @@ describe("projects route", () => {
 
       try {
         const app = await buildApp();
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: {
-            name: "git-repair-plan-host",
-            baseUrl: `http://127.0.0.1:${port}`,
-            token: "t",
-          },
+        const host = await seedHostResponse(app, {
+          name: "git-repair-plan-host",
+          baseUrl: `http://127.0.0.1:${port}`,
+          token: "t",
         });
         const project = await app.inject({
           method: "POST",
@@ -434,10 +431,10 @@ describe("projects route", () => {
 
     it("503s when the plan for a remote host cannot be fetched", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "git-repair-plan-dead-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "git-repair-plan-dead-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -472,14 +469,10 @@ describe("projects route", () => {
 
       try {
         const app = await buildApp();
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: {
-            name: "git-repair-old-host",
-            baseUrl: `http://127.0.0.1:${port}`,
-            token: "t",
-          },
+        const host = await seedHostResponse(app, {
+          name: "git-repair-old-host",
+          baseUrl: `http://127.0.0.1:${port}`,
+          token: "t",
         });
         const project = await app.inject({
           method: "POST",
@@ -609,10 +602,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "git-health-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "git-health-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -659,14 +652,10 @@ describe("projects route", () => {
 
       try {
         const app = await buildApp();
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: {
-            name: "git-health-live-host",
-            baseUrl: `http://127.0.0.1:${port}`,
-            token: "t",
-          },
+        const host = await seedHostResponse(app, {
+          name: "git-health-live-host",
+          baseUrl: `http://127.0.0.1:${port}`,
+          token: "t",
         });
         const project = await app.inject({
           method: "POST",
@@ -711,14 +700,10 @@ describe("projects route", () => {
 
       try {
         const app = await buildApp();
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: {
-            name: "git-health-old-host",
-            baseUrl: `http://127.0.0.1:${port}`,
-            token: "t",
-          },
+        const host = await seedHostResponse(app, {
+          name: "git-health-old-host",
+          baseUrl: `http://127.0.0.1:${port}`,
+          token: "t",
         });
         const project = await app.inject({
           method: "POST",

@@ -9,7 +9,7 @@ import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { insertDevice } from "../../src/services/device-store.js";
 import { ChannelSocket } from "../../src/services/channel-socket.js";
 import type { MuxChannel } from "../../src/services/ssh-agent-mux.js";
@@ -86,15 +86,15 @@ describe("/ws/device/:deviceId for an iOS device on an outbound-channel host (#3
     });
     app = await buildTestAppOnPlatform("linux");
     // An outbound-only host: no advertised URL, reached over its channel.
-    const host = createHost(app, { name: "macbook", token: "t" });
-    hostId = host.id;
+    const host = createPairedHost(app, { hostname: "macbook", name: "macbook" });
+    hostId = host.hostId;
     deviceId = insertDevice(app, {
       kind: "emulator",
       serial: null,
       avdName: null,
       projectId: null,
       name: "iPhone 17",
-      hostId: host.id,
+      hostId: host.hostId,
       platform: "ios",
       udid: "17CD1308-0F2B-4652-8986-3F9612A09F8E",
     }).id;

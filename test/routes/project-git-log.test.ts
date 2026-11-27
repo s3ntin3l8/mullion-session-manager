@@ -31,6 +31,7 @@ import type { FastifyInstance } from "fastify";
 
 import { buildTestApp, buildTeardownApp } from "../helpers/app.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -299,14 +300,10 @@ describe("projects route", () => {
         const port = (server.address() as { port: number }).port;
         const app = await buildTestApp();
         try {
-          const host = await app.inject({
-            method: "POST",
-            url: "/api/hosts",
-            payload: {
-              name: `history-host-${port}`,
-              baseUrl: `http://127.0.0.1:${port}`,
-              token: "t",
-            },
+          const host = await seedHostResponse(app, {
+            name: `history-host-${port}`,
+            baseUrl: `http://127.0.0.1:${port}`,
+            token: "t",
           });
           const project = await app.inject({
             method: "POST",
@@ -440,10 +437,10 @@ describe("projects route", () => {
       it("503s when the host is unreachable", async () => {
         vi.unstubAllGlobals();
         const app = await buildTestApp();
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "history-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+        const host = await seedHostResponse(app, {
+          name: "history-down",
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const project = await app.inject({
           method: "POST",

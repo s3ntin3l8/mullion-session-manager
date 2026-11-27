@@ -8,6 +8,7 @@ import type * as RemoteHostClientModule from "../../src/services/remote-host-cli
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../../src/db/schema.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #73 — GET /api/projects/:id/dock merging in discovered Compose
 // services, and the two docker/check-update + docker/update routes.
@@ -1509,14 +1510,10 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
       const agentPort = typeof address === "object" && address ? address.port : 0;
 
       const app = await buildApp();
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "real-remote",
-          baseUrl: `http://127.0.0.1:${agentPort}`,
-          token: AGENT_TOKEN,
-        },
+      const hostRes = await seedHostResponse(app, {
+        name: "real-remote",
+        baseUrl: `http://127.0.0.1:${agentPort}`,
+        token: AGENT_TOKEN,
       });
       const hostId = hostRes.json().id as string;
       const projectId = await createProject(app, { cwd: agentCwd, hostId });

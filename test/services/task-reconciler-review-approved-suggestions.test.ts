@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import path from "node:path";
 import fs from "node:fs";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 import {
   reconcilerMocks,
   mockPushDeliveryFactory,
@@ -950,10 +951,10 @@ describe("reconcileTasks — approved-with-suggestions", () => {
   // inconclusive, never silently dropped either.
   it("skips (does not ingest as inconclusive) a remote-hosted task whose host is unreachable", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     const project = await app.inject({
@@ -1008,10 +1009,10 @@ describe("reconcileTasks — approved-with-suggestions", () => {
   // outright.
   it("ingests a reachable remote-hosted task's review findings via the resolved backend", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     const project = await app.inject({
@@ -1100,10 +1101,10 @@ describe("reconcileTasks — approved-with-suggestions", () => {
   // host level) but whose read throws.
   it("does not ingest as inconclusive when readTaskReviewFindings itself throws (host unreachable mid-read, a peer 5xx, or version skew)", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     const project = await app.inject({
@@ -1193,10 +1194,10 @@ describe("reconcileTasks — approved-with-suggestions", () => {
   // different for remote hosts.
   it("ingests a reachable remote-hosted task as inconclusive once the grace window elapses with a genuinely absent (not thrown) findings read", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     const project = await app.inject({

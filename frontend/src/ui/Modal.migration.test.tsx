@@ -44,7 +44,7 @@ describe("migrated dialogs — dialog semantics", () => {
     render(<CreateHostModal onClose={vi.fn()} onSave={vi.fn()} />);
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    expect(dialog).toHaveAccessibleName("Add host");
+    expect(dialog).toHaveAccessibleName("Edit host");
   });
 
   it("gives the close button an accessible name", () => {

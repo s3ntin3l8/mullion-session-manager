@@ -12,6 +12,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
@@ -70,10 +71,10 @@ describe("Abandon a remote-placed task (#3193)", () => {
     const remoteCwd = "/Users/bjoern/Projects/branchdam-mobile";
     const worktreePath = `${remoteCwd}/.mullion-worktrees/mullion-task-1`;
 
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const hostRes = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const remoteHostId = hostRes.json().id as string;
 
@@ -145,10 +146,10 @@ describe("Abandon a remote-placed task (#3193)", () => {
     const projectId = projectRes.json().id as number;
     const worktreePath = "/Users/bjoern/Projects/unknown/.mullion-worktrees/mullion-task-2";
 
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Unmapped", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const hostRes = await seedHostResponse(app, {
+      name: "Unmapped",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const remoteHostId = hostRes.json().id as string;
 
@@ -268,10 +269,10 @@ describe("clear-done branch delete on the worker host (#3193)", () => {
       });
       const projectId = projectRes.json().id as number;
       const remoteCwd = "/Users/bjoern/Projects/branchdam-mobile";
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "ClearDoneRemote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const hostRes = await seedHostResponse(app, {
+        name: "ClearDoneRemote",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remoteHostId = hostRes.json().id as string;
       const [session] = app.db
@@ -353,10 +354,10 @@ describe("clear-done branch delete on the worker host (#3193)", () => {
         payload: { allowDuplicate: true, name: "clear-done-unmapped-p", cwd },
       });
       const projectId = projectRes.json().id as number;
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "ClearDoneUnmapped", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const hostRes = await seedHostResponse(app, {
+        name: "ClearDoneUnmapped",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remoteHostId = hostRes.json().id as string;
       const [session] = app.db

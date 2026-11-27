@@ -198,7 +198,6 @@ export function HostsSection() {
   const {
     hosts,
     refreshHosts,
-    createHost,
     updateHost,
     deleteHost,
     pingHost,
@@ -1082,20 +1081,11 @@ export function HostsSection() {
       <HostPairings />
 
       <Presence when={pairing !== null}>
-        {pairing && (
-          <HostPairingDialog
-            host={pairing.host}
-            onClose={() => setPairing(null)}
-            onSaveTokenHost={(name, baseUrl, token) =>
-              createHost(name, baseUrl || undefined, token || undefined)
-            }
-          />
-        )}
+        {pairing && <HostPairingDialog host={pairing.host} onClose={() => setPairing(null)} />}
       </Presence>
       <Presence when={editing !== null}>
         {editing && (
           <CreateHostModal
-            mode="edit"
             initialName={editing.name}
             initialBaseUrl={editing.baseUrl ?? ""}
             hasToken={editing.hasToken}

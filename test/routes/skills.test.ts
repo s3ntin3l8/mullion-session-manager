@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { closeDb } from "../../src/db/client.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `skills-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -479,14 +480,10 @@ describe("skills routes", () => {
       const { agentApp, port } = await startAgent(os.tmpdir());
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "skills-remote-host",
-          baseUrl: `http://127.0.0.1:${port}`,
-          token: "skills-remote-token",
-        },
+      const host = await seedHostResponse(primary, {
+        name: "skills-remote-host",
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "skills-remote-token",
       });
       const project = await primary.inject({
         method: "POST",
@@ -523,14 +520,10 @@ describe("skills routes", () => {
       const { agentApp, port } = await startAgent(os.tmpdir());
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "skills-remote-toggle-host",
-          baseUrl: `http://127.0.0.1:${port}`,
-          token: "skills-remote-token",
-        },
+      const host = await seedHostResponse(primary, {
+        name: "skills-remote-toggle-host",
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "skills-remote-token",
       });
       const project = await primary.inject({
         method: "POST",
@@ -565,14 +558,10 @@ describe("skills routes", () => {
       const { agentApp, port } = await startAgent(os.tmpdir());
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "skills-wrong-token-host",
-          baseUrl: `http://127.0.0.1:${port}`,
-          token: "a-completely-different-token",
-        },
+      const host = await seedHostResponse(primary, {
+        name: "skills-wrong-token-host",
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "a-completely-different-token",
       });
       const project = await primary.inject({
         method: "POST",

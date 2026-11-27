@@ -10,6 +10,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { PREVIEW_COOKIE_NAME } from "../../src/services/preview-auth.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Two real buildApp() instances in one process — a primary (issue #28's own
 // preview proxy) and an agent (issue #26) — proving the whole two-hop
@@ -189,14 +190,10 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
       PREVIEW_BASE_HOST,
     });
 
-    const hostRes = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: "integration-preview-agent",
-        baseUrl: `http://127.0.0.1:${agent.port}`,
-        token: AGENT_TOKEN,
-      },
+    const hostRes = await seedHostResponse(primary.app, {
+      name: "integration-preview-agent",
+      baseUrl: `http://127.0.0.1:${agent.port}`,
+      token: AGENT_TOKEN,
     });
     hostId = hostRes.json().id;
 
@@ -279,10 +276,10 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
   });
 
   it("502s when the owning agent itself is unreachable", async () => {
-    const deadHost = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "dead-preview-agent", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const deadHost = await seedHostResponse(primary.app, {
+      name: "dead-preview-agent",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const deadProject = await primary.app.inject({
       method: "POST",

@@ -18,6 +18,7 @@ import fs from "node:fs";
 import { spawn as childProcessSpawn } from "node:child_process";
 import { tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => mockNodePtyFactory());
 vi.mock("node:child_process", (io) => mockChildProcessFactory(io));
@@ -895,10 +896,10 @@ describe("approve/reject (6.2/#215, promotion added in 6.7/#220)", () => {
     const app = await buildApp();
     const warnSpy = vi.spyOn(app.log, "warn");
 
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     const project = await app.inject({

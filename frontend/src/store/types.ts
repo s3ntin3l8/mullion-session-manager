@@ -649,11 +649,6 @@ export interface HostsSlice {
   // not just Settings -> Hosts.
   hosts: Host[];
   refreshHosts: () => Promise<void>;
-  createHost: (
-    name: string,
-    baseUrl?: string,
-    token?: string,
-  ) => Promise<Host & { token?: string }>;
   /** Mints a new token for a remote host and returns it (shown once). */
   rotateHostToken: (id: string) => Promise<string>;
   /** Issue #2568 — revokes the host's machine identity for good. */

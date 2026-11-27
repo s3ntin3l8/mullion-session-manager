@@ -11,6 +11,7 @@ import {
 } from "../helpers/sessions-routes.js";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionBackend } from "../../src/services/session-backend.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
@@ -52,12 +53,10 @@ describe("sessions route: promoting a session on a remote host", () => {
   // session either.
   describe("option 2 — POST /:id/promote, when resolvePendingPromote fails on a remote host (issue #679)", () => {
     async function createRemotePromoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        // Deliberately unreachable — resolveBackend is spied per-test to
-        // return a fake backend, so this baseUrl is never actually hit.
-        payload: { name: "promote-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "promote-remote",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const project = await app.inject({
@@ -224,10 +223,10 @@ describe("sessions route: promoting a session on a remote host", () => {
   // comment and routes/sessions.ts's promote handler).
   describe("option 2 — POST /:id/promote, initialPromptApplied version-skew warning (remote host)", () => {
     async function createRemotePromoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "promote-remote-skew", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "promote-remote-skew",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const project = await app.inject({

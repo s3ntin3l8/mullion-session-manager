@@ -12,6 +12,7 @@ import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { ne } from "drizzle-orm";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
@@ -56,10 +57,10 @@ describe("upload and promote routes with an unknown outcome (#2703)", () => {
   });
 
   async function setup(overrides: Record<string, unknown>) {
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "unknown-agent", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const hostRes = await seedHostResponse(app, {
+      name: "unknown-agent",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = hostRes.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(hostId);

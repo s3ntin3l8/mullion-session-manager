@@ -6,6 +6,7 @@ import type * as RemoteHostClientModule from "../../src/services/remote-host-cli
 import { projects, sessions } from "../../src/db/schema.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../src/shared/constants.js";
 import { eq } from "drizzle-orm";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #3427 - a REMOTE project's Docker discovery and service actions go to
 // its agent. The agent is scripted below; a method the test does not script
@@ -70,10 +71,10 @@ describe("remote projects: Docker discovery and actions on the agent (#3427)", (
   });
 
   async function remoteProjectOn(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+    const hostRes = await seedHostResponse(app, {
+      name,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const [row] = app.db
       .insert(projects)

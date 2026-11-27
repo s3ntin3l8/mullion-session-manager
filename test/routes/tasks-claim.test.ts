@@ -10,6 +10,7 @@ import fs from "node:fs";
 import { deriveTaskBranchName, deriveWorktreePath } from "../../src/services/git-worktree.js";
 import { tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => mockNodePtyFactory());
 vi.mock("node:child_process", (io) => mockChildProcessFactory(io));
@@ -190,10 +191,10 @@ describe("POST /api/tasks/:id/claim (issue #216)", () => {
   it("queues unconditionally on a remote-hosted project; dispatch is what discovers the host is unreachable and releases back to claimed, not ready", async () => {
     const app = await buildApp();
 
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     const project = await app.inject({

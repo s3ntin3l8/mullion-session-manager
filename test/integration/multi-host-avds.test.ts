@@ -10,6 +10,7 @@ import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { warmSqliteBinding } from "../helpers/app.js";
 import { overrideDefaultRequestTimeoutForTests } from "../../src/services/remote-host-client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #3299 end to end: primary <-> agent over loopback HTTP + WS for
 // available system images, SDK license status, system-image install/uninstall
@@ -168,11 +169,7 @@ describe("System image management and SDK licenses on an agent host (issue #3299
 
     const register = async (name: string, port: number, token: string) =>
       (
-        await primary.app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name, baseUrl: `http://127.0.0.1:${port}`, token },
-        })
+        await seedHostResponse(primary.app, { name, baseUrl: `http://127.0.0.1:${port}`, token })
       ).json().id as string;
     hostId = await register("avd-agent", agent.port, AGENT_TOKEN);
     deadHostId = await register("dead-agent", await closedPort(), "unused-token");

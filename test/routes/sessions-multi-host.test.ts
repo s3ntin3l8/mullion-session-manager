@@ -14,6 +14,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
@@ -48,12 +49,10 @@ setupSessionsRouteLifecycle("multi-host");
 describe("sessions route: multi-host", () => {
   describe("multi-host (issue #26)", () => {
     async function createRemoteProject(app: Awaited<ReturnType<typeof buildApp>>) {
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        // Deliberately unreachable (port 1 refuses immediately) rather than
-        // mocked — exercises the real HostUnreachableError path.
-        payload: { name: "unreachable", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "unreachable",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const project = await app.inject({
@@ -92,10 +91,10 @@ describe("sessions route: multi-host", () => {
       });
       const sessionId = created.json().id;
 
-      const badHost = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "goes-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const badHost = await seedHostResponse(app, {
+        name: "goes-down",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remoteProject = await app.inject({
         method: "POST",
@@ -140,10 +139,10 @@ describe("sessions route: multi-host", () => {
     it("marks a session killed instead of 500ing when its host's terminate call fails (Hermes review, PR #34)", async () => {
       const app = await buildApp();
 
-      const badHost = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "goes-down-2", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const badHost = await seedHostResponse(app, {
+        name: "goes-down-2",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remoteProject = await app.inject({
         method: "POST",
@@ -310,12 +309,10 @@ describe("sessions route: multi-host", () => {
     // directly, mirroring option 2's own makeFakeBackend pattern above.
     describe("POST /api/sessions/:id/attention/ack (issue #1472)", () => {
       async function createRemoteAttentionProject(app: Awaited<ReturnType<typeof buildApp>>) {
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          // Deliberately unreachable — resolveBackend is spied per-test to
-          // return a fake backend, so this baseUrl is never actually hit.
-          payload: { name: "attention-ack-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+        const host = await seedHostResponse(app, {
+          name: "attention-ack-remote",
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const hostId = host.json().id as string;
         const project = await app.inject({

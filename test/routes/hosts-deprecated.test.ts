@@ -1,39 +1,49 @@
 import { describe, it, expect } from "vitest";
+import crypto from "node:crypto";
 import { buildApp } from "../../src/app.js";
-import { enrollHost, revokeMachineIdentity } from "../../src/services/host-registry.js";
+import { hosts } from "../../src/db/schema.js";
+import { createPairedHost, revokeMachineIdentity } from "../../src/services/host-registry.js";
 
-// Issue #3476 — the legacy host kinds are FLAGGED, not refused. This issue
-// only produces the signal (HostSummary.deprecatedKind) and says so in the
-// UI; the gate that refuses NEW legacy hosts (MULLION_ALLOW_LEGACY_HOSTS,
-// issue #3477) and the removal are separate issues — a flagged host keeps
-// working either way.
+// Issue #3476 — existing legacy host rows remain flagged (HostSummary.deprecatedKind)
+// even after the legacy entry points are removed (#3535).
 describe("GET /api/hosts: the legacy host kinds are flagged (issue #3476)", () => {
   it("flags a legacy agent and a manual-token host, and nothing on a host with a live identity", async () => {
     const app = await buildApp();
     try {
-      // A legacy agent: enrolled with the fleet secret, no machine identity,
+      // A legacy agent: existing enrolled row with no machine identity,
       // so the primary has to dial it at the address it stored.
-      const legacy = enrollHost(app, {
-        baseUrl: "http://127.0.0.1:4741",
-        hostname: "legacy-agent",
-      });
-
-      // A manual-token host: added by hand, with its own static token (the
-      // agent's MULLION_AGENT_TOKEN) and the address the primary dials it
-      // at.
-      const manual = (
-        await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "manual-token", baseUrl: "http://127.0.0.1:4742" },
+      const legacyId = crypto.randomUUID();
+      app.db
+        .insert(hosts)
+        .values({
+          id: legacyId,
+          name: "legacy-agent",
+          baseUrl: "http://127.0.0.1:4741",
+          authTokenEnc: null,
+          origin: "enrolled",
+          approvedAt: new Date(),
         })
-      ).json() as { id: string };
+        .run();
+
+      // A manual-token host: existing row with its own static token (the
+      // agent's MULLION_AGENT_TOKEN) and the address the primary dials it at.
+      const manualId = crypto.randomUUID();
+      app.db
+        .insert(hosts)
+        .values({
+          id: manualId,
+          name: "manual-token",
+          baseUrl: "http://127.0.0.1:4742",
+          authTokenEnc: app.encryption.encryptString("manual-tok"),
+          origin: "manual",
+          approvedAt: new Date(),
+        })
+        .run();
 
       // A host with a live machine identity: the current path.
-      const paired = enrollHost(app, {
+      const paired = createPairedHost(app, {
         baseUrl: "http://127.0.0.1:4743",
         hostname: "paired-agent",
-        wantsMachineCredential: true,
       });
 
       const list = (await app.inject({ method: "GET", url: "/api/hosts" })).json() as {
@@ -43,14 +53,14 @@ describe("GET /api/hosts: the legacy host kinds are flagged (issue #3476)", () =
       }[];
       const byId = (id: string) => list.find((h) => h.id === id)!;
 
-      expect(byId(legacy.hostId).deprecatedKind).toBe("legacy-agent");
-      expect(byId(legacy.hostId).legacyAgent).toBe(true);
+      expect(byId(legacyId).deprecatedKind).toBe("legacy-agent");
+      expect(byId(legacyId).legacyAgent).toBe(true);
 
       // The kind names the CREDENTIAL path: a manual-token host is dialled
       // by address too (legacyAgent is true), but what it authenticates with
       // is the row's own static token.
-      expect(byId(manual.id).deprecatedKind).toBe("manual-token");
-      expect(byId(manual.id).legacyAgent).toBe(true);
+      expect(byId(manualId).deprecatedKind).toBe("manual-token");
+      expect(byId(manualId).legacyAgent).toBe(true);
 
       expect(byId(paired.hostId).deprecatedKind).toBeNull();
       // The primary is never a legacy host.
@@ -63,13 +73,21 @@ describe("GET /api/hosts: the legacy host kinds are flagged (issue #3476)", () =
   it("changes nothing about a legacy host: it is still listed, and still editable", async () => {
     const app = await buildApp();
     try {
-      const legacy = enrollHost(app, {
-        baseUrl: "http://127.0.0.1:4744",
-        hostname: "still-works",
-      });
+      const legacyId = crypto.randomUUID();
+      app.db
+        .insert(hosts)
+        .values({
+          id: legacyId,
+          name: "still-works",
+          baseUrl: "http://127.0.0.1:4744",
+          authTokenEnc: null,
+          origin: "enrolled",
+          approvedAt: new Date(),
+        })
+        .run();
       const renamed = await app.inject({
         method: "PATCH",
-        url: `/api/hosts/${legacy.hostId}`,
+        url: `/api/hosts/${legacyId}`,
         payload: { name: "renamed" },
       });
       expect(renamed.statusCode).toBe(200);
@@ -81,7 +99,7 @@ describe("GET /api/hosts: the legacy host kinds are flagged (issue #3476)", () =
       const list = (await app.inject({ method: "GET", url: "/api/hosts" })).json() as {
         id: string;
       }[];
-      expect(list.some((h) => h.id === legacy.hostId)).toBe(true);
+      expect(list.some((h) => h.id === legacyId)).toBe(true);
     } finally {
       await app.close();
     }
@@ -94,9 +112,8 @@ describe("GET /api/hosts: the legacy host kinds are flagged (issue #3476)", () =
       // own. Revoking the identity leaves a row with neither a token nor an
       // address — a host that is waiting for a re-pair, not one on a legacy
       // credential path.
-      const paired = enrollHost(app, {
+      const paired = createPairedHost(app, {
         hostname: "revoked-outbound",
-        wantsMachineCredential: true,
       });
       expect(revokeMachineIdentity(app, paired.hostId)).toBe(true);
 

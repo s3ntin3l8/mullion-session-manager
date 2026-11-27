@@ -14,6 +14,7 @@ import { RemoteHostClient } from "../../src/services/remote-host-client.js";
 import { MuxBusyError } from "../../src/services/ssh-agent-mux.js";
 import { bindChannelHost, unbindChannelHost } from "../../src/services/agent-channel-tunnel.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -776,14 +777,10 @@ describe("project-files routes", () => {
 
     async function remoteProject(port: number, token: string, cwd: string) {
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: `pf-remote-${crypto.randomBytes(3).toString("hex")}`,
-          baseUrl: `http://127.0.0.1:${port}`,
-          token,
-        },
+      const host = await seedHostResponse(primary, {
+        name: `pf-remote-${crypto.randomBytes(3).toString("hex")}`,
+        baseUrl: `http://127.0.0.1:${port}`,
+        token,
       });
       const project = await primary.inject({
         method: "POST",
@@ -971,10 +968,10 @@ describe("project-files routes", () => {
       fs.writeFileSync(path.join(projectCwd, ".env"), "FROM=agent\n");
       const { agentApp, port } = await startAgent("pf-token-auto");
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "pf-auto", baseUrl: `http://127.0.0.1:${port}`, token: "pf-token-auto" },
+      const host = await seedHostResponse(primary, {
+        name: "pf-auto",
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "pf-token-auto",
       });
       const hostId = host.json().id as string;
       const projectId = (

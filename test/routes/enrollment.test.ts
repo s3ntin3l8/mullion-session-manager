@@ -2,11 +2,32 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { createHost, getHostRow } from "../../src/services/host-registry.js";
+import { hosts } from "../../src/db/schema.js";
+import { createPairedHost, getHostRow } from "../../src/services/host-registry.js";
 
 const tmpDb = path.join(os.tmpdir(), `enrollment-test-${process.pid}.db`);
+
+function seedManualHost(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  opts: { name: string; baseUrl?: string; token: string },
+): { id: string } {
+  const id = crypto.randomUUID();
+  app.db
+    .insert(hosts)
+    .values({
+      id,
+      name: opts.name,
+      baseUrl: opts.baseUrl ?? null,
+      authTokenEnc: app.encryption.encryptString(opts.token),
+      origin: "manual",
+      approvedAt: new Date(),
+    })
+    .run();
+  return { id };
+}
 
 describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
   // Claiming a host opens a fan-out connection to its (unroutable, fake)
@@ -27,7 +48,7 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
 
   it("claims an existing host row when the token matches its own authTokenEnc", async () => {
     const app = await buildApp();
-    const created = createHost(app, {
+    const created = seedManualHost(app, {
       name: "pre-provisioned",
       baseUrl: "http://placeholder:0",
       token: "claim-me",
@@ -52,7 +73,7 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     await app.close();
   });
 
-  it("401s a claim attempt when the token matches no host row and enrollment is disabled", async () => {
+  it("401s a claim attempt when the token matches no host row", async () => {
     const app = await buildApp();
     const res = await app.inject({
       method: "POST",
@@ -63,222 +84,45 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     await app.close();
   });
 
-  it("enrolls a brand-new host row when the token matches MULLION_ENROLLMENT_SECRET", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: "fleet-wide-secret",
-          baseUrl: "http://10.0.0.7:4000",
-          hostname: "fresh-box",
-        },
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      const row = getHostRow(app, body.host_id)!;
-      expect(row.origin).toBe("enrolled");
-      expect(row.baseUrl).toBe("http://10.0.0.7:4000");
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
+  it("rejects a baseUrl pointed at cloud instance metadata / link-local", async () => {
+    const app = await buildApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: { token: "any-token", baseUrl: "http://169.254.169.254", hostname: "x" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
   });
 
-  // Issue #1721 / roadmap 8.7 — the agent's own PLATFORM, recorded from its
-  // self-report at enrollment and refreshed at renewal. Free-form and
-  // informational; an agent build that predates the field simply does not
-  // send it.
-  it("records the agent's reported platform when it enrolls", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: "fleet-wide-secret",
-          baseUrl: "http://10.0.0.7:4000",
-          hostname: "fresh-box",
-          platform: "darwin",
-        },
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(getHostRow(app, body.host_id)!.platform).toBe("darwin");
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
-  });
-
-  it("leaves the platform null when the agent reports none (an older build)", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: "fleet-wide-secret",
-          baseUrl: "http://10.0.0.7:4001",
-          hostname: "old-box",
-        },
-      });
-      expect(res.statusCode).toBe(200);
-      const body = res.json();
-      expect(getHostRow(app, body.host_id)!.platform).toBeNull();
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
-  });
-
-  it("refreshes the platform on a session renewal", async () => {
-    // The renewal path re-presents the agent's self-report, so the platform
-    // is not frozen at the first enrollment.
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const registered = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: "fleet-wide-secret",
-          baseUrl: "http://10.0.0.9:4000",
-          hostname: "x",
-          platform: "linux",
-        },
-      });
-      const { host_id, session_id } = registered.json();
-      expect(getHostRow(app, host_id)!.platform).toBe("linux");
-
-      const renewed = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: session_id,
-          hostId: host_id,
-          baseUrl: "http://10.0.0.9:4000",
-          hostname: "x",
-          platform: "darwin",
-        },
-      });
-      expect(renewed.statusCode).toBe(200);
-      expect(getHostRow(app, host_id)!.platform).toBe("darwin");
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
-  });
-
-  it("leaves a recorded platform ALONE when a renewal reports none", async () => {
-    // An older agent build renewing must not ERASE what a newer build
-    // recorded earlier — an absent report is not a report of "no platform".
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const registered = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: "fleet-wide-secret",
-          baseUrl: "http://10.0.0.9:4000",
-          hostname: "x",
-          platform: "darwin",
-        },
-      });
-      const { host_id, session_id } = registered.json();
-
-      const renewed = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: session_id,
-          hostId: host_id,
-          baseUrl: "http://10.0.0.9:4000",
-          hostname: "x",
-        },
-      });
-      expect(renewed.statusCode).toBe(200);
-      expect(getHostRow(app, host_id)!.platform).toBe("darwin");
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
-  });
-
-  it("401s an enroll attempt with the wrong secret, even with MULLION_ENROLLMENT_SECRET set", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: { token: "wrong-secret", baseUrl: "http://10.0.0.8:4000", hostname: "x" },
-      });
-      expect(res.statusCode).toBe(401);
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
-  });
-
-  it("rejects a baseUrl pointed at cloud instance metadata / link-local, same as POST /api/hosts", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: "fleet-wide-secret",
-          baseUrl: "http://169.254.169.254",
-          hostname: "x",
-        },
-      });
-      expect(res.statusCode).toBe(400);
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
-  });
-
-  it("registers a tailnet 100.x baseUrl only with MULLION_ALLOW_TAILNET_HOSTS; IMDS stays blocked", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
+  it("accepts Tailscale CGNAT baseUrls only when MULLION_ALLOW_TAILNET_HOSTS=true", async () => {
     const register = (app: Awaited<ReturnType<typeof buildApp>>, baseUrl: string) =>
       app.inject({
         method: "POST",
         url: "/api/internal/register",
-        payload: { token: "fleet-wide-secret", baseUrl, hostname: "ts-box" },
+        payload: { token: "tailnet-claim", baseUrl, hostname: "tailnet-box" },
       });
-    try {
-      let app = await buildApp();
-      expect((await register(app, "http://100.101.102.103:4000")).statusCode).toBe(400);
-      await app.close();
 
-      process.env.MULLION_ALLOW_TAILNET_HOSTS = "true";
+    let app = await buildApp();
+    expect((await register(app, "http://100.64.0.10:4000")).statusCode).toBe(400);
+    await app.close();
+
+    process.env.MULLION_ALLOW_TAILNET_HOSTS = "true";
+    try {
       app = await buildApp();
-      expect((await register(app, "http://100.101.102.103:4000")).statusCode).toBe(200);
+      seedManualHost(app, { name: "tailnet-box", token: "tailnet-claim" });
+      expect((await register(app, "http://100.64.0.10:4000")).statusCode).toBe(200);
       expect((await register(app, "http://169.254.169.254")).statusCode).toBe(400);
       await app.close();
     } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
       delete process.env.MULLION_ALLOW_TAILNET_HOSTS;
     }
   });
 
-  // Issue #213 cross-host capture — proves the wiring (this route calls the
-  // decorator with the freshly-issued hostId), not
-  // remote-event-subscriber.ts's own reconcile behavior (already covered by
-  // test/services/remote-event-subscriber.test.ts). Mocked out rather than
-  // left to run for real, same reasoning as the hosts.test.ts equivalents.
   it("force-reconnects the events subscription after claiming a host", async () => {
     const app = await buildApp();
     await app.ready();
-    const created = createHost(app, {
+    const created = seedManualHost(app, {
       name: "pre-provisioned-2",
       baseUrl: "http://placeholder:0",
       token: "claim-me-2",
@@ -295,124 +139,75 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     await app.close();
   });
 
-  it("force-reconnects the events subscription after enrolling a brand-new host", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret-2"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      await app.ready();
-      const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
-
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: "fleet-wide-secret-2",
-          baseUrl: "http://10.0.0.51:4000",
-          hostname: "fresh-box-2",
-        },
-      });
-      const { host_id } = res.json();
-
-      expect(spy).toHaveBeenCalledWith({ forceReconnect: [host_id] });
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
-  });
-
   it("renews a session when hostId + the current session id are presented", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const registered = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.9:4000", hostname: "x" },
-      });
-      const { host_id, session_id } = registered.json();
+    const app = await buildApp();
+    const registered = createPairedHost(app, { baseUrl: "http://10.0.0.9:4000", hostname: "x" });
 
-      const renewed = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: session_id,
-          hostId: host_id,
-          baseUrl: "http://10.0.0.9:4000",
-          hostname: "x",
-        },
-      });
-      expect(renewed.statusCode).toBe(200);
-      const renewedBody = renewed.json();
-      expect(renewedBody.host_id).toBe(host_id);
-      expect(renewedBody.session_id).not.toBe(session_id);
+    const renewed = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        token: registered.sessionId,
+        hostId: registered.hostId,
+        baseUrl: "http://10.0.0.9:4000",
+        hostname: "x",
+      },
+    });
+    expect(renewed.statusCode).toBe(200);
+    const renewedBody = renewed.json();
+    expect(renewedBody.host_id).toBe(registered.hostId);
+    expect(renewedBody.session_id).not.toBe(registered.sessionId);
 
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
+    await app.close();
   });
 
   it("force-reconnects the events subscription after a session renewal", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret-3"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      await app.ready();
-      const registered = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: { token: "fleet-wide-secret-3", baseUrl: "http://10.0.0.52:4000", hostname: "x" },
-      });
-      const { host_id, session_id } = registered.json();
+    const app = await buildApp();
+    await app.ready();
+    const registered = createPairedHost(app, { baseUrl: "http://10.0.0.52:4000", hostname: "x" });
 
-      const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
-      await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: {
-          token: session_id,
-          hostId: host_id,
-          baseUrl: "http://10.0.0.52:4000",
-          hostname: "x",
-        },
-      });
+    const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
+    await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        token: registered.sessionId,
+        hostId: registered.hostId,
+        baseUrl: "http://10.0.0.52:4000",
+        hostname: "x",
+      },
+    });
 
-      expect(spy).toHaveBeenCalledWith({ forceReconnect: [host_id] });
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
+    expect(spy).toHaveBeenCalledWith({ forceReconnect: [registered.hostId] });
+    await app.close();
   });
 
   it("401s a renewal with a stale/wrong session id, without falling back to bootstrap validation", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-    try {
-      const app = await buildApp();
-      const registered = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.10:4000", hostname: "x" },
-      });
-      const { host_id } = registered.json();
+    const app = await buildApp();
+    const created = seedManualHost(app, {
+      name: "no-fallback",
+      baseUrl: "http://10.0.0.10:4000",
+      token: "claim-bootstrap-secret",
+    });
+    const claimed = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: { token: "claim-bootstrap-secret", baseUrl: "http://10.0.0.10:4000", hostname: "x" },
+    });
+    expect(claimed.statusCode).toBe(200);
 
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/internal/register",
-        // Presenting the *bootstrap* secret as a renewal token must NOT
-        // succeed just because it happens to be a valid credential of a
-        // different kind — a renewal only ever accepts that host's own
-        // current session id.
-        payload: {
-          token: "fleet-wide-secret",
-          hostId: host_id,
-          baseUrl: "http://10.0.0.10:4000",
-          hostname: "x",
-        },
-      });
-      expect(res.statusCode).toBe(401);
-      await app.close();
-    } finally {
-      delete process.env.MULLION_ENROLLMENT_SECRET;
-    }
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        token: "claim-bootstrap-secret",
+        hostId: created.id,
+        baseUrl: "http://10.0.0.10:4000",
+        hostname: "x",
+      },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
   });
 
   it("400s a missing required field", async () => {
@@ -425,154 +220,30 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     expect(res.statusCode).toBe(400);
     await app.close();
   });
-
-  // Issue #245 — MULLION_ENROLLMENT_ALLOWED_CIDRS, when set, additionally
-  // restricts the *enroll* path (never the claim path, which already
-  // requires knowing a specific row's own token).
-  describe("MULLION_ENROLLMENT_ALLOWED_CIDRS", () => {
-    it("allows an enroll request whose peer IP falls inside the configured range", async () => {
-      process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-      process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS = "127.0.0.0/8";
-      try {
-        const app = await buildApp();
-        const res = await app.inject({
-          method: "POST",
-          url: "/api/internal/register",
-          payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.11:4000", hostname: "x" },
-          // app.inject()'s default remoteAddress is 127.0.0.1.
-        });
-        expect(res.statusCode).toBe(200);
-        await app.close();
-      } finally {
-        delete process.env.MULLION_ENROLLMENT_SECRET;
-        delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
-      }
-    });
-
-    it("403s an enroll request whose peer IP falls outside the configured range", async () => {
-      process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-      process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS = "10.99.0.0/16";
-      try {
-        const app = await buildApp();
-        const res = await app.inject({
-          method: "POST",
-          url: "/api/internal/register",
-          payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.12:4000", hostname: "x" },
-        });
-        expect(res.statusCode).toBe(403);
-        await app.close();
-      } finally {
-        delete process.env.MULLION_ENROLLMENT_SECRET;
-        delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
-      }
-    });
-
-    it("does not restrict the claim path at all", async () => {
-      process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS = "10.99.0.0/16";
-      try {
-        const app = await buildApp();
-        createHost(app, { name: "claimable", baseUrl: "http://x:1", token: "claim-tok" });
-        const res = await app.inject({
-          method: "POST",
-          url: "/api/internal/register",
-          payload: { token: "claim-tok", baseUrl: "http://10.0.0.13:4000", hostname: "x" },
-        });
-        expect(res.statusCode).toBe(200);
-        await app.close();
-      } finally {
-        delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
-      }
-    });
-
-    // Hermes review (PR #528): a trailing-slash typo with no bits
-    // (e.g. "10.0.0.0/") must not silently fail open to a /0 (matches
-    // every IP) — Number("") === 0 made that happen before the fix.
-    it("403s (fails closed) on a malformed range with no bits after the slash", async () => {
-      process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-      process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS = "10.0.0.0/";
-      try {
-        const app = await buildApp();
-        const res = await app.inject({
-          method: "POST",
-          url: "/api/internal/register",
-          payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.14:4000", hostname: "x" },
-          // app.inject()'s default remoteAddress (127.0.0.1) is not in
-          // 10.0.0.0/0 at all if the malformed range were treated as
-          // invalid, and would incorrectly match if it fell open to /0.
-        });
-        expect(res.statusCode).toBe(403);
-        await app.close();
-      } finally {
-        delete process.env.MULLION_ENROLLMENT_SECRET;
-        delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
-      }
-    });
-
-    // Finding AS7: this gate now reads the raw socket's remoteAddress (via
-    // getRawRemoteAddress), the same source security.ts and preview-proxy.ts
-    // already use, instead of request.ip — which this app never enables
-    // trustProxy for, but would otherwise become X-Forwarded-For-forgeable
-    // the day that changes (this app deploys behind Traefik, per CLAUDE.md).
-    // Proof: an X-Forwarded-For header naming an address OUTSIDE the allowed
-    // range must not influence the decision at all — only the connection's
-    // own (in-range) remoteAddress matters, exactly as the other three
-    // call sites document.
-    it("ignores X-Forwarded-For entirely — only the raw connection address is checked", async () => {
-      process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
-      process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS = "127.0.0.0/8";
-      try {
-        const app = await buildApp();
-        const res = await app.inject({
-          method: "POST",
-          url: "/api/internal/register",
-          payload: { token: "fleet-wide-secret", baseUrl: "http://10.0.0.15:4000", hostname: "x" },
-          headers: { "x-forwarded-for": "203.0.113.9" }, // outside the allowed range
-          remoteAddress: "127.0.0.1", // inside the allowed range
-        });
-        expect(res.statusCode).toBe(200);
-        await app.close();
-      } finally {
-        delete process.env.MULLION_ENROLLMENT_SECRET;
-        delete process.env.MULLION_ENROLLMENT_ALLOWED_CIDRS;
-      }
-    });
-  });
 });
 
 describe("POST /api/internal/deregister (issue #248 / roadmap 7.3)", () => {
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    // Set once, for the whole describe, before any buildApp() call — unlike
-    // the register tests above, these don't need to test the secret being
-    // absent/wrong, so there's no reason to toggle it per-test. (Toggling it
-    // per-call, as the register tests do, only works there because they set
-    // it *before* their own buildApp(); doing that inside a helper called
-    // *after* an already-built app's env was read would be a no-op.)
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-wide-secret"; // pragma: allowlist secret
   });
 
   afterAll(() => {
     closeDb();
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
-    delete process.env.MULLION_ENROLLMENT_SECRET;
   });
 
   async function registerAgent(app: Awaited<ReturnType<typeof buildApp>>, baseUrl: string) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/internal/register",
-      payload: { token: "fleet-wide-secret", baseUrl, hostname: "x" },
-    });
-    return res.json() as { host_id: string; session_id: string };
+    await app.ready();
+    const reg = createPairedHost(app, { baseUrl, hostname: "x" });
+    return { host_id: reg.hostId, session_id: reg.sessionId };
   }
 
   it("marks the host offline immediately when the current session id is presented", async () => {
     const app = await buildApp();
     const { host_id, session_id } = await registerAgent(app, "http://10.0.1.1:4000");
 
-    // Not offline yet — no sweep has run, no deregister call made.
     expect(app.hostHeartbeatTracker?.getHealth(host_id).status).toBe("pending");
 
     const res = await app.inject({
@@ -638,9 +309,6 @@ describe("POST /api/internal/deregister (issue #248 / roadmap 7.3)", () => {
     await app.close();
   });
 
-  // Hermes review, PR #530: the session credential is revoked outright, not
-  // just marked offline in the live tracker — a session that just said
-  // "I'm going away" must not remain a valid inbound credential.
   it("revokes the session credential — a repeat deregister with the same session id 401s", async () => {
     const app = await buildApp();
     const { host_id, session_id } = await registerAgent(app, "http://10.0.1.4:4000");

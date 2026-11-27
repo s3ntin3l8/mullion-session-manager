@@ -14,6 +14,7 @@ import {
 import * as listHostsModule from "../../src/services/host-registry.js";
 import type { HostCapacity } from "../../src/services/host-capacity.js";
 import { LEGACY_BASELINE } from "../../src/shared/agent-protocol.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #1723 / roadmap 8.9 — the assembler's half: what goes INTO the
 // candidate set. The policy's own decision table lives in
@@ -66,11 +67,7 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
 
   /** Registers a remote host and returns its id. */
   async function registerHost(name: string): Promise<string> {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
     return res.json().id as string;
   }
 
@@ -276,11 +273,7 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
   });
 
   async function registerHost(name: string): Promise<string> {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
     return res.json().id as string;
   }
 

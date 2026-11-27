@@ -14,6 +14,7 @@ import { execFileSync } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import { eq } from "drizzle-orm";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
@@ -296,10 +297,10 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
     // First in line, and held: a Mac is registered but parked.
-    const heldRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "parked-mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const heldRes = await seedHostResponse(app, {
+      name: "parked-mac",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const macId = heldRes.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(macId);
@@ -478,10 +479,10 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
       const app = await buildApp();
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-dispatch-test-give-up-hold-"));
       const projectId = await createProject(app, cwd);
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "gone-mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const hostRes = await seedHostResponse(app, {
+        name: "gone-mac",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const macId = hostRes.json().id as string;
       app.hostHeartbeatTracker?.recordSuccess(macId);

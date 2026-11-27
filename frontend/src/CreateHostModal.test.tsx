@@ -4,57 +4,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CreateHostModal } from "./CreateHostModal.js";
 
-// Regression coverage for the Hermes review findings on PR #35 (issue #26,
-// phase 4): the blank-fields path used to silently focus the input with no
-// visible feedback, and this is the frontend's first component-test file
-// (see vitest.config.ts's per-file `@vitest-environment jsdom` directive
-// above — the project-wide config stays "node" for the existing pure-logic
-// test files).
-
-describe("CreateHostModal", () => {
+describe("CreateHostModal (edit mode)", () => {
   it("shows an inline error instead of silently doing nothing when the name is blank", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
-    render(<CreateHostModal onClose={vi.fn()} onSave={onSave} />);
+    render(<CreateHostModal onClose={vi.fn()} onSave={onSave} initialName="home-server" />);
 
-    await user.click(screen.getByRole("button", { name: "Add host" }));
+    await user.clear(screen.getByLabelText("Name"));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("A name is required.");
     expect(onSave).not.toHaveBeenCalled();
-  });
-
-  it("requires a token only when bringing your own", async () => {
-    const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue(undefined);
-    render(<CreateHostModal onClose={vi.fn()} onSave={onSave} />);
-
-    await user.type(screen.getByLabelText("Name"), "home-server");
-    await user.click(screen.getByLabelText("Use my own token"));
-    await user.click(screen.getByRole("button", { name: "Add host" }));
-
-    expect(await screen.findByText(/Enter the token/)).toBeInTheDocument();
-    expect(onSave).not.toHaveBeenCalled();
-  });
-
-  it("asks the primary to mint a token when none is brought, and shows the install step", async () => {
-    const user = userEvent.setup();
-    const onSave = vi.fn().mockResolvedValue({ id: "h1", token: "minted-secret" });
-    const onClose = vi.fn();
-    render(<CreateHostModal onClose={onClose} onSave={onSave} />);
-
-    await user.type(screen.getByLabelText("Name"), "win-pc");
-    await user.clear(screen.getByLabelText(/^Primary URL/));
-    await user.type(screen.getByLabelText(/^Primary URL/), "http://dev-01:3100");
-    await user.click(screen.getByRole("button", { name: "Add host" }));
-
-    // Base URL and token are left empty so the backend omits them.
-    await waitFor(() => expect(onSave).toHaveBeenCalledWith("win-pc", "", ""));
-    expect(await screen.findByText("minted-secret")).toBeInTheDocument();
-    expect(screen.getByText(/-PrimaryUrl 'http:\/\/dev-01:3100'/)).toBeInTheDocument();
-    // The modal stays open on the install step until the user is done.
-    expect(onClose).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Done" }));
-    expect(onClose).toHaveBeenCalled();
   });
 
   it("submits trimmed values and closes on success", async () => {
@@ -65,9 +25,8 @@ describe("CreateHostModal", () => {
 
     await user.type(screen.getByLabelText("Name"), "  home-server  ");
     await user.type(screen.getByLabelText(/^Base URL/), "  http://192.168.1.20:4000  ");
-    await user.click(screen.getByLabelText("Use my own token"));
     await user.type(screen.getByLabelText(/^Token/), "  secret  ");
-    await user.click(screen.getByRole("button", { name: "Add host" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     await waitFor(() => {
       expect(onSave).toHaveBeenCalledWith("home-server", "http://192.168.1.20:4000", "secret");
@@ -82,7 +41,6 @@ describe("CreateHostModal", () => {
       <CreateHostModal
         onClose={vi.fn()}
         onSave={onSave}
-        mode="edit"
         initialName="home-server"
         initialBaseUrl="http://192.168.1.20:4000"
         hasToken
@@ -108,7 +66,6 @@ describe("CreateHostModal", () => {
       <CreateHostModal
         onClose={vi.fn()}
         onSave={onSave}
-        mode="edit"
         initialName="home-server"
         initialBaseUrl="http://192.168.1.20:4000"
       />,
@@ -131,7 +88,6 @@ describe("CreateHostModal", () => {
       <CreateHostModal
         onClose={vi.fn()}
         onSave={onSave}
-        mode="edit"
         initialName="macbook"
         initialBaseUrl="http://192.168.2.92:3000"
         canClearBaseUrl
@@ -151,61 +107,55 @@ describe("CreateHostModal", () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockRejectedValue(new Error("host name already in use"));
     const onClose = vi.fn();
-    render(<CreateHostModal onClose={onClose} onSave={onSave} />);
+    render(
+      <CreateHostModal
+        onClose={onClose}
+        onSave={onSave}
+        initialName="home-server"
+        initialBaseUrl="http://192.168.1.20:4000"
+      />,
+    );
 
-    await user.type(screen.getByLabelText("Name"), "home-server");
-    await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
-    await user.click(screen.getByLabelText("Use my own token"));
-    await user.type(screen.getByLabelText(/^Token/), "secret");
-    await user.click(screen.getByRole("button", { name: "Add host" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("host name already in use");
     expect(onClose).not.toHaveBeenCalled();
   });
 });
 
-// Audit finding 18 — "Add host" could be submitted twice with Enter. The
-// submit button is disabled while saving, but React has not re-rendered
-// yet when the second Enter arrives, so the second submission went
-// through and the same host was registered twice.
+// Audit finding 18 — submit could be triggered twice with Enter.
 describe("re-entry guard (audit finding 18)", () => {
-  // This is the PRE-EXISTING protection, not the guard: the button
-  // carries `disabled={saving}`, so the browser swallows the second click
-  // outright. It passes with or without the `if (saving) return;` guard,
-  // and it is kept because it is a real property of the form — but the
-  // Enter test below is the one that pins the guard, because a keyboard
-  // Enter reaches the handler directly and is not stopped by a disabled
-  // button.
   it("swallows a second click on the disabled submit button", async () => {
     const user = userEvent.setup();
-    // A save that never settles, so the second click lands while the
-    // first is still in flight.
     const onSave = vi.fn().mockReturnValue(new Promise<void>(() => {}));
-    render(<CreateHostModal onClose={vi.fn()} onSave={onSave} />);
+    render(
+      <CreateHostModal
+        onClose={vi.fn()}
+        onSave={onSave}
+        initialName="home-server"
+        initialBaseUrl="http://192.168.1.20:4000"
+      />,
+    );
 
-    await user.type(screen.getByLabelText("Name"), "home-server");
-    await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
-    await user.click(screen.getByLabelText("Use my own token"));
-    await user.type(screen.getByLabelText(/^Token/), "secret");
-
-    const submit = screen.getByRole("button", { name: "Add host" });
+    const submit = screen.getByRole("button", { name: "Save changes" });
     await user.click(submit);
     await user.click(submit);
 
     expect(onSave).toHaveBeenCalledTimes(1);
   });
 
-  // This is the regression test for the guard: Enter reaches the form's
-  // own handler, which is not stopped by the disabled button, so without
-  // `if (saving) return;` the second Enter submitted a second time.
   it("does not submit twice when Enter is pressed twice", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockReturnValue(new Promise<void>(() => {}));
-    render(<CreateHostModal onClose={vi.fn()} onSave={onSave} />);
+    render(
+      <CreateHostModal
+        onClose={vi.fn()}
+        onSave={onSave}
+        initialName="home-server"
+        initialBaseUrl="http://192.168.1.20:4000"
+      />,
+    );
 
-    await user.type(screen.getByLabelText("Name"), "home-server");
-    await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
-    await user.click(screen.getByLabelText("Use my own token"));
     await user.type(screen.getByLabelText(/^Token/), "secret{Enter}");
     await user.type(screen.getByLabelText(/^Token/), "{Enter}");
 
@@ -215,17 +165,19 @@ describe("re-entry guard (audit finding 18)", () => {
   it("allows a second submission after a failed one", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockRejectedValue(new Error("the server said no"));
-    render(<CreateHostModal onClose={vi.fn()} onSave={onSave} />);
+    render(
+      <CreateHostModal
+        onClose={vi.fn()}
+        onSave={onSave}
+        initialName="home-server"
+        initialBaseUrl="http://192.168.1.20:4000"
+      />,
+    );
 
-    await user.type(screen.getByLabelText("Name"), "home-server");
-    await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
-    await user.click(screen.getByLabelText("Use my own token"));
-    await user.type(screen.getByLabelText(/^Token/), "secret");
-    await user.click(screen.getByRole("button", { name: "Add host" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("the server said no");
-    // The guard released, so a retry is possible.
-    await user.click(screen.getByRole("button", { name: "Add host" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(2));
   });
 });

@@ -35,6 +35,7 @@ vi.mock("../../src/services/github.js", (io) => mockGithubFactory(io));
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const { buildApp } = await import("../../src/app.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
@@ -194,10 +195,10 @@ describe("reconcileTasks — worker never started", () => {
       // entry in the primary's PtyManager, so discard that fixture-only PTY.
       app.pty.kill(String(sessionId));
       expect(app.pty.get(String(sessionId))).toBeUndefined();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "remote-start", baseUrl: "http://127.0.0.1:1", token: "test" },
+      const host = await seedHostResponse(app, {
+        name: "remote-start",
+        baseUrl: "http://127.0.0.1:1",
+        token: "test",
       });
       const hostId = host.json().id as string;
       app.db.update(sessions).set({ hostId }).where(eq(sessions.id, sessionId)).run();

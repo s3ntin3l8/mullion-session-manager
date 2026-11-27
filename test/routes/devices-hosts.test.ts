@@ -8,7 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import {
   DEVICE_HOSTS_CACHE_MS,
   DEVICE_HOSTS_TIMEOUT_MS,
@@ -85,7 +85,13 @@ describe("GET /api/devices/hosts", () => {
 
   it("adds an agent that reports its kinds and platforms", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Mac mini", baseUrl: "http://agent:1", token: "t" });
+    const host = {
+      id: createPairedHost(app, {
+        hostname: "Mac mini",
+        name: "Mac mini",
+        baseUrl: "http://agent:1",
+      }).hostId,
+    };
     kindsByHost.set(host.id, async () => ({
       deviceKinds: ["physical"],
       platforms: ["android", "ios"],
@@ -102,7 +108,13 @@ describe("GET /api/devices/hosts", () => {
 
   it("copies empty platforms when an agent reports no supported platforms", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Headless agent", baseUrl: "http://agent:1", token: "t" });
+    const host = {
+      id: createPairedHost(app, {
+        hostname: "Headless agent",
+        name: "Headless agent",
+        baseUrl: "http://agent:1",
+      }).hostId,
+    };
     kindsByHost.set(host.id, async () => ({ deviceKinds: [], platforms: [] }));
     const body: DeviceHostEntry[] = (await get(app)).json();
     expect(body[1]).toEqual({
@@ -116,7 +128,10 @@ describe("GET /api/devices/hosts", () => {
 
   it("passes a remote Mac's reason for offering no iOS through (#3510)", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Macbook", baseUrl: "http://agent:1", token: "t" });
+    const host = {
+      id: createPairedHost(app, { hostname: "Macbook", name: "Macbook", baseUrl: "http://agent:1" })
+        .hostId,
+    };
     kindsByHost.set(host.id, async () => ({
       deviceKinds: [],
       platforms: [],
@@ -135,7 +150,10 @@ describe("GET /api/devices/hosts", () => {
 
   it("sends no reason for an older agent that reports none, nor for a Linux primary", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Old Mac", baseUrl: "http://agent:1", token: "t" });
+    const host = {
+      id: createPairedHost(app, { hostname: "Old Mac", name: "Old Mac", baseUrl: "http://agent:1" })
+        .hostId,
+    };
     kindsByHost.set(host.id, async () => ({ deviceKinds: ["physical"], platforms: ["android"] }));
     const body: DeviceHostEntry[] = (await get(app)).json();
     expect(body[0]).not.toHaveProperty("unavailable");
@@ -144,7 +162,9 @@ describe("GET /api/devices/hosts", () => {
 
   it("marks an agent that predates the route (404) unsupported", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Old", baseUrl: "http://agent:1", token: "t" });
+    const host = {
+      id: createPairedHost(app, { hostname: "Old", name: "Old", baseUrl: "http://agent:1" }).hostId,
+    };
     kindsByHost.set(host.id, async () => null);
     const body: DeviceHostEntry[] = (await get(app)).json();
     expect(body[1]).toMatchObject({
@@ -157,8 +177,13 @@ describe("GET /api/devices/hosts", () => {
 
   it("marks a down agent unreachable and still answers 200", async () => {
     const app = await build();
-    const down = createHost(app, { name: "Down", baseUrl: "http://agent:1", token: "t" });
-    const up = createHost(app, { name: "Up", baseUrl: "http://agent:2", token: "t" });
+    const down = {
+      id: createPairedHost(app, { hostname: "Down", name: "Down", baseUrl: "http://agent:1" })
+        .hostId,
+    };
+    const up = {
+      id: createPairedHost(app, { hostname: "Up", name: "Up", baseUrl: "http://agent:2" }).hostId,
+    };
     kindsByHost.set(down.id, async () => {
       throw new HostRequestError("down", 503, "");
     });
@@ -172,7 +197,10 @@ describe("GET /api/devices/hosts", () => {
 
   it("gives up on a hung agent after 5 s", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Slow", baseUrl: "http://agent:1", token: "t" });
+    const host = {
+      id: createPairedHost(app, { hostname: "Slow", name: "Slow", baseUrl: "http://agent:1" })
+        .hostId,
+    };
     kindsByHost.set(host.id, () => new Promise(() => {}));
     vi.useFakeTimers();
     const pending = get(app);
@@ -184,7 +212,10 @@ describe("GET /api/devices/hosts", () => {
 
   it("serves a second call within 10 s from the cache, then asks again", async () => {
     const app = await build();
-    const host = createHost(app, { name: "Agent", baseUrl: "http://agent:1", token: "t" });
+    const host = {
+      id: createPairedHost(app, { hostname: "Agent", name: "Agent", baseUrl: "http://agent:1" })
+        .hostId,
+    };
     kindsByHost.set(host.id, async () => ({ deviceKinds: ["emulator"], platforms: ["android"] }));
     vi.useFakeTimers();
     await get(app);

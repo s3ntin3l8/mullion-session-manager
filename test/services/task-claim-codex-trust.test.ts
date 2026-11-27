@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
 import type { CodexHookTrust } from "../../src/services/hook-adapters/codex-trust.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // No real systemd/pty, real git.
 vi.mock("node-pty", () => ({
@@ -335,10 +336,10 @@ describe("codex /hooks trust gate at task dispatch", () => {
 
   it("does not gate remote placements even when local codex hook trust is pending", async () => {
     const app = await buildApp();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-codex-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const res = await seedHostResponse(app, {
+      name: "remote-codex-host",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const remoteHostId = res.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(remoteHostId);

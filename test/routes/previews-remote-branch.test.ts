@@ -5,6 +5,7 @@ import fs from "node:fs";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 import { previews, projects, sessions } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #3428 — a REMOTE project's branch preview, through POST /api/previews:
 // the dock controls, the branch, the stale worktree and the port all go to the
@@ -75,10 +76,10 @@ describe("branch previews on a remote host (#3428)", () => {
   });
 
   async function remoteProject() {
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: `bp-host-${++n}`, baseUrl: "http://127.0.0.1:1", token: "t".repeat(24) },
+    const hostRes = await seedHostResponse(app, {
+      name: `bp-host-${++n}`,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t".repeat(24),
     });
     const hostId = hostRes.json().id as string;
     const [row] = app.db

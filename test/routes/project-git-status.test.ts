@@ -27,6 +27,7 @@ import type * as TaskReconciler from "../../src/services/task-reconciler.js";
 // The relay's landed-check memo (issue #1630) — cleared per test so one
 // test's answer is not the next one's.
 import { gitEnv } from "../../src/services/git-env.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -311,10 +312,10 @@ describe("projects route", () => {
 
     it("omits a project on an unreachable remote host from the response", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "batch-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "batch-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -338,10 +339,10 @@ describe("projects route", () => {
       const { resetHostWarnThrottle } = await import("../../src/services/host-warn-throttle.js");
       resetHostWarnThrottle();
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "batch-throttle-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "batch-throttle-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -379,10 +380,10 @@ describe("projects route", () => {
       const { resetHostWarnThrottle } = await import("../../src/services/host-warn-throttle.js");
       resetHostWarnThrottle();
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "batch-mixed-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "batch-mixed-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const mk = async (name: string, cwd: string) =>
         (
@@ -438,10 +439,10 @@ describe("projects route", () => {
 
     describe("remote host git status problems (issue #1612)", () => {
       async function remoteProject(app: FastifyInstance) {
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "problem-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+        const host = await seedHostResponse(app, {
+          name: "problem-host",
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const project = await app.inject({
           method: "POST",
@@ -1023,10 +1024,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "git-status-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "git-status-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -1284,10 +1285,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "git-branches-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "git-branches-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",

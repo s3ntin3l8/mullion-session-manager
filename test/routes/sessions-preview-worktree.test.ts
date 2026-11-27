@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { gitEnv } from "../../src/services/git-env.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
@@ -175,12 +176,10 @@ describe("sessions route: the dock preview worktree", () => {
 
     describe("on a remote-hosted project (issue #345)", () => {
       async function createRemotePreviewProject(app: Awaited<ReturnType<typeof buildApp>>) {
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          // Deliberately unreachable — resolveBackend is spied per-test to
-          // return a fake backend, so this baseUrl is never actually hit.
-          payload: { name: "preview-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+        const host = await seedHostResponse(app, {
+          name: "preview-remote",
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const hostId = host.json().id as string;
         const project = await app.inject({

@@ -19,7 +19,7 @@ import {
   tasks,
   webhookRegistrations,
 } from "../../src/db/schema.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { findDuplicateGroups, mergeProjects } from "../../src/services/project-merge.js";
 import { parseHostCwds, serializeHostCwds } from "../../src/services/placement.js";
 import { parseHostCwdsMeta } from "../../src/services/host-cwds-meta.js";
@@ -73,7 +73,11 @@ describe("project-merge", () => {
     app = await buildTestApp();
     await app.ready();
     app.db.delete(projects).run();
-    macId = createHost(app, { name: "mac", baseUrl: "http://mac.test", token: "t" }).id;
+    macId = createPairedHost(app, {
+      hostname: "mac",
+      name: "mac",
+      baseUrl: "http://mac.test",
+    }).hostId;
     survivorId = localProject(app, tmp, "app", OLD).id;
     dupCwd = "/Users/me/app";
     dupId = remoteProject(app, macId, "app-mac", dupCwd, NEW).id;

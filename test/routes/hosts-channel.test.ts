@@ -1,14 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { bindChannelHost } from "../../src/services/agent-channel-tunnel.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 describe("hosts route channel binding (#2622)", () => {
   it("reports a bound host as 'bound to the outbound channel, not connected' and supports unbinding", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "bound-host", baseUrl: "http://127.0.0.1:2", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "bound-host",
+      baseUrl: "http://127.0.0.1:2",
+      token: "t",
     });
     const hostId = created.json().id as string;
 

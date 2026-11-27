@@ -7,6 +7,7 @@ import { vi } from "vitest";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { startFixturePageServer, type FixturePageServer } from "./support/fixture-page-server.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #407's checklist item "Multi-host: ... confirm ... browser navigate
 // ... work[s] through RemoteHostClient proxying. The plan calls this 'the
@@ -152,14 +153,10 @@ describe("multi-host proxy — browser automation (issue #407)", () => {
       SESSIONS_DIR: primarySessionsDir,
     });
 
-    const hostRes = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: "e2e-agent",
-        baseUrl: `http://127.0.0.1:${agent.port}`,
-        token: AGENT_TOKEN,
-      },
+    const hostRes = await seedHostResponse(primary.app, {
+      name: "e2e-agent",
+      baseUrl: `http://127.0.0.1:${agent.port}`,
+      token: AGENT_TOKEN,
     });
     hostId = hostRes.json().id;
 

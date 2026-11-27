@@ -8,6 +8,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hostIdentityEvents } from "../../src/db/schema.js";
 import { recordHostIdentityEvent } from "../../src/services/host-registry.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #3435 — audit trail of host identity lifecycle events and surfacing
 // unacknowledged identity replacements on /api/hosts.
@@ -19,7 +20,6 @@ describe("host identity events (issue #3435)", () => {
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret-3435"; // pragma: allowlist secret
   });
 
   beforeEach(async () => {
@@ -34,17 +34,15 @@ describe("host identity events (issue #3435)", () => {
     closeDb();
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
-    delete process.env.MULLION_ENROLLMENT_SECRET;
   });
 
   // Issue #3439 — a per-host token can no longer claim a host that holds a
   // live machine identity, so a registration can no longer REPLACE that
   // identity: the claim is refused and no event is written for it.
   it("refuses a live-identity claim and writes no event for it", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "claimable-box", baseUrl: "http://10.2.0.1:4000" },
+    const created = await seedHostResponse(app, {
+      name: "claimable-box",
+      baseUrl: "http://10.2.0.1:4000",
     });
     expect(created.statusCode).toBe(201);
     const { id: hostId, token: perHostToken } = created.json() as { id: string; token: string };
@@ -112,10 +110,9 @@ describe("host identity events (issue #3435)", () => {
   });
 
   it("surfaces a `replaced` event on /api/hosts until it is acknowledged", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "replaced-box", baseUrl: "http://10.2.0.2:4000" },
+    const created = await seedHostResponse(app, {
+      name: "replaced-box",
+      baseUrl: "http://10.2.0.2:4000",
     });
     expect(created.statusCode).toBe(201);
     const { id: hostId } = created.json() as { id: string };
@@ -160,16 +157,18 @@ describe("host identity events (issue #3435)", () => {
     expect(itemAfter?.recentIdentityReplacement).toBeNull();
   });
 
-  it("writes `enrolled` on enrollment and no event on normal machine credential renewal", async () => {
+  it("writes `paired` on pairing and no event on normal machine credential renewal", async () => {
+    const pairing = await app.inject({ method: "POST", url: "/api/host-pairings", payload: {} });
+    const { code } = pairing.json() as { code: string };
     const enrollRes = await app.inject({
       method: "POST",
-      url: "/api/internal/register",
+      url: "/api/internal/pair",
       remoteAddress: "10.3.0.5",
       payload: {
-        token: "fleet-secret-3435",
+        code,
+        requestId: "req-3435-1",
         hostname: "enrolled-box",
         baseUrl: "http://10.3.0.5:4000",
-        wantsMachineCredential: true,
       },
     });
     expect(enrollRes.statusCode).toBe(200);
@@ -198,16 +197,14 @@ describe("host identity events (issue #3435)", () => {
     expect(eventsRes.statusCode).toBe(200);
     const events = eventsRes.json() as Array<{ kind: string; peer: string | null }>;
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ kind: "enrolled", peer: "10.3.0.5" });
-    expect(JSON.stringify(events)).not.toContain("fleet-secret-3435");
+    expect(events[0]).toMatchObject({ kind: "paired", peer: "10.3.0.5" });
     expect(JSON.stringify(events)).not.toContain(cred);
   });
 
   it("writes `claimed` on first claim", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "manual-box", baseUrl: "http://10.4.0.1:4000" },
+    const created = await seedHostResponse(app, {
+      name: "manual-box",
+      baseUrl: "http://10.4.0.1:4000",
     });
     const { id: hostId, token } = created.json() as { id: string; token: string };
 
@@ -272,10 +269,9 @@ describe("host identity events (issue #3435)", () => {
   });
 
   it("writes `revoked` on revoke and `token_rotated` on rotate-token", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "rotate-revoke-box", baseUrl: "http://10.6.0.1:4000" },
+    const created = await seedHostResponse(app, {
+      name: "rotate-revoke-box",
+      baseUrl: "http://10.6.0.1:4000",
     });
     const { id: hostId } = created.json() as { id: string };
 
@@ -307,10 +303,9 @@ describe("host identity events (issue #3435)", () => {
   });
 
   it("caps GET /api/hosts/:id/identity-events at 100 newest-first and deletes events when host is deleted", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "many-events-box", baseUrl: "http://10.7.0.1:4000" },
+    const created = await seedHostResponse(app, {
+      name: "many-events-box",
+      baseUrl: "http://10.7.0.1:4000",
     });
     const { id: hostId } = created.json() as { id: string };
 
@@ -358,10 +353,9 @@ describe("host identity events (issue #3435)", () => {
     });
     expect(missingAck.statusCode).toBe(404);
 
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "old-replaced-box", baseUrl: "http://10.8.0.1:4000" },
+    const created = await seedHostResponse(app, {
+      name: "old-replaced-box",
+      baseUrl: "http://10.8.0.1:4000",
     });
     const { id: hostId } = created.json() as { id: string };
 
@@ -381,10 +375,9 @@ describe("host identity events (issue #3435)", () => {
   });
 
   it("preserves an unacknowledged `replaced` event when >100 later events are recorded", async () => {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "protected-replaced-box", baseUrl: "http://10.9.0.1:4000" },
+    const created = await seedHostResponse(app, {
+      name: "protected-replaced-box",
+      baseUrl: "http://10.9.0.1:4000",
     });
     const { id: hostId } = created.json() as { id: string };
 

@@ -8,6 +8,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { getHostRow, listHosts } from "../../src/services/host-registry.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2452 — the three credential transitions have deterministic results,
 // and none of them lets stale bootstrap state win back revoked authority:
@@ -24,7 +25,6 @@ describe("credential transitions (issue #2452)", () => {
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
   });
   beforeEach(async () => {
     app = await buildApp();
@@ -36,7 +36,6 @@ describe("credential transitions (issue #2452)", () => {
     closeDb();
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
-    delete process.env.MULLION_ENROLLMENT_SECRET;
   });
 
   const register = (payload: Record<string, unknown>) =>
@@ -52,9 +51,7 @@ describe("credential transitions (issue #2452)", () => {
   // A per-host bootstrap token (the row an operator pre-creates), claimed once
   // by an agent that wants a machine credential.
   async function claimedHost(name: string) {
-    const created = (
-      await app.inject({ method: "POST", url: "/api/hosts", payload: { name } })
-    ).json() as { id: string; token: string };
+    const created = (await seedHostResponse(app, { name })).json() as { id: string; token: string };
     const claim = await register({
       token: created.token,
       wantsMachineCredential: true,
@@ -149,14 +146,36 @@ describe("credential transitions (issue #2452)", () => {
       expect(row.sessionSecretEnc).toBeNull();
     });
 
-    it("does not let the fleet secret take over a revoked row", async () => {
+    it("does not let a new pairing take over a revoked row", async () => {
+      const pairing = await app.inject({ method: "POST", url: "/api/host-pairings", payload: {} });
+      const { code } = pairing.json() as { code: string };
       const enrolled = (
-        await register({ token: "fleet-secret", wantsMachineCredential: true })
+        await app.inject({
+          method: "POST",
+          url: "/api/internal/pair",
+          payload: {
+            code,
+            requestId: crypto.randomUUID(),
+            hostname: "box",
+            baseUrl: "http://10.2.0.1:4000",
+          },
+        })
       ).json();
       await post(`/api/hosts/${enrolled.host_id}/revoke`);
       const before = listHosts(app).length;
-      const again = await register({ token: "fleet-secret", wantsMachineCredential: true });
-      // A fresh enrollment is a NEW host, never the revoked identity.
+      const pairing2 = await app.inject({ method: "POST", url: "/api/host-pairings", payload: {} });
+      const { code: code2 } = pairing2.json() as { code: string };
+      const again = await app.inject({
+        method: "POST",
+        url: "/api/internal/pair",
+        payload: {
+          code: code2,
+          requestId: crypto.randomUUID(),
+          hostname: "box",
+          baseUrl: "http://10.2.0.1:4000",
+        },
+      });
+      // A fresh pairing is a NEW host, never the revoked identity.
       expect(again.statusCode).toBe(200);
       expect(again.json().host_id).not.toBe(enrolled.host_id);
       expect(listHosts(app)).toHaveLength(before + 1);

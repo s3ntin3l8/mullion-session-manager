@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
@@ -188,10 +189,10 @@ describe("budget failure keeps the worker's scrollback tail", () => {
       payload: { allowDuplicate: true, createDir: true, name: "budget-remote-p", cwd: "/tmp" },
     });
     const projectId = projectRes.json().id as number;
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "Remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const hostRes = await seedHostResponse(app, {
+      name: "Remote",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const remoteHostId = hostRes.json().id as string;
     const remoteCwd = "/Users/bjoern/Projects/branchdam-mobile";

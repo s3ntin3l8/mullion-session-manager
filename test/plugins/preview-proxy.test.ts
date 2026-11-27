@@ -23,6 +23,7 @@ import {
   PREVIEW_TRACKER_MAX_ENTRIES,
 } from "../../src/plugins/preview-proxy.js";
 import { signPayload } from "../../src/services/signed-payload.js";
+import { seedHost } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `preview-proxy-test-${process.pid}.db`);
 const PREVIEW_BASE_HOST = "preview.test";
@@ -778,11 +779,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     // phase-5-and-earlier "not supported yet" 503, and fails gracefully
     // (502, not a 500/hang) when the agent can't actually be reached.
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-box", baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const host = await seedHost(app, { name: "remote-box", baseUrl: "http://127.0.0.1:1" });
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -790,7 +787,7 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
         allowDuplicate: true,
         name: "remote-proxy-test",
         cwd: "/x",
-        hostId: host.json().id,
+        hostId: host.id,
       },
     });
     const projectId = created.json().id as number;

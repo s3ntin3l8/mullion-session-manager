@@ -8,7 +8,7 @@ import type * as RemoteHostClientModule from "../../src/services/remote-host-cli
 import { buildTestApp } from "../helpers/app.js";
 import { projects } from "../../src/db/schema.js";
 import { HostHeartbeatTracker } from "../../src/services/host-heartbeat.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import type { DiscoveredCandidate } from "../../src/services/project-config.js";
 import { applySettingsPatch } from "../../src/services/settings.js";
 
@@ -51,7 +51,11 @@ describe("host checkout detection routes", () => {
     await app.ready();
     const tracker = new HostHeartbeatTracker();
     app.hostHeartbeatTracker = tracker;
-    macId = createHost(app, { name: "mac", baseUrl: "http://mac.test", token: "t" }).id;
+    macId = createPairedHost(app, {
+      hostname: "mac",
+      name: "mac",
+      baseUrl: "http://mac.test",
+    }).hostId;
     tracker.recordSuccess(macId);
 
     const cwd = path.join(tmp, "app");
@@ -106,7 +110,11 @@ describe("host checkout detection routes", () => {
     });
 
     it("name-matches a project whose own cwd is a Windows drive path (#2958)", async () => {
-      const winId = createHost(app, { name: "win", baseUrl: "http://win.test", token: "t" }).id;
+      const winId = createPairedHost(app, {
+        hostname: "win",
+        name: "win",
+        baseUrl: "http://win.test",
+      }).hostId;
       app.hostHeartbeatTracker!.recordSuccess(winId);
       app.db
         .update(projects)

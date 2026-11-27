@@ -5,6 +5,7 @@ import fs from "node:fs";
 import http from "node:http";
 import { EventEmitter } from "node:events";
 import type { SessionLiveness } from "../../src/services/session-process.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation still spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked the same way as test/helpers/sessions-routes.ts, since
@@ -1146,10 +1147,10 @@ describe("reconcileExitedSessions", () => {
       const localSessionId = await createSession(app);
       mockMasterAlive(app, true);
 
-      const badHost = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "goes-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const badHost = await seedHostResponse(app, {
+        name: "goes-down",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remoteProject = await app.inject({
         method: "POST",
@@ -1217,14 +1218,10 @@ describe("reconcileExitedSessions", () => {
       const address = server.address();
       if (address === null || typeof address === "string") throw new Error("expected a bound port");
 
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "partial-liveness",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          token: "t",
-        },
+      const host = await seedHostResponse(app, {
+        name: "partial-liveness",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -1293,14 +1290,10 @@ describe("reconcileExitedSessions", () => {
       const address = server.address();
       if (address === null || typeof address === "string") throw new Error("expected a bound port");
 
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "confirmed-dead",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          token: "t",
-        },
+      const host = await seedHostResponse(app, {
+        name: "confirmed-dead",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -1335,10 +1328,10 @@ describe("reconcileExitedSessions", () => {
       resetHostWarnThrottle();
       const app = await openTestApp();
       mockMasterAlive(app, true);
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "throttled-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "throttled-down",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -1386,14 +1379,10 @@ describe("reconcileExitedSessions", () => {
       const address = server.address();
       if (address === null || typeof address === "string") throw new Error("expected a bound port");
 
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "buggy-liveness",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          token: "t",
-        },
+      const host = await seedHostResponse(app, {
+        name: "buggy-liveness",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",

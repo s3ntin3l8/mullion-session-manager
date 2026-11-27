@@ -4,7 +4,6 @@ import {
   type FakePty,
   createControlSocketPtyMock,
   mockControlSocketChildProcess,
-  TEST_TOKEN,
   NOT_MINE,
   waitForReply,
   waitUntil,
@@ -17,6 +16,7 @@ import {
   spawnChildOf,
   ask,
 } from "../helpers/control-socket.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const ptyMock = createControlSocketPtyMock();
 vi.mock("../../src/services/hook-adapters/codex-trust.js", () => ({
@@ -78,11 +78,10 @@ describe("parent→child ops: sessions.prompt", () => {
       liveScript: Array<Record<string, unknown> | Error> = [{ alive: true }],
     ) {
       const { childId, socket, pty } = await agentChild();
-      const hostRes = await app!.inject({
-        method: "POST",
-        url: "/api/hosts",
-        headers: { authorization: `Bearer ${TEST_TOKEN}` },
-        payload: { name: "mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const hostRes = await seedHostResponse(app!, {
+        name: "mac",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = hostRes.json().id as string;
       if (!hostId) throw new Error(`host create: ${hostRes.statusCode} ${hostRes.body}`);
