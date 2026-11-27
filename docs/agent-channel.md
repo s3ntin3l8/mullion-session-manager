@@ -180,10 +180,15 @@ attach query validation is shared, not copied.
   reported to the panel by name: the agent's stream carries the reason in
   band (the failure notice above), and the primary tells the panel which
   cap it hit and on which host, instead of the generic "did not accept the
-  device socket" a refusal gets. The notice goes AHEAD of the frames the
-  agent already had queued, because the send window is normally exhausted
-  while video streams — a notice queued behind that backlog would never
-  reach the wire, and the panel would see the bare disconnect this fixes.
+  device socket" a refusal gets. The notice goes ahead of the frames the
+  agent had queued but had NOT started, because the send window is normally
+  exhausted while video streams — a notice queued behind that backlog would
+  never reach the wire, and the panel would see the bare disconnect this
+  fixes. It is a frame itself, so it goes on a frame boundary: the tail of
+  the frame that is already half on the wire goes out first (up to one
+  frame), and the notice follows it. Splicing it into that frame instead
+  would have the peer read the notice as the frame's payload, and it would
+  never see a frame at all.
   Lowering `DEVICE_VIDEO_MAX_SIZE` on that host is what brings the frames
   back under the bound. A peer that predates the notice gets none: an
   agent that predates it fails the frame silently, and a primary that
@@ -218,7 +223,8 @@ attach query validation is shared, not copied.
   grown, and the connection-level `maxBufferedBytes` ceiling still applies. A
   message past the 1 MiB per-message cap fails the stream: the side that sent
   it tells the peer WHY with a failure notice — written ahead of the frames it
-  had queued, since the window is normally exhausted — and the peer raises
+  had queued and not yet started, since the window is normally exhausted, and
+  on a frame boundary, so the peer reads it as a frame — and the peer raises
   that reason as an error on its own socket. A peer that never drains does
   not hold the stream open for good: the notice has a bound, and the stream
   ends without it.
