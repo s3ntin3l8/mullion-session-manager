@@ -216,6 +216,60 @@ describe("reconcileTasks — auto-approve sweep", () => {
       expect(row.prUrl).toBe("https://github.com/o/r/pull/9");
     });
 
+    it.each([
+      { latest: "cancelled", older: "success", expectedStatus: "reviewing" },
+      { latest: "success", older: "cancelled", expectedStatus: "done" },
+    ])(
+      "a lost workflow run with a latest $latest check and superseded $older check leaves the task $expectedStatus",
+      async ({ latest, older, expectedStatus }) => {
+        const { resetCiApprovalGateLogsForTests } =
+          await import("../../src/services/task-ci-approval-gate.js");
+        resetCiApprovalGateLogsForTests();
+        const app = await openTestApp();
+        const { taskId } = await createAutoApproveCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(
+          ciRun("failure").map((run) => ({ ...run, name: "CodeQL" })),
+        );
+        // GitHub returns the newest run first, including superseded attempts.
+        reconcilerMocks.mockFetchCheckRunsForHead.mockResolvedValue([
+          { name: "test-node / lint-and-test", conclusion: latest },
+          { name: "test-node / lint-and-test", conclusion: older },
+          { name: "analyze / setup", conclusion: "success" },
+        ]);
+        if (expectedStatus === "done") {
+          mockPromoteTaskToPR.mockResolvedValueOnce({
+            ok: true,
+            prUrl: "https://github.com/o/r/pull/9",
+            prNumber: 9,
+          });
+        }
+        const infoSpy = vi.spyOn(app.log, "info");
+        const warnSpy = vi.spyOn(app.log, "warn");
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe(expectedStatus);
+        if (latest === "cancelled") {
+          expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+          expect(infoSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ taskId, reason: "check-run-not-passing" }),
+            expect.stringContaining("waiting on CI"),
+          );
+          expect(warnSpy).not.toHaveBeenCalledWith(
+            expect.anything(),
+            expect.stringContaining("the latest run of every check name on the head is green"),
+          );
+        } else {
+          expect(mockPromoteTaskToPR).toHaveBeenCalled();
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ taskId, failedRuns: ["CodeQL"] }),
+            expect.stringContaining("the latest run of every check name on the head is green"),
+          );
+        }
+      },
+    );
+
     it("records the transition via 'auto-approve', distinct from a human's 'approve'", async () => {
       const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app);

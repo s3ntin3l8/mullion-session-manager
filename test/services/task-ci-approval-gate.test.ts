@@ -78,6 +78,22 @@ describe("ciAllowsAutoApproval", () => {
     );
   });
 
+  it.each(["success", "skipped", "neutral", "cancelled"])(
+    "requires a passing latest check conclusion (%s) before ignoring a lost workflow run",
+    async (conclusion) => {
+      const { app, log } = appWithLog();
+      mockFetchCheckRunsForHead.mockResolvedValue([{ name: "lint-and-test", conclusion }]);
+
+      await expect(ciAllowsAutoApproval(app, task, current("failure", deadRun))).resolves.toBe(
+        conclusion !== "cancelled",
+      );
+      if (conclusion === "cancelled") {
+        expect(holdReason(log)).toBe("check-run-not-passing");
+        expect(log.warn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("holds when a check run is actually red", async () => {
     const { app, log } = appWithLog();
     mockFetchCheckRunsForHead.mockResolvedValue([
