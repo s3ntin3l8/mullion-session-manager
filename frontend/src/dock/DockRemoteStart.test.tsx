@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { Dock } from "../Dock.js";
 import { DockSidebarView } from "../right-sidebar/DockSidebarView.js";
 import { useDashboardStore } from "../store/index.js";
-import { ApiError } from "../api/index.js";
+import { ApiError, LOCAL_HOST_ID } from "../api/index.js";
 import type { GitBranchesResult, Session } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { makeHost, makeProject, makeSession } from "../test/fixtures.js";
@@ -307,5 +307,43 @@ describe("Dock: starting a control on another host (#3557)", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("Error: .env not found")).toBeInTheDocument();
+  });
+
+  it("labels a remote-owned project's own host by name and local host by name when not own host (#3570)", async () => {
+    const remoteProject = makeProject({
+      id: 1,
+      name: "aurora",
+      cwd: "/Users/x/aurora",
+      hostId: "mac",
+      hostCwds: { [LOCAL_HOST_ID]: "/home/x/aurora" },
+    });
+    const localHost = makeHost({ id: LOCAL_HOST_ID, name: "linux-box", health: "online" });
+    resetStore({ projects: [remoteProject], sessions: [], hosts: [MAC, localHost] });
+    createSession.mockRejectedValue(new Error("Host is unreachable"));
+    useDashboardStore.setState({
+      createSession,
+      deleteSession: vi.fn().mockResolvedValue(undefined),
+      sessionsLoaded: true,
+      gitBranchesByProject: { 1: REFS },
+    });
+    renderDock();
+    const header = await screen.findByText("Dev server");
+    // Own host is "mac", so default start labels it "macbook".
+    await userEvent.click(header);
+    expect(await screen.findByText("Failed to start")).toBeInTheDocument();
+    expect(toasts()).toEqual(["Couldn't start Dev server on macbook: Host is unreachable"]);
+
+    // Picking the local host on a remote-owned project labels it by its host name, not "this server".
+    dd.pickDropdownOption(
+      screen.getByRole("combobox", { name: "Run dock controls on host" }),
+      LOCAL_HOST_ID,
+    );
+    await userEvent.click(header);
+    await waitFor(() =>
+      expect(toasts()).toEqual([
+        "Couldn't start Dev server on macbook: Host is unreachable",
+        "Couldn't start Dev server on linux-box: Host is unreachable",
+      ]),
+    );
   });
 });
