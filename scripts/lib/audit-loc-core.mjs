@@ -300,18 +300,23 @@ export function areaOf(relPath) {
 }
 
 /**
- * Derive the production/test/tooling/total breakdown of a baseline's `files`
- * map at read time, so the tally can never desynchronise from the entries
- * across a merge.
+ * Derive the production/test/tooling/other/total breakdown of a baseline's
+ * `files` map (or an iterable of file paths) at read time, so the tally can
+ * never desynchronise from the entries across a merge.
  *
- * @param {Record<string, number>} files
- * @returns {{ production: number, test: number, tooling: number, total: number }}
+ * @param {Record<string, number> | Iterable<string>} files
+ * @returns {{ production: number, test: number, tooling: number, other: number, total: number }}
  */
 export function deriveBaselineCounts(files) {
+  const paths =
+    typeof (/** @type {any} */ (files)[Symbol.iterator]) === "function"
+      ? /** @type {Iterable<string>} */ (files)
+      : Object.keys(/** @type {Record<string, number>} */ (files));
   let production = 0;
   let test = 0;
   let tooling = 0;
-  for (const file of Object.keys(files)) {
+  let other = 0;
+  for (const file of paths) {
     const area = areaOf(file);
     if (area === "backend tests (test/)" || area === "frontend tests (colocated)") {
       test += 1;
@@ -322,9 +327,11 @@ export function deriveBaselineCounts(files) {
       area === "frontend production (frontend/src/)"
     ) {
       production += 1;
+    } else {
+      other += 1;
     }
   }
-  return { production, test, tooling, total: production + test + tooling };
+  return { production, test, tooling, other, total: production + test + tooling + other };
 }
 
 /**

@@ -241,11 +241,12 @@ describe("audit-loc-core: the file map", () => {
     ]);
   });
 
-  it("derives production/test/tooling counts from baseline entries", () => {
+  it("derives production/test/tooling/other counts from baseline entries or path lists", () => {
     expect(deriveBaselineCounts({})).toEqual({
       production: 0,
       test: 0,
       tooling: 0,
+      other: 0,
       total: 0,
     });
     expect(
@@ -256,12 +257,22 @@ describe("audit-loc-core: the file map", () => {
         "frontend/src/Sidebar.test.tsx": 1415,
         "frontend/src/panelUtils.test.ts": 2531,
         "scripts/audit-loc.mjs": 1300,
+        "docs/big.ts": 1300,
+        "vendor/c.js": 900,
       }),
     ).toEqual({
       production: 2,
       test: 3,
       tooling: 1,
-      total: 6,
+      other: 2,
+      total: 8,
+    });
+    expect(deriveBaselineCounts(["src/a.ts", "test/a.test.ts"])).toEqual({
+      production: 1,
+      test: 1,
+      tooling: 0,
+      other: 0,
+      total: 2,
     });
   });
 });
@@ -455,6 +466,15 @@ describe("check-max-file-lines.mjs", () => {
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("1 production, 0 test, 0 tooling");
   });
+
+  it("reports the split of baselined files present on disk rather than including deleted entries", async () => {
+    writeCodeLines("src/huge.ts", LIMIT + 500);
+    writeBaseline({ "src/huge.ts": LIMIT + 500, "src/gone.ts": LIMIT + 100 });
+    const result = await runCheck();
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("1 baselined (1 production, 0 test, 0 tooling)");
+    expect(result.stdout).toContain("src/gone.ts");
+  });
 });
 
 describe("check-max-file-lines.mjs: the repository's own baseline", () => {
@@ -512,7 +532,8 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
     const names = Object.keys(baseline.files);
     const counts = deriveBaselineCounts(baseline.files);
     expect(counts.total).toBe(names.length);
-    expect(counts.production + counts.test + counts.tooling).toBe(counts.total);
+    expect(counts.other).toBe(0);
+    expect(counts.production + counts.test + counts.tooling + counts.other).toBe(counts.total);
     expect(counts.production).toBeGreaterThan(0);
     expect(counts.test).toBeGreaterThan(0);
 
