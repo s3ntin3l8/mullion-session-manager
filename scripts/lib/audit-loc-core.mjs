@@ -300,6 +300,41 @@ export function areaOf(relPath) {
 }
 
 /**
+ * Derive the production/test/tooling/other/total breakdown of a baseline's
+ * `files` map (or an iterable of file paths) at read time, so the tally can
+ * never desynchronise from the entries across a merge.
+ *
+ * @param {Record<string, number> | Iterable<string>} files
+ * @returns {{ production: number, test: number, tooling: number, other: number, total: number }}
+ */
+export function deriveBaselineCounts(files) {
+  const paths =
+    typeof (/** @type {any} */ (files)[Symbol.iterator]) === "function"
+      ? /** @type {Iterable<string>} */ (files)
+      : Object.keys(/** @type {Record<string, number>} */ (files));
+  let production = 0;
+  let test = 0;
+  let tooling = 0;
+  let other = 0;
+  for (const file of paths) {
+    const area = areaOf(file);
+    if (area === "backend tests (test/)" || area === "frontend tests (colocated)") {
+      test += 1;
+    } else if (area === "tooling (scripts/)") {
+      tooling += 1;
+    } else if (
+      area === "backend production (src/)" ||
+      area === "frontend production (frontend/src/)"
+    ) {
+      production += 1;
+    } else {
+      other += 1;
+    }
+  }
+  return { production, test, tooling, other, total: production + test + tooling + other };
+}
+
+/**
  * Group counted files into the audit's per-area summary.
  *
  * @param {FileCounts[]} counts

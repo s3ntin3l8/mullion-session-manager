@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 // The file-size guardrail: no source file may grow past the size ceiling.
 //
-// WHY this exists: Mullion's codebase has 57 source files over 1,200 code
-// lines — 14 of them production, the largest of which hold 59 and 95 route
-// registrations respectively. A file that size does not fail loudly — it just gets
-// slower to change safely, one edit at a time, until the next change to it
-// touches something nobody remembers. The ceiling turns that slow decay into
-// a build failure at the moment it happens.
+// WHY this exists: Mullion's codebase has legacy source files over 1,200 code
+// lines (the guard prints the current baselined split on each run). A file that
+// size does not fail loudly — it just gets slower to change safely, one edit at
+// a time, until the next change to it touches something nobody remembers. The
+// ceiling turns that slow decay into a build failure at the moment it happens.
 //
 // THIS IS A RATCHET, NOT A THRESHOLD. A flat "max 1,200 lines" rule would
-// fail on all 57 existing files the day it landed. Instead each file is
+// fail on all those existing files the day it landed. Instead each file is
 // measured against a ceiling of its own, and so:
 //
 //   - a NEW file over 1,200 lines fails        (the global ceiling)
@@ -93,7 +92,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
-import { AUDIT_ROOTS, countFileLines, countSourceFiles } from "./lib/audit-loc-core.mjs";
+import {
+  AUDIT_ROOTS,
+  countFileLines,
+  countSourceFiles,
+  deriveBaselineCounts,
+} from "./lib/audit-loc-core.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -145,6 +149,7 @@ function warn(message) {
  * @property {number} limit
  * @property {Record<string, number>} files
  * @property {Record<string, number>} pins
+ * @property {{ production: number, test: number, tooling: number, other: number, total: number }} counts
  */
 
 /**
@@ -161,7 +166,7 @@ function readBaseline(file) {
         `fails — the baseline is what records the existing offenders at their ` +
         `current size.`,
     );
-    return { limit: FALLBACK_LIMIT, files: {}, pins: {} };
+    return { limit: FALLBACK_LIMIT, files: {}, pins: {}, counts: deriveBaselineCounts({}) };
   }
   let parsed;
   try {
@@ -182,7 +187,7 @@ function readBaseline(file) {
   for (const [key, value] of Object.entries(parsed.pins ?? {})) {
     if (typeof value === "number") pins[key] = value;
   }
-  return { limit, files, pins };
+  return { limit, files, pins, counts: deriveBaselineCounts(files) };
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -303,7 +308,7 @@ if (reference === null && isGitCheckout(options.root)) {
       `is not a merge commit), so this check ABSTAINS: it cannot tell what ` +
       `this change did, and a stale snapshot would blame it for the default ` +
       `branch's own growth. ${over.length} file(s) are over the ` +
-      `${baseline.limit}-line ceiling; the baseline records ${Object.keys(baseline.files).length}.`,
+      `${baseline.limit}-line ceiling; the baseline records ${baseline.counts.total}.`,
   );
   if (options.strict) {
     console.error(
@@ -432,6 +437,7 @@ if (failures.length > 0) {
 }
 
 const baselinedHere = counts.filter((c) => baseline.files[c.path] !== undefined);
+const presentCounts = deriveBaselineCounts(baselinedHere.map((c) => c.path));
 // Every baselined file sits AT its ceiling until someone lowers it — that is
 // what a ratchet is. So the useful list is not "who is about to trip" (all of
 // them are one line from tripping) but "whose ceiling is cheapest to lower":
@@ -443,7 +449,10 @@ const smallest = [...baselinedHere]
 
 console.log(
   `OK — no file is over its size ceiling (${baseline.limit} for a new file; ` +
-    `${baselinedHere.length} baselined, all within their own ceilings).`,
+    `${baselinedHere.length} baselined ` +
+    `(${presentCounts.production} production, ${presentCounts.test} test, ${presentCounts.tooling} tooling` +
+    (presentCounts.other > 0 ? `, ${presentCounts.other} other` : "") +
+    `), all within their own ceilings).`,
 );
 console.log("");
 console.log("Smallest baselined files — the cheapest ceilings to lower:");
