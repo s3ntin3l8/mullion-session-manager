@@ -252,7 +252,7 @@ describe("Dock: starting a control on another host (#3557)", () => {
     expect(toasts()).toEqual([]);
   });
 
-  it("restarts a running control where it runs: the host selector is locked meanwhile (#3556)", async () => {
+  it("locks the host selector while a control runs, so Restart cannot move it to another host (#3556)", async () => {
     const running = makeSession({
       id: 42,
       projectId: 1,

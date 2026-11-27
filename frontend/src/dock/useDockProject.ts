@@ -317,12 +317,11 @@ export function useDockProject(
   const multiHost = project !== null && hostOptions.length > 1;
   // #3556 — the name a host goes by in the Dock, by buildHostTargetOptions's
   // rule: "this server" for the project's own host when that is the local one,
-  // else the host's name (and "this server" for a local host with no row).
-  // No id means the project's own host (#3557).
+  // else the host's name. No id means the project's own host (#3557).
   const hostLabel = (hostId: string | undefined): string => {
     const id = hostId ?? project?.hostId ?? LOCAL_HOST_ID;
     if (id === LOCAL_HOST_ID && (!project || id === project.hostId)) return "this server";
-    return hosts.find((h) => h.id === id)?.name ?? (id === LOCAL_HOST_ID ? "this server" : id);
+    return hosts.find((h) => h.id === id)?.name ?? id;
   };
   // The option value that stands for a host: the project's own host is the
   // OWN sentinel, any other host its id.
