@@ -408,6 +408,7 @@ describe("HostsSection", () => {
       expect(menu.getByText(action, { exact: action !== "Park host" })).toBeInTheDocument();
     }
     expect(screen.queryByText("Identity revoked")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Test" })).toBeEnabled();
     expect(menu.queryByText(/rotate token and discard/i)).not.toBeInTheDocument();
     expect(menu.queryAllByText("Rotate token")).toHaveLength(rotates ? 1 : 0);
   });
@@ -438,6 +439,7 @@ describe("HostsSection", () => {
         expect.stringMatching(/agent can no longer connect.*Re-pair/),
       );
       expect(row.queryByText(/paired — waiting for the agent to connect/)).not.toBeInTheDocument();
+      expect(row.getByRole("button", { name: "Test" })).toBeDisabled();
       await user.click(row.getByRole("button", { name: "More…" }));
       const menu = within(screen.getByRole("menu"));
       for (const action of ["View config", "Edit", "Park host", "Re-pair", "Delete host"]) {

@@ -879,7 +879,7 @@ export function HostsSection() {
                     })()}
                     <SecondaryButton
                       onClick={() => testConnection(host)}
-                      disabled={click.status === "checking"}
+                      disabled={host.machineIdentityRevoked === true || click.status === "checking"}
                     >
                       Test
                     </SecondaryButton>
