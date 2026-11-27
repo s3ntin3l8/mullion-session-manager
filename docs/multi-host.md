@@ -2829,8 +2829,9 @@ A session's browser (pane and agent automation) runs on the session's own host a
 
 A dock control runs on the host it is started on, so a project's dev server can
 run on a Mac agent while the project stays on the primary: choose the host when
-you start the control (the Dock's **Run on** dropdown, `mullion dock start --host`,
-MCP `host`). The project needs a checkout there (`hostCwds`), and the Browser pane
+you start the control (the Dock's **Next start on** dropdown, `mullion dock start --host`,
+MCP `host`). A running control shows its host beside its name, and the dropdown
+is locked to that host until the control stops. The project needs a checkout there (`hostCwds`), and the Browser pane
 reaches the server through the preview proxy, so `PREVIEW_BASE_HOST` must be set.
 The agent dials the dev server on its own loopback, `127.0.0.1` then `::1`. A
 simulator on that host reaches the same server at the host's localhost. Details

@@ -1584,6 +1584,15 @@
   flex-shrink: 0;
   white-space: nowrap;
 }
+/* #3556 — the host a running control is on, beside its name. Status text,
+   toned like the container state next to it. */
+.dock-monitor-host {
+  font-size: 0.59375rem;
+  color: var(--dim);
+  font-family: "Geist Mono", monospace;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .dock-monitor-worktree-select {
   max-width: 120px;
   min-width: 0;

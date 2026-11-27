@@ -382,6 +382,7 @@ export function DockProjectGroup({
         key={control.id}
         control={control}
         running={running}
+        runHostLabel={view.runHostLabel}
         selected={isActive && selectedKey === rowKey}
         showSelector={view.showSelector}
         selectedValue={view.selectedValue}

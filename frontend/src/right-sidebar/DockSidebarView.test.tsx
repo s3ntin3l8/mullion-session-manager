@@ -215,7 +215,10 @@ describe("DockSidebarView (#3012)", () => {
       resetStore({ projects: [spanning], sessions: [running], hosts: [MAC] });
       useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
       renderView();
-      await userEvent.click(await screen.findByRole("button", { name: /^dev, running/ }));
+      // #3556 — the row says where it runs.
+      await userEvent.click(
+        await screen.findByRole("button", { name: "dev, running on Mac mini" }),
+      );
       const picker = screen.getByRole("combobox", { name: "Run dock controls on host" });
       // Not "this server": it is running on the Mac.
       expect(dd.dropdownValue(picker)).toBe("mac");
@@ -225,16 +228,124 @@ describe("DockSidebarView (#3012)", () => {
       expect(createSession.mock.calls[0][2]).toEqual(
         expect.objectContaining({ kind: "dock", targetHostId: "mac" }),
       );
+    });
 
-      // An explicit choice of the project's own host wins over where it runs now.
-      createSession.mockClear();
-      dd.pickDropdownOption(
-        screen.getByRole("combobox", { name: "Run dock controls on host" }),
-        "__own__",
-      );
-      await userEvent.click(within(group).getByRole("button", { name: "Restart" }));
-      await waitFor(() => expect(createSession).toHaveBeenCalled());
-      expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+    describe("while a control runs, the selector shows its host and is locked (#3556)", () => {
+      const picker = () => screen.getByRole("combobox", { name: "Run dock controls on host" });
+
+      it("a stopped control: no host badge, the selector picks the next start's host", async () => {
+        resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
+        useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+        renderView();
+        await screen.findByRole("button", { name: "dev, stopped" });
+        expect(picker()).not.toBeDisabled();
+        expect(screen.getByText("Next start on")).toBeInTheDocument();
+        expect(document.querySelector(".dock-host-picker")?.getAttribute("title")).toMatch(
+          /next Start runs/,
+        );
+      });
+
+      it("a pick made while stopped does not override where it then runs", async () => {
+        resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
+        useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+        renderView();
+        await screen.findByRole("button", { name: "dev, stopped" });
+        dd.pickDropdownOption(picker(), "mac");
+        expect(dd.dropdownValue(picker())).toBe("mac");
+
+        // ...but it runs on the primary (started elsewhere, or before the pick).
+        act(() => {
+          useDashboardStore.setState({
+            sessions: [
+              { ...dockSession(7, null, "npm run dev"), resolvedHostId: "local" } as Session,
+            ],
+          });
+        });
+        await userEvent.click(
+          await screen.findByRole("button", { name: "dev, running on this server" }),
+        );
+        expect(dd.dropdownValue(picker())).toBe("__own__");
+        expect(picker()).toBeDisabled();
+        expect(screen.getByText("Running on")).toBeInTheDocument();
+        expect(document.querySelector(".dock-host-picker")?.getAttribute("title")).toBe(
+          "dev is running on this server. Stop dev to run it on another host.",
+        );
+        // Restart keeps it where it runs, not on the stale pick.
+        await userEvent.click(
+          within(screen.getByRole("group", { name: "dev actions" })).getByRole("button", {
+            name: "Restart",
+          }),
+        );
+        await waitFor(() => expect(createSession).toHaveBeenCalled());
+        expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+
+        // Stopped again: the pick is back and the selector unlocked.
+        act(() => {
+          useDashboardStore.setState({ sessions: [] });
+        });
+        await screen.findByRole("button", { name: "dev, stopped" });
+        expect(picker()).not.toBeDisabled();
+        expect(dd.dropdownValue(picker())).toBe("mac");
+      });
+
+      it("the bottom Dock badges a running control with its host, not the selector's", async () => {
+        resetStore({
+          projects: [spanning],
+          sessions: [
+            { ...dockSession(7, null, "npm run dev"), resolvedHostId: "local" } as Session,
+          ],
+          hosts: [MAC],
+        });
+        useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+        expect(await screen.findByText("on this server")).toHaveAttribute(
+          "title",
+          "Running on this server",
+        );
+        expect(picker()).toBeDisabled();
+        expect(dd.dropdownValue(picker())).toBe("__own__");
+
+        act(() => {
+          useDashboardStore.setState({
+            sessions: [
+              {
+                ...dockSession(8, null, "npm run dev"),
+                hostId: "mac",
+                resolvedHostId: "mac",
+              } as Session,
+            ],
+          });
+        });
+        expect(await screen.findByText("on Mac mini")).toBeInTheDocument();
+        expect(dd.dropdownValue(picker())).toBe("mac");
+
+        act(() => {
+          useDashboardStore.setState({ sessions: [] });
+        });
+        await waitFor(() => expect(picker()).not.toBeDisabled());
+        expect(document.querySelector(".dock-monitor-host")).toBeNull();
+      });
+
+      it("names every running control, and shows a host that left the list as itself", async () => {
+        const LOGS = { id: "logs", title: "logs", command: "tail -f log" };
+        controls = [DEV, LOGS];
+        resetStore({
+          projects: [spanning],
+          sessions: [
+            { ...dockSession(7, null, "npm run dev"), resolvedHostId: "old-box" } as Session,
+            { ...dockSession(9, null, "tail -f log"), resolvedHostId: "local" } as Session,
+          ],
+          hosts: [MAC],
+        });
+        useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+        renderView();
+        await screen.findByRole("button", { name: "dev, running on old-box" });
+        // The newest control off the project's own host decides what is shown.
+        expect(dd.dropdownValue(picker())).toBe("old-box");
+        expect(document.querySelector(".dock-host-picker")?.getAttribute("title")).toBe(
+          "logs and dev are running. Stop them to run them on another host.",
+        );
+      });
     });
 
     it("restarts each control on the host its own session runs on", async () => {

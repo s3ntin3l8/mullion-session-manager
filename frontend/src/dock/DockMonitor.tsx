@@ -39,6 +39,7 @@ import { imagePillLabel } from "./dockHelpers.js";
 export function DockMonitor({
   control,
   running,
+  runHostLabel = null,
   selected,
   showSelector,
   selectedValue,
@@ -65,6 +66,9 @@ export function DockMonitor({
 }: {
   control: DockControl;
   running: Session | undefined;
+  // #3556 — the host the running session is on, from the session itself (not
+  // the Dock's host selector); null hides the badge.
+  runHostLabel?: string | null;
   // Whether this row's identity (dockRowKey, dockHelpers.ts) is BOTH this
   // row's own project's current selection AND that project is the dock's
   // ACTIVE one (unified-rail dock rework — DockProjectGroup passes
@@ -289,6 +293,11 @@ export function DockMonitor({
             </span>
           )}
           <span className="dock-monitor-name">{control.title}</span>
+          {runHostLabel && (
+            <span className="dock-monitor-host" title={`Running on ${runHostLabel}`}>
+              on {runHostLabel}
+            </span>
+          )}
           {showSelector && (
             // Hermes review — the one interactive child of this row that
             // didn't already stopPropagation its own clicks (unlike
