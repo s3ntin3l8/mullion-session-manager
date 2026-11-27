@@ -16,7 +16,10 @@
 //     state changes (Approve, Re-pair);
 //   - backs off after an answer the host could not give (409/503): the wait
 //     doubles per unanswered poll, up to a minute, and a successful answer
-//     (or a state change) puts the host back on the normal cadence.
+//     (or a state change) puts the host back on the normal cadence;
+//   - reads a new row's update status on its first tick, which is
+//     immediate — the row's version label lands with the row, as it did
+//     before this poll existed.
 //
 // The server is unchanged: it still answers 409 and 503.
 import { useEffect, useRef } from "react";
@@ -300,14 +303,19 @@ export function useHostUpdateStatusPoll({
       const key = pollStateKey(host);
       const poller = pollers.get(host.id);
       if (!poller) {
-        // A new row: its first poll is one interval from now.
+        // A new row: its first poll is immediate, so the row's version
+        // label lands as soon as the row does — the effect this poll
+        // replaced fetched on mount. It is still gated on canPoll, so a
+        // host that cannot answer is never asked, and the backoff that
+        // follows an unanswered poll is untouched: the first answer is
+        // what earns the wait, not the first tick.
         pollers.set(host.id, {
           intervalMs: HOST_UPDATE_POLL_MS,
           unanswered: 0,
           timer: null,
           stateKey: key,
         });
-        if (canPoll(host)) engine.schedule(host.id, HOST_UPDATE_POLL_MS);
+        if (canPoll(host)) engine.schedule(host.id, 0);
         continue;
       }
       if (poller.stateKey === key) continue;

@@ -432,10 +432,11 @@ describe("Settings -> Hosts", () => {
 
   // Issue #647 / roadmap 7.8.
   describe("agent updates", () => {
-    // Issue #3574 — the update status is no longer read the moment the row
-    // appears: it is read on the update-status poll's own ticks, the first
-    // one a base interval (2s) after the row shows up, so the row's version
-    // lands a beat later than it used to.
+    // Issue #3574 — the update status is read on the update-status poll's
+    // own ticks. A new row's first tick is immediate, but the row itself
+    // only shows up once the host list has loaded, so the status lands a
+    // tick after the row does: the waits below are a margin, not a
+    // cadence.
     const UPDATE_STATUS_TIMEOUT = 5000;
 
     it("shows 'up to date' with no Update button when the agent matches the primary's version", async () => {

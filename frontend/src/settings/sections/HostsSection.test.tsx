@@ -8,6 +8,7 @@ import { api, ApiError } from "../../api/index.js";
 import type { HostUpdateStatus } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { makeHost, makeServerInfo } from "../../test/fixtures.js";
+import { HOST_UPDATE_POLL_MAX_MS, HOST_UPDATE_POLL_MS } from "../useHostUpdateStatusPoll.js";
 import type { PlacementCapability } from "../../../../src/shared/constants.js";
 
 // Token rotation and the "waiting for the agent" row state. The rest of the
@@ -880,10 +881,15 @@ describe("HostsSection", () => {
       vi.useFakeTimers();
       render(<HostsSection />);
 
-      await advance(2_000);
+      // A new row's first tick is immediate: the row's version label lands
+      // with the row, as it did before this poll was keyed per host.
+      await advance(0);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
       expect(getHostUpdateStatus).toHaveBeenCalledWith("h1");
-      await advance(2_000);
+      // Then the normal cadence takes over.
+      await advance(HOST_UPDATE_POLL_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
 
       getHostUpdateStatus.mockRestore();
@@ -919,44 +925,93 @@ describe("HostsSection", () => {
       vi.useFakeTimers();
       render(<HostsSection />);
 
-      // The wait doubles per answer the host could not give: it is asked at
-      // 2s, 4s, 8s, 16s, 32s …
-      await advance(2_000);
+      // The row's first tick is immediate, and every answer the host could
+      // not give doubles the wait before the next one: the polls land at
+      // 0s, 2s, 6s, 14s, 30s, 62s …
+      await advance(0);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
-      await advance(2_000);
+      await advance(1_999);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
-      await advance(2_000);
+      await advance(3_999);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
-      await advance(2_000);
+      await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
-      await advance(4_000);
+      await advance(7_999);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
-      await advance(4_000);
+      await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(4);
-      await advance(8_000);
+      await advance(15_999);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(4);
-      await advance(8_000);
+      await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(5);
-
-      // Never more often than a minute apart, however long the host stays
-      // silent.
       await advance(31_999);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(5);
       await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(6);
-      await advance(59_999);
+
+      // The cap is the constant the wait is measured against, and a minute
+      // is what the issue's acceptance criteria name.
+      expect(HOST_UPDATE_POLL_MAX_MS).toBe(60_000);
+
+      // Never more often than a minute apart, however long the host stays
+      // silent.
+      await advance(HOST_UPDATE_POLL_MAX_MS - 1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(6);
       await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(7);
 
       // A host that answers again is back on the normal cadence.
       getHostUpdateStatus.mockResolvedValue(status());
-      await advance(60_000);
+      await advance(HOST_UPDATE_POLL_MAX_MS);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(8);
-      await advance(1_999);
+      await advance(HOST_UPDATE_POLL_MS - 1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(8);
       await advance(1);
       expect(getHostUpdateStatus).toHaveBeenCalledTimes(9);
+
+      getHostUpdateStatus.mockRestore();
+    });
+
+    it("drops the backoff when the host's state changes, and polls it again within one interval", async () => {
+      stubFetch({});
+      const getHostUpdateStatus = vi
+        .spyOn(api, "getHostUpdateStatus")
+        .mockRejectedValue(new ApiError("Host h1 is unreachable", 503));
+      useDashboardStore.setState({
+        hosts: [makeHost({ id: "h1", name: "worker", health: "offline" })],
+      });
+      vi.useFakeTimers();
+      render(<HostsSection />);
+
+      // The immediate poll is answered with a 503, so the wait doubles: the
+      // next poll is 2s out, the one after that 4s.
+      await advance(0);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      await advance(2_000);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
+
+      // The host's health changes: the backoff is dropped and the host is
+      // polled again within one interval — not after the 4s it was backed
+      // off to.
+      await act(async () => {
+        useDashboardStore.setState({
+          hosts: [makeHost({ id: "h1", name: "worker", health: "online" })],
+        });
+      });
+      await advance(HOST_UPDATE_POLL_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
+
+      // And the host is back on the normal cadence: the 503 it answers
+      // with earns the base interval again, not the doubled one it was
+      // backed off to.
+      await advance(HOST_UPDATE_POLL_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(4);
 
       getHostUpdateStatus.mockRestore();
     });
