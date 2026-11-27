@@ -12,7 +12,7 @@ import type * as ChildProcess from "node:child_process";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 
 // Issue #2069 — POST /api/sessions refuses a dock session whose control's
-// port is already bound. Same fakes as sessions.test.ts: no real PTY or
+// port is already bound. Same fakes as test/helpers/sessions-routes.ts: no real PTY or
 // systemd-run; the port itself is REAL (an ephemeral listener).
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));

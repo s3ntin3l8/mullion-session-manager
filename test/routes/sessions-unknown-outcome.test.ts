@@ -1,7 +1,7 @@
 // #2637 follow-up — a review-gate decision or an attention ack whose connection
 // to the session's host was lost after the request was sent has an UNKNOWN
 // outcome: the route says so (502) instead of "failed to reach host", which
-// invites a blind retry. Its own file: sessions.test.ts is at its size ceiling.
+// invites a blind retry. Its own file: the pre-split sessions suite was at its size ceiling.
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";

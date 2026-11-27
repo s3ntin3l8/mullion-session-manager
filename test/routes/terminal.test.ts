@@ -9,7 +9,7 @@ import { WebSocket as NodeWebSocket } from "ws";
 // Real integration test: a genuine WebSocket client against a real listening
 // server, not app.inject() (which can't drive a full-duplex upgrade). The
 // underlying OS processes (systemd-run, dtach) are faked the same way as
-// test/helpers/pty-manager-harness.ts and test/routes/sessions.test.ts, so this
+// test/helpers/pty-manager-harness.ts and test/helpers/sessions-routes.ts, so this
 // exercises the actual /ws/terminal route logic — session lookup,
 // preValidation rejection, binary I/O framing, resize control messages,
 // scrollback replay — without depending on a real systemd --user session.

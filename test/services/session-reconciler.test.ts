@@ -7,7 +7,7 @@ import { EventEmitter } from "node:events";
 import type { SessionLiveness } from "../../src/services/session-process.js";
 
 // Session creation still spawns real OS processes (systemd-run, dtach) via
-// PtyManager — faked the same way as test/routes/sessions.test.ts, since
+// PtyManager — faked the same way as test/helpers/sessions-routes.ts, since
 // this test drives real create/list through the actual app + DB rather
 // than hand-faking drizzle's query builder.
 vi.mock("node-pty", () => ({
