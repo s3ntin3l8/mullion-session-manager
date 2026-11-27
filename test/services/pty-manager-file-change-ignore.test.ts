@@ -23,11 +23,11 @@ import { isSystemctlUserAvailable } from "../../src/services/session-process.js"
 // This file's whole point is exercising a REAL `git check-ignore` shell-out
 // (Part B's isPathGitIgnored, wired into Session.emitHookEvent's file_change
 // case). It used to run with NO mocks at all, reasoning that
-// the pty-manager suite's / test/helpers/sessions-routes.ts's unconditional node:child_process
-// mock would make a real "is this path ignored" check hang rather than ever
-// seeing genuine git output, and that a real PTY spawn "isn't needed" since
-// emitHookEvent's file_change filtering never touches the underlying pty
-// process.
+// an unconditional node:child_process mock (like test/helpers/mock-spawn.ts's
+// default in test/services/pty-manager-*.test.ts) would make a real "is this
+// path ignored" check hang rather than ever seeing genuine git output, and
+// that a real PTY spawn "isn't needed" since emitHookEvent's file_change
+// filtering never touches the underlying pty process.
 //
 // That reasoning covered whether the test NEEDS a real spawn, not whether
 // leaving one unmocked is safe. `manager.getOrCreate()` below unconditionally
