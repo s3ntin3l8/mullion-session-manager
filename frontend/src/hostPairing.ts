@@ -11,7 +11,7 @@ declare module "./api/types.js" {
   }
 }
 
-// Issue #2449 — the three states a pairing shows in the Hosts UI, kept
+// Issue #2449 — the stages a pairing shows in the Hosts UI, kept
 // distinct on purpose:
 //   pending   — a code was issued and the agent has not redeemed it yet
 //   paired    — the code was redeemed: the host has an identity and credential
@@ -20,14 +20,18 @@ declare module "./api/types.js" {
 // a paired host can be perfectly valid yet unreachable from the primary.
 //   unclaimed — paired, but the agent never took delivery (issue #2597): the
 //               retry window passed with no credential renewal and no channel
+//   expired   — the code expired before it was redeemed
+//   revoked   — a cancelled code, or a host whose machine identity an operator
+//               revoked; Re-pair re-arms the host row
 export type PairingStage = "pending" | "paired" | "unclaimed" | "connected" | "expired" | "revoked";
 
 export function derivePairingStage(
   pairing: Pick<HostPairingSummary, "state" | "host_id">,
-  hosts: Pick<Host, "id" | "health" | "unclaimed">[],
+  hosts: Pick<Host, "id" | "health" | "unclaimed" | "machineIdentityRevoked">[],
 ): PairingStage {
   if (pairing.state !== "paired") return pairing.state;
   const host = hosts.find((h) => h.id === pairing.host_id);
+  if (host?.machineIdentityRevoked === true) return "revoked";
   if (host?.unclaimed) return "unclaimed";
   return host?.health === "online" ? "connected" : "paired";
 }
@@ -38,7 +42,7 @@ export const PAIRING_STAGE_LABEL: Record<PairingStage, string> = {
   unclaimed: "Paired, never connected",
   connected: "connected",
   expired: "expired",
-  revoked: "cancelled",
+  revoked: "revoked",
 };
 
 export const HELPER_DOWNLOAD_URL = "https://github.com/s3ntin3l8/mullion-helper/releases/latest";

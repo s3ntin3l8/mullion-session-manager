@@ -190,11 +190,13 @@ export function HostPairings() {
                   subtitle={
                     stage === "pending"
                       ? `code expires ${formatRelativeUntil(Date.parse(p.expires_at))}`
-                      : stage === "paired"
-                        ? "Identity issued. The primary cannot reach this host yet."
-                        : stage === "unclaimed"
-                          ? "The agent never picked up its identity. Revoke or remove the host."
-                          : "Agent connected"
+                      : stage === "revoked"
+                        ? "The agent can no longer connect. Re-pair this host to reconnect."
+                        : stage === "paired"
+                          ? "Identity issued. The primary cannot reach this host yet."
+                          : stage === "unclaimed"
+                            ? "The agent never picked up its identity. Revoke or remove the host."
+                            : "Agent connected"
                   }
                   trailing={
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

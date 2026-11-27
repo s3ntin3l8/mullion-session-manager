@@ -341,6 +341,9 @@ Pairing activity shows whether the agent has redeemed the code and connected:
   outbound-channel rollout is incomplete a paired host that advertises no URL
   stays `paired`, not `connected`; pairing success is deliberately separate
   from transport reachability.
+- **revoked** — the host's machine identity was revoked by an operator. The
+  agent can no longer connect; **Re-pair** restores it. Cancelled codes also
+  have a revoked state, but are hidden from Pairing activity.
 
 **Redeeming** (`POST /api/internal/pair`, unauthenticated — the code is the
 credential). Only _failed_ attempts (`400`/`401`) count toward its limit of 20
@@ -388,14 +391,20 @@ or a later retry needs a new code. Revoking a host
 ### Hosts row menu
 
 Every remote host has **View config**, **Edit**, **Park host** (or **Unpark host**),
-**Re-pair**, **Revoke identity** and **Delete host**. **Rotate token** is available
-only when the host has a per-host token and no live machine identity.
+**Re-pair** and **Delete host**. **Revoke identity** is available unless the
+identity is already revoked. **Rotate token** is available only when the host
+has a per-host token and no live machine identity. **Test** is disabled while
+the identity is revoked.
 
-| Host kind                                     | Credential actions                       |
-| --------------------------------------------- | ---------------------------------------- |
-| Host with a live machine identity             | Re-pair · Revoke identity                |
-| Manual host with a token and no live identity | Rotate token · Re-pair · Revoke identity |
-| Enrolled host without a per-host token        | Re-pair · Revoke identity                |
+| Host kind                                     | Credential actions                         |
+| --------------------------------------------- | ------------------------------------------ |
+| Host with a live machine identity             | Re-pair · Revoke identity                  |
+| Manual host with a token and no live identity | Rotate token · Re-pair · Revoke identity   |
+| Enrolled host without a per-host token        | Re-pair · Revoke identity                  |
+| Host with a revoked identity                  | Re-pair · Delete host (no Revoke identity) |
+
+A revoked manual host with a per-host token also keeps **Rotate token**;
+rotating the token re-arms the row.
 
 Choose **Re-pair**, then confirm by selecting **Generate pairing code**. The
 panel shows the link, server address, code and install command. Redeeming this
