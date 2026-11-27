@@ -13,6 +13,8 @@ import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { makePng } from "../helpers/png.js";
 import { devices } from "../../src/db/schema.js";
+import { REVERSE_REMOVE_TIMEOUT_MS } from "../../src/services/device-manager.js";
+import type { Device } from "../../src/services/device-manager.js";
 
 // A device's spawn() bootstraps a real systemd-run scope the same way a
 // session's master does — faked here for the same reason
@@ -843,6 +845,33 @@ describe("devices routes", () => {
         const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
         expect(stop.statusCode).toBe(204);
         expect(remove).toHaveBeenCalledWith("tcp:5173");
+      });
+
+      it("bounds the reverse removals on stop when adb no longer answers (#3559)", async () => {
+        const app = await buildTestAppOnPlatform("linux");
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+        // A transport that dropped: every removal hangs forever.
+        const remove = vi.fn(() => new Promise<void>(() => {}));
+        (device as unknown as { adb: unknown }).adb = {
+          reverse: { addExternal: vi.fn().mockResolvedValue("tcp:1"), remove },
+          close: vi.fn().mockResolvedValue(undefined),
+        };
+        for (const port of [3000, 5173, 8080]) await (device as Device).reversePort(port);
+
+        const started = Date.now();
+        const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+        const elapsed = Date.now() - started;
+        expect(stop.statusCode).toBe(204);
+        expect(remove).toHaveBeenCalledTimes(3);
+        // One shared bound, not one per port (3 x 2 s).
+        expect(elapsed).toBeGreaterThanOrEqual(REVERSE_REMOVE_TIMEOUT_MS - 50);
+        expect(elapsed).toBeLessThan(REVERSE_REMOVE_TIMEOUT_MS * 2);
       });
 
       it("400s on a logcat action whose optional fields have the wrong type", async () => {

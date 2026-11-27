@@ -168,6 +168,14 @@ function deviceRow(
   };
 }
 
+/** The label suffix of a disabled row, shared by the dev-server and target
+ * rows so it agrees with the tooltip's reason: booting first, then "on another
+ * host" where the row's route depends on the host, else "unavailable". */
+function unavailableSuffix(d: Device, otherHost: boolean): string {
+  if (isDeviceBooting(d)) return " (booting)";
+  return otherHost ? " (on another host)" : " (unavailable)";
+}
+
 /** "Open … on <device>" rows per running iOS Simulator or Android device: the
  * project's dev server, then each named preview target. Manual only; a row the
  * device cannot open is listed disabled with the reason, not hidden. */
@@ -187,11 +195,7 @@ function deviceItems(
         route.kind === "preview"
           ? " (via preview)"
           : route.kind === "unavailable"
-            ? isDeviceBooting(d)
-              ? " (booting)"
-              : d.hostId === devServer.hostId
-                ? " (unavailable)"
-                : " (on another host)"
+            ? unavailableSuffix(d, d.hostId !== devServer.hostId)
             : "";
       rows.push(
         deviceRow(`device-${d.id}`, `Open dev server on ${name}${suffix}`, route, () =>
@@ -206,7 +210,7 @@ function deviceItems(
       rows.push(
         deviceRow(
           `device-${d.id}-${target.id}`,
-          `Open ${target.name} on ${name}${route.kind === "unavailable" ? " (unavailable)" : ""}`,
+          `Open ${target.name} on ${name}${route.kind === "unavailable" ? unavailableSuffix(d, false) : ""}`,
           route,
           () => openPreviewOnDevice(projectId, d.id, target.id, info),
         ),

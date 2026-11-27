@@ -333,8 +333,9 @@ const PHYSICAL_CONNECT_TIMEOUT_MS = 15_000;
 const EMULATOR_PORT_BASE = 5554;
 const EMULATOR_PORT_MAX = 5682;
 
-// How long teardown waits to remove one `adb reverse` mapping (#3559).
-const REVERSE_REMOVE_TIMEOUT_MS = 2_000;
+// How long teardown waits for its `adb reverse` removals (#3559). Exported
+// for the test that pins the bound.
+export const REVERSE_REMOVE_TIMEOUT_MS = 2_000;
 
 /** `promise`, or a rejection once `ms` has passed. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -469,7 +470,8 @@ export class Device {
    * own loopback port at this host. In memory only, so best-effort within one
    * backend run: a mapping made before a backend restart, or by an action
    * during a boot that then failed (those paths close adb without
-   * teardownProcess), stays until adb drops the device. */
+   * teardownProcess), stays until adb drops the device; so does one whose
+   * request was still in flight when a teardown had already finished. */
   private reversedPorts = new Set<number>();
 
   constructor(
@@ -906,16 +908,18 @@ export class Device {
    * connection itself is deliberately left alone too — see kill()'s own
    * comment on why disconnect() never happens here either. */
   private async teardownProcess(): Promise<void> {
-    // Before adb.close(): the removal goes over the same connection.
-    for (const port of this.reversedPorts) {
-      try {
-        // Bounded: on a device that already dropped off adb the request
-        // would otherwise wait on a transport that never answers.
-        const adb = this.adb;
-        if (adb) await withTimeout(adb.reverse.remove(`tcp:${port}`), REVERSE_REMOVE_TIMEOUT_MS);
-      } catch {
-        // Best-effort — an emulator that is going away takes its mappings with it.
-      }
+    // Before adb.close(): the removal goes over the same connection. All ports
+    // at once, each bounded: on a device that already dropped off adb a request
+    // would otherwise wait on a transport that never answers, so the whole
+    // step costs at most REVERSE_REMOVE_TIMEOUT_MS, not that per port.
+    // Best-effort — an emulator that is going away takes its mappings with it.
+    const adb = this.adb;
+    if (adb) {
+      await Promise.allSettled(
+        [...this.reversedPorts].map((port) =>
+          withTimeout(adb.reverse.remove(`tcp:${port}`), REVERSE_REMOVE_TIMEOUT_MS),
+        ),
+      );
     }
     this.reversedPorts.clear();
     try {

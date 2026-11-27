@@ -141,6 +141,8 @@ describe("AndroidDriver.openUrl (#3559)", () => {
       ["http://preview-abc.localhost:3000/", 3000],
       ["http://[::1]:8080/", 8080],
       ["http://127.0.0.2:9000/", 9000],
+      ["http://0.0.0.0:5173/", 5173],
+      ["http://localhost.:3000/", 3000],
     ] as const) {
       const { device, reversePort } = liveDevice();
       await new AndroidDriver(device).openUrl(url);

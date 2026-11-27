@@ -307,7 +307,7 @@ describe("Preview menu: open on a device", () => {
     expect(row).toHaveAttribute("aria-disabled", "true");
     expect(row.getAttribute("title")).toMatch(/still booting/);
     expect(
-      screen.getByRole("menuitem", { name: "Open Staging on Pixel 10 (unavailable)" }),
+      screen.getByRole("menuitem", { name: "Open Staging on Pixel 10 (booting)" }),
     ).toHaveAttribute("aria-disabled", "true");
     await user.click(row);
     expect(api.openUrlOnDevice).not.toHaveBeenCalled();

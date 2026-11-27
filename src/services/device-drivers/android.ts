@@ -44,9 +44,14 @@ function shellExecArgv(argv: string[]): string[] {
   return argv.map(shellQuoteArg);
 }
 
-/** A URL hostname that, on the device, would point at the device itself. */
-function isLoopbackHostname(hostname: string): boolean {
+/** A URL hostname that, on the device, would point at the device itself.
+ * Kept in step with the Preview menu's `isLoopbackHost` (frontend
+ * lib/deviceUrl.ts): a fully qualified `localhost.` and the unspecified
+ * `0.0.0.0` (which Linux connects to locally) count too. */
+function isLoopbackHostname(raw: string): boolean {
+  const hostname = raw.replace(/\.$/, "");
   return (
+    hostname === "0.0.0.0" ||
     hostname === "localhost" ||
     // Chrome resolves every *.localhost name to loopback itself.
     hostname.endsWith(".localhost") ||

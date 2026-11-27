@@ -214,19 +214,20 @@ once the cookie lapses (a 24-hour lifetime, slid forward while the preview is in
 re-opening from the menu mints a fresh token. With preview auth off no token is minted
 and the URL is the bare preview URL. This was established from the proxy's code and
 tests, not observed on a live simulator.
+
 **Opening a URL on Android (#3559).** `AndroidDriver.openUrl`
 (`src/services/device-drivers/android.ts`) accepts the same http(s)-only URLs and runs
 `am start -a android.intent.action.VIEW -d <url>` over the device's adb shell (each
 argument single-quoted, as for every other Android shell action), so the device's
 default browser opens it. `am start` exits 0 even when no activity takes the intent,
 so a line starting with `Error` in its output is answered with a 502. A loopback URL
-(`127.0.0.1`, `localhost`, `*.localhost`, `[::1]`) means the host running adb, not the
+(`127.0.0.1`, `localhost`, `*.localhost`, `[::1]`, `0.0.0.0`) means the host running adb, not the
 device: before opening it Mullion runs the equivalent of `adb -s <serial> reverse
 tcp:<port> tcp:<port>` (`Device.reversePort`, through the adb server Mullion already
 talks to), which works on an emulator and on a USB or wireless physical device alike
 (an emulator's own `10.0.2.2` alias does not exist on a phone). The mapping is
-**removed when the device is stopped** (`Device.teardownProcess`, best-effort with a
-2-second bound), so a phone left connected does not keep pointing its loopback port at
+**removed when the device is stopped** (`Device.teardownProcess`, best-effort, all
+ports at once within a 2-second bound), so a phone left connected does not keep pointing its loopback port at
 the host. The bookkeeping is in memory, so this holds within one backend run: a mapping
 made before a backend restart, or during a boot that then failed, stays until adb drops
 the device (`adb -s <serial> reverse --remove-all` clears it by hand). A port already
