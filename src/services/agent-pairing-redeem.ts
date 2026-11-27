@@ -76,6 +76,19 @@ function loadExistingRequestId(requestPath: string, codeHash: string): string | 
 }
 
 /**
+ * Format the operator-facing diagnosis when the primary answers a pairing or
+ * enrollment call with a 3xx redirect (typically a login gateway such as
+ * Authentik forwardAuth sitting in front of the primary).
+ *
+ * Deliberately excludes `Location` (which may carry a session token) and any
+ * credential/code, and names both `MULLION_AGENT_PRIMARY_URL` (read by
+ * `install.sh`) and `MULLION_PRIMARY_URL` in `.env` (read by the agent).
+ */
+export function formatPrimaryRedirectMessage(action: string, status: number): string {
+  return `${action}: the primary answered with a redirect (HTTP ${status}), which usually means a login gateway sits in front of it. Use the primary's direct address as MULLION_AGENT_PRIMARY_URL (MULLION_PRIMARY_URL in .env); see docs/multi-host.md`;
+}
+
+/**
  * One-shot agent-side pairing redeem:
  * 1. Persists a `requestId` to a 0600 file under `sessionsDir` BEFORE the first
  *    request so a retry after a lost response converges on the same host.
@@ -155,15 +168,7 @@ export async function redeemPairingCode(
       // API. The `Location` header is deliberately NOT included: it can carry
       // a session token, and the error must not echo anything the caller did
       // not ask for. The pairing code is not in the message either.
-      //
-      // Both spellings of the primary's address are named: `install.sh` takes
-      // the pairing primary from `MULLION_AGENT_PRIMARY_URL` and only falls
-      // back to `MULLION_PRIMARY_URL` read out of an existing `.env`, so an
-      // operator who only sets the latter in their shell would hit the same
-      // redirect again. The `.env` spelling is what the agent itself reads.
-      throw new Error(
-        `Pairing failed: the primary answered with a redirect (HTTP ${res.status}), which usually means a login gateway sits in front of it. Use the primary's direct address as MULLION_AGENT_PRIMARY_URL (MULLION_PRIMARY_URL in .env); see docs/multi-host.md`,
-      );
+      throw new Error(formatPrimaryRedirectMessage("Pairing failed", res.status));
     }
     throw new Error(`Pairing failed with HTTP ${res.status}`);
   }
