@@ -522,7 +522,10 @@ Starting one:
    in a `.mullion-worktrees/dock-preview-*` worktree of the branch, with
    `PORT=<port>` in its environment. **The control's command must listen on
    `$PORT`** (e.g. `vite --host 127.0.0.1 --port $PORT --strictPort`); see
-   [`dock.md`](dock.md)'s `PORT` convention.
+   [`dock.md`](dock.md)'s `PORT` convention. `PORT` is a reserved session env
+   key (a control's `env` or `POST /api/sessions` can't set it); the branch
+   preview hands its port to the session create separately (`previewPort`,
+   #3555), and it is stored with the session's env so a reattach replays it.
 4. Binds the `(project, branch)` preview row to that session and port. The
    proxy forwards that preview's slug to the port, not to `devServerUrl`.
 
@@ -543,7 +546,10 @@ is stopped.
 
 ### On a remote host (#3428)
 
-**A branch preview runs on the project's own host.** That host's checkout is
+**A branch preview runs on the project's own host.** There is no per-branch
+choice: the branch row's globe button says so in its tooltip ("Preview runs on
+<host>"), and it is not the Dock's **Run on** selector, which picks a host for
+a control's ordinary dock session only. That host's checkout is
 where the branch is fetched and the `dock-preview-*` worktree is cut, so the
 port is picked and the dev server started there too; the dock session is
 _pinned_ to the project's host (`hostId`, bypassing the placement policy), so

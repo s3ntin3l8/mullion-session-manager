@@ -128,6 +128,8 @@ describe("branch previews on a remote host (#3428)", () => {
     });
 
   const calls = (method: string) => agent.calls.filter((c) => c.method === method);
+  const nameOfBranch = (branch: string) =>
+    path.basename(dockPreviewWorktreePath(REMOTE_CWD, branch));
 
   it("prepares the branch, worktree and port on the agent and targets the session there", async () => {
     const { projectId, hostId } = await remoteProject();
@@ -162,8 +164,41 @@ describe("branch previews on a remote host (#3428)", () => {
       kind: "dock",
       command: "vite --port $PORT",
       worktree: { branch: "feat/x" },
-      env: { PORT: "41234" },
+      // #3555 — the port travels as `previewPort`, never as `env.PORT` (a
+      // reserved key createSessionRecord refuses).
+      previewPort: 41234,
     });
+    expect(params.env?.PORT).toBeUndefined();
+  });
+
+  // #3555 — the session create is the REAL createSessionRecord here (its
+  // reserved-env-key check included); only the agent is scripted, so the
+  // spawn the agent receives is what a real one would get.
+  it("starts the preview through the real session create, the agent spawning it with PORT", async () => {
+    const { projectId } = await remoteProject();
+    scriptAgent(41235);
+    agent.scripted.resolveCheckoutBranchWorktree = (_cwd: unknown, branch: unknown) => ({
+      worktreePath: `${REMOTE_CWD}/.mullion-worktrees/${nameOfBranch(String(branch))}`,
+      branch,
+    });
+    agent.scripted.spawn = () => ({ ok: true });
+
+    const res = await start(projectId, "feat/real");
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ branch: "feat/real", upstreamPort: 41235 });
+    const spawned = calls("spawn");
+    expect(spawned).toHaveLength(1);
+    const opts = spawned[0].args[0] as { env?: Record<string, string>; command: string };
+    expect(opts.env).toMatchObject({ PORT: "41235" });
+    expect(opts.command).toBe("vite --port $PORT");
+    // Persisted with the session, so a reattach replays the same PORT.
+    const row = app.db
+      .select()
+      .from(sessions)
+      .where(eq(sessions.id, res.json().sessionId as number))
+      .get();
+    expect(JSON.parse(row!.env!)).toMatchObject({ PORT: "41235" });
   });
 
   it("fast-forwards a PR's head branch on the agent", async () => {

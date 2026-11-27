@@ -3,6 +3,7 @@ import { api } from "../api/index.js";
 import type { GitBranchInfo, PROrWithChecks, GitWorktreeInfo } from "../api/types.js";
 import { PHASE_LABEL } from "../github/prPhase.js";
 import { describeError } from "../lib/describeError.js";
+import { hostDisplayName } from "../lib/hostBadge.js";
 import { statusTone, type Tone } from "../lib/statusTone.js";
 import { useDashboardStore } from "../store/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
@@ -188,6 +189,14 @@ export function BranchesSection({
   };
 
   const branchPreview = useBranchPreview(projectId);
+  // #3555 — a branch preview always runs on the project's own host (no
+  // per-row choice, unlike the Dock's "Run on"), so the globe button says
+  // which one.
+  const previewHost = useDashboardStore((s) => {
+    const hostId = s.projects.find((p) => p.id === projectId)?.hostId;
+    return hostId === undefined ? null : hostDisplayName(hostId, s.hosts);
+  });
+  const previewHostNote = previewHost === null ? "" : `. Preview runs on ${previewHost}`;
 
   const total = branches.length;
   const prunableCount = groups.find((g) => g.id === "prunable")?.branches.length ?? 0;
@@ -386,7 +395,7 @@ export function BranchesSection({
                       <PlayTriangleIcon size={13} />
                     </IconButton>
                     <IconButton
-                      label={entry?.preview ? "Open preview" : "Preview this branch"}
+                      label={`${entry?.preview ? "Open preview" : "Preview this branch"}${previewHostNote}`}
                       onClick={() =>
                         void branchPreview.open(
                           { kind: "branch", branch: b.name, isCurrent: b.isCurrent },

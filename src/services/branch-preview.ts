@@ -442,7 +442,10 @@ async function startOnPort(
     worktree: { branch },
     worktreeRefresh:
       control.worktreeRefresh ?? getStoredSettings(app.db).dock.defaultWorktreeRefresh ?? false,
-    env: { ...control.env, PORT: String(port) },
+    // #3555 — not `env: { PORT }`: PORT is a reserved session env key, so
+    // createSessionRecord refuses it there; `previewPort` is its one exemption.
+    ...(control.env !== undefined ? { env: control.env } : {}),
+    previewPort: port,
   });
   if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
     // #2637 — the spawn may have landed and createSessionRecord kept the row:

@@ -225,7 +225,9 @@ describe("branch previews (issues #2016/#2018)", () => {
       worktree: { branch: "feat/x" },
       worktreeRefresh: true,
     });
-    expect(params.env?.PORT).toBe(String(preview.upstreamPort));
+    // #3555 — as `previewPort`, not `env.PORT` (reserved; createSessionRecord refuses it).
+    expect(params.previewPort).toBe(preview.upstreamPort);
+    expect(params.env?.PORT).toBeUndefined();
     expect(preview).toMatchObject({ kind: "project", projectId, branch: "feat/x" });
     expect(preview.sessionId).toBe(
       create.mock.results[0] && (await create.mock.results[0].value).row.id,

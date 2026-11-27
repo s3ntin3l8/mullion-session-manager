@@ -71,3 +71,22 @@ export function isReservedSessionEnvKey(key: string): boolean {
   if (RESERVED_GIT_CONFIG_IDENTITY_KEYS.has(key)) return true;
   return false;
 }
+
+/**
+ * The env a session create launches with (issue #3555): the caller's `env`,
+ * refused if it carries a reserved key, plus — only AFTER that check — a
+ * branch preview's allocated port as `PORT`. `PORT` is reserved (a
+ * server-identity var buildSessionEnv() scrubs), so a branch preview cannot
+ * pass it in `env`; `previewPort` is its one exemption, and the result is what
+ * sessions.env persists, so a reattach replays the same PORT.
+ */
+export function resolveCreateSessionEnv(
+  env: Record<string, string> | undefined,
+  previewPort: number | undefined,
+): { ok: true; env: Record<string, string> | undefined } | { ok: false; reservedKey: string } {
+  const reservedKey =
+    env === undefined ? undefined : Object.keys(env).find(isReservedSessionEnvKey);
+  if (reservedKey !== undefined) return { ok: false, reservedKey };
+  if (previewPort === undefined) return { ok: true, env };
+  return { ok: true, env: { ...env, PORT: String(previewPort) } };
+}

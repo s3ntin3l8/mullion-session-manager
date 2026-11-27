@@ -246,7 +246,9 @@ than a fixed port, on IPv4 loopback (a bare `localhost` can bind `::1` only):
 }
 ```
 
-The control's own `env` is kept, with `PORT` set on top. See
+The control's own `env` is kept, with `PORT` set on top. A control can't set
+`PORT` itself (it is a reserved session env key); only the branch preview
+supplies it. See
 [`browser-previews.md`](browser-previews.md)'s "Branch previews" for the full
 behavior.
 
