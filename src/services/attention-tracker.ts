@@ -443,9 +443,9 @@ export class AttentionTracker {
     // capture and THIS call's own now (test setup, GC, CI scheduling) — the
     // window is closed by a few ms and the deferred emit never fires, an
     // intermittent failure that gets more likely, not less, on a loaded
-    // CI runner (see test/services/pty-manager.test.ts's D4 sweep test and
-    // attention-tracker.test.ts's "confirm-after-window" test, both fixed
-    // alongside this).
+    // CI runner (see test/services/pty-manager-hook-stale-blocked.test.ts's
+    // D4 sweep test and attention-tracker.test.ts's "confirm-after-window"
+    // test, both fixed alongside this).
     now: number = Date.now(),
   ): void {
     const settleMs = ATTENTION_SETTLE_MS[kind] ?? 0;

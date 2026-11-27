@@ -2460,8 +2460,9 @@ export class Session {
   // tick()/drainDeferred() against the SAME synthetic clock, rather than
   // racing this call's own internal Date.now() against a `now` the test
   // captured slightly earlier — see emitAttentionSignalDeferred's own doc
-  // comment for the failure this caused (test/services/pty-manager.test.ts's
-  // D4 sweep test, intermittently on a loaded CI runner).
+  // comment for the failure this caused
+  // (test/services/pty-manager-hook-stale-blocked.test.ts's D4 sweep test,
+  // intermittently on a loaded CI runner).
   emitHookEvent(
     message: HookMessage,
     now: number = Date.now(),
@@ -2932,7 +2933,7 @@ export class Session {
    * `now` is a parameter (defaulting to Date.now()) rather than read
    * unconditionally inside, purely so tests can call this directly with a
    * synthetic clock instead of needing fake real timers — see
-   * test/services/pty-manager.test.ts.
+   * test/services/pty-manager-activity.test.ts.
    *
    * Issue #1228: a hookless session's silence signal (the only kind that
    * ever needed one — a `hooksActive` session already gets a richer
