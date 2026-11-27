@@ -141,6 +141,7 @@ export function KebabMenu({
     secondsLeft: armSecondsLeft,
     arm: armItem,
     disarm: disarmItem,
+    confirm: confirmItem,
   } = useArmConfirm();
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -228,7 +229,7 @@ export function KebabMenu({
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [popoverOpen]);
+  }, [popoverOpen, disarmItem]);
 
   // Issue #1399 — re-read the trigger's rect when the iOS visual viewport
   // pans/resizes while open: `.app` (and this trigger with it) moves with the
@@ -281,8 +282,8 @@ export function KebabMenu({
     // (Escape, a press outside) must still return focus to the trigger.
     if (item.confirm) {
       if (armedKey === item.key) {
+        if (!confirmItem(item.key)) return;
         if (item.opensOverlay) suppressRestore();
-        disarmItem();
         setOpen(false);
         item.onClick();
       } else {

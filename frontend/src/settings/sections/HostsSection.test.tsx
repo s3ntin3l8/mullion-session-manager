@@ -582,14 +582,21 @@ describe("HostsSection", () => {
       expect(rejectBtn).toHaveTextContent("Reject");
       expect(calls.filter((c) => c === "DELETE /api/hosts/h-reject")).toHaveLength(0);
 
-      // Second click within 3s calls DELETE once.
-      fireEvent.click(rejectBtn);
+      // Second click of a native double-click (detail: 2) must not delete; a
+      // real follow-up click (detail: 1) within 3s calls DELETE once.
+      fireEvent.click(rejectBtn, { detail: 1 });
       expect(rejectBtn).toHaveTextContent("Click again to reject");
       act(() => {
         vi.advanceTimersByTime(2000);
       });
       expect(rejectBtn).toHaveTextContent("Click again to reject");
-      fireEvent.click(rejectBtn);
+      fireEvent.click(rejectBtn, { detail: 2 });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(rejectBtn).toHaveTextContent("Click again to reject");
+      expect(calls.filter((c) => c === "DELETE /api/hosts/h-reject")).toHaveLength(0);
+      fireEvent.click(rejectBtn, { detail: 1 });
       await act(async () => {
         await Promise.resolve();
       });

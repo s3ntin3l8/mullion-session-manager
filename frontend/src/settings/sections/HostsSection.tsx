@@ -266,7 +266,12 @@ export function HostsSection() {
   const [approving, setApproving] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const coarse = useCoarsePointer();
-  const { armedKey: armedRejectHostId, arm: armReject, disarm: disarmReject } = useArmConfirm();
+  const {
+    armedKey: armedRejectHostId,
+    arm: armReject,
+    disarm: disarmReject,
+    confirm: confirmReject,
+  } = useArmConfirm();
 
   // Issue #647 / roadmap 7.8 — per-host update state, keyed like pingStatus
   // above (one global updater's worth of state, per host, not a single flat
@@ -771,9 +776,12 @@ export function HostsSection() {
                           </SecondaryButton>{" "}
                           <SecondaryButton
                             className={armedRejectHostId === host.id ? "danger armed" : undefined}
-                            onClick={() => {
+                            onClick={(e) => {
                               if (armedRejectHostId === host.id) {
-                                disarmReject();
+                                // Ignore the second click of a native double-click
+                                // so it cannot both arm and delete in one gesture.
+                                if (e.detail > 1) return;
+                                if (!confirmReject(host.id)) return;
                                 handleReject(host);
                               } else {
                                 armReject(host.id);

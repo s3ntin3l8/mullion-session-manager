@@ -73,4 +73,44 @@ describe("hooks/useArmConfirm", () => {
     expect(result.current.armedKey).toBe("host-2");
     expect(result.current.secondsLeft).toBe(3);
   });
+
+  it("enforces the wall-clock deadline in confirm() even when timers are throttled", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const { result } = renderHook(() => useArmConfirm());
+
+    act(() => {
+      result.current.arm("host-1");
+    });
+    expect(result.current.armedKey).toBe("host-1");
+
+    // Jump wall-clock past the 3s window without advancing interval ticks.
+    vi.setSystemTime(new Date("2026-01-01T00:10:00.000Z"));
+    let confirmed = true;
+    act(() => {
+      confirmed = result.current.confirm("host-1");
+    });
+    expect(confirmed).toBe(false);
+    expect(result.current.armedKey).toBeNull();
+    expect(result.current.secondsLeft).toBe(3);
+  });
+
+  it("confirms and disarms when within the deadline", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const { result } = renderHook(() => useArmConfirm());
+
+    act(() => {
+      result.current.arm("host-1");
+    });
+    let wrongKey = true;
+    let confirmed = false;
+    act(() => {
+      wrongKey = result.current.confirm("host-2");
+      confirmed = result.current.confirm("host-1");
+    });
+    expect(wrongKey).toBe(false);
+    expect(confirmed).toBe(true);
+    expect(result.current.armedKey).toBeNull();
+  });
 });

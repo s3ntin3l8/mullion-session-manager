@@ -1,53 +1,69 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export const ARM_CONFIRM_SECONDS = 3;
 
 /**
  * Two-step arm-then-confirm state keyed by item/target id.
- * Arms a key for `seconds` (default 3s), ticking `secondsLeft` down once per
- * second and auto-disarming when the countdown reaches 0 or on unmount.
+ * Arms a key for `seconds` (default 3s) against a wall-clock deadline, ticking
+ * `secondsLeft` down once per second and auto-disarming on expiry or unmount.
  */
 export function useArmConfirm(seconds = ARM_CONFIRM_SECONDS) {
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(seconds);
-  // Mirrors secondsLeft so the interval callback can branch without calling
-  // side effects inside a setState updater (which warns under StrictMode).
-  const secondsRef = useRef(seconds);
+  const deadlineRef = useRef<number | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const clearTimer = () => {
+  const clearTimer = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
-  };
+    deadlineRef.current = null;
+  }, []);
 
-  useEffect(() => clearTimer, []);
+  useEffect(() => clearTimer, [clearTimer]);
 
-  const disarm = () => {
+  const disarm = useCallback(() => {
     clearTimer();
     setArmedKey(null);
-    secondsRef.current = seconds;
     setSecondsLeft(seconds);
-  };
+  }, [clearTimer, seconds]);
 
-  const arm = (key: string) => {
-    clearTimer();
-    setArmedKey(key);
-    secondsRef.current = seconds;
-    setSecondsLeft(seconds);
-    intervalRef.current = setInterval(() => {
-      secondsRef.current -= 1;
-      if (secondsRef.current <= 0) {
-        clearTimer();
-        setArmedKey(null);
-        secondsRef.current = seconds;
-        setSecondsLeft(seconds);
-      } else {
-        setSecondsLeft(secondsRef.current);
+  const arm = useCallback(
+    (key: string) => {
+      clearTimer();
+      deadlineRef.current = Date.now() + seconds * 1000;
+      setArmedKey(key);
+      setSecondsLeft(seconds);
+      intervalRef.current = setInterval(() => {
+        const remaining =
+          deadlineRef.current === null ? 0 : Math.ceil((deadlineRef.current - Date.now()) / 1000);
+        if (remaining <= 0) {
+          clearTimer();
+          setArmedKey(null);
+          setSecondsLeft(seconds);
+        } else {
+          setSecondsLeft(remaining);
+        }
+      }, 1000);
+    },
+    [clearTimer, seconds],
+  );
+
+  // Re-check the wall-clock deadline at click time so a throttled/frozen tab
+  // cannot confirm after the arm window has already elapsed.
+  const confirm = useCallback(
+    (key: string): boolean => {
+      if (armedKey !== key) return false;
+      if (deadlineRef.current === null || Date.now() >= deadlineRef.current) {
+        disarm();
+        return false;
       }
-    }, 1000);
-  };
+      disarm();
+      return true;
+    },
+    [armedKey, disarm],
+  );
 
-  return { armedKey, secondsLeft, arm, disarm };
+  return { armedKey, secondsLeft, arm, disarm, confirm };
 }
