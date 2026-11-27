@@ -413,9 +413,11 @@ export function updateHost(
             // now-orphaned old session indefinitely (it renews itself
             // forever), giving the admin false confidence the leak was
             // closed. Clearing the session forces resolveCurrentCredentials()
-            // to fall back to the freshly-rotated token immediately, and
-            // the agent's own next renewal attempt 401s and falls back to
-            // re-registering with whatever bootstrap credential it has.
+            // to fall back to the freshly-rotated token immediately. The
+            // agent's own next renewal is authenticated with its stored
+            // machine identity, not the session; if that identity is gone or
+            // rejected the agent stops and asks to be re-paired
+            // (agent-enrollment.ts).
             sessionIdEnc: null,
             sessionSecretEnc: null,
             sessionExpiresAt: null,
@@ -1360,10 +1362,10 @@ export function fillHostPlatformIfUnset(
 /**
  * D2 — renewal. The agent re-authenticates with its own CURRENT session id
  * (not the bootstrap token) to get a fresh secret before TTL expiry. Returns
- * null on any mismatch — the caller (routes/enrollment.ts) responds 401,
- * and the agent's own retry logic (agent-enrollment.ts) falls back to its
- * bootstrap token, exactly #157's "primary DB loss -> 401 -> re-register"
- * path.
+ * null on any mismatch — the caller (routes/enrollment.ts) responds 401, and
+ * the agent's own retry logic (agent-enrollment.ts) treats that as a rejected
+ * identity and stops until it is re-paired; a transient failure makes it
+ * re-register with the machine identity it still holds.
  */
 export function rotateSession(
   app: FastifyInstance,
@@ -1393,12 +1395,12 @@ export function verifyHostSession(
 /**
  * Issue #248 / roadmap 7.3 (Hermes review, PR #530) — revokes a host's
  * session credential outright, called on deregister after verifyHostSession
- * confirms the caller holds it. This is free: a self-registered agent is
- * stateless and always re-establishes a brand-new session from its
- * bootstrap credential on its very next boot (agent-enrollment.ts), so
- * nothing depends on the outgoing session staying valid. Without this, a
- * session that just told the primary "I'm going away" would otherwise
- * remain a valid inbound Bearer credential for up to its full 24h TTL.
+ * confirms the caller holds it. This is free: a self-registered agent holds a
+ * machine identity and re-establishes a brand-new session from it on its very
+ * next boot (agent-enrollment.ts), so nothing depends on the outgoing session
+ * staying valid. Without this, a session that just told the primary "I'm going
+ * away" would otherwise remain a valid inbound Bearer credential for up to its
+ * full 24h TTL.
  * Same fields updateHost() clears when an admin rotates a claimed host's
  * token, for the same reason.
  *

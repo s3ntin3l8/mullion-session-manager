@@ -520,13 +520,9 @@ describeOnLinux("deploy/install.sh", () => {
       });
       expect(kept).toMatch(/^MULLION_AGENT_TOKEN=fixture-old-tok$/m);
       expect(kept).not.toContain("fixture-new-tok");
-
-      // A paired agent's .env has only the primary URL; it must keep its
-      // credential path and not get a manual token injected.
-      const paired = await run("MULLION_ROLE=agent\nMULLION_PRIMARY_URL=https://p.example\n", {
-        MULLION_AGENT_TOKEN: "fixture-new-tok", // pragma: allowlist secret
-      });
-      expect(paired).not.toContain("fixture-new-tok");
+      // A primary URL with a loadable identity is a credential too, and the
+      // manual token must not be injected over it — covered, alongside the
+      // URL-without-identity repair, in install-identity.test.ts.
     });
 
     it("treats a quoted-empty or comment-only token as no credential, and keeps the rest of the file", async () => {
@@ -722,7 +718,10 @@ describeOnLinux("deploy/install.sh", () => {
       // A paired host: the generated .env's SESSIONS_DIR holds the identity.
       const pairedDir = path.join(mullionHome, "data", "sessions");
       fs.mkdirSync(pairedDir, { recursive: true });
-      fs.writeFileSync(path.join(pairedDir, "agent-identity.json"), "{}");
+      fs.writeFileSync(
+        path.join(pairedDir, "agent-identity.json"),
+        JSON.stringify({ hostId: "host-fixture-1", machineCredential: "ab".repeat(32) }), // pragma: allowlist secret
+      );
       const { stderr } = await runScript(["--role", "agent", mullionHome], {
         env: {
           MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",

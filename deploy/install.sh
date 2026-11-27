@@ -675,8 +675,16 @@ if [ -f "$MULLION_HOME/.env" ]; then
     # re-running the installer with them is not a silent no-op.
     if [ -n "${MULLION_AGENT_HOST:-}" ]; then set_env_value HOST "$MULLION_AGENT_HOST"; echo "==> set HOST in $MULLION_HOME/.env"; fi
     if [ -n "${MULLION_AGENT_PORT:-}" ]; then set_env_value PORT "$MULLION_AGENT_PORT"; echo "==> set PORT in $MULLION_HOME/.env"; fi
+    # Issue #3577 — "no credential" is not the same as "no primary URL". A
+    # pre-removal agent's .env kept MULLION_PRIMARY_URL next to the
+    # now-ignored MULLION_ENROLLMENT_TOKEN and has no agent-identity.json, so a
+    # URL alone leaves it unable to boot (src/app.ts's fail-closed check). A
+    # URL is only a credential when a loadable identity sits where the agent
+    # reads it; otherwise the caller's manual token is exactly what this
+    # repair exists to write.
     if [ -n "${MULLION_AGENT_TOKEN:-}" ] && is_blank "$(env_value MULLION_AGENT_TOKEN)" &&
-      is_blank "$(env_value MULLION_PRIMARY_URL)"; then
+      { is_blank "$(env_value MULLION_PRIMARY_URL)" ||
+        ! identity_file_is_usable "$(pair_identity_file "$PAIR_SESSIONS_DIR")"; }; then
       set_env_value MULLION_AGENT_TOKEN "$MULLION_AGENT_TOKEN"
       echo "==> set MULLION_AGENT_TOKEN in $MULLION_HOME/.env (it had no credential)"
     fi
@@ -886,7 +894,8 @@ EOF
   HAS_MANUAL_TOKEN=false
   is_blank "${MULLION_AGENT_TOKEN:-}" || HAS_MANUAL_TOKEN=true
   HAS_PAIRING_IDENTITY=false
-  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$(pair_identity_file "$PAIR_SESSIONS_DIR")" ]; then
+  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" &&
+    identity_file_is_usable "$(pair_identity_file "$PAIR_SESSIONS_DIR")"; then
     HAS_PAIRING_IDENTITY=true
   fi
   if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_PAIRING_IDENTITY" = false ]; then

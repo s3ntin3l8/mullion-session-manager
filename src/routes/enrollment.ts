@@ -248,10 +248,10 @@ export async function enrollmentRoute(app: FastifyInstance) {
   // real decommissioning, not a restart — already has that path.
   //
   // The session credential itself IS revoked here (Hermes review, PR #530),
-  // though: clearHostSession() is free — a self-registered agent is
-  // stateless and always re-establishes a brand-new session from its
-  // bootstrap credential on its very next boot, so nothing depends on the
-  // outgoing one staying valid, and leaving it live would mean a session
+  // though: clearHostSession() is free — a self-registered agent holds a
+  // machine identity and re-establishes a brand-new session from it on its
+  // very next boot, so nothing depends on the outgoing one staying valid,
+  // and leaving it live would mean a session
   // that just said "I'm going away" stays a usable inbound credential for
   // up to its full 24h TTL. This is credential hygiene, not session
   // termination — it revokes the agent's ability to authenticate, not any

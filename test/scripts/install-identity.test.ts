@@ -287,6 +287,73 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     expect(envFile(home)).toMatch(/^MULLION_AGENT_TOKEN=fixture-restart-tok$/m);
   });
 
+  // Issue #3577 review — a pre-removal .env kept MULLION_PRIMARY_URL beside the
+  // now-ignored MULLION_ENROLLMENT_TOKEN and has no agent-identity.json, so it
+  // cannot boot. The documented manual-token fallback must actually be written
+  // for it; a bare URL is not a credential any more. A hand-mangled identity
+  // counts as absent too (loadAgentIdentity's own shape check).
+  it.each([
+    { label: "no identity", identity: null },
+    { label: "an unusable identity", identity: "{}" },
+  ])(
+    "fills a supplied MULLION_AGENT_TOKEN into a URL-only .env with $label",
+    async ({ identity }) => {
+      const home = freshHome();
+      const sessionsDir = path.join(home, "data", "sessions");
+      if (identity !== null) {
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(identityFile(home), identity);
+      }
+      const original =
+        [
+          "MULLION_ROLE=agent",
+          `MULLION_HOME=${home}`,
+          `SESSIONS_DIR=${sessionsDir}`,
+          "MULLION_PRIMARY_URL=https://primary.example.com",
+          `MULLION_ENROLLMENT_TOKEN=${LEFTOVER_TOKEN}`,
+          "PROJECTS_ROOTS=/srv/projects",
+        ].join("\n") + "\n";
+      fs.writeFileSync(path.join(home, ".env"), original, { mode: 0o600 });
+
+      await run(home, { ...ansibleEnv, MULLION_AGENT_TOKEN: "fixture-repair-tok" }); // pragma: allowlist secret
+
+      // Only the missing token line is added; the inert legacy one stays.
+      expect(envFile(home)).toBe(
+        original + "MULLION_AGENT_TOKEN=fixture-repair-tok\n", // pragma: allowlist secret
+      );
+    },
+  );
+
+  it("does not inject a manual token into a .env whose primary URL has a loadable identity", async () => {
+    const home = freshHome();
+    fs.mkdirSync(path.dirname(identityFile(home)), { recursive: true });
+    fs.writeFileSync(identityFile(home), IDENTITY, { mode: 0o600 });
+    const original =
+      [
+        "MULLION_ROLE=agent",
+        `MULLION_HOME=${home}`,
+        `SESSIONS_DIR=${path.join(home, "data", "sessions")}`,
+        "MULLION_PRIMARY_URL=https://primary.example.com",
+        "PROJECTS_ROOTS=/srv/projects",
+      ].join("\n") + "\n";
+    fs.writeFileSync(path.join(home, ".env"), original, { mode: 0o600 });
+
+    await run(home, { ...ansibleEnv, MULLION_AGENT_TOKEN: "fixture-repair-tok" }); // pragma: allowlist secret
+
+    expect(envFile(home)).toBe(original);
+  });
+
+  // A truncated or hand-mangled identity is "no identity" to loadAgentIdentity,
+  // so the fresh-generation credential warning must fire for it (the paired
+  // fixture in install.test.ts proves the opposite, quiet case).
+  it("warns about a fresh .env whose agent-identity.json is not loadable", async () => {
+    const home = freshHome();
+    fs.mkdirSync(path.dirname(identityFile(home)), { recursive: true });
+    fs.writeFileSync(identityFile(home), "{}");
+    const result = await run(home);
+    expect(result.stderr).toMatch(/WARNING: this agent has no complete credential path/);
+  });
+
   it("redeems MULLION_AGENT_PAIRING_CODE_STDIN=1 into agent-identity.json with no code or enrollment token in .env or argv", async () => {
     const pairingCode = "ab".repeat(32); // pragma: allowlist secret
     const home = freshHome();

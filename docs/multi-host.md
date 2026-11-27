@@ -83,10 +83,12 @@ on. A `session_secret` is issued and stored alongside it — the HMAC signing
 key that every request covered by "Request signing" below is signed with;
 unlike `session_id`, it's never re-sent after issuance or presented as a
 request credential itself.
-The agent renews its session at ~50% of its TTL, and re-runs the full
-registration call (with retry/backoff, so a briefly-down primary never blocks
-the agent's own boot) if a renewal ever fails. With no identity at all the
-agent refuses to boot rather than running uncredentialed.
+The agent renews its session at ~50% of its TTL. If a renewal fails
+transiently (a 5xx, a network blip) it re-runs the full registration call with
+retry/backoff, so a briefly-down primary never blocks the agent's own boot; a
+`401` means the identity itself was rejected, and the agent stops and asks to be
+re-paired rather than retrying forever. With no identity at all the agent
+refuses to boot rather than running uncredentialed.
 
 Newly-enrolled hosts are distinguishable from manually-registered ones via
 the API's `origin: "enrolled" | "manual"` field on `GET /api/hosts` —
@@ -1147,10 +1149,10 @@ self-registered one — gates `/internal/ws/attach`, which runs
 `${SHELL} -lc "<command>"` for any request bearing a valid one: a leaked
 credential is arbitrary command execution on that host. For manual tokens,
 generate them with real entropy (`openssl rand -hex 32`) and use a different
-one per agent. A pairing code and the redeemed `agent-identity.json` are the
-same kind of secret — one-time / never an inbound bearer credential — but
-still worth the same handling (real entropy, owner-only file, re-pair rather
-than share it).
+one per agent. A pairing code is one-time and is never an inbound bearer
+credential; the `agent-identity.json` it is redeemed into is long-lived and
+renews itself, so treat it as the durable secret it is — real entropy, an
+owner-only file, and re-pair rather than copy it to another host.
 
 Task Master's promotion path (`#484`) sends a **GitHub credential** (the
 shared PAT/OAuth token, or a short-lived App installation token when one is

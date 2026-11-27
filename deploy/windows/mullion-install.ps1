@@ -35,7 +35,9 @@
 #     registration (Settings -> Hosts -> Add host on the primary), keeps it in
 #     the .env and reports it ONCE: as "agentToken" on the final -Json line, or
 #     as one line of text. A re-run reports none, unless the existing .env has
-#     no credential at all, in which case the new token is filled into it;
+#     no complete credential (no MULLION_AGENT_TOKEN, and no MULLION_PRIMARY_URL
+#     with a loadable agent-identity.json), in which case the new token is
+#     filled into it;
 #   - with -Json, stdout is one JSON object per line, nothing else:
 #       {"step":"<name>","status":"start|ok|skip|log|fail","detail":"...", ...}
 #     steps, in order: platform, git-bash, node, rcedit, fetch, install, done (an
@@ -585,6 +587,11 @@ if ($TokenFromStdin -or $env:MULLION_AGENT_ENROLLMENT_TOKEN -or $env:MULLION_AGE
   Emit 'install' 'log' ('MULLION_AGENT_ENROLLMENT_TOKEN/-_STDIN and -TokenFromStdin are ignored: the ' +
     'agent-side enrollment-token bootstrap has been removed. Pair this host with a one-time ' +
     'pairing code instead (see deploy/README.md, "Automating agent deploys").')
+  # Clear them from this process's environment before mullion-install.sh is
+  # started: it inherits the process environment, and would otherwise print
+  # its own notice for the same values -- two notices for one converge.
+  Remove-Item Env:MULLION_AGENT_ENROLLMENT_TOKEN -ErrorAction SilentlyContinue
+  Remove-Item Env:MULLION_AGENT_ENROLLMENT_TOKEN_STDIN -ErrorAction SilentlyContinue
 }
 
 # No credential at all: generate the per-agent token for manual registration.
@@ -592,9 +599,30 @@ if ($TokenFromStdin -or $env:MULLION_AGENT_ENROLLMENT_TOKEN -or $env:MULLION_AGE
 # token is filled in when the file has no credential, so a token is generated
 # only when there is no .env, or the one there has no credential (a first run
 # that failed halfway, say). One that has a credential is never touched.
+
+# identity_file_is_usable FILE -- what src/services/agent-identity.ts's
+# loadAgentIdentity accepts: parseable JSON with non-empty string hostId and
+# machineCredential. A truncated, hand-mangled or otherwise malformed file
+# counts as NO identity, exactly as it does for the agent.
+function Test-IdentityUsable([string]$File) {
+  if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return $false }
+  try {
+    $id = Get-Content -LiteralPath $File -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    return $false
+  }
+  if (-not $id) { return $false }
+  if ($id.hostId -isnot [string] -or [string]::IsNullOrEmpty($id.hostId)) { return $false }
+  if ($id.machineCredential -isnot [string] -or [string]::IsNullOrEmpty($id.machineCredential)) { return $false }
+  return $true
+}
+
 function Test-EnvCredential([string]$EnvFile) {
   # What src/app.ts needs: a non-blank MULLION_AGENT_TOKEN, or a primary URL
-  # (whose credential is the paired agent-identity.json, not an .env value).
+  # AND a loadable agent-identity.json under SESSIONS_DIR. The URL alone is
+  # not a credential -- issue #3577 removed the enrollment-token bootstrap it
+  # used to pair with, so treating it as one would suppress the generated
+  # token for an agent that then crash-loops on the fail-closed check.
   $vals = @{}
   foreach ($line in @(Get-Content -LiteralPath $EnvFile -ErrorAction SilentlyContinue)) {
     if ($line -match '^\s*([A-Za-z_]+)=(.*)$') {
@@ -608,7 +636,15 @@ function Test-EnvCredential([string]$EnvFile) {
     }
   }
   if ($vals['MULLION_AGENT_TOKEN']) { return $true }
-  return [bool]$vals['MULLION_PRIMARY_URL']
+  if (-not $vals['MULLION_PRIMARY_URL']) { return $false }
+  $sessionsDir = $vals['SESSIONS_DIR']
+  if (-not $sessionsDir) { $sessionsDir = 'data/sessions' }
+  if (-not [IO.Path]::IsPathRooted($sessionsDir)) {
+    # install.sh resolves a relative SESSIONS_DIR against $MULLION_HOME/current
+    # (the release directory the agent runs from), never the caller's cwd.
+    $sessionsDir = Join-Path (Join-Path $InstallRoot 'current') $sessionsDir
+  }
+  return Test-IdentityUsable (Join-Path $sessionsDir 'agent-identity.json')
 }
 $envFile = Join-Path $InstallRoot '.env'
 $hasCredential = (Test-Path -LiteralPath $envFile) -and (Test-EnvCredential $envFile)
