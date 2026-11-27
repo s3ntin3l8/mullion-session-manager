@@ -41,12 +41,19 @@ export function resetLegacyHostDeprecationNotices(): void {
 
 /**
  * Warn at startup when the removed fleet-wide enrollment secret is still
- * present in the process environment.
+ * present in the `.env` file or process environment.
  *
- * Reads `process.env.MULLION_ENROLLMENT_SECRET` directly because the key was
- * removed from `src/plugins/env.ts` (`app.config`) in #3535.
+ * Accepts `dotenvOverrides` from `src/app.ts` (`loadDotenvOverrides()`) and
+ * falls back to `process.env.MULLION_ENROLLMENT_SECRET` (mirroring `env.ts`'s
+ * merged view, since `.env` is not written into `process.env`), because the
+ * key was removed from `src/plugins/env.ts` (`app.config`) in #3535.
  */
-export function warnLegacyEnrollmentSecretAtBoot(app: FastifyInstance): void {
-  if ((process.env.MULLION_ENROLLMENT_SECRET ?? "").trim() === "") return;
+export function warnLegacyEnrollmentSecretAtBoot(
+  app: FastifyInstance,
+  dotenvOverrides: NodeJS.Dict<string> = {},
+): void {
+  const secret =
+    dotenvOverrides.MULLION_ENROLLMENT_SECRET ?? process.env.MULLION_ENROLLMENT_SECRET ?? "";
+  if (secret.trim() === "") return;
   emitOnce(app, LEGACY_ENROLLMENT_SECRET_WARNING);
 }

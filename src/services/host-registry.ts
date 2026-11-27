@@ -35,12 +35,10 @@ export interface HostSummary {
   hasToken: boolean;
   createdAt: Date;
   lastSeenAt: Date | null;
-  // Issue #245 / roadmap 7.1 — "manual" (created via Settings -> Add host,
-  // including every pre-#245 row, which has origin === null in the DB) vs
-  // "enrolled" (auto-created by an agent's own registration call against
-  // MULLION_ENROLLMENT_SECRET). Lets the Hosts list flag an unexpected
-  // enrolled row for what it is, rather than looking identical to one an
-  // admin deliberately added.
+  // Issue #245 / roadmap 7.1 — "manual" (legacy hand-added rows, including
+  // every pre-#245 row, which has origin === null in the DB) vs "enrolled"
+  // (created via the pairing flow in createPairedHost, or historically via the
+  // removed MULLION_ENROLLMENT_SECRET path; #3535).
   origin: "manual" | "enrolled";
   // Issue #1721 / roadmap 8.7 — the host's own reported platform
   // ("darwin" | "linux" | "win32" | …), free-form and informational, same
@@ -89,20 +87,18 @@ export interface HostSummary {
   // stored): "legacy-agent" is an agent without a machine identity that the
   // primary has to dial at its stored address, "manual-token" is a host whose
   // agent still authenticates with the row's own static per-host token
-  // (MULLION_AGENT_TOKEN). Nothing is refused on this flag itself — the gate
-  // (MULLION_ALLOW_LEGACY_HOSTS, issue #3477) sits on the entry points that
-  // create a legacy host, not on the hosts that already exist.
+  // (MULLION_AGENT_TOKEN). Nothing is refused on this flag itself — the legacy
+  // entry points (POST /api/hosts and fleet-secret enrollment) were removed in
+  // issue #3535, while existing hosts keep working.
   deprecatedKind: DeprecatedHostKind | null;
   // Issue #3441 — when this host was approved for execution (null = awaiting
   // approval; `local` is always approved by construction).
   approvedAt: Date | null;
   approvalPending: boolean;
-  // baseUrl is null for "local" and for a "manual" host added without one
-  // (Settings -> Add host, token minted by the primary) that is still
-  // waiting for its agent: claimHost fills it in from the agent's own
-  // registration call. An "enrolled" row is never baseUrl-less —
-  // enrollHost sets it atomically. host-heartbeat.ts skips a null
-  // baseUrl, so such a host reads "pending" until the agent claims it.
+  // baseUrl is null for "local", for an outbound-only paired host ("enrolled",
+  // created by createPairedHost), and for a "manual" host waiting for its
+  // agent to claim it via claimHost. host-heartbeat.ts skips a null baseUrl,
+  // so an unclaimed manual host reads "pending" until the agent claims it.
 }
 
 export interface UpdateHostInput {
@@ -548,7 +544,7 @@ export interface RegisterAgentInput {
   platform?: string;
   // Issue #2568 — set by an agent that persists a machine identity. An agent
   // that predates it (or any manual caller) leaves it unset and is served the
-  // legacy way: no credential is issued, and enrollHost dedupes on baseUrl.
+  // legacy way: no credential is issued.
   wantsMachineCredential?: boolean;
 }
 

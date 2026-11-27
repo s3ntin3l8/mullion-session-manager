@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import sensible from "@fastify/sensible";
 import compress from "@fastify/compress";
-import { envPlugin } from "./plugins/env.js";
+import { envPlugin, loadDotenvOverrides } from "./plugins/env.js";
 import { loggingPlugin } from "./plugins/logging.js";
 import { securityPlugin } from "./plugins/security.js";
 import { dbPlugin } from "./plugins/db.js";
@@ -121,7 +121,7 @@ export async function buildApp() {
   // removed; warn once at startup if MULLION_ENROLLMENT_SECRET is still set in
   // the environment so the operator knows why it is ignored and what replaces
   // it.
-  warnLegacyEnrollmentSecretAtBoot(app);
+  warnLegacyEnrollmentSecretAtBoot(app, loadDotenvOverrides());
 
   // Multi-host support (issue #26). "primary" (default) is today's full
   // single-process app, unchanged below. "agent" is a lightweight, DB-less

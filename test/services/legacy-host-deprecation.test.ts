@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { buildApp } from "../../src/app.js";
+import { setDotenvPathForTests } from "../../src/plugins/env.js";
 import {
   LEGACY_ENROLLMENT_SECRET_WARNING,
   legacyHostDeprecationNotices,
@@ -30,6 +34,7 @@ async function captureLogLines(fn: () => Promise<void>): Promise<string[]> {
 describe("the removed legacy host boot notice (issue #3535)", () => {
   afterEach(() => {
     delete process.env.MULLION_ENROLLMENT_SECRET;
+    setDotenvPathForTests(null);
   });
 
   it("warns exactly once at startup when the removed fleet enrollment secret is set", async () => {
@@ -48,6 +53,32 @@ describe("the removed legacy host boot notice (issue #3535)", () => {
     expect(warned[0]).toContain("removed");
     expect(warned[0]).toContain("Add host");
     expect(warned[0]).toContain("automation tokens");
+  });
+
+  it("warns at startup when MULLION_ENROLLMENT_SECRET is set only in .env (not process.env)", async () => {
+    delete process.env.MULLION_ENROLLMENT_SECRET;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-deprecation-dotenv-"));
+    const envPath = path.join(dir, ".env");
+    fs.writeFileSync(
+      envPath,
+      "MULLION_ENROLLMENT_SECRET=fleet-secret-from-dotenv\n", // pragma: allowlist secret
+    );
+    setDotenvPathForTests(envPath);
+    try {
+      const lines = await captureLogLines(async () => {
+        const app = await buildApp();
+        try {
+          expect([...legacyHostDeprecationNotices()]).toEqual([LEGACY_ENROLLMENT_SECRET_WARNING]);
+        } finally {
+          await app.close();
+        }
+      });
+      const warned = lines.filter((line) => line.includes("MULLION_ENROLLMENT_SECRET is set"));
+      expect(warned).toHaveLength(1);
+    } finally {
+      setDotenvPathForTests(null);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("never warns when MULLION_ENROLLMENT_SECRET is not set", async () => {

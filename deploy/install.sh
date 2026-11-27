@@ -852,11 +852,13 @@ EOF
 # --- Pick ONE of the credential paths below; src/app.ts refuses to
 # boot an agent with none configured. See docs/multi-host.md. ---
 
-# Path 1 (recommended for a single new host): one-time pairing code redeemed
-# during install into $SESSIONS_DIR/agent-identity.json (only MULLION_PRIMARY_URL
-# is set here; MULLION_ENROLLMENT_TOKEN and MULLION_AGENT_TOKEN stay empty).
-# For automated fleets: set MULLION_ENROLLMENT_TOKEN (requires
-# MULLION_ENROLLMENT_SECRET on the primary too).
+# Path 1 (recommended): one-time pairing code (from Settings -> Hosts -> Add host
+# or an automation token) redeemed during install into $SESSIONS_DIR/agent-identity.json
+# (only MULLION_PRIMARY_URL is set here; MULLION_ENROLLMENT_TOKEN and MULLION_AGENT_TOKEN
+# stay empty).
+# Legacy per-host bootstrap: set MULLION_ENROLLMENT_TOKEN for an existing
+# pre-provisioned host row (fleet-secret enrollment via MULLION_ENROLLMENT_SECRET
+# has been removed).
 EOF
     printf 'MULLION_PRIMARY_URL=%s\n' "${MULLION_AGENT_PRIMARY_URL:-}" >>"$MULLION_HOME/.env"
     printf 'MULLION_ENROLLMENT_TOKEN=%s\n' "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" >>"$MULLION_HOME/.env"
@@ -871,8 +873,8 @@ EOF
     printf 'MULLION_AGENT_NAME=%s\n' "${MULLION_AGENT_NAME:-}" >>"$MULLION_HOME/.env"
     cat >>"$MULLION_HOME/.env" <<'EOF'
 
-# Path 2: a pre-provisioned static token, registered by hand in the
-# primary's Settings -> Hosts -> Add host. Set this INSTEAD of Path 1 above.
+# Path 2 (legacy): static token for an existing manual-token host row
+# (new hosts must use Path 1 pairing instead). Set this INSTEAD of Path 1 above.
 EOF
     printf 'MULLION_AGENT_TOKEN=%s\n' "${MULLION_AGENT_TOKEN:-}" >>"$MULLION_HOME/.env"
     # A private Git Bash (the Windows bootstrap's download) is not on any
