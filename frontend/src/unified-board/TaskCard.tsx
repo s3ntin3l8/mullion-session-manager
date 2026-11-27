@@ -635,8 +635,9 @@ export function TaskCard({
           className="task-card-review-round task-card-review-round-capped"
           role="status"
           data-testid="ci-hold-needs-human"
+          title={task.ciHoldNote ?? undefined}
         >
-          {needsHumanText(task.needsHumanReason, task.ciHoldNote)}, needs a human
+          {needsHumanText(task.needsHumanReason, task.ciHoldNote, "short")}, needs a human
         </div>
       )}
       {task.status === "reviewing" && task.needsHumanReason === "review-inconclusive" && (
