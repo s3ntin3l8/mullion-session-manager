@@ -1,5 +1,6 @@
 import { useDashboardStore } from "../store/index.js";
 import { CreateProjectModal } from "../CreateProjectModal.js";
+import { NoSetupRecipeHint } from "../NoSetupRecipeHint.js";
 import type { Host, Project } from "../api/index.js";
 
 // The Edit-project dialog, opened with the project's current settings: the
@@ -20,6 +21,8 @@ export function ProjectEditModal({
     <CreateProjectModal
       mode="edit"
       surface={surface}
+      // #3588 — no setup recipe, and a dock start went without dependencies.
+      lead={<NoSetupRecipeHint projectId={project.id} />}
       initialName={project.name}
       initialPath={project.cwd}
       initialDevServerUrl={project.devServerUrl}

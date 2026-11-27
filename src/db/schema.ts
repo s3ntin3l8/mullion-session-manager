@@ -730,6 +730,18 @@ export const sessions = sqliteTable(
     // recipe never blocks or kills the session; it only flags it.
     setupStatus: text("setup_status"),
     setupLogPath: text("setup_log_path"),
+    // Issue #3588 — "no-recipe": a dock session started in a fresh worktree or
+    // another host's checkout that has a lockfile, for a project with no setup
+    // recipe, so nothing installed its dependencies. Drives a one-time hint
+    // when it fails to start (and in Edit project). NULL = nothing to say.
+    setupHint: text("setup_hint"),
+    // Issue #3588 — a dock session that exited on its own keeps its last
+    // output and exit code here (captured by the reconciler before the scope
+    // and its in-memory scrollback are torn down and its preview worktree
+    // removed), so the preview proxy and the Dock can still say why it died.
+    // NULL for every other session, and while it runs.
+    lastOutput: text("last_output"),
+    lastExitCode: integer("last_exit_code"),
     worktreeRepoCwd: text("worktree_repo_cwd"),
     // When the worktree directory was removed (the branch is always kept).
     // NULL while it still exists.
@@ -2376,5 +2388,29 @@ export const codeScanningDismissals = sqliteTable(
   (table) => [
     index("code_scanning_dismissals_task_idx").on(table.taskId),
     index("code_scanning_dismissals_rule_idx").on(table.repo, table.ruleId),
+  ],
+);
+
+// Issue #3588 — the last successful setup-recipe run in a checkout that is
+// not a fresh worktree (a project's checkout on another host), keyed by the
+// fingerprint of its lockfiles. A dock start there re-runs the recipe only
+// when the fingerprint differs from this one (or none was recorded), not on
+// every start.
+export const setupStamps = sqliteTable(
+  "setup_stamps",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    hostId: text("host_id").notNull(),
+    cwd: text("cwd").notNull(),
+    lockfileHash: text("lockfile_hash").notNull(),
+    ranAt: integer("ran_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("setup_stamps_checkout_idx").on(table.projectId, table.hostId, table.cwd),
   ],
 );

@@ -1,3 +1,4 @@
+import { NoSetupRecipeHint } from "./NoSetupRecipeHint.js";
 import { useBusyAction } from "./hooks/useBusyAction.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
@@ -645,7 +646,12 @@ function ProjectSetupRecipe({ projectId }: { projectId: number }) {
   const saved = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.setupRecipe);
   // Keyed by the saved value so an external change (another tab, a merge)
   // resets the draft without a set-state-in-effect.
-  return <SetupRecipeField key={saved ?? ""} projectId={projectId} saved={saved ?? ""} />;
+  return (
+    <>
+      <NoSetupRecipeHint projectId={projectId} />
+      <SetupRecipeField key={saved ?? ""} projectId={projectId} saved={saved ?? ""} />
+    </>
+  );
 }
 
 function SetupRecipeField({ projectId, saved }: { projectId: number; saved: string }) {
@@ -660,8 +666,9 @@ function SetupRecipeField({ projectId, saved }: { projectId: number; saved: stri
     <div className="agent-rules-panel-notice project-briefing-setup-recipe">
       <span>
         Setup recipe — run with <code>sh -c</code> in a new worktree or clone, on its host (e.g.{" "}
-        <code>npm ci &amp;&amp; (cd frontend &amp;&amp; npm ci)</code>). A failure never blocks the
-        session; its log stays one click away:
+        <code>npm ci &amp;&amp; (cd frontend &amp;&amp; npm ci)</code>). An agent session never
+        waits for it; a Dock dev server or branch preview does, and a failure stops its start. The
+        log stays one click away:
       </span>
       <textarea
         className="project-setup-recipe-input"

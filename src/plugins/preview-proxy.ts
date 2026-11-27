@@ -18,6 +18,11 @@ import {
   isHostBusyError,
 } from "../services/remote-host-errors.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
+import {
+  acceptsHtml,
+  buildExitedPreviewHtml,
+  exitedPreviewReport,
+} from "../services/preview-exited-page.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
 import { requestScheme } from "../services/request-scheme.js";
 import {
@@ -222,12 +227,41 @@ function addPreviewErrorCorsHeaders(request: FastifyRequest, reply: FastifyReply
   reply.header("Vary", "Origin");
 }
 
+/**
+ * #3588 — a browser navigation to a preview whose bound dev-server session has
+ * exited gets a readable page (the exit code, its last output, a way back),
+ * not the fixed JSON 502. Sent WITHOUT addPreviewErrorCorsHeaders: unlike the
+ * fixed error bodies, this one carries the dev server's output. Returns null
+ * (the caller answers as before) for anything else, and for a non-HTML client.
+ */
+function sendExitedPreviewPage(
+  app: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  slug: string,
+): FastifyReply | null {
+  if (!acceptsHtml(request.headers.accept)) return null;
+  const report = exitedPreviewReport(app, slug);
+  if (!report) return null;
+  request.raw.resume();
+  // A failure path may already have set the reflected origin for its fixed body.
+  reply.removeHeader("Access-Control-Allow-Origin");
+  return reply
+    .code(502)
+    .type("text/html; charset=utf-8")
+    .send(buildExitedPreviewHtml(report, app.config.PREVIEW_AUTH_DASHBOARD_URL.trim()));
+}
+
 async function handlePreviewRequest(
   app: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
   slug: string,
 ) {
+  // A branch preview whose dev server already exited has nothing to proxy to
+  // (the port may even be someone else's by now).
+  const exited = sendExitedPreviewPage(app, request, reply, slug);
+  if (exited) return exited;
   const resolution = await resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
     addPreviewErrorCorsHeaders(request, reply);
@@ -341,6 +375,8 @@ async function handlePreviewRequest(
           message: PREVIEW_UNAVAILABLE_MESSAGE,
         });
       }
+      const exited = sendExitedPreviewPage(app, request, reply, slug);
+      if (exited) return exited;
       return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
     }
     // The loopback base this hop actually forced the connection to (see the
@@ -403,6 +439,9 @@ async function handlePreviewRequest(
         "preview proxy: upstream unreachable",
       );
     }
+    // The session may have died a moment ago (the reconciler marks it next).
+    const exited = sendExitedPreviewPage(app, request, reply, slug);
+    if (exited) return exited;
     addPreviewErrorCorsHeaders(request, reply);
     return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
   }

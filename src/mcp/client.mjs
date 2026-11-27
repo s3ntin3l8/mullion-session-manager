@@ -1,5 +1,6 @@
 import net from "node:net";
 import {
+  DOCK_START_TIMEOUT_MS,
   MullionSocketClient,
   WAIT_DEFAULT_TIMEOUT_MS,
   WAIT_SOCKET_SLACK_MS,
@@ -381,12 +382,16 @@ export class MullionClient {
     // caller's own project. It 404s a docker-sourced control (not agent-
     // controllable), so only then fall back to the legacy full-scope path.
     try {
-      return await this.controlRequest("docks.start", {
-        ...(projectId !== undefined ? { projectId } : {}),
-        dockControlId,
-        ...(branch !== undefined ? { branch } : {}),
-        ...(host !== undefined ? { hostId: host } : {}),
-      });
+      return await this.controlRequest(
+        "docks.start",
+        {
+          ...(projectId !== undefined ? { projectId } : {}),
+          dockControlId,
+          ...(branch !== undefined ? { branch } : {}),
+          ...(host !== undefined ? { hostId: host } : {}),
+        },
+        DOCK_START_TIMEOUT_MS,
+      );
     } catch (err) {
       if (
         err?.status !== 404 ||
@@ -463,13 +468,17 @@ export class MullionClient {
 
   /** Restart a dock control on another branch or worktree (#3049). */
   switchDockControl(projectId, dockControlId, { branch, worktreePath, host } = {}) {
-    return this.controlRequest("docks.switch", {
-      ...(projectId !== undefined ? { projectId } : {}),
-      dockControlId,
-      ...(branch !== undefined ? { branch } : {}),
-      ...(worktreePath !== undefined ? { worktreePath } : {}),
-      ...(host !== undefined ? { hostId: host } : {}),
-    });
+    return this.controlRequest(
+      "docks.switch",
+      {
+        ...(projectId !== undefined ? { projectId } : {}),
+        dockControlId,
+        ...(branch !== undefined ? { branch } : {}),
+        ...(worktreePath !== undefined ? { worktreePath } : {}),
+        ...(host !== undefined ? { hostId: host } : {}),
+      },
+      DOCK_START_TIMEOUT_MS,
+    );
   }
 
   /** The project's raw `.crs/dock.json` document (#3050). */

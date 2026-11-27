@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
 import { usePrDetail, usePrList, useRunJobs } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type SessionLink } from "../hooks/useMullionLinks.js";
-import { useBranchPreview } from "../hooks/useBranchPreview.js";
+import { INSTALLING_LABEL, useBranchPreview } from "../hooks/useBranchPreview.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
 import type {
   GitHubPrDetail,
@@ -813,7 +813,11 @@ export function PrDetailView({
                 )
               }
             >
-              {entry?.preview ? "Open preview" : "Preview PR"}
+              {branchPreview.installing.has(`pr:${pr.number}`)
+                ? INSTALLING_LABEL
+                : entry?.preview
+                  ? "Open preview"
+                  : "Preview PR"}
             </Button>
           </div>
           <div className="pr-card-b">

@@ -420,6 +420,9 @@ export function DockProjectGroup({
         onServiceRestart={view.serviceRestart}
         onServiceStop={view.serviceStop}
         onServiceStart={view.serviceStart}
+        installing={view.installing}
+        branchPreviews={view.branchPreviews}
+        onOpenSession={onOpenSession}
       />
     );
   };

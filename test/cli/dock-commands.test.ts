@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
+import { DOCK_START_TIMEOUT_MS } from "../../src/cli/client.mjs";
 import { EventEmitter } from "node:events";
 import { runCommand } from "../../src/cli/core.mjs";
+
+// #3588 — a dock start may wait for the setup recipe: a long request timeout.
+const DOCK_START_OPTS = { timeoutMs: DOCK_START_TIMEOUT_MS };
 
 // `mullion dock …` (#2494: list/start/stop go through the narrow `docks.*`
 // ops; a Docker-discovered control and a raw session id keep the legacy path).
@@ -56,18 +60,30 @@ describe("mullion dock", () => {
     const client = fakeClient();
     const io = fakeIo();
     await runCommand(["dock", "start", "web"], { client, io });
-    expect(client.request).toHaveBeenCalledWith("docks.start", { dockControlId: "web" });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.start",
+      { dockControlId: "web" },
+      DOCK_START_OPTS,
+    );
     await runCommand(["dock", "start", "1", "web", "--branch", "feat/x"], { client, io });
     await runCommand(["dock", "start", "web", "--branch", "feat/y"], { client, io });
-    expect(client.request).toHaveBeenCalledWith("docks.start", {
-      dockControlId: "web",
-      branch: "feat/y",
-    });
-    expect(client.request).toHaveBeenCalledWith("docks.start", {
-      projectId: "1",
-      dockControlId: "web",
-      branch: "feat/x",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.start",
+      {
+        dockControlId: "web",
+        branch: "feat/y",
+      },
+      DOCK_START_OPTS,
+    );
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.start",
+      {
+        projectId: "1",
+        dockControlId: "web",
+        branch: "feat/x",
+      },
+      DOCK_START_OPTS,
+    );
   });
 
   it("dock start names a docker-sourced control's session by its stable containerName identity, not its title", async () => {
@@ -106,35 +122,51 @@ describe("mullion dock", () => {
     const client = fakeClient();
     const io = fakeIo();
     await runCommand(["dock", "start", "web", "--host", "mac"], { client, io });
-    expect(client.request).toHaveBeenCalledWith("docks.start", {
-      dockControlId: "web",
-      hostId: "mac",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.start",
+      {
+        dockControlId: "web",
+        hostId: "mac",
+      },
+      DOCK_START_OPTS,
+    );
     await runCommand(["dock", "start", "1", "web", "--branch", "feat/x", "--host", "mac"], {
       client,
       io,
     });
-    expect(client.request).toHaveBeenCalledWith("docks.start", {
-      projectId: "1",
-      dockControlId: "web",
-      branch: "feat/x",
-      hostId: "mac",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.start",
+      {
+        projectId: "1",
+        dockControlId: "web",
+        branch: "feat/x",
+        hostId: "mac",
+      },
+      DOCK_START_OPTS,
+    );
     await runCommand(["dock", "switch", "web", "feat/z", "--host", "mac"], { client, io });
-    expect(client.request).toHaveBeenCalledWith("docks.switch", {
-      dockControlId: "web",
-      branch: "feat/z",
-      hostId: "mac",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.switch",
+      {
+        dockControlId: "web",
+        branch: "feat/z",
+        hostId: "mac",
+      },
+      DOCK_START_OPTS,
+    );
     await runCommand(["dock", "switch", "web", "--worktree", "../wt", "--host", "mac"], {
       client,
       io,
     });
-    expect(client.request).toHaveBeenCalledWith("docks.switch", {
-      dockControlId: "web",
-      worktreePath: "../wt",
-      hostId: "mac",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.switch",
+      {
+        dockControlId: "web",
+        worktreePath: "../wt",
+        hostId: "mac",
+      },
+      DOCK_START_OPTS,
+    );
   });
 
   it("dock start/switch reject a repeated or dangling --host", async () => {
@@ -165,11 +197,15 @@ describe("mullion dock", () => {
     });
     await runCommand(["dock", "start", "1", "web", "--host", "mac"], { client, io: fakeIo() });
     expect(client.request).toHaveBeenCalledTimes(1);
-    expect(client.request).toHaveBeenCalledWith("docks.start", {
-      projectId: "1",
-      dockControlId: "web",
-      hostId: "mac",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.start",
+      {
+        projectId: "1",
+        dockControlId: "web",
+        hostId: "mac",
+      },
+      DOCK_START_OPTS,
+    );
   });
 
   it("dock start rejects a repeated or dangling --branch", async () => {
@@ -224,16 +260,24 @@ describe("mullion dock", () => {
       dockControlId: "web",
     });
     await runCommand(["dock", "switch", "web", "feat/x"], { client, io });
-    expect(client.request).toHaveBeenCalledWith("docks.switch", {
-      dockControlId: "web",
-      branch: "feat/x",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.switch",
+      {
+        dockControlId: "web",
+        branch: "feat/x",
+      },
+      DOCK_START_OPTS,
+    );
     await runCommand(["dock", "switch", "2", "web", "--worktree", "/p/wt"], { client, io });
-    expect(client.request).toHaveBeenCalledWith("docks.switch", {
-      projectId: "2",
-      dockControlId: "web",
-      worktreePath: "/p/wt",
-    });
+    expect(client.request).toHaveBeenCalledWith(
+      "docks.switch",
+      {
+        projectId: "2",
+        dockControlId: "web",
+        worktreePath: "/p/wt",
+      },
+      DOCK_START_OPTS,
+    );
     expect(await runCommand(["dock", "switch", "web"], { client, io })).toBe(2);
   });
 

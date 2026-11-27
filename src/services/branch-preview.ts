@@ -66,6 +66,9 @@ export type BranchPreviewErrorCode =
   | "invalid_branch"
   | "worktree_busy"
   | "start_failed"
+  // #3588 — the project's setup recipe failed or timed out in the preview's
+  // fresh worktree, so the dev server was not started.
+  | "setup_failed"
   // #3428 — the project's host runs an agent build without the branch-preview
   // routes: updating it fixes this, retrying does not.
   | "host_unsupported"
@@ -76,7 +79,7 @@ export type BranchPreviewErrorCode =
   // connection mid-request): retryable.
   | "host_unavailable";
 
-type BranchPreviewStatus = 400 | 404 | 409 | 502 | 503;
+type BranchPreviewStatus = 400 | 404 | 409 | 424 | 502 | 503;
 
 const STATUS: Record<BranchPreviewErrorCode, BranchPreviewStatus> = {
   unknown_project: 404,
@@ -85,6 +88,7 @@ const STATUS: Record<BranchPreviewErrorCode, BranchPreviewStatus> = {
   invalid_branch: 400,
   worktree_busy: 409,
   start_failed: 502,
+  setup_failed: 424,
   host_unsupported: 409,
   host_refused: 409,
   host_unavailable: 503,
@@ -465,6 +469,9 @@ async function startOnPort(
     return (
       bindBranchPreview(app, row.slug, { sessionId: result.sessionId, upstreamPort: port }) ?? row
     );
+  }
+  if (!result.ok && result.reason === "setup-failed") {
+    throw new BranchPreviewError("setup_failed", result.detail);
   }
   if (!result.ok) {
     throw new BranchPreviewError(

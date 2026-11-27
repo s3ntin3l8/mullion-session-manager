@@ -26,6 +26,7 @@ import { killSession } from "./session-lifecycle.js";
 import { withLiveStatus } from "./session-live-info.js";
 import { isSiblingWorktreeCwd } from "./session-cwd.js";
 import { getStoredSettings } from "./settings.js";
+import { controlInstalling, DOCK_CONTROL_INSTALLING } from "./dock-setup.js";
 
 export interface DockControlView {
   id: string;
@@ -183,15 +184,18 @@ export type LaunchSession = (
  * known code. Upstream message text is deliberately not echoed to the caller. */
 export interface LaunchOutcome {
   id?: number;
-  code?: "port_in_use";
+  code?: "port_in_use" | "setup_failed";
   port?: number;
   holderSessionId?: number;
+  /** #3588 — with `setup_failed`: the recipe's outcome and its log's tail. */
+  setupDetail?: string;
 }
 
 const LAUNCH_FAILURE: Record<number, string> = {
   400: "The launch was refused as invalid.",
   404: "Project not found.",
   409: "The control is already running, or its port is in use.",
+  424: "Installing dependencies failed; the command was not run.",
   429: "Too many live sessions.",
   502: "Failed to spawn the session.",
   503: "The spawn outcome is unknown; check the dock.",
@@ -296,6 +300,8 @@ export async function startDockControl(
     }
     await killSession(app, running.id, "detach");
   }
+  // #3588 — a start already waiting for the setup recipe has no row yet.
+  if (controlInstalling(projectId, controlId)) return fail(409, DOCK_CONTROL_INSTALLING);
   const c = control.value;
   const checked = await validateTarget(app, projectId, target);
   if (!checked.ok) return checked.error;
@@ -320,7 +326,11 @@ export async function startDockControl(
   const { statusCode, body } = await launch(payload);
   if (statusCode !== 201 || typeof body.id !== "number") {
     const status = statusCode >= 400 ? statusCode : 502;
-    return fail(status, LAUNCH_FAILURE[status] ?? `Failed to start (HTTP ${status}).`, {
+    const message =
+      body.code === "setup_failed" && body.setupDetail !== undefined
+        ? body.setupDetail
+        : (LAUNCH_FAILURE[status] ?? `Failed to start (HTTP ${status}).`);
+    return fail(status, message, {
       ...(body.code !== undefined ? { code: body.code } : {}),
       ...(body.port !== undefined ? { port: body.port } : {}),
       ...(body.holderSessionId !== undefined ? { holderSessionId: body.holderSessionId } : {}),
@@ -379,6 +389,8 @@ export async function switchDockControl(
   // `code`), not the upstream text echoed back.
   return {
     ...started,
-    message: `The control was stopped but could not be restarted (HTTP ${started.status}); start it again.`,
+    message: `The control was stopped but could not be restarted (HTTP ${started.status}); start it again.${
+      started.body?.code === "setup_failed" ? `\n${started.message}` : ""
+    }`,
   };
 }

@@ -1,3 +1,5 @@
+import { DOCK_START_TIMEOUT_MS } from "./client.mjs";
+
 // #2494 — `list`/`start`/`stop` go through the narrow `docks.*` ops, which an
 // agent session may call for its OWN project: a lone control id means "my
 // project's"; `<projectId> <controlId>` names the project (full scope).
@@ -49,12 +51,16 @@ export function createDockCommands({ CliUsageError, requireOne }) {
       const dockId = hasProject ? args[1] : args[0];
       if (dockId === undefined) throw new CliUsageError("dock control id is required");
       try {
-        const result = await client.request("docks.start", {
-          ...(projectId !== undefined ? { projectId } : {}),
-          dockControlId: dockId,
-          ...(branch !== undefined ? { branch } : {}),
-          ...(host !== undefined ? { hostId: host } : {}),
-        });
+        const result = await client.request(
+          "docks.start",
+          {
+            ...(projectId !== undefined ? { projectId } : {}),
+            dockControlId: dockId,
+            ...(branch !== undefined ? { branch } : {}),
+            ...(host !== undefined ? { hostId: host } : {}),
+          },
+          { timeoutMs: DOCK_START_TIMEOUT_MS },
+        );
         return { json: result };
       } catch (err) {
         if (
@@ -120,12 +126,16 @@ export function createDockCommands({ CliUsageError, requireOne }) {
         );
       }
       return {
-        json: await client.request("docks.switch", {
-          ...(rest.length > 1 ? { projectId: rest[0] } : {}),
-          dockControlId: rest[rest.length - 1],
-          ...(wt === -1 ? { branch: target } : { worktreePath: target }),
-          ...(host !== undefined ? { hostId: host } : {}),
-        }),
+        json: await client.request(
+          "docks.switch",
+          {
+            ...(rest.length > 1 ? { projectId: rest[0] } : {}),
+            dockControlId: rest[rest.length - 1],
+            ...(wt === -1 ? { branch: target } : { worktreePath: target }),
+            ...(host !== undefined ? { hostId: host } : {}),
+          },
+          { timeoutMs: DOCK_START_TIMEOUT_MS },
+        ),
       };
     },
     // `config get [<projectId>]` / `config set [<projectId>] --upsert <json> | --remove <id> | --controls <json>`.

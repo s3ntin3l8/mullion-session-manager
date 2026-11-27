@@ -1,3 +1,4 @@
+import { captureDockExitReport, isDevServerSession } from "./dock-exit-report.js";
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
@@ -257,6 +258,12 @@ async function reconcileRow(
   // agent's own PtyManager owns its files. Gated on the CAS so a lost
   // race (e.g. an in-flight re-seed spawning into this id) never has
   // its files deleted from under it.
+  // #3588 — a dock session (a dev server, a branch preview) keeps its last
+  // output and exit code: read from the host before terminate() drops the
+  // scrollback, and before the preview worktree is removed below.
+  if (flipped.changes === 1 && isDevServerSession(row.session)) {
+    await captureDockExitReport(app, row.session.id, hostId);
+  }
   if (flipped.changes === 1 && hostId === LOCAL_HOST_ID) {
     await app.pty.terminate(String(row.session.id));
   }

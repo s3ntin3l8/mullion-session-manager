@@ -6,10 +6,13 @@
 //    machine, captures output to `<sessionsDir>/<logKey>.setup.log`, and never
 //    throws. The primary calls it in-process for a local host; a remote agent
 //    calls it from `POST /internal/run-setup`.
-//  - `startSetupRecipe` is the primary-side TRIGGER. It fire-and-forgets: the
-//    session start never waits for an install, and a failed or timed-out
-//    recipe only flags the session (`sessions.setup_status`) — it never blocks
-//    or kills it.
+//  - `startSetupRecipe` is the primary-side TRIGGER for an agent session. It
+//    fire-and-forgets: the session start never waits for an install, and a
+//    failed or timed-out recipe only flags the session
+//    (`sessions.setup_status`) — it never blocks or kills it.
+//  - A dock session (a dev server) is the exception, #3588: it waits for the
+//    recipe before its command runs, and a failed recipe fails its start —
+//    see dock-setup.ts.
 
 import { spawn } from "node:child_process";
 import {
@@ -47,7 +50,9 @@ export {
   type SetupRunResult,
 } from "./setup-recipe-shared.js";
 
-const LOG_KEY_PATTERN = /^(checkout-)?(\d{1,15})$/;
+// `<sessionId>`, `checkout-<projectId>` (a clone), or `dock-<n>` (a dock start
+// waiting for its recipe before it has a session row, #3588).
+const LOG_KEY_PATTERN = /^(checkout-|dock-)?(\d{1,15})$/;
 // The per-run timeout is process-local, never taken from a request: a caller
 // (including `/internal/run-setup`) cannot choose how long a timer runs.
 let setupTimeoutMs = DEFAULT_SETUP_TIMEOUT_MS;
@@ -57,8 +62,8 @@ export function setSetupTimeoutForTests(ms?: number): void {
   setupTimeoutMs = ms ?? DEFAULT_SETUP_TIMEOUT_MS;
 }
 
-/** `<sessionsDir>/<logKey>.setup.log`. `logKey` is a session id or
- * `checkout-<projectId>`; the filename is rebuilt from the parsed integer, so
+/** `<sessionsDir>/<logKey>.setup.log`. `logKey` is a session id,
+ * `checkout-<projectId>` or `dock-<n>`; the filename is rebuilt from the parsed integer, so
  * no part of the request's string reaches the path. Anything else throws. */
 export function setupLogPath(sessionsDir: string, logKey: string): string {
   const m = LOG_KEY_PATTERN.exec(logKey);

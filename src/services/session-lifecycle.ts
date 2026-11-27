@@ -31,7 +31,7 @@ import {
 } from "./git-worktree.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend.js";
-import { forceRemoveCheckout, previewRemover } from "./checkout-removal.js";
+import { previewRemover } from "./checkout-removal.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { LOCAL_HOST_ID, getHostRow, isHostApproved } from "./host-registry.js";
 import { HOST_AWAITING_APPROVAL_MESSAGE } from "./remote-host-errors.js";
@@ -45,6 +45,8 @@ import {
 } from "./session-github-auth.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
 import { startSetupRecipe } from "./setup-recipe.js";
+import { prepareDockLaunch, recordSetupHint } from "./dock-setup.js";
+import { rollbackCreate, type CreateRollback } from "./session-create-rollback.js";
 import { closeSessionBrowserBindings, recordSessionBrowserBinding } from "./session-browsers.js";
 import { dropPendingOpensForSession } from "./workspace-pending-opens.js";
 import { resolveSessionHostId } from "./session-live-info.js";
@@ -553,6 +555,9 @@ export type CreateSessionResult =
   // the host's Update action. Refused before any worktree or process exists.
   | { ok: false; reason: "host-unsupported"; detail: string }
   | { ok: false; reason: "host-awaiting-approval"; detail: string }
+  // Issue #3588 — a dock session's setup recipe failed or timed out, so its
+  // command was not run. `detail` names the outcome and carries the log's tail.
+  | { ok: false; reason: "setup-failed"; detail: string }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
   // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
   // is bound by the same reserved-key rules as a dock control. See
@@ -918,83 +923,6 @@ export async function createSessionRecord(
   return result;
 }
 
-// What createSessionRecordInner has created so far and so must unwind.
-interface CreateRollback {
-  /** The host the session's SCOPE was created on — the placement host. */
-  hostId?: string;
-  /**
-   * The host the session's WORKTREE was created on — issue #1722: the
-   * worktree is cut from the project's repo, so it is created on the
-   * PROJECT's host, while the scope runs on the placement host. The two
-   * are the same host today; #1724 makes them differ, and a rollback that
-   * sent the worktree cleanup to the scope's host would leave a leaked
-   * worktree and an undeleted branch with no log line. So they are
-   * tracked separately.
-   */
-  worktreeHostId?: string;
-  projectId?: number; // for releasing the worktree's browsers
-  /** Worktree created by this call (never a pre-existing one). */
-  worktreePath?: string;
-  /** Repo the worktree was cut from (parentCwd for removeWorktree/deleteBranch). */
-  parentCwd?: string;
-  /** Branch created together with the worktree (baseRef path only). */
-  branch?: string;
-  /** Issue #2245 — prepareWorktree cut a fresh tree for this call (not a resume
-   * of an existing one), so the project's setup recipe runs in it. */
-  cutWorktree?: boolean;
-  /** Inserted `sessions` row id, once the insert committed. */
-  sessionId?: number;
-  spawned: boolean;
-  done: boolean;
-}
-
-// Idempotent, best-effort, never throws: terminate any scope/Session this
-// call created for `sessionId` (never an id it didn't create), remove the
-// worktree and its branch, then delete the row. Each step is its own
-// try/catch — a RemoteBackend method can throw synchronously from its
-// `client` getter (hosts row deleted mid-request), and one failing step
-// must not skip the rest.
-async function rollbackCreate(app: FastifyInstance, rb: CreateRollback): Promise<void> {
-  if (rb.done) return;
-  rb.done = true;
-  // Either host is enough to have something to undo: the scope's host (the
-  // terminate) or the worktree's host (the worktree/branch cleanup). They
-  // are two INDEPENDENT fields (issue #1722) — so the gate has to name
-  // both, or a rollback that only ever made a worktree would be skipped
-  // and leave the worktree and its branch behind.
-  if (rb.hostId === undefined && rb.worktreeHostId === undefined) return;
-  if (rb.sessionId !== undefined && rb.hostId !== undefined) {
-    try {
-      await resolveBackend(app, rb.hostId).terminate(String(rb.sessionId));
-    } catch (err) {
-      app.log.warn({ err, sessionId: rb.sessionId }, "create rollback: terminate failed");
-    }
-  }
-  if (rb.worktreePath !== undefined) {
-    // The worktree lives on ITS host — the project's, where it was cut
-    // from — which is not necessarily the host the scope was created on
-    // (issue #1722).
-    const wtHost = rb.worktreeHostId ?? rb.hostId!;
-    const worktreeBackend = () => resolveBackend(app, wtHost);
-    try {
-      await forceRemoveCheckout(app, rb.projectId, wtHost, rb.worktreePath, rb.parentCwd);
-    } catch {
-      // Best-effort: a leaked worktree directory is the cheaper failure —
-      // same posture as cleanupPreviewWorktree's pendingRemoval retry.
-    }
-    if (rb.branch !== undefined && rb.parentCwd !== undefined) {
-      try {
-        await worktreeBackend().deleteBranch(rb.parentCwd, rb.branch, { force: true });
-      } catch {
-        // Best-effort, as above.
-      }
-    }
-  }
-  if (rb.sessionId !== undefined) {
-    app.db.delete(sessions).where(eq(sessions.id, rb.sessionId)).run();
-  }
-}
-
 // The createSessionRecordInner pipeline (issue #1525): each step below was a
 // contiguous block of what used to be one ~620-line function. Steps that can
 // end the create early return `Step<T>` — `{ ok: false, result }` carries the
@@ -1340,6 +1268,17 @@ async function createSessionRecordInner(
     }
   }
 
+  // Issue #3588 — a dock session (a dev server) waits for the project's setup
+  // recipe before anything is spawned, on the host it runs on; a failure
+  // fails the start here (the rollback removes a worktree cut above) and no
+  // command runs. Agent sessions keep the fire-and-forget recipe below.
+  const dockSetup = await prepareDockLaunch(app, project, params, {
+    hostId: placementHost,
+    cwd: cwd ?? placement.cwd,
+    freshWorktree: rb.cutWorktree === true,
+  });
+  if (!dockSetup.ok) return { ok: false, reason: "setup-failed", detail: dockSetup.detail };
+
   const insert = insertRow(
     app,
     params,
@@ -1366,7 +1305,7 @@ async function createSessionRecordInner(
         : undefined),
   );
   if (!insert.ok) return insert.result;
-  const created = insert.row;
+  const created = recordSetupHint(app, insert.row, dockSetup.hint);
   // The placement host, not the project's: rb.hostId is what a failed
   // create unwinds through (rollbackCreate terminates the scope and removes
   // the worktree), so it has to be the host the session was actually
@@ -1410,7 +1349,8 @@ async function createSessionRecordInner(
   // install its dependencies. Fire-and-forget, so the session is never held up
   // by it and a failure only flags the session. A Task Master retry/resume
   // reuses an existing tree and passes neither, so it does not re-run.
-  if (cwd !== undefined && (rb.cutWorktree || params.ownedWorktree !== undefined)) {
+  // A dock session already waited for its recipe above (#3588).
+  if (!dockSetup.waited && cwd !== undefined && (rb.cutWorktree || params.ownedWorktree)) {
     startSetupRecipe(app, project, { id: created.id, hostId: placementHost, cwd });
   }
 

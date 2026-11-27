@@ -14,10 +14,14 @@ import type {
   DockerStackActionResult,
   DockerServiceActionResult,
 } from "./types.js";
-import type { DockControl } from "../../../src/shared/types.js";
+import type { DockControl, DockSetupRun } from "../../../src/shared/types.js";
 
 export const dockerApi = {
   listProjectDock: (projectId: number) => request<DockControl[]>(`/api/projects/${projectId}/dock`),
+
+  // #3588 — the project's dock starts waiting for its setup recipe right now.
+  listDockSetups: (projectId: number) =>
+    request<DockSetupRun[]>(`/api/projects/${projectId}/dock/setups`),
 
   // U4 — the raw, per-project `.crs/dock.json` (unmerged — see
   // DockConfigResult's own doc comment). Distinct from listProjectDock

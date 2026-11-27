@@ -583,6 +583,16 @@ export interface Session {
   // worktree. Null/absent = none ran. The log is read through
   // `api.getSessionSetupLog`.
   setupStatus?: SetupStatus | null;
+  // #3588 — "no-recipe": a dock session started in a fresh worktree or on
+  // another host with a lockfile, for a project with no setup recipe.
+  setupHint?: "no-recipe" | null;
+  // The dock control a dock session was launched from (#2494); null for a
+  // branch preview or any other session.
+  dockControlId?: string | null;
+  // #3588 — a dock session that exited on its own: its last output and exit
+  // code, kept on the row after its scope (and scrollback) went away.
+  lastOutput?: string | null;
+  lastExitCode?: number | null;
   worktreeKeptReason?: WorktreeKeptReason | null;
   worktreeLastAttemptAt?: string | null;
   worktreeReclaimedAt?: string | null;

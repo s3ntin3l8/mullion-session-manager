@@ -880,6 +880,16 @@ export async function sessionsRoute(app: FastifyInstance) {
           // Issue #3441 — an unapproved host refuses direct spawns with 409.
           return reply.conflict(result.detail);
         }
+        if (result.reason === "setup-failed") {
+          // Issue #3588 — a dock session's setup recipe failed or timed out,
+          // so its command never ran. The detail carries the log's tail.
+          return reply.code(424).send({
+            statusCode: 424,
+            error: "Failed Dependency",
+            code: "setup_failed",
+            message: result.detail,
+          });
+        }
         if (result.reason === "cwd-outside-project") {
           return reply.badRequest(
             "cwd must resolve inside the project directory or be a registered git worktree of its repo",

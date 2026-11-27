@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api/index.js";
 import type { Preview } from "../api/index.js";
 import { describeError } from "../lib/describeError.js";
@@ -43,6 +43,10 @@ export function previewErrorMessage(err: unknown): string {
   return describeError(err, "Could not start the preview");
 }
 
+// #3588 — how often a start in flight asks whether it is installing.
+const INSTALL_POLL_MS = 1500;
+export const INSTALLING_LABEL = "Installing dependencies…";
+
 export function targetKey(target: BranchPreviewTarget): string {
   return target.kind === "pr" ? `pr:${target.number}` : `branch:${target.branch}`;
 }
@@ -50,6 +54,18 @@ export function targetKey(target: BranchPreviewTarget): string {
 export function useBranchPreview(projectId: number) {
   // Keys of the previews being started, so a row can disable its button.
   const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
+  // #3588 — the starts whose dev server is waiting for the project's setup
+  // recipe on the server ("Installing dependencies…"), polled only while a
+  // start is in flight.
+  const [installing, setInstalling] = useState<ReadonlySet<string>>(new Set());
+  const pollsRef = useRef(new Set<ReturnType<typeof setInterval>>());
+  useEffect(() => {
+    const polls = pollsRef.current;
+    return () => {
+      for (const timer of polls) clearInterval(timer);
+      polls.clear();
+    };
+  }, []);
   const hasDevServer = useDashboardStore(
     (s) => !!s.projects.find((p) => p.id === projectId)?.devServerUrl,
   );
@@ -63,6 +79,25 @@ export function useBranchPreview(projectId: number) {
       }
       const key = targetKey(target);
       setStarting((prev) => new Set(prev).add(key));
+      const mark = (on: boolean) =>
+        setInstalling((prev) => {
+          if (prev.has(key) === on) return prev;
+          const next = new Set(prev);
+          if (on) next.add(key);
+          else next.delete(key);
+          return next;
+        });
+      let done = false;
+      const poll = setInterval(() => {
+        api
+          .listDockSetups(projectId)
+          // A poll answering after the start returned must not turn it back on.
+          .then((runs) => !done && mark(runs.some((r) => r.branch === target.branch)))
+          .catch(() => {
+            // Only the label is lost; the start goes on.
+          });
+      }, INSTALL_POLL_MS);
+      pollsRef.current.add(poll);
       try {
         const preview =
           target.kind === "pr"
@@ -78,6 +113,10 @@ export function useBranchPreview(projectId: number) {
           previewErrorMessage(err),
         );
       } finally {
+        done = true;
+        clearInterval(poll);
+        pollsRef.current.delete(poll);
+        mark(false);
         setStarting((prev) => {
           const next = new Set(prev);
           next.delete(key);
@@ -88,5 +127,5 @@ export function useBranchPreview(projectId: number) {
     [projectId, hasDevServer],
   );
 
-  return { open, starting };
+  return { open, starting, installing };
 }
