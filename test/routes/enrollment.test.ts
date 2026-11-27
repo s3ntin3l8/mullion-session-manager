@@ -200,6 +200,45 @@ describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
     await app.close();
   });
 
+  it("refreshes hosts.platform on machine-credential renewal and preserves it when omitted", async () => {
+    const app = await buildApp();
+    const registered = createPairedHost(app, {
+      baseUrl: "http://10.0.0.20:4000",
+      hostname: "x",
+      platform: "linux",
+    });
+    expect(getHostRow(app, registered.hostId)?.platform).toBe("linux");
+
+    const updated = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        machineCredential: registered.machineCredential,
+        hostId: registered.hostId,
+        baseUrl: "http://10.0.0.20:4000",
+        hostname: "x",
+        platform: "darwin",
+      },
+    });
+    expect(updated.statusCode).toBe(200);
+    expect(getHostRow(app, registered.hostId)?.platform).toBe("darwin");
+
+    const omitted = await app.inject({
+      method: "POST",
+      url: "/api/internal/register",
+      payload: {
+        machineCredential: updated.json().machine_credential,
+        hostId: registered.hostId,
+        baseUrl: "http://10.0.0.20:4000",
+        hostname: "x",
+      },
+    });
+    expect(omitted.statusCode).toBe(200);
+    expect(getHostRow(app, registered.hostId)?.platform).toBe("darwin");
+
+    await app.close();
+  });
+
   it("force-reconnects the events subscription after a session renewal", async () => {
     const app = await buildApp();
     await app.ready();

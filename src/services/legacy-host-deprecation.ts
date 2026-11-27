@@ -50,7 +50,7 @@ export function resetLegacyHostDeprecationNotices(): void {
  */
 export function warnLegacyEnrollmentSecretAtBoot(
   app: FastifyInstance,
-  dotenvOverrides: NodeJS.Dict<string> = {},
+  dotenvOverrides: NodeJS.Dict<string>,
 ): void {
   const secret =
     dotenvOverrides.MULLION_ENROLLMENT_SECRET ?? process.env.MULLION_ENROLLMENT_SECRET ?? "";

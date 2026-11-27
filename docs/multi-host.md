@@ -274,7 +274,7 @@ Every host identity lifecycle transition records an entry in `host_identity_even
 (with timestamp and raw TCP peer address when request-driven, never storing any
 credential, token, or code):
 
-- `enrolled` — a host paired via a one-time pairing code (or, historically, enrolled via the removed `MULLION_ENROLLMENT_SECRET`).
+- `enrolled` — historical only: a host enrolled via the removed `MULLION_ENROLLMENT_SECRET`; no code path writes this kind any more (pairing records `paired`).
 - `claimed` — an existing manual host row was claimed with its per-host token.
 - `paired` — a host was paired (or had its pairing response reissued on retry) via a one-time pairing code.
 - `replaced` — a re-pair replaced an already-live machine identity in place (no grace period, recorded alongside `paired`). Since issue #3439, claims on a row with a live identity are refused, so re-pairing via a host-bound pairing code is the only path that produces a `replaced` event (any rows written before #3439 came from a token claim).
@@ -534,8 +534,8 @@ both entries delete the row.
 `"manual-token"`, or `null` for a host that is on the current path). The host's
 status chip — the one beside a host name in a session row or a pane tab —
 carries a "(deprecated)" qualifier for the first two kinds, and the primary
-logs a warning at startup if `MULLION_ENROLLMENT_SECRET` is still set in the
-environment.
+logs a warning at startup if `MULLION_ENROLLMENT_SECRET` is still set in `.env`
+or the environment.
 
 **What keeps working.** Every existing host row keeps working: its renewals,
 its outbound channel, and a pre-provisioned host claiming its own row with its
