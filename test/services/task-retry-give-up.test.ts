@@ -17,6 +17,13 @@
 // waits for something else (a checkout being prepared on the replacement
 // host, where nothing is stranded on the original host): exactly like every
 // other placement wait.
+//
+// Issue #3232 — the CONFIRMATION survives a degraded lookup. A wait that was
+// confirmed stranded stays exempt while it waits: a later sweep whose origin
+// lookup could not be made (a 502, a rate limit, a missing token) says
+// nothing about the branch, so it must not withdraw the confirmation —
+// otherwise the give-up fires on the LOOKUP's failure, against the original
+// clock, and the task is failed the moment GitHub has a bad minute.
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
@@ -178,6 +185,10 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
    * lookup that could not be made at all (a rate limit, a network error) —
    * the branch's whereabouts are then UNKNOWN, and the wait must not claim
    * the work is stranded on the Mac.
+   *
+   * The returned `origin` controller lets a test DEGRADE the lookup between
+   * two sweeps (issue #3232): one sweep confirms the branch is only on the
+   * Mac, the next one's lookup cannot be made.
    */
   async function setupWaitingRetry(name: string, originLookup: "absent" | "unknown" = "absent") {
     const app = await buildApp();
@@ -250,19 +261,16 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
     vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation(() => fakeSessionBackend());
     vi.spyOn(hostGitModule, "resolveRepoRef").mockResolvedValue({ owner: "o", repo: "r" });
     vi.spyOn(githubIntegrationModule, "resolveGitHubToken").mockResolvedValue("tok");
-    // The branch is NOT on origin: the retry can only wait for its Mac.
-    if (originLookup === "absent") {
-      vi.spyOn(githubRequestModule, "githubRequest").mockRejectedValue(
-        new GitHubApiError("Not Found", 404),
-      );
-    } else {
-      // The lookup could not be made — a rate limit, a network error. The
-      // branch's whereabouts are UNKNOWN, which is NOT a confirmation that
-      // it is stranded on the Mac.
-      vi.spyOn(githubRequestModule, "githubRequest").mockRejectedValue(
-        new GitHubApiError("Bad gateway", 502),
-      );
-    }
+    // The origin lookup, under the test's control: "absent" is GitHub's 404
+    // (the branch is CONFIRMED to be only on the Mac), "unknown" is a lookup
+    // that could not be made at all (a rate limit, a network error). The
+    // branch's whereabouts are then UNKNOWN, which is NOT a confirmation
+    // that it is stranded on the Mac.
+    const origin = { lookup: originLookup };
+    vi.spyOn(githubRequestModule, "githubRequest").mockImplementation(async () => {
+      if (origin.lookup === "absent") throw new GitHubApiError("Not Found", 404);
+      throw new GitHubApiError("Bad gateway", 502);
+    });
 
     const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/retry` });
     expect(res.statusCode).toBe(202);
@@ -271,7 +279,7 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
       expect(row?.retryHostId).toBe(mac);
     });
 
-    return { app, mac, task };
+    return { app, mac, task, origin };
   }
 
   it("leaves a retry waiting for its original host queued past the 6-hour give-up", async () => {
@@ -313,6 +321,18 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
       // be on origin, and failing the task frees something.
       expect(held?.retryStrandedOnHost).toBe(false);
 
+      // A sweep whose lookup still cannot be made does not GRANT the
+      // exemption either — a degraded lookup is not a confirmation, so the
+      // wait stays an ordinary one.
+      await dispatchQueuedTasks(app);
+      const swept = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(swept?.status).toBe("claimed");
+      expect(swept?.retryStrandedOnHost).toBe(false);
+      // The reason says the lookup failed — it never claims the work is
+      // stranded on the Mac.
+      expect(swept?.failureReason).toContain("could not confirm");
+      expect(swept?.failureReason).not.toContain("only on");
+
       app.db
         .update(tasks)
         .set({ dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000) })
@@ -327,6 +347,104 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
       // The preserved branch survives: a later Retry resumes it instead of
       // cutting a brand-new branch.
       expect(failed?.branchName).toBe(BRANCH);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps a CONFIRMED stranded wait's exemption when a later sweep's lookup degrades (#3232)", async () => {
+    const { app, mac, task, origin } = await setupWaitingRetry("give-up-degraded");
+    try {
+      // The first sweep CONFIRMED the branch is only on the Mac (GitHub's
+      // 404), so the wait is exempt from the give-up.
+      const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(held?.retryHostId).toBe(mac);
+      expect(held?.retryStrandedOnHost).toBe(true);
+
+      // The next sweep's lookup DEGRADES — a 502 is not a confirmation, and
+      // it says nothing about the branch.
+      origin.lookup = "unknown";
+      await dispatchQueuedTasks(app);
+
+      const degraded = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(degraded?.status).toBe("claimed");
+      // The degraded lookup does not withdraw the confirmation: the wait is
+      // still exempt, and it is still waiting for the same host.
+      expect(degraded?.retryHostId).toBe(mac);
+      expect(degraded?.retryStrandedOnHost).toBe(true);
+      // The reason stays honest: it says the latest check could not confirm,
+      // and it does not pass the earlier confirmation off as a fresh one.
+      expect(degraded?.failureReason).toContain("could not confirm");
+      expect(degraded?.failureReason).not.toContain("it is not on origin");
+
+      // Past the 6-hour mark the wait is NOT given up on: the give-up would
+      // otherwise fire on the LOOKUP's failure rather than on the wait's own
+      // clock.
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000) })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await dispatchQueuedTasks(app);
+
+      const row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      // The branch is on the Mac — failing the task would free nothing.
+      expect(row?.status).toBe("claimed");
+      expect(row?.retryHostId).toBe(mac);
+      expect(row?.retryStrandedOnHost).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("drops the exemption when the wait ends and the retry starts (#3232)", async () => {
+    const { app, mac, task, origin } = await setupWaitingRetry("give-up-wait-ends");
+    try {
+      const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(held?.retryStrandedOnHost).toBe(true);
+
+      // The original host comes back, so the retry resumes the preserved
+      // branch there and the wait is over. The origin lookup is still
+      // degraded — that must not keep the wait (or its exemption) alive.
+      origin.lookup = "unknown";
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation(() => ({
+        ...fakeSessionBackend(),
+        resumeTaskWorktree: vi.fn().mockResolvedValue({
+          path: `${MAC_CWD}/.mullion-worktrees/mullion-task-9102-give-up`,
+          branch: BRANCH,
+        }),
+      }));
+      app.hostHeartbeatTracker?.recordSuccess(mac);
+
+      await dispatchQueuedTasks(app);
+
+      const row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(row?.status).toBe("in_progress");
+      // The wait is over, so the exemption goes with it.
+      expect(row?.retryHostId).toBeNull();
+      expect(row?.retryStrandedOnHost).toBe(false);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("drops the exemption when the operator starts the task fresh (#3232)", async () => {
+    const { app, mac, task } = await setupWaitingRetry("give-up-start-fresh");
+    try {
+      const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(held?.retryHostId).toBe(mac);
+      expect(held?.retryStrandedOnHost).toBe(true);
+
+      // "Start fresh" abandons the preserved branch and re-queues the task
+      // as a NEW claim — so the wait is over, and the exemption goes with
+      // it: the new claim has no stranded branch behind it.
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-fresh` });
+      expect(res.statusCode).toBe(202);
+
+      const row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(row?.retryHostId).toBeNull();
+      expect(row?.retryStrandedOnHost).toBe(false);
     } finally {
       await app.close();
     }

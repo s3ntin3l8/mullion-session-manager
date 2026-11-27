@@ -404,6 +404,19 @@ waiting for a free concurrency slot. It never holds a session; see the
      [A queued task that cannot dispatch](#a-queued-task-that-cannot-dispatch)).
      A task with no placement requirement follows the same order.
 
+     **The confirmation outlives a degraded lookup** (`#3232`). A wait that
+     was confirmed stranded stays exempt for as long as it waits: a later
+     check whose lookup could not be made (a 502, a rate limit, a token that
+     went missing) says nothing about the branch, so it does not withdraw
+     the confirmation — otherwise the give-up would fire on the _lookup's_
+     failure instead of on the wait's own clock, and the task would be failed
+     the moment GitHub had a bad minute. The card says so too: it names the
+     branch as confirmed missing from `origin` **and** says the latest check
+     could not confirm it, and it never claims the work is stranded there on
+     a check that never happened. The exemption ends with the wait: the retry
+     starts (on the original host or on a replacement one), or the operator
+     starts the task fresh.
+
      **Start fresh** (`POST /api/tasks/:id/start-fresh`, offered on the card
      and in the task sidebar) is the operator's way out of a wait that never
      ends: it abandons the preserved branch — it stays on that host, with its
@@ -1110,6 +1123,17 @@ The reason is not hidden:
   ordinary placement wait: the 6-hour give-up applies to it, and it keeps the
   preserved branch (a later **Retry** resumes that branch instead of cutting
   a new one).
+- **The exemption lasts as long as the wait does** (`#3232`). A later check
+  whose lookup could not be made (a 502, a rate limit, a token that went
+  missing, a repository that cannot be resolved) says nothing about the
+  branch, so it does not withdraw the confirmation — the give-up would
+  otherwise fire on the _lookup's_ failure, against the original clock, and
+  the task would be failed the moment GitHub had a bad minute, throwing away
+  a branch that is provably on the host the retry waits for. The card says
+  both things while that lasts: the branch is confirmed missing from
+  `origin`, **and** the latest check could not confirm it. The exemption ends
+  with the wait — the retry starts (on the original host or on a replacement
+  one), or the operator starts the task fresh.
 
 ## Where a task runs: `Platform:`, `Host:` and `Capability:`
 

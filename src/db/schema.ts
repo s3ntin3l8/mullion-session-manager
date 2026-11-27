@@ -1853,6 +1853,14 @@ export const tasks = sqliteTable(
     // give-up still applies to it. Folding the two into one column took that
     // escape away from exactly the projects whose origin can never be
     // confirmed (a local-only repository, a project with no GitHub token).
+    //
+    // Issue #3232 — the confirmation SURVIVES a degraded lookup while the
+    // wait lasts: a sweep whose origin lookup could not be made (a 502, a
+    // rate limit, a missing token) says nothing about the branch, so it
+    // leaves this column alone instead of withdrawing the confirmation — the
+    // give-up would then fire on the lookup's failure rather than on the
+    // wait's own clock. The column is cleared when the wait ends (the retry
+    // starts, or "Start fresh" re-queues the task).
     retryStrandedOnHost: integer("retry_stranded_on_host", { mode: "boolean" })
       .notNull()
       .default(false),

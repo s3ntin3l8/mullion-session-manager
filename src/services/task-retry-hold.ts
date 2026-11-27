@@ -15,6 +15,12 @@
 //     this is an ordinary placement wait. It keeps the 6-hour give-up like
 //     every other wait.
 //
+// The confirmation in the first case is a STANDING fact about the wait
+// (issue #3232): a later sweep whose origin lookup degraded (a 502, a rate
+// limit, a missing token) says nothing about the branch, so it does not
+// withdraw it — the exemption lasts as long as the wait does, and ends with
+// it (the retry starts, or the operator starts the task fresh).
+//
 // Either way the retry WAITS FOR A HOST, so either way the host it waits for
 // is recorded (`tasks.retryHostId`) and "Start fresh" is offered — the
 // operator's way out of a wait that never ends, and the only escape for a
@@ -70,6 +76,13 @@ export function holdRetry(
      * thing as `waitHostId`: a wait whose origin state could not be
      * confirmed still waits for a host (and still offers "Start fresh"), but
      * its branch may well be on origin, so the give-up still applies to it.
+     *
+     * Issue #3232 — the value written here is the wait's EFFECTIVE one: a
+     * confirmation this wait already holds survives a sweep whose origin
+     * lookup degraded (a 502, a rate limit, a missing token), because such a
+     * lookup says nothing about the branch. The caller
+     * (task-retry-host.ts's `decideRetryHost`) decides that, from the origin
+     * state and the row's standing confirmation.
      */
     strandedOnHost: boolean;
     /** The task's placement requirement, stored for the re-placement. */
