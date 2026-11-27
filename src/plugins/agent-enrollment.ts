@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import os from "node:os";
 import { reloadDotenvOverrides } from "./env.js";
+import { formatPrimaryRedirectMessage } from "../services/agent-pairing-redeem.js";
 import {
   identityStatePath,
   loadAgentIdentity,
@@ -199,6 +200,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   let identityRejected = false;
   let loggedNoIdentity = false;
   let loggedBootstrapRejected = false;
+  let loggedRedirectRejected = false;
 
   async function persistIdentity(session: AgentSession): Promise<void> {
     if (!session.machineCredential) return;
@@ -276,6 +278,10 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   // error message is the only signal available: callRegister's own throw.
   function isUnauthorized(err: unknown): boolean {
     return err instanceof RegisterRejectedError && err.status === 401;
+  }
+
+  function isRedirect(err: unknown): err is RegisterRejectedError {
+    return err instanceof RegisterRejectedError && err.status >= 300 && err.status < 400;
   }
 
   function scheduleRenewal(session: AgentSession) {
@@ -398,6 +404,16 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
             loggedBootstrapRejected = true;
             app.log.warn(
               "[agent-enrollment] the primary rejected the bootstrap token (401) and the env file has no newer one. It was most likely rotated, or is wrong: rotate the host's token in Settings -> Hosts and put the new value in MULLION_ENROLLMENT_TOKEN; no restart is needed, the agent re-reads the env file on a 401. A host that enrolled with the fleet-wide MULLION_ENROLLMENT_SECRET has no per-host token to rotate, though: if the primary refuses fleet-secret enrollment (MULLION_ALLOW_LEGACY_HOSTS is off there), pair the host instead (Settings -> Hosts -> Add host -> Generate pairing code) or let the primary accept the fleet secret again.",
+            );
+          }
+          if (isRedirect(err) && !loggedRedirectRejected) {
+            // A login gateway in front of the primary answered with a 3xx
+            // instead of the API. Logged once per process so the retry loop
+            // does not repeat the bare status forever, while keeping the
+            // normal backoff alive in case the route/proxy recovers.
+            loggedRedirectRejected = true;
+            app.log.warn(
+              `[agent-enrollment] ${formatPrimaryRedirectMessage("registration failed", err.status)}`,
             );
           }
           enrollment.failedAttempts++;

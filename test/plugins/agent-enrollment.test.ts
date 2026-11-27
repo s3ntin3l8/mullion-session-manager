@@ -223,6 +223,45 @@ describe("agentEnrollmentPlugin", () => {
     }
   });
 
+  // Issue #3502 — a 3xx from /api/internal/register means a login gateway sits
+  // in front of the primary; diagnose once per process and keep retrying.
+  it("explains a 302 redirect from a login gateway once without leaking Location or token and keeps retrying", async () => {
+    const location = "https://login.example.com/?token=super-secret";
+    fetchMock.mockImplementation(
+      async () => new Response(null, { status: 302, headers: { location } }),
+    );
+
+    const app = await buildApp();
+    const warnSpy = vi.spyOn(app.log, "warn");
+    try {
+      await app.ready();
+      await waitUntil(() => fetchMock.mock.calls.length >= 2, 10_000);
+
+      expect(app.agentEnrollment?.state).toBe("registering");
+      expect(app.agentEnrollment?.failedAttempts).toBeGreaterThanOrEqual(1);
+
+      const warnMessages = warnSpy.mock.calls.map((args) =>
+        args.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg))).join(" "),
+      );
+      const diagnosisLogs = warnMessages.filter((msg) => msg.includes("redirect"));
+      expect(diagnosisLogs).toHaveLength(1);
+
+      const diagnosis = diagnosisLogs[0]!;
+      expect(diagnosis).toMatch(/redirect/i);
+      expect(diagnosis).toContain("302");
+      expect(diagnosis).toContain("MULLION_AGENT_PRIMARY_URL");
+      expect(diagnosis).toContain("MULLION_PRIMARY_URL");
+      expect(diagnosis).not.toBe("registration request failed: HTTP 302");
+
+      const allWarnings = warnMessages.join("\n");
+      expect(allWarnings).not.toContain("login.example.com");
+      expect(allWarnings).not.toContain("super-secret");
+      expect(allWarnings).not.toContain("bootstrap-secret");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("falls back to the bootstrap token when a renewal is rejected, not just retrying the stale session", async () => {
     fetchMock
       // Initial registration — short TTL so renewal fires almost
