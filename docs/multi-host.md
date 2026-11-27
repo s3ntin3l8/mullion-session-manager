@@ -2458,9 +2458,11 @@ with the row's own static token (`MULLION_AGENT_TOKEN`) reads
 host that is both (no machine identity AND a static token) reads
 `not registered · manual token (deprecated)` (or `outdated agent · manual token
 (deprecated)`), because that credential — not the agent's version — is what has
-to change. The chip says what is wrong; the hover says what to do, and the Fix
-section below has the steps. Every surface has a hover with the agent's reported
-version, but only the Settings hover also gives the primary's version. The
+to change. The chip says what is wrong; the hover says what to do — for a
+manual-token host, a host-bound pairing code (see "Deprecated host kinds"
+above); the Fix section below has the legacy-agent steps. Every surface has a
+hover with the agent's reported version, but only the Settings hover also gives
+the primary's version. The
 `GET /api/hosts` field is `legacyAgent`: true for a non-local host that has a
 `baseUrl`, no machine identity and no revoked identity; `deprecatedKind` says
 which legacy path a host is on (`"legacy-agent"`, `"manual-token"`, or `null`).
