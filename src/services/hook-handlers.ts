@@ -303,7 +303,7 @@ export type HookHandler = (ctx: SessionHookContext, message: HookMessage) => voi
 // ordering. Both are independent forwarder subprocesses with no ordering
 // guarantee (see the doc comment above), so this is a real, accepted gap,
 // not an oversight — see
-// test/services/pty-manager.test.ts's own test documenting it.
+// test/services/pty-manager-hook-notification.test.ts's own test documenting it.
 const RECENT_STRUCTURED_ASK_MS = 2_000;
 
 // Code review (issue #903) — this hand-enumerates every current "structured

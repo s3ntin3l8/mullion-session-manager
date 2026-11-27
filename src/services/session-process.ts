@@ -28,7 +28,7 @@
 // functions directly — that keeps `app.pty.*` the one call surface routes/
 // session-reconciler.ts/session-backend.ts and their tests already use
 // (session-reconciler.test.ts spies on `app.pty.isMasterAliveStateBatch`
-// directly; pty-manager.test.ts calls `manager.isMasterAliveState`/
+// directly; pty-manager-scope.test.ts calls `manager.isMasterAliveState`/
 // `manager.isMasterAliveStateBatch`) — those keep working unchanged.
 // scopeUnitName/stopScope, by contrast, were already plain
 // module-level functions (not PtyManager methods) before this extraction, so
