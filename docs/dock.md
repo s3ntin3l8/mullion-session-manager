@@ -112,9 +112,9 @@ not stored: a fresh Dock starts on the project's own placement again.
 - While any of the project's commands runs, the dropdown reads **Running on**,
   shows that control's host and is disabled; its tooltip names the control to
   stop. A choice made earlier cannot contradict the log pane beside it. With
-  controls on two hosts (only `--host` from the CLI or MCP gets there), it shows
-  the newest one on a host other than the project's own. Compose service log
-  streams do not lock it.
+  controls on two hosts (`--host` from the CLI or MCP), it shows the newest one
+  on a host other than the project's own, and a stopped control starts there.
+  Compose service log streams do not lock it.
 - A control runs in one place at a time: starting one that is already running
   (on any host) answers `409`. To move it, stop it, pick the host and Start (or
   `mullion dock switch <control> <branch> --host <id>`). Until you pick, the

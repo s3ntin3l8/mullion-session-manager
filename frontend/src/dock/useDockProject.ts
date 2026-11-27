@@ -317,10 +317,15 @@ export function useDockProject(
         .find((h) => h && h !== project?.hostId && hostOptions.some((o) => o.value === h))
     : undefined;
   const effectiveHostChoice = lockedHostValue ?? hostChoice ?? runningElsewhere ?? OWN_HOST_VALUE;
+  // A locked host is used even when it has left the options (removed, or no
+  // longer in `hostCwds`): Start must go where the selector says, and the
+  // server refuses a host it cannot use rather than the Dock silently picking
+  // another (#3556).
   const targetHostId =
     project &&
     effectiveHostChoice !== OWN_HOST_VALUE &&
-    hostOptions.some((o) => o.value === effectiveHostChoice)
+    (effectiveHostChoice === lockedHostValue ||
+      hostOptions.some((o) => o.value === effectiveHostChoice))
       ? effectiveHostChoice
       : undefined;
   const lockedBy = runningConfigured.map((r) => r.control.title);

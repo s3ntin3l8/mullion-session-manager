@@ -328,7 +328,7 @@ describe("DockSidebarView (#3012)", () => {
 
       it("names every running control, and shows a host that left the list as itself", async () => {
         const LOGS = { id: "logs", title: "logs", command: "tail -f log" };
-        controls = [DEV, LOGS];
+        controls = [DEV, LOGS, { id: "build", title: "build", command: "npm run build" }];
         resetStore({
           projects: [spanning],
           sessions: [
@@ -344,6 +344,17 @@ describe("DockSidebarView (#3012)", () => {
         expect(dd.dropdownValue(picker())).toBe("old-box");
         expect(document.querySelector(".dock-host-picker")?.getAttribute("title")).toBe(
           "logs and dev are running. Stop them to run them on another host.",
+        );
+        // A stopped control starts where the selector says, even on that host.
+        await userEvent.click(screen.getByRole("button", { name: /^build, stopped/ }));
+        await userEvent.click(
+          within(screen.getByRole("group", { name: "build actions" })).getByRole("button", {
+            name: "Start",
+          }),
+        );
+        await waitFor(() => expect(createSession).toHaveBeenCalled());
+        expect(createSession.mock.calls[0][2]).toEqual(
+          expect.objectContaining({ dockControlId: "build", targetHostId: "old-box" }),
         );
       });
     });
