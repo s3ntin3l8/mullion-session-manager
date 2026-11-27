@@ -4,9 +4,10 @@
 // cwd it sends is the chosen host's, a refused launch names its reason, and a
 // run that exits at once keeps its last output in the log pane.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Dock } from "../Dock.js";
+import { DockSidebarView } from "../right-sidebar/DockSidebarView.js";
 import { useDashboardStore } from "../store/index.js";
 import { ApiError } from "../api/index.js";
 import type { GitBranchesResult, Session } from "../api/index.js";
@@ -148,7 +149,7 @@ describe("Dock: starting a control on another host (#3557)", () => {
     await userEvent.click(header);
     expect(await screen.findByText("Failed to start")).toBeInTheDocument();
     expect(toasts()).toEqual([
-      "Couldn't start Dev server on macbook: macbook: cwd does not exist: /Users/x/aurora",
+      "Couldn't start Dev server on macbook: cwd does not exist: /Users/x/aurora",
     ]);
     expect(screen.queryByTestId("terminal-pane")).toBeNull();
   });
@@ -216,11 +217,96 @@ describe("Dock: starting a control on another host (#3557)", () => {
     renderDock();
     await userEvent.click(await screen.findByText("Dev server"));
     await screen.findByTestId("terminal-pane");
+    // A killed row's live status derives "exited" too (session-status.ts).
     act(() =>
-      useDashboardStore.setState({ sessions: [{ ...started, status: "killed" } as Session] }),
+      useDashboardStore.setState({
+        sessions: [{ ...started, status: "killed", sessionStatus: "exited" } as Session],
+      }),
     );
     await new Promise((r) => setTimeout(r, 0));
     expect(toasts()).toEqual([]);
     expect(screen.queryByText(/exited right after starting/)).toBeNull();
+  });
+
+  it("does not report a one-shot command that finished cleanly", async () => {
+    const started = makeSession({
+      id: 42,
+      projectId: 1,
+      kind: "dock",
+      command: "make dev",
+      status: "active",
+    } as Partial<Session>);
+    createSession.mockImplementation(async () => {
+      useDashboardStore.setState({ sessions: [started] });
+      return started;
+    });
+    renderDock();
+    await userEvent.click(await screen.findByText("Dev server"));
+    await screen.findByTestId("terminal-pane");
+    act(() =>
+      useDashboardStore.setState({
+        sessions: [{ ...started, status: "exited", exitCode: 0 } as Session],
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(toasts()).toEqual([]);
+  });
+
+  it("refuses a Restart onto a worktree the chosen host lacks, before stopping the run", async () => {
+    const running = makeSession({
+      id: 42,
+      projectId: 1,
+      kind: "dock",
+      command: "make dev",
+      status: "active",
+      cwd: "/home/x/aurora/.mullion-worktrees/feature-x",
+      hostId: "local",
+      resolvedHostId: "local",
+    } as Partial<Session>);
+    const deleteSession = vi.fn().mockResolvedValue(undefined);
+    useDashboardStore.setState({ sessions: [running], deleteSession });
+    render(<DockSidebarView projectId={1} actions={{ onOpenDockConfig: vi.fn() } as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Dev server, running/ }));
+    runOnMac();
+    const group = screen.getByRole("group", { name: "Dev server actions" });
+    await userEvent.click(within(group).getByRole("button", { name: "Restart" }));
+    expect(await screen.findByText("Failed to switch")).toBeInTheDocument();
+    expect(deleteSession).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(toasts()).toEqual([
+      expect.stringMatching(
+        /^Couldn't start Dev server on macbook: .* is a checkout on this server only\./,
+      ),
+    ]);
+  });
+
+  it("shows the report in the Dock view too", async () => {
+    const started = makeSession({
+      id: 42,
+      projectId: 1,
+      kind: "dock",
+      command: "make dev",
+      status: "active",
+    } as Partial<Session>);
+    createSession.mockImplementation(async () => {
+      useDashboardStore.setState({ sessions: [started] });
+      return started;
+    });
+    scrollbackText = "Error: .env not found\n";
+    render(<DockSidebarView projectId={1} actions={{ onOpenDockConfig: vi.fn() } as never} />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Dev server, stopped/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    act(() =>
+      useDashboardStore.setState({
+        sessions: [{ ...started, status: "exited", exitCode: 1 } as Session],
+      }),
+    );
+    expect(
+      await screen.findByText(
+        "Dev server exited right after starting on this server (exit code 1).",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Error: .env not found")).toBeInTheDocument();
   });
 });

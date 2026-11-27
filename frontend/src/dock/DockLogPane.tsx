@@ -58,19 +58,7 @@ export function DockLogPane({
       }}
     >
       {sessionId === null && ended ? (
-        <div className="dock-log-pane-ended" role="status">
-          <div className="dock-log-pane-ended-title">
-            {ended.title} exited right after starting on {ended.hostLabel}
-            {ended.exitCode !== null ? ` (exit code ${ended.exitCode})` : ""}.
-          </div>
-          {ended.lines.length > 0 ? (
-            <pre className="dock-log-pane-ended-output">{ended.lines.join("\n")}</pre>
-          ) : (
-            <div className="dock-log-pane-hint">
-              The host kept no output for it. Start it again to watch its log.
-            </div>
-          )}
-        </div>
+        <DockEndedOutput ended={ended} />
       ) : sessionId === null ? (
         <div className="dock-log-pane-hint">Select a row to view its log</div>
       ) : (
@@ -83,6 +71,27 @@ export function DockLogPane({
             // TerminalPane's own doc comment on this prop.
             inputAffordances={false}
           />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** #3557 — a run that ended right after it started: its exit and last output,
+ * in place of the stream that can no longer be attached. Shared by the bottom
+ * Dock's log pane and the Dock view. */
+export function DockEndedOutput({ ended }: { ended: DockEndedReport }) {
+  return (
+    <div className="dock-log-pane-ended" role="status">
+      <div className="dock-log-pane-ended-title">
+        {ended.title} exited right after starting on {ended.hostLabel}
+        {ended.exitCode !== null ? ` (exit code ${ended.exitCode})` : ""}.
+      </div>
+      {ended.lines.length > 0 ? (
+        <pre className="dock-log-pane-ended-output">{ended.lines.join("\n")}</pre>
+      ) : (
+        <div className="dock-log-pane-hint">
+          The host kept no output for it. Start it again to watch its log.
         </div>
       )}
     </div>

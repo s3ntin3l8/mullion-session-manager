@@ -215,6 +215,9 @@ export function useDockProject(
   const launchWatchRef = useRef(
     new Map<string, { sessionId: number; at: number; title: string; hostLabel: string }>(),
   );
+  // Each control's latest launched session, so a report still in flight for
+  // an older run is dropped once a newer one has started.
+  const latestLaunchRef = useRef(new Map<string, number>());
   const [endedById, setEndedById] = useState<Record<string, DockEndedReport>>({});
   // Issue #2069 — a start the backend refused with 409 `port_in_use`. Kept
   // until the next start attempt (not a transient tag) because it carries
@@ -348,8 +351,12 @@ export function useDockProject(
       }
       const session = sessions.find((s) => s.id === watch.sessionId);
       if (!session) continue;
-      if (session.status !== "exited" && session.sessionStatus !== "exited") continue;
+      // The row's own status, not the live `sessionStatus`: a killed row (Stop,
+      // Restart) also derives "exited" there, and that is not an early exit.
+      if (session.status === "active") continue;
       watches.delete(controlId);
+      // A deliberate stop, or a one-shot command that finished cleanly.
+      if (session.status !== "exited" || session.exitCode === 0) continue;
       void (async () => {
         let lines: string[] = [];
         try {
@@ -358,6 +365,7 @@ export function useDockProject(
         } catch {
           // The host no longer answers for it: the report says so.
         }
+        if (latestLaunchRef.current.get(controlId) !== session.id) return;
         const exitCode = typeof session.exitCode === "number" ? session.exitCode : null;
         setEndedById((prev) => ({
           ...prev,
@@ -705,8 +713,47 @@ export function useDockProject(
 
     const dockIdentity = dockerSessionIdentity(control);
     const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
-    const launchOnHost = (value: string) => {
+    // #3557 — the selector's paths are on the project's own host; another host
+    // gets the same directory under its own checkout, or a refusal to show.
+    const cwdOnLaunchHost = (
+      value: string,
+    ): { ok: true; cwd: string | undefined } | { ok: false; message: string } => {
       const effectiveCwd = value.length > 0 ? value : control.cwd;
+      if (!project || launchHostId === undefined || launchHostId === project.hostId) {
+        return { ok: true, cwd: effectiveCwd };
+      }
+      if (effectiveCwd?.startsWith("branch:")) return { ok: true, cwd: effectiveCwd };
+      const mapped =
+        effectiveCwd !== undefined && effectiveCwd === mainCheckout?.path
+          ? { ok: true as const, cwd: undefined }
+          : cwdForOtherHost({
+              cwd: effectiveCwd,
+              projectRoot: project.cwd,
+              hostRoot: project.hostCwds?.[launchHostId],
+              isLinkedWorktree:
+                effectiveCwd !== undefined &&
+                worktrees.some((w) => w.path === effectiveCwd && !w.isMain),
+            });
+      return mapped.ok
+        ? mapped
+        : {
+            ok: false,
+            message: `${effectiveCwd} is a checkout on ${hostLabel(project.hostId)} only. Run the main checkout or a branch preview on ${hostLabel(launchHostId)}.`,
+          };
+    };
+    const reportStartFailure = (err: unknown) => {
+      const host = hostLabel(launchHostId);
+      let reason = err instanceof Error ? err.message : String(err);
+      // The server already names a remote host in front of its reason.
+      if (reason.startsWith(`${host}: `)) reason = reason.slice(host.length + 2);
+      useDashboardStore
+        .getState()
+        .reportError(`Couldn't start ${control.title} on ${host}:`, reason);
+    };
+    const launchOnHost = (value: string) => {
+      const resolved = cwdOnLaunchHost(value);
+      if (!resolved.ok) return Promise.reject(new Error(resolved.message));
+      const effectiveCwd = resolved.cwd;
       if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
         const branchName = effectiveCwd.slice("branch:".length);
         return useDashboardStore.getState().createSession(projectId, control.command, {
@@ -719,32 +766,8 @@ export function useDockProject(
           ...(control.env ? { env: control.env } : {}),
         });
       }
-      // #3557 — the selector's paths are on the project's own host; another
-      // host gets the same directory under its own checkout, or a refusal.
-      let cwd = effectiveCwd;
-      if (project && launchHostId !== undefined && launchHostId !== project.hostId) {
-        const mapped =
-          effectiveCwd !== undefined && effectiveCwd === mainCheckout?.path
-            ? { ok: true as const, cwd: undefined }
-            : cwdForOtherHost({
-                cwd: effectiveCwd,
-                projectRoot: project.cwd,
-                hostRoot: project.hostCwds?.[launchHostId],
-                isLinkedWorktree:
-                  effectiveCwd !== undefined &&
-                  worktrees.some((w) => w.path === effectiveCwd && !w.isMain),
-              });
-        if (!mapped.ok) {
-          return Promise.reject(
-            new Error(
-              `${effectiveCwd} is a checkout on ${hostLabel(project.hostId)} only. Run the main checkout or a branch preview on ${hostLabel(launchHostId)}.`,
-            ),
-          );
-        }
-        cwd = mapped.cwd;
-      }
       return useDashboardStore.getState().createSession(projectId, control.command, {
-        ...(cwd ? { cwd } : {}),
+        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         kind: "dock",
         dockControlId: control.id,
         ...(launchHostId !== undefined ? { targetHostId: launchHostId } : {}),
@@ -763,6 +786,7 @@ export function useDockProject(
         return next;
       });
       const session = await launchOnHost(value);
+      latestLaunchRef.current.set(control.id, session.id);
       launchWatchRef.current.set(control.id, {
         sessionId: session.id,
         at: Date.now(),
@@ -798,12 +822,7 @@ export function useDockProject(
           // #3557 — the reason, not just "try again": a remote host's own
           // refusal (a missing directory there) or the server's message.
           showCheckStatus(control.id, "Failed to start", true);
-          useDashboardStore
-            .getState()
-            .reportError(
-              `Couldn't start ${control.title} on ${hostLabel(launchHostId)}:`,
-              err instanceof Error ? err.message : String(err),
-            );
+          reportStartFailure(err);
         }
         return false;
       }
@@ -851,6 +870,14 @@ export function useDockProject(
     // explicit stop or start in between wins over the relaunch.
     const relaunch = (value: string) => {
       if (!running) return;
+      // Refused before anything stops: a checkout that cannot run on the
+      // chosen host must not cost the user the run they have (#3557).
+      const resolved = cwdOnLaunchHost(value);
+      if (!resolved.ok) {
+        showCheckStatus(control.id, "Failed to switch", true);
+        reportStartFailure(new Error(resolved.message));
+        return;
+      }
       disarmKill(control.id);
       bumpToggleGen(control.id);
       const shouldRestart = Boolean(running);
@@ -860,7 +887,10 @@ export function useDockProject(
           await useDashboardStore.getState().deleteSession(running.id);
           const genUnchanged = (toggleGenRef.current.get(control.id) ?? 0) === genAtStart;
           if (shouldRestart && genUnchanged) {
-            await launchForValue(value);
+            await launchForValue(value).catch((err: unknown) => {
+              reportStartFailure(err);
+              throw err;
+            });
           }
         } catch {
           showCheckStatus(control.id, "Failed to switch — try again", true);

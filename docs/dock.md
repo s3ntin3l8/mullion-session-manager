@@ -123,11 +123,13 @@ starts on the project's own placement again.
   instead, which is cut on that host.
 - A launch that fails on the host (a directory that does not exist there, say)
   is reported with the host's own reason, as a toast, and the control stays
-  off. A control that exits right after starting (within two minutes) is
-  reported too: a toast with its exit code, and its last output in the log
-  pane, read from the host it ran on. The reason a launch failed on an agent
-  reaches the primary only once the agent runs this version or later; an
-  older agent answers before the launch has run.
+  off. A control that exits with a non-zero code within two minutes of its
+  start is reported too: a toast with its exit code and, for a run on an agent
+  host, its last output in the log pane (read from that host). A run on this
+  server keeps no output once it has exited, so its report has none. The
+  reason a launch failed on an agent reaches the primary only when both run
+  this version or later: an older agent answers before the launch has run,
+  and an older primary gives an agent's spawn reply only 5 s.
 - A remote checkout is its own clone: untracked files the dev server needs
   (`.env`, local config, `node_modules`) are not copied to it. Create them in
   that checkout; a server that exits for want of one shows it in the log pane.

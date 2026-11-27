@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DockControl } from "../api/index.js";
 import { TerminalPane } from "../TerminalPane.js";
+import { DockEndedOutput } from "../dock/DockLogPane.js";
 import { useDashboardStore } from "../store/index.js";
 import { isStartable } from "../dockerServiceStatus.js";
 import { dockRowKey, imagePillLabel } from "../dock/dockHelpers.js";
@@ -508,6 +509,8 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
                 captureCtrlC
               />
             </div>
+          ) : selected.ended ? (
+            <DockEndedOutput ended={selected.ended} />
           ) : (
             <EmptyStateNote>
               {rowKind(selected.control) === "command"

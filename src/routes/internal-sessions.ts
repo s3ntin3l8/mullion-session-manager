@@ -212,7 +212,8 @@ export function registerSessionRoutes(app: FastifyInstance): void {
       try {
         await session.spawnOutcome();
       } catch (err) {
-        app.pty.kill(id);
+        // Only the Session this request made: never one a later call replaced.
+        if (app.pty.get(id) === session) app.pty.kill(id);
         // 422, not 5xx: the primary reads a 5xx as "host unreachable" and
         // drops the body, so the reason would be lost on the way back.
         return reply.code(422).send({
