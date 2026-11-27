@@ -5,8 +5,11 @@ import userEvent from "@testing-library/user-event";
 import { HostsSection } from "./HostsSection.js";
 import { HostStatusLabel } from "../../HostStatusLabel.js";
 import { useDashboardStore } from "../../store/index.js";
+import { api, ApiError } from "../../api/index.js";
+import type { HostUpdateStatus } from "../../api/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { makeHost, makeServerInfo } from "../../test/fixtures.js";
+import { HOST_UPDATE_POLL_MAX_MS, HOST_UPDATE_POLL_MS } from "../useHostUpdateStatusPoll.js";
 import type { PlacementCapability } from "../../../../src/shared/constants.js";
 
 // Token rotation and the "waiting for the agent" row state. The rest of the
@@ -894,5 +897,222 @@ describe("HostsSection", () => {
     expect(dialog.getByRole("button", { name: "Generate pairing code" })).toBeInTheDocument();
     expect(dialog.queryByText("Advanced: host the primary dials directly (deprecated)")).toBeNull();
     expect(dialog.queryByRole("button", { name: "Add with a token" })).toBeNull();
+  });
+
+  // Issue #3574 — the update-status poll must not ask a host that cannot
+  // answer, and must back off when one answers 409/503.
+  describe("update-status poll (issue #3574)", () => {
+    const status = (): HostUpdateStatus => ({
+      hostVersion: "0.3.70",
+      primaryVersion: "0.3.70",
+      upToDate: true,
+      updatable: false,
+      unavailableReason: null,
+      assetUrl: null,
+      checksumUrl: null,
+      status: { phase: "idle" },
+    });
+
+    const advance = async (ms: number) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
+
+    const setVisibility = (state: "visible" | "hidden") => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => state });
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    it("never polls a host that is awaiting approval, and polls it once it is approved", async () => {
+      stubFetch({});
+      const getHostUpdateStatus = vi.spyOn(api, "getHostUpdateStatus").mockResolvedValue(status());
+      useDashboardStore.setState({
+        hosts: [makeHost({ id: "h-pending", name: "new-worker", approvalPending: true })],
+      });
+      vi.useFakeTimers();
+      render(<HostsSection />);
+
+      await advance(10_000);
+      expect(getHostUpdateStatus).not.toHaveBeenCalled();
+
+      // The operator approves it: the host's own state changes.
+      await act(async () => {
+        useDashboardStore.setState({
+          hosts: [makeHost({ id: "h-pending", name: "new-worker", approvalPending: false })],
+        });
+      });
+      await advance(2_000);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledWith("h-pending");
+
+      getHostUpdateStatus.mockRestore();
+    });
+
+    it("does not poll a host whose machine identity is revoked", async () => {
+      stubFetch({});
+      const getHostUpdateStatus = vi.spyOn(api, "getHostUpdateStatus").mockResolvedValue(status());
+      useDashboardStore.setState({
+        hosts: [makeHost({ id: "h-revoked", name: "old-worker", machineIdentityRevoked: true })],
+      });
+      vi.useFakeTimers();
+      render(<HostsSection />);
+
+      await advance(10_000);
+      expect(getHostUpdateStatus).not.toHaveBeenCalled();
+
+      getHostUpdateStatus.mockRestore();
+    });
+
+    it("polls a host that can answer on the normal cadence, and never asks the local host", async () => {
+      stubFetch({});
+      const getHostUpdateStatus = vi.spyOn(api, "getHostUpdateStatus").mockResolvedValue(status());
+      useDashboardStore.setState({
+        hosts: [
+          makeHost({ id: "local", name: "This machine", isLocal: true }),
+          makeHost({ id: "h1", name: "worker" }),
+        ],
+      });
+      vi.useFakeTimers();
+      render(<HostsSection />);
+
+      // A new row's first tick is immediate: the row's version label lands
+      // with the row, as it did before this poll was keyed per host.
+      await advance(0);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledWith("h1");
+      // Then the normal cadence takes over.
+      await advance(HOST_UPDATE_POLL_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
+
+      getHostUpdateStatus.mockRestore();
+    });
+
+    it("does not ask a host while the tab is hidden, and picks it up again when it comes back", async () => {
+      stubFetch({});
+      const getHostUpdateStatus = vi.spyOn(api, "getHostUpdateStatus").mockResolvedValue(status());
+      useDashboardStore.setState({ hosts: [makeHost({ id: "h1", name: "worker" })] });
+      // The tab starts hidden.
+      setVisibility("hidden");
+      vi.useFakeTimers();
+      render(<HostsSection />);
+
+      await advance(10_000);
+      expect(getHostUpdateStatus).not.toHaveBeenCalled();
+
+      // The tab comes back: the host is polled again, on the normal cadence.
+      setVisibility("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await advance(2_000);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+
+      getHostUpdateStatus.mockRestore();
+    });
+
+    it("backs off a host that answers 503, and returns to the normal cadence after a success", async () => {
+      stubFetch({});
+      const getHostUpdateStatus = vi
+        .spyOn(api, "getHostUpdateStatus")
+        .mockRejectedValue(new ApiError("Host h1 is unreachable", 503));
+      useDashboardStore.setState({ hosts: [makeHost({ id: "h1", name: "worker" })] });
+      vi.useFakeTimers();
+      render(<HostsSection />);
+
+      // The row's first tick is immediate, and every answer the host could
+      // not give doubles the wait before the next one: the polls land at
+      // 0s, 2s, 6s, 14s, 30s, 62s …
+      await advance(0);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      await advance(1_999);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
+      await advance(3_999);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
+      await advance(7_999);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(4);
+      await advance(15_999);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(4);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(5);
+      await advance(31_999);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(5);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(6);
+
+      // The cap is the constant the wait is measured against, and a minute
+      // is what the issue's acceptance criteria name.
+      expect(HOST_UPDATE_POLL_MAX_MS).toBe(60_000);
+
+      // Never more often than a minute apart, however long the host stays
+      // silent.
+      await advance(HOST_UPDATE_POLL_MAX_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(6);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(7);
+
+      // A host that answers again is back on the normal cadence.
+      getHostUpdateStatus.mockResolvedValue(status());
+      await advance(HOST_UPDATE_POLL_MAX_MS);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(8);
+      await advance(HOST_UPDATE_POLL_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(8);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(9);
+
+      getHostUpdateStatus.mockRestore();
+    });
+
+    it("drops the backoff when the host's state changes, and polls it again within one interval", async () => {
+      stubFetch({});
+      const getHostUpdateStatus = vi
+        .spyOn(api, "getHostUpdateStatus")
+        .mockRejectedValue(new ApiError("Host h1 is unreachable", 503));
+      useDashboardStore.setState({
+        hosts: [makeHost({ id: "h1", name: "worker", health: "offline" })],
+      });
+      vi.useFakeTimers();
+      render(<HostsSection />);
+
+      // The immediate poll is answered with a 503, so the wait doubles: the
+      // next poll is 2s out, the one after that 4s.
+      await advance(0);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(1);
+      await advance(2_000);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
+
+      // The host's health changes: the backoff is dropped and the host is
+      // polled again within one interval — not after the 4s it was backed
+      // off to.
+      await act(async () => {
+        useDashboardStore.setState({
+          hosts: [makeHost({ id: "h1", name: "worker", health: "online" })],
+        });
+      });
+      await advance(HOST_UPDATE_POLL_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(2);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
+
+      // And the host is back on the normal cadence: the 503 it answers
+      // with earns the base interval again, not the doubled one it was
+      // backed off to.
+      await advance(HOST_UPDATE_POLL_MS - 1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(3);
+      await advance(1);
+      expect(getHostUpdateStatus).toHaveBeenCalledTimes(4);
+
+      getHostUpdateStatus.mockRestore();
+    });
   });
 });
