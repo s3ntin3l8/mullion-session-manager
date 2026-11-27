@@ -30,6 +30,8 @@ import { resolveBackend } from "./session-backend.js";
 import { createSessionRecord } from "./session-lifecycle.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import { getStoredSettings } from "./settings.js";
+import { MAX_SESSION_ENV_ENTRIES } from "./session-limits.js";
+import { hasRoomForPreviewPort } from "./session-env-keys.js";
 
 /*
  * Branch-scoped previews (issues #2016/#2018).
@@ -360,6 +362,14 @@ async function createBranchPreview(
       "Mark one dock control as serving branch previews (or keep a single control)",
     );
   }
+  // #3555 — the preview adds PORT to the control's env, and a session's env is
+  // capped (session-env-keys.ts, next to the code that adds it).
+  if (!hasRoomForPreviewPort(control.env)) {
+    throw new BranchPreviewError(
+      "start_failed",
+      `The preview control "${control.title}" sets ${MAX_SESSION_ENV_ENTRIES} or more env vars; a branch preview adds PORT and a session allows at most ${MAX_SESSION_ENV_ENTRIES}. Remove one in Dock config.`,
+    );
+  }
 
   if (!(await ensureBranch(app, hostId, project.cwd, branch))) {
     throw new BranchPreviewError("unknown_branch", `No branch ${branch} here or on origin`);
@@ -442,7 +452,10 @@ async function startOnPort(
     worktree: { branch },
     worktreeRefresh:
       control.worktreeRefresh ?? getStoredSettings(app.db).dock.defaultWorktreeRefresh ?? false,
-    env: { ...control.env, PORT: String(port) },
+    // #3555 — not `env: { PORT }`: PORT is a reserved session env key, so
+    // createSessionRecord refuses it there; `previewPort` is its one exemption.
+    ...(control.env !== undefined ? { env: control.env } : {}),
+    previewPort: port,
   });
   if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
     // #2637 — the spawn may have landed and createSessionRecord kept the row:

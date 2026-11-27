@@ -552,7 +552,7 @@ describe("Branches", () => {
     renderView();
     await ready();
     await userEvent.click(
-      within(rowOf("main")).getByRole("button", { name: "Preview this branch" }),
+      within(rowOf("main")).getByRole("button", { name: /^Preview this branch/ }),
     );
     await waitFor(() =>
       expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({
@@ -564,12 +564,35 @@ describe("Branches", () => {
     expect(m.createBranchPreview).not.toHaveBeenCalled();
   });
 
+  // #3555 — no per-row host choice: the globe names the project's own host,
+  // so it is not mistaken for the Dock's "Run on" selector.
+  it("names the host a branch preview runs on in the globe button's label", async () => {
+    renderView();
+    await ready();
+    expect(
+      within(rowOf("feat/open")).getByRole("button", {
+        name: "Preview this branch. Preview runs on this machine",
+      }),
+    ).toBeInTheDocument();
+    act(() =>
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, name: "proj", cwd: "/repo", hostId: "h-1" })],
+        hosts: [makeHost({ id: "h-1", name: "mac-mini" })],
+      }),
+    );
+    expect(
+      within(rowOf("feat/open")).getByRole("button", {
+        name: "Preview this branch. Preview runs on mac-mini",
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("starts a branch preview for any other branch, and opens an existing one (#2016)", async () => {
     m.createBranchPreview.mockResolvedValue({ slug: "b1", branch: "feat/open" } as never);
     renderView();
     await ready();
     await userEvent.click(
-      within(rowOf("feat/open")).getByRole("button", { name: "Preview this branch" }),
+      within(rowOf("feat/open")).getByRole("button", { name: /^Preview this branch/ }),
     );
     await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledWith(1, "feat/open"));
     await waitFor(() =>
@@ -594,7 +617,9 @@ describe("Branches", () => {
         openPreviewRequest: null,
       }),
     );
-    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    await userEvent.click(
+      within(rowOf("feat/open")).getByRole("button", { name: /^Open preview/ }),
+    );
     await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledTimes(2));
     await waitFor(() =>
       expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "b1" }),
@@ -617,7 +642,9 @@ describe("Branches", () => {
     );
     // Without a dev server the checkout row would only proxy to a 503: start
     // a branch preview instead.
-    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    await userEvent.click(
+      within(rowOf("feat/open")).getByRole("button", { name: /^Open preview/ }),
+    );
     await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledTimes(3));
 
     act(() =>
@@ -628,7 +655,9 @@ describe("Branches", () => {
         openPreviewRequest: null,
       }),
     );
-    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    await userEvent.click(
+      within(rowOf("feat/open")).getByRole("button", { name: /^Open preview/ }),
+    );
     expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "checkout" });
     expect(m.createBranchPreview).toHaveBeenCalledTimes(3);
   });
@@ -639,7 +668,7 @@ describe("Branches", () => {
     renderView();
     await ready();
     await userEvent.click(
-      within(rowOf("feat/open")).getByRole("button", { name: "Preview this branch" }),
+      within(rowOf("feat/open")).getByRole("button", { name: /^Preview this branch/ }),
     );
     await waitFor(() =>
       expect(

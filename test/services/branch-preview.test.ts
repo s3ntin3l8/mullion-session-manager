@@ -225,12 +225,37 @@ describe("branch previews (issues #2016/#2018)", () => {
       worktree: { branch: "feat/x" },
       worktreeRefresh: true,
     });
-    expect(params.env?.PORT).toBe(String(preview.upstreamPort));
+    // #3555 — as `previewPort`, not `env.PORT` (reserved; createSessionRecord refuses it).
+    expect(params.previewPort).toBe(preview.upstreamPort);
+    expect(params.env?.PORT).toBeUndefined();
     expect(preview).toMatchObject({ kind: "project", projectId, branch: "feat/x" });
     expect(preview.sessionId).toBe(
       create.mock.results[0] && (await create.mock.results[0].value).row.id,
     );
     expect(listUpstreamPorts(app, "local").has(preview.upstreamPort!)).toBe(true);
+  });
+
+  // #3555 — the session env cap is 16 (an agent refuses more on attach):
+  // 15 control vars + PORT fit, 16 + PORT do not.
+  it("starts a preview control with 15 env vars and refuses one with 16 (#3555)", async () => {
+    const envOf = (n: number) =>
+      Object.fromEntries(Array.from({ length: n }, (_, i) => [`V${i}`, "x"]));
+    const { cwd } = repo();
+    writeDock(cwd, [{ id: "web", title: "Web", command: "vite", preview: true, env: envOf(16) }]);
+    const projectId = insertProject(app, cwd);
+    const create = fakeCreate(app);
+
+    await expect(getOrCreateBranchPreview(app, projectId, "feat/x")).rejects.toMatchObject({
+      code: "start_failed",
+      message: expect.stringMatching(/adds PORT/),
+    });
+    expect(create).not.toHaveBeenCalled();
+
+    writeDock(cwd, [{ id: "web", title: "Web", command: "vite", preview: true, env: envOf(15) }]);
+    const preview = await getOrCreateBranchPreview(app, projectId, "feat/x");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(Object.keys(create.mock.calls[0][1].env ?? {})).toHaveLength(15);
+    expect(create.mock.calls[0][1].previewPort).toBe(preview.upstreamPort);
   });
 
   it("never hands a port still held by an unbound create to a concurrent one", async () => {

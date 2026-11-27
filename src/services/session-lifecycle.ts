@@ -66,7 +66,7 @@ import {
 import type { BrowserTarget } from "./browser-manager.js";
 import { resolveSessionBrowserTarget } from "./browser-target.js";
 import { requiredLaunchOptions, type LaunchFields } from "./launch-requirements.js";
-import { isReservedSessionEnvKey } from "./session-env-keys.js";
+import { resolveCreateSessionEnv } from "./session-env-keys.js";
 import { MAX_SESSION_ENV_ENTRIES, MAX_SESSION_ENV_VALUE_LENGTH } from "./session-limits.js";
 import { commandAgentBin } from "./hook-adapters/index.js";
 import {
@@ -363,6 +363,15 @@ function logPreviewWorktreeHostError(
 }
 
 export type CreateSessionParams = CreateSessionBody & {
+  // Issue #3555 — branch-preview.ts only: the port allocated for a branch
+  // preview's dev server, delivered as `PORT` in the session's environment.
+  // `PORT` is a reserved env key (session-env-keys.ts: it is a server-identity
+  // var buildSessionEnv() scrubs), so it cannot travel in `env`; this typed
+  // field is the one exemption, set after the reserved-key check and then
+  // persisted with the rest of sessions.env so a reattach replays it. Like
+  // initialPrompt below, NOT part of CreateSessionBody: POST /api/sessions's
+  // schema (additionalProperties: false) never lets a caller set it.
+  previewPort?: number;
   // Task Master only (task-claim.ts/task-reconciler.ts) — a prompt to start
   // the spawned agent's first turn with, see pty-manager.ts's
   // CreateSessionOptions.initialPrompt for the full delivery chain.
@@ -1187,23 +1196,23 @@ function resolveSessionPlacement(
 
 async function createSessionRecordInner(
   app: FastifyInstance,
-  params: CreateSessionParams,
+  callerParams: CreateSessionParams,
   rb: CreateRollback,
 ): Promise<CreateSessionResult> {
-  const { projectId, env } = params;
-
   // Hermes review, this PR (issue #822) — dock-config.ts's validateOneControl
   // is not the only producer of a session's `env`; a direct full-scope
   // `POST /api/sessions` call bypasses it entirely. Enforce the same
   // reserved-key rule here so it's bound regardless of caller, matching the
   // parentSessionId validation (validateParent) — also re-validated here for
   // exactly the same "not just the socket op" reason.
-  if (env !== undefined) {
-    const reservedKey = Object.keys(env).find(isReservedSessionEnvKey);
-    if (reservedKey !== undefined) {
-      return { ok: false, reason: "reserved-env-key", detail: reservedKey };
-    }
+  // Issue #3555 — a branch preview's `previewPort` joins the env as `PORT`
+  // only after that check (CreateSessionParams.previewPort).
+  const resolvedEnv = resolveCreateSessionEnv(callerParams.env, callerParams.previewPort);
+  if (!resolvedEnv.ok) {
+    return { ok: false, reason: "reserved-env-key", detail: resolvedEnv.reservedKey };
   }
+  const params: CreateSessionParams = { ...callerParams, env: resolvedEnv.env };
+  const { projectId } = params;
 
   // Issue #1951 — options that contradict each other are refused, never
   // resolved by silently preferring one: `hostId` ("run exactly here") vs

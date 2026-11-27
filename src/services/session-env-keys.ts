@@ -4,6 +4,7 @@ import {
   GIT_CONFIG_TASK_PUSH_BLOCK_ENV,
   SERVER_ENV_KEYS,
 } from "./session-env.js";
+import { MAX_SESSION_ENV_ENTRIES } from "./session-limits.js";
 
 // Issue #822 — the reserved-key predicate shared by dock-config.ts's write
 // path (throws on a reserved key), project-config.ts's read path (drops one
@@ -70,4 +71,33 @@ export function isReservedSessionEnvKey(key: string): boolean {
   if (RESERVED_GIT_CONFIG_TASK_PUSH_KEYS.has(key)) return true;
   if (RESERVED_GIT_CONFIG_IDENTITY_KEYS.has(key)) return true;
   return false;
+}
+
+/**
+ * Issue #3555 — whether a caller's `env` leaves room for the `PORT` that
+ * `previewPort` adds (resolveCreateSessionEnv below) within the session env
+ * cap: an agent host refuses more entries at spawn and on every reattach, so a
+ * `previewPort` caller checks this first to refuse with a readable message.
+ */
+export function hasRoomForPreviewPort(env: Record<string, string> | undefined): boolean {
+  return Object.keys(env ?? {}).length < MAX_SESSION_ENV_ENTRIES;
+}
+
+/**
+ * The env a session create launches with (issue #3555): the caller's `env`,
+ * refused if it carries a reserved key, plus — only AFTER that check — a
+ * branch preview's allocated port as `PORT`. `PORT` is reserved (a
+ * server-identity var buildSessionEnv() scrubs), so a branch preview cannot
+ * pass it in `env`; `previewPort` is its one exemption, and the result is what
+ * sessions.env persists, so a reattach replays the same PORT.
+ */
+export function resolveCreateSessionEnv(
+  env: Record<string, string> | undefined,
+  previewPort: number | undefined,
+): { ok: true; env: Record<string, string> | undefined } | { ok: false; reservedKey: string } {
+  const reservedKey =
+    env === undefined ? undefined : Object.keys(env).find(isReservedSessionEnvKey);
+  if (reservedKey !== undefined) return { ok: false, reservedKey };
+  if (previewPort === undefined) return { ok: true, env };
+  return { ok: true, env: { ...env, PORT: String(previewPort) } };
 }
