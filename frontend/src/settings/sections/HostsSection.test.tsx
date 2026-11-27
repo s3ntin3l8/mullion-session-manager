@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HostsSection } from "./HostsSection.js";
+import { HostStatusLabel } from "../../HostStatusLabel.js";
 import { useDashboardStore } from "../../store/index.js";
 import { api, ApiError } from "../../api/index.js";
 import type { HostUpdateStatus } from "../../api/index.js";
@@ -135,36 +136,134 @@ describe("HostsSection", () => {
     expect(screen.getByText("2 leaked browsers")).toBeInTheDocument();
   });
 
-  it("flags an outdated agent with both versions in the explanation (issue #2969)", () => {
+  it("flags an outdated agent with both versions in the explanation (issue #2969, #3573)", () => {
     stubFetch({});
     useDashboardStore.setState({
       hosts: [
         makeHost({ id: "local", name: "This machine", isLocal: true, mullionVersion: "0.3.62" }),
+        // Issue #3573 — the shape the API really returns for a legacy agent:
+        // a deprecatedKind comes with EVERY legacyAgent (the server derives
+        // both flags from the same row), so the row reads the qualified chip
+        // and the hover still names both versions.
         makeHost({
           id: "old",
           name: "macbook",
           baseUrl: "http://192.168.2.92:3000",
           legacyAgent: true,
+          deprecatedKind: "legacy-agent",
           mullionVersion: "0.3.50",
         }),
         makeHost({ id: "new", name: "current", legacyAgent: false }),
       ],
     });
     render(<HostsSection />);
-    const badge = screen.getByText("Outdated agent — upgrade");
+    const badge = screen.getByText("outdated agent (deprecated)");
     expect(badge).toHaveAttribute("title", expect.stringMatching(/v0\.3\.50.*v0\.3\.62/s));
-    expect(screen.getAllByText("Outdated agent — upgrade")).toHaveLength(1);
+    expect(screen.getAllByText("outdated agent (deprecated)")).toHaveLength(1);
   });
 
-  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969)", () => {
+  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969, #3573)", () => {
     stubFetch({});
     useDashboardStore.setState({
-      hosts: [makeHost({ id: "h", name: "mac", legacyAgent: true, mullionVersion: "0.3.62" })],
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "mac",
+          legacyAgent: true,
+          deprecatedKind: "legacy-agent",
+          mullionVersion: "0.3.62",
+        }),
+      ],
     });
     render(<HostsSection />);
-    const label = screen.getByText("Not registered — set primary URL");
+    const label = screen.getByText("not registered (deprecated)");
     expect(label).toHaveAttribute("title", expect.stringMatching(/MULLION_PRIMARY_URL/));
-    expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
+    expect(screen.queryByText(/outdated agent/)).toBeNull();
+  });
+
+  // Issue #3573 — the row shows the same chip as the places that name a host,
+  // so a deprecated host says so where the operator looks.
+  it("qualifies a manual-token host's chip as deprecated on the row (issue #3573)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          legacyAgent: true,
+          deprecatedKind: "manual-token",
+          mullionVersion: "0.3.50",
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    const chip = screen.getByText("outdated agent · manual token (deprecated)");
+    expect(chip).toHaveAttribute("title", expect.stringContaining("Deprecated:"));
+    // The hover names the credential that has to change.
+    expect(chip).toHaveAttribute("title", expect.stringContaining("MULLION_AGENT_TOKEN"));
+    // The unqualified legacy-agent words are never the chip on their own.
+    expect(screen.queryByText(/^outdated agent$/)).toBeNull();
+  });
+
+  it("shows a chip for a manual-token host that is not a legacy agent (issue #3573)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          legacyAgent: false,
+          deprecatedKind: "manual-token",
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    const chip = screen.getByText("manual token (deprecated)");
+    expect(chip).toHaveAttribute("title", expect.stringContaining("Deprecated:"));
+  });
+
+  it("shows no chip for a host with a live machine identity (issue #3573)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "macbook",
+          baseUrl: "http://192.168.2.92:3000",
+          hasMachineIdentity: true,
+          hasLiveMachineIdentity: true,
+          legacyAgent: false,
+          deprecatedKind: null,
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    expect(screen.queryByText(/deprecated/)).toBeNull();
+    expect(screen.queryByText(/outdated agent/)).toBeNull();
+  });
+
+  it("shows the same chip and hover as the places that name a host (issue #3573)", () => {
+    // The row and the sidebar read the same chip from one shared function,
+    // so they cannot drift apart again.
+    stubFetch({});
+    const host = makeHost({
+      id: "h",
+      name: "macbook",
+      baseUrl: "http://192.168.2.92:3000",
+      legacyAgent: false,
+      deprecatedKind: "manual-token",
+    });
+    useDashboardStore.setState({ hosts: [host] });
+    render(<HostsSection />);
+    const rowChip = screen.getByText("manual token (deprecated)");
+
+    const label = render(<HostStatusLabel host={host} />);
+    const labelChip = within(label.container).getByText("manual token (deprecated)");
+
+    expect(labelChip.textContent).toBe(rowChip.textContent);
+    expect(labelChip.getAttribute("title")).toBe(rowChip.getAttribute("title"));
   });
 
   it("sends a cleared address as null for a host with a machine identity (issue #3091)", async () => {
