@@ -45,7 +45,9 @@ export function DockHostPicker({ picker }: { picker: DockHostPickerState }) {
     <div className="dock-host-picker" title={title}>
       <span className="dock-host-picker-label">{locked ? "Running on" : "Next start on"}</span>
       <Dropdown
-        ariaLabel="Run dock controls on host"
+        // The lock's reason is part of the name: a disabled field's tooltip
+        // is not announced.
+        ariaLabel={locked ? `Run dock controls on host — ${title}` : "Run dock controls on host"}
         value={picker.value}
         onChange={picker.onChange}
         options={picker.options}

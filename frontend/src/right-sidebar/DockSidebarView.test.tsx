@@ -203,7 +203,7 @@ describe("DockSidebarView (#3012)", () => {
     it("offers no host choice for a project that lives on one host", async () => {
       renderView();
       await screen.findByRole("region", { name: "Commands" });
-      expect(screen.queryByRole("combobox", { name: "Run dock controls on host" })).toBeNull();
+      expect(screen.queryByRole("combobox", { name: /^Run dock controls on host/ })).toBeNull();
     });
 
     it("follows a control already running on another host, so Restart keeps it there", async () => {
@@ -219,7 +219,7 @@ describe("DockSidebarView (#3012)", () => {
       await userEvent.click(
         await screen.findByRole("button", { name: "dev, running on Mac mini" }),
       );
-      const picker = screen.getByRole("combobox", { name: "Run dock controls on host" });
+      const picker = screen.getByRole("combobox", { name: /^Run dock controls on host/ });
       // Not "this server": it is running on the Mac.
       expect(dd.dropdownValue(picker)).toBe("mac");
       const group = screen.getByRole("group", { name: "dev actions" });
@@ -231,7 +231,7 @@ describe("DockSidebarView (#3012)", () => {
     });
 
     describe("while a control runs, the selector shows its host and is locked (#3556)", () => {
-      const picker = () => screen.getByRole("combobox", { name: "Run dock controls on host" });
+      const picker = () => screen.getByRole("combobox", { name: /^Run dock controls on host/ });
 
       it("a stopped control: no host badge, the selector picks the next start's host", async () => {
         resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
@@ -356,6 +356,81 @@ describe("DockSidebarView (#3012)", () => {
         expect(createSession.mock.calls[0][2]).toEqual(
           expect.objectContaining({ dockControlId: "build", targetHostId: "old-box" }),
         );
+
+        // Restart keeps `dev` on that host too, rather than moving it home.
+        createSession.mockClear();
+        await userEvent.click(screen.getByRole("button", { name: "dev, running on old-box" }));
+        await userEvent.click(
+          within(screen.getByRole("group", { name: "dev actions" })).getByRole("button", {
+            name: "Restart",
+          }),
+        );
+        await waitFor(() => expect(createSession).toHaveBeenCalled());
+        expect(createSession.mock.calls[0][2]).toEqual(
+          expect.objectContaining({ dockControlId: "dev", targetHostId: "old-box" }),
+        );
+      });
+
+      it("says why it is locked in the field's accessible name", async () => {
+        resetStore({
+          projects: [spanning],
+          sessions: [
+            {
+              ...dockSession(7, null, "npm run dev"),
+              hostId: "mac",
+              resolvedHostId: "mac",
+            } as Session,
+          ],
+          hosts: [MAC],
+        });
+        useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+        renderView();
+        expect(
+          await screen.findByRole("combobox", {
+            name: "Run dock controls on host — dev is running on Mac mini. Stop dev to run it on another host.",
+          }),
+        ).toBeDisabled();
+      });
+
+      it("names a local checkout of a remote-hosted project by the host's name", async () => {
+        const LOCAL = makeHost({ id: "local", name: "dev-01", health: "online" });
+        const remoteHosted = makeProject({
+          id: 1,
+          name: "aurora-web",
+          hostId: "mac",
+          cwd: "/Users/x/aurora",
+          hostCwds: { local: "/home/x/aurora" },
+        });
+        resetStore({
+          projects: [remoteHosted],
+          sessions: [
+            { ...dockSession(7, null, "npm run dev"), resolvedHostId: "local" } as Session,
+          ],
+          hosts: [MAC, LOCAL],
+        });
+        useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+        renderView();
+        // The badge and the selector's entry use the same name.
+        await screen.findByRole("button", { name: "dev, running on dev-01" });
+        expect(dd.dropdownLabel(picker())).toBe("dev-01");
+      });
+
+      it("shows the server's reason when the chosen host has no checkout", async () => {
+        resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
+        createSession.mockRejectedValueOnce(
+          new ApiError("aurora-web has no checkout on Mac mini", 409, "no_checkout_on_host"),
+        );
+        useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
+        renderView();
+        await userEvent.click(await screen.findByRole("button", { name: "dev, stopped" }));
+        await userEvent.click(
+          within(screen.getByRole("group", { name: "dev actions" })).getByRole("button", {
+            name: "Start",
+          }),
+        );
+        expect(
+          await screen.findByText("aurora-web has no checkout on Mac mini"),
+        ).toBeInTheDocument();
       });
     });
 
@@ -379,7 +454,7 @@ describe("DockSidebarView (#3012)", () => {
       // The group's default is where the newest other-host control runs.
       await userEvent.click(await screen.findByRole("button", { name: /^logs, running/ }));
       expect(
-        dd.dropdownValue(screen.getByRole("combobox", { name: "Run dock controls on host" })),
+        dd.dropdownValue(screen.getByRole("combobox", { name: /^Run dock controls on host/ })),
       ).toBe("mac");
       // ...but Restart on `logs` leaves it at home.
       await userEvent.click(
@@ -417,7 +492,7 @@ describe("DockSidebarView (#3012)", () => {
       await userEvent.click(within(group).getByRole("button", { name: "Start" }));
       expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
 
-      const picker = screen.getByRole("combobox", { name: "Run dock controls on host" });
+      const picker = screen.getByRole("combobox", { name: /^Run dock controls on host/ });
       expect(dd.dropdownOptions(picker).map((o) => o.label)).toEqual(["this server", "Mac mini"]);
       dd.pickDropdownOption(picker, "mac");
       await userEvent.click(within(group).getByRole("button", { name: "Start" }));
@@ -432,7 +507,7 @@ describe("DockSidebarView (#3012)", () => {
 
       // Back to the project's own host: nothing is sent again.
       dd.pickDropdownOption(
-        screen.getByRole("combobox", { name: "Run dock controls on host" }),
+        screen.getByRole("combobox", { name: /^Run dock controls on host/ }),
         "__own__",
       );
       await userEvent.click(within(group).getByRole("button", { name: "Start" }));
@@ -449,12 +524,12 @@ describe("DockSidebarView (#3012)", () => {
     });
     useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
     renderView();
-    const picker = await screen.findByRole("combobox", { name: "Run dock controls on host" });
+    const picker = await screen.findByRole("combobox", { name: /^Run dock controls on host/ });
     expect(screen.queryByRole("note")).toBeNull();
     dd.pickDropdownOption(picker, "mac");
     expect(await screen.findByRole("note")).toHaveTextContent(/PREVIEW_BASE_HOST/);
     dd.pickDropdownOption(
-      screen.getByRole("combobox", { name: "Run dock controls on host" }),
+      screen.getByRole("combobox", { name: /^Run dock controls on host/ }),
       "__own__",
     );
     await waitFor(() => expect(screen.queryByRole("note")).toBeNull());

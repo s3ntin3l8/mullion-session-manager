@@ -283,10 +283,13 @@ export function useDockProject(
     ? buildHostTargetOptions(project, hosts).filter((o) => o.value !== AUTO_VALUE)
     : [];
   const multiHost = project !== null && hostOptions.length > 1;
-  // #3556 — the name a host goes by in the Dock, the same one the selector's
-  // options use: "this server" for the local host, else the host's name.
+  // #3556 — the name a host goes by in the Dock, by buildHostTargetOptions's
+  // rule: "this server" for the project's own host when that is the local one,
+  // else the host's name.
   const hostLabel = (hostId: string): string =>
-    hostId === LOCAL_HOST_ID ? "this server" : (hosts.find((h) => h.id === hostId)?.name ?? hostId);
+    project && hostId === project.hostId && hostId === LOCAL_HOST_ID
+      ? "this server"
+      : (hosts.find((h) => h.id === hostId)?.name ?? hostId);
   // The option value that stands for a host: the project's own host is the
   // OWN sentinel, any other host its id.
   const hostValue = (hostId: string): string =>
@@ -668,11 +671,10 @@ export function useDockProject(
     // `dev` on the Mac and `logs` at home, Restart on `logs` must not move it
     // to the Mac (#3425), and the selector is locked while it runs, so a
     // choice made before the start cannot move it either (#3556).
+    // A host that has left the options is kept too, as Start does for a
+    // locked host: the server refuses it rather than the row moving home.
     const rowHostId =
-      running &&
-      project &&
-      running.resolvedHostId !== project.hostId &&
-      hostOptions.some((o) => o.value === running.resolvedHostId)
+      running && project && running.resolvedHostId !== project.hostId
         ? running.resolvedHostId
         : undefined;
     const launchHostId = running ? rowHostId : targetHostId;
@@ -732,6 +734,10 @@ export function useDockProject(
             ...(Number.isInteger(holder) ? { holderSessionId: holder } : {}),
             message: err.message,
           });
+        } else if (err instanceof ApiError && err.code === "no_checkout_on_host") {
+          // #3556 — a locked host that has no checkout any more: retrying
+          // cannot help, the server's reason says what to do.
+          showCheckStatus(control.id, err.message, true);
         } else {
           showCheckStatus(control.id, "Failed to start — try again", true);
         }
