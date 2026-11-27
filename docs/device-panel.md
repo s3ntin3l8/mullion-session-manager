@@ -150,10 +150,11 @@ screenshots (`simctl io <udid> screenshot --type=png <file>`, see below), logs
 (`simctl spawn <udid> log show --last 5m --style compact`), and clipboard
 (`pbcopy`/`pbpaste`, over stdin/stdout).
 `openurl` runs `simctl openurl <udid> <url>`: `mullion device openurl <id> <url>`,
-the `use_device` MCP tool's `openurl` action, or "Open in simulator" in the Dock's
-Preview menu. Only http(s) URLs are accepted (`simctl openurl` would otherwise launch
-any registered URL scheme). It is manual: nothing opens on dev-server start. Android
-devices answer it with a 400.
+the `use_device` MCP tool's `openurl` action, or an "Open … on <device>" row in the
+Dock's Preview menu. Only http(s) URLs are accepted (`simctl openurl` would otherwise
+launch any registered URL scheme). It is manual: nothing opens on dev-server start.
+On Android the same verb runs `am start -a android.intent.action.VIEW -d <url>`
+(see "Opening a URL on Android" below).
 
 **iOS screenshots go through a temp file (#3517).** `screenshot()`
 (`simctlScreenshot` in `src/services/device-drivers/ios-screenshot.ts`) makes a fresh
@@ -169,18 +170,21 @@ back, the 502 quotes the first 200 bytes of what `simctl` printed (stderr, then
 stdout) and of the file it wrote, whichever are non-empty. No other `simctl` call writes output to a
 path: `pbcopy`/`pbpaste` use stdin/stdout and there is no `recordVideo`.
 
-**What the Preview menu opens (#3429, #3491).** One set of rows per running iOS
-Simulator (`frontend/src/lib/simulatorUrl.ts` picks the route):
+**What the Preview menu opens (#3429, #3491, #3559).** One set of rows per running
+iOS Simulator or Android emulator/phone, labelled "Open dev server on <device>" and
+"Open <target> on <device>" (`frontend/src/lib/deviceUrl.ts` picks the route). A
+device that is still starting or booting is listed disabled until it is running:
 
-- **The dev server, simulator on the same host.** `http://127.0.0.1:<port>`, straight
-  to the dev server's loopback, with no proxy and no auth (always http: a certificate
+- **The dev server, device on the same host.** `http://127.0.0.1:<port>`, straight
+  to the dev server's loopback, with no proxy and no auth (on Android the port is
+  first mapped back to the host with `adb reverse`, below) (always http: a certificate
   for `localhost` cannot match `127.0.0.1`). "The same host" is the host the dev
   server runs on: the Browser pane's dev-server destination, which follows a running
   Dock control to its host.
-- **The dev server, simulator on another host** ("… (via preview)"). The project's
+- **The dev server, device on another host** ("… (via preview)"). The project's
   Mullion preview, `<dashboard scheme>//preview-<slug>.<PREVIEW_BASE_HOST>/`, which
   proxies to the dev server on whichever host it runs.
-- **Each named preview target** ("Open <name> in simulator"). The target's preview
+- **Each named preview target** ("Open <name> on <device>"). The target's preview
   (`POST /api/previews` with `kind: "target"`), on any host, so the proxy applies the
   target's connection origin exactly as for the Browser pane.
 
@@ -188,10 +192,11 @@ A preview row is listed **disabled, with the reason as its tooltip**, while the 
 preview settings are still loading or could not be read (retried every 10 seconds), when
 previews are not enabled (`PREVIEW_BASE_HOST` unset: there is no preview URL to hand over), or when
 `PREVIEW_BASE_HOST` is a loopback name (`localhost`, `*.localhost`, `127.x`, `::1`, `0.0.0.0`)
-and the simulator is on an agent host, which cannot resolve it to the primary. Beyond
-that, `preview-<slug>.<PREVIEW_BASE_HOST>` must resolve from the simulator's Mac and,
-over https, present a certificate the simulator trusts, the same as for a browser on
-that Mac.
+and the device is on an agent host, which cannot resolve it to the primary. Beyond
+that, `preview-<slug>.<PREVIEW_BASE_HOST>` must resolve from the device (the
+simulator's Mac, or the Android device's own DNS) and, over https, present a
+certificate the device trusts, the same as for a browser on that machine. The
+bootstrap token below is appended the same way on Android.
 
 **Preview auth inside the simulator's Safari.** The simulator's Safari has no
 dashboard session, so with `PREVIEW_AUTH_REQUIRED=true` a bare preview URL would only
@@ -209,6 +214,36 @@ once the cookie lapses (a 24-hour lifetime, slid forward while the preview is in
 re-opening from the menu mints a fresh token. With preview auth off no token is minted
 and the URL is the bare preview URL. This was established from the proxy's code and
 tests, not observed on a live simulator.
+
+**Opening a URL on Android (#3559).** `AndroidDriver.openUrl`
+(`src/services/device-drivers/android.ts`) accepts the same http(s)-only URLs and runs
+`am start -a android.intent.action.VIEW -d <url>` over the device's adb shell (each
+argument single-quoted, as for every other Android shell action), so the device's
+default browser opens it. `am start` exits 0 even when no activity takes the intent,
+so a line starting with `Error` in its output is answered with a 502. A loopback URL
+(`127.0.0.1`, `localhost`, `*.localhost`, `[::1]`, `0.0.0.0`) means the host running adb, not the
+device: before opening it Mullion runs the equivalent of `adb -s <serial> reverse
+tcp:<port> tcp:<port>` (`Device.reversePort`, through the adb server Mullion already
+talks to), which works on an emulator and on a USB or wireless physical device alike
+(an emulator's own `10.0.2.2` alias does not exist on a phone). The mapping is
+**removed when the device is stopped** (`Device.teardownProcess`, best-effort, all
+ports at once within a 2-second bound), so a phone left connected does not keep pointing its loopback port at
+the host. The bookkeeping is in memory, so this holds within one backend run: a mapping
+made before a backend restart, or during a boot that then failed, stays until adb drops
+the device (`adb -s <serial> reverse --remove-all` clears it by hand). A port already
+mapped by something else (`adb reverse` from a shell) is replaced by the same mapping and
+removed with it. A loopback URL on the scheme's default port (80/443) needs adbd to bind
+a privileged port on the device, which usually fails on an unrooted phone with a 502
+naming `adb reverse`; give the dev server a port above 1023. A URL on any other host (a
+Mullion preview URL) is opened as is. Verified on an `android-35` emulator on this
+host: the VIEW intent opened Chrome on `http://127.0.0.1:<port>`, the host's server
+logged the request, `reverse --list` showed the mapping, and it was gone after stop.
+
+The Preview menu lists an Android device only while its live status is not `exited` or
+`error`, and disables its rows while it is `starting` or `booting`. An iOS Simulator's
+live status describes its idb video stream rather than its boot, so it is not consulted:
+the rows stay usable while the stream is reconnecting.
+
 Live H.264 video and HID input come from `idb_companion` over gRPC
 (`@grpc/grpc-js`, one companion process per device), which is restarted after
 every simulator boot because its HID connection goes stale across a reboot.
@@ -869,7 +904,7 @@ expose them.
 — `button` takes `{button: "home"|"lock"|"side"|"siri"}` on iOS and answers
 400 on Android; `clipboard` additionally carries `{op: "get"}` or
 `{op: "set", text, paste?}` — same shape the CLI/MCP surface forwards;
-`openurl` takes `{url}`, an http(s) URL, on iOS and answers 400 on Android).
+`openurl` takes `{url}`, an http(s) URL, on iOS and Android).
 Every device carries a `platform` (`"android"`, the default, or `"ios"`) and a
 `udid` (an iOS Simulator's identifier, null for Android); `kind`, `avdName`,
 `serial` and `port` stay Android-shaped. `POST /api/devices` takes each

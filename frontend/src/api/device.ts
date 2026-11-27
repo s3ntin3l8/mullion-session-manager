@@ -83,8 +83,9 @@ export const devicesApi = {
       body: JSON.stringify({ action: "screenshot" }),
     }),
 
-  // iOS Simulator only: opens an http(s) URL in the simulator's browser
-  // (`simctl openurl`). Manual, never fired on dev-server start.
+  // Opens an http(s) URL in the device's browser: `simctl openurl` on an iOS
+  // Simulator, a VIEW intent (after `adb reverse` for a loopback URL) on
+  // Android. Manual, never fired on dev-server start.
   openUrlOnDevice: (id: number, url: string) =>
     request<{ ok: true }>(`/api/devices/${id}/action`, {
       method: "POST",

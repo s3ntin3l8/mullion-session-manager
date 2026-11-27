@@ -2,8 +2,8 @@ import { api } from "../api/index.js";
 import type { ServerInfo } from "../api/index.js";
 
 // Shared by the Browser pane's preview iframe (BrowserPanel.tsx) and the Dock
-// Preview menu's "Open in simulator" rows (#3491), which hand the same URL to
-// a simulator's Safari.
+// Preview menu's "Open … on <device>" rows (#3491, #3559), which hand the same URL to
+// a device's browser.
 
 // Mirrors src/services/preview-auth.ts's PREVIEW_TOKEN_QUERY_PARAM 1:1
 // (issue #383) — duplicated across the workspace boundary like every other

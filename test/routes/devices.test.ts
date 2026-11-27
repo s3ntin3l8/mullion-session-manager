@@ -13,6 +13,8 @@ import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { makePng } from "../helpers/png.js";
 import { devices } from "../../src/db/schema.js";
+import { REVERSE_REMOVE_TIMEOUT_MS } from "../../src/services/device-manager.js";
+import type { Device } from "../../src/services/device-manager.js";
 
 // A device's spawn() bootstraps a real systemd-run scope the same way a
 // session's master does — faked here for the same reason
@@ -793,6 +795,85 @@ describe("devices routes", () => {
           // into `;`/`$()` as separate shell commands.
           "'MyTag:D; rm -rf / #$(whoami)'\\'''",
         ]);
+      });
+
+      it("opens a URL on an Android row, reversing a loopback port and dropping it on stop (#3559)", async () => {
+        const app = await buildTestAppOnPlatform("linux");
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+
+        const spawnWaitText = vi
+          .fn()
+          .mockResolvedValue("Starting: Intent { act=android.intent.action.VIEW }");
+        const addExternal = vi.fn().mockResolvedValue("tcp:5173");
+        const remove = vi.fn().mockResolvedValue(undefined);
+        (device as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWaitText } },
+          reverse: { addExternal, remove },
+          close: vi.fn().mockResolvedValue(undefined),
+        };
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "openurl", url: "http://127.0.0.1:5173/" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true });
+        expect(addExternal).toHaveBeenCalledWith("tcp:5173", "tcp:5173");
+        expect(spawnWaitText).toHaveBeenCalledWith([
+          "'am'",
+          "'start'",
+          "'-a'",
+          "'android.intent.action.VIEW'",
+          "'-d'",
+          "'http://127.0.0.1:5173/'",
+        ]);
+
+        const bad = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "openurl", url: "tel:123" },
+        });
+        expect(bad.statusCode).toBe(400);
+
+        const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+        expect(stop.statusCode).toBe(204);
+        expect(remove).toHaveBeenCalledWith("tcp:5173");
+      });
+
+      it("bounds the reverse removals on stop when adb no longer answers (#3559)", async () => {
+        const app = await buildTestAppOnPlatform("linux");
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+        // A transport that dropped: every removal hangs forever.
+        const remove = vi.fn(() => new Promise<void>(() => {}));
+        (device as unknown as { adb: unknown }).adb = {
+          reverse: { addExternal: vi.fn().mockResolvedValue("tcp:1"), remove },
+          close: vi.fn().mockResolvedValue(undefined),
+        };
+        for (const port of [3000, 5173, 8080]) await (device as Device).reversePort(port);
+
+        const stopping = app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+        // All three removals start together, well inside the first bound: run
+        // one after another, only the first would have started by now.
+        await vi.waitFor(() => expect(remove).toHaveBeenCalledTimes(3), {
+          timeout: REVERSE_REMOVE_TIMEOUT_MS / 2,
+        });
+        // And the hanging removals do not hang the stop, nor are they repeated
+        // by an overlapping teardown.
+        expect((await stopping).statusCode).toBe(204);
+        expect(remove).toHaveBeenCalledTimes(3);
       });
 
       it("400s on a logcat action whose optional fields have the wrong type", async () => {

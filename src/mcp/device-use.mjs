@@ -78,8 +78,9 @@ export const useDevice = {
       url: {
         type: "string",
         description:
-          "http(s) URL to open in the simulator's browser (openurl, iOS Simulator only). " +
-          "A dev server on the simulator's own Mac is http://127.0.0.1:<port>.",
+          "http(s) URL to open in the device's browser (openurl; iOS Simulator and Android). " +
+          "A dev server on the device's own host is http://127.0.0.1:<port> (on Android the " +
+          "port is mapped back to that host with adb reverse first).",
       },
       lines: {
         type: "number",

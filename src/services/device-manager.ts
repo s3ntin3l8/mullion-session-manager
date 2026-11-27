@@ -333,6 +333,20 @@ const PHYSICAL_CONNECT_TIMEOUT_MS = 15_000;
 const EMULATOR_PORT_BASE = 5554;
 const EMULATOR_PORT_MAX = 5682;
 
+// How long teardown waits for its `adb reverse` removals (#3559). Exported
+// for the test that pins the bound.
+export const REVERSE_REMOVE_TIMEOUT_MS = 2_000;
+
+/** `promise`, or a rejection once `ms` has passed. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     // unref() — the boot-wait poll loop below can run for up to
@@ -448,6 +462,17 @@ export class Device {
    * routes/device.ts additionally gates each socket on a keyframe and
    * requests one on attach. */
   private lastConfigPacket: ScrcpyMediaStreamPacket | null = null;
+  /** Host ports this device was given an `adb reverse tcp:<port> tcp:<port>`
+   * mapping for (AndroidDriver.openUrl, #3559), so `http://127.0.0.1:<port>`
+   * on the device reaches the dev server on this host. Removed again in
+   * teardownProcess(): a physical device keeps its adbd running after Mullion
+   * lets go of it, and a mapping left behind would keep pointing the device's
+   * own loopback port at this host. In memory only, so best-effort within one
+   * backend run: a mapping made before a backend restart, or by an action
+   * during a boot that then failed (those paths close adb without
+   * teardownProcess), stays until adb drops the device; so does one whose
+   * request was still in flight when a teardown had already finished. */
+  private reversedPorts = new Set<number>();
 
   constructor(
     opts: DeviceSpawnOptions,
@@ -497,6 +522,20 @@ export class Device {
    * action shouldn't require an active viewer at all. */
   get adbConnection(): Adb | undefined {
     return this.adb ?? undefined;
+  }
+
+  /** Maps the device's own `tcp:<port>` to this host's `tcp:<port>` through
+   * the adb server (`adb reverse tcp:<port> tcp:<port>`), so a loopback URL
+   * opened on the device reaches a dev server on the host running adb. Works
+   * the same on an emulator and a USB/wireless physical device. Re-adding an
+   * existing mapping is a no-op on adbd's side. */
+  async reversePort(port: number): Promise<void> {
+    const adb = this.adb;
+    if (!adb) throw new Error(`device ${this.id} has no live adb connection`);
+    // Tracked before the request, so a teardown racing it still removes the
+    // mapping (removing one that never landed is a harmless failure).
+    this.reversedPorts.add(port);
+    await adb.reverse.addExternal(`tcp:${port}`, `tcp:${port}`);
   }
 
   /** Starts the emulator's systemd scope, waits for adb to see it, then
@@ -869,6 +908,23 @@ export class Device {
    * connection itself is deliberately left alone too — see kill()'s own
    * comment on why disconnect() never happens here either. */
   private async teardownProcess(): Promise<void> {
+    // Before adb.close(): the removal goes over the same connection. All ports
+    // at once, each bounded: on a device that already dropped off adb a request
+    // would otherwise wait on a transport that never answers, so the whole
+    // step costs at most REVERSE_REMOVE_TIMEOUT_MS, not that per port.
+    // Best-effort — an emulator that is going away takes its mappings with it.
+    // Taken and cleared before the wait, so a second teardown running
+    // concurrently (a stop overlapping another teardown path) does not repeat them.
+    const ports = [...this.reversedPorts];
+    this.reversedPorts.clear();
+    const adb = this.adb;
+    if (adb && ports.length > 0) {
+      await Promise.allSettled(
+        ports.map((port) =>
+          withTimeout(adb.reverse.remove(`tcp:${port}`), REVERSE_REMOVE_TIMEOUT_MS),
+        ),
+      );
+    }
     try {
       await this.scrcpyClient?.close();
     } catch {

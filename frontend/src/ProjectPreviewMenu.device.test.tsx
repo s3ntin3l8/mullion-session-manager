@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-// "Open in simulator" rows of the Dock's Preview menu (#3429).
+// "Open … on <device>" rows of the Dock's Preview menu: iOS Simulators
+// (#3429, #3491) and Android emulators/phones (#3559).
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { api } from "./api/index.js";
 import type { Device, NamedPreviewTarget, Preview, ServerInfo } from "./api/index.js";
 import { ProjectPreviewMenu } from "./ProjectPreviewMenu.js";
+import { isOpenableDevice } from "./lib/deviceUrl.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeProject, makeSession } from "./test/fixtures.js";
 import { resetStore } from "./test/resetStore.js";
@@ -28,6 +30,19 @@ function sim(over: Partial<Device>): Device {
     live: { id: "7" } as unknown as Device["live"],
     ...over,
   };
+}
+
+function android(over: Partial<Device>): Device {
+  return sim({
+    id: 9,
+    name: "Pixel 10",
+    platform: "android",
+    avdName: "pixel_10",
+    serial: "emulator-5554",
+    udid: null,
+    live: { id: "9", status: "streaming" } as unknown as Device["live"],
+    ...over,
+  });
 }
 
 function destinations(hostId: string) {
@@ -84,7 +99,7 @@ async function openMenu(
   const user = userEvent.setup();
   render(<ProjectPreviewMenu projectId={1} onOpenDefault={vi.fn()} onManage={vi.fn()} />);
   await waitFor(() => expect(useDashboardStore.getState().projectPreviewConfigs[1]).toBeTruthy());
-  if (devices.some((d) => d.platform === "ios" && d.status === "active" && d.live)) {
+  if (devices.some(isOpenableDevice)) {
     await waitFor(() => expect(api.getBrowserDestinations).toHaveBeenCalled());
     await waitFor(() => expect(api.getServerInfo).toHaveBeenCalled());
   }
@@ -92,19 +107,19 @@ async function openMenu(
   return user;
 }
 
-describe("Preview menu: Open in simulator", () => {
+describe("Preview menu: open on a device", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("opens the dev server's loopback URL in a same-host running simulator", async () => {
     const user = await openMenu([sim({})]);
-    await user.click(screen.getByRole("menuitem", { name: "Open in simulator — iPhone 16" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open dev server on iPhone 16" }));
     expect(api.openUrlOnDevice).toHaveBeenCalledWith(7, "http://127.0.0.1:3005/");
   });
 
   it("lists a simulator on another host disabled, with the reason, when previews are off", async () => {
     const user = await openMenu([sim({ hostId: "mac-1" })]);
     const item = await screen.findByRole("menuitem", {
-      name: "Open in simulator — iPhone 16 (on another host)",
+      name: "Open dev server on iPhone 16 (on another host)",
     });
     expect(item).toHaveAttribute("aria-disabled", "true");
     expect(item.getAttribute("title")).toMatch(/Previews are not enabled/);
@@ -117,7 +132,7 @@ describe("Preview menu: Open in simulator", () => {
     vi.spyOn(api, "mintPreviewToken");
     const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON);
     await user.click(
-      await screen.findByRole("menuitem", { name: "Open in simulator — iPhone 16 (via preview)" }),
+      await screen.findByRole("menuitem", { name: "Open dev server on iPhone 16 (via preview)" }),
     );
     await waitFor(() =>
       expect(api.openUrlOnDevice).toHaveBeenCalledWith(
@@ -138,7 +153,7 @@ describe("Preview menu: Open in simulator", () => {
       previewAuthRequired: true,
     });
     await user.click(
-      await screen.findByRole("menuitem", { name: "Open in simulator — iPhone 16 (via preview)" }),
+      await screen.findByRole("menuitem", { name: "Open dev server on iPhone 16 (via preview)" }),
     );
     await waitFor(() =>
       expect(api.openUrlOnDevice).toHaveBeenCalledWith(
@@ -159,9 +174,7 @@ describe("Preview menu: Open in simulator", () => {
         connectionOrigin: "project",
       },
     ]);
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
-    );
+    await user.click(await screen.findByRole("menuitem", { name: "Open Staging on iPhone 16" }));
     await waitFor(() =>
       expect(api.openUrlOnDevice).toHaveBeenCalledWith(
         7,
@@ -182,7 +195,7 @@ describe("Preview menu: Open in simulator", () => {
       },
     ]);
     const item = await screen.findByRole("menuitem", {
-      name: "Open Staging in simulator — iPhone 16 (unavailable)",
+      name: "Open Staging on iPhone 16 (unavailable)",
     });
     expect(item).toHaveAttribute("aria-disabled", "true");
     expect(item.getAttribute("title")).toMatch(/Previews are not enabled/);
@@ -202,17 +215,102 @@ describe("Preview menu: Open in simulator", () => {
     expect(
       await screen.findByRole("menuitem", { name: /Local sim .*another host/ }),
     ).toHaveAttribute("aria-disabled", "true");
-    await user.click(screen.getByRole("menuitem", { name: "Open in simulator — iPhone 16" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open dev server on iPhone 16" }));
     expect(api.openUrlOnDevice).toHaveBeenCalledWith(7, "http://127.0.0.1:3005/");
   });
 
-  it("offers nothing for Android devices, stopped simulators or none at all", async () => {
+  it("offers nothing for stopped, exited or failed devices", async () => {
     await openMenu([
-      sim({ id: 1, platform: "android" }),
       sim({ id: 2, status: "killed" }),
       sim({ id: 3, live: null }),
+      android({ id: 4, live: { id: "4", status: "exited" } as unknown as Device["live"] }),
+      android({ id: 5, live: { id: "5", status: "error" } as unknown as Device["live"] }),
     ]);
-    expect(screen.queryByRole("menuitem", { name: /Open in simulator/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /^Open .* on / })).toBeNull();
+  });
+
+  it("opens the dev server's loopback URL on a same-host Android device (#3559)", async () => {
+    const user = await openMenu([android({})]);
+    await user.click(screen.getByRole("menuitem", { name: "Open dev server on Pixel 10" }));
+    // The backend maps the port back to this host with `adb reverse`.
+    expect(api.openUrlOnDevice).toHaveBeenCalledWith(9, "http://127.0.0.1:3005/");
+  });
+
+  it("opens the dev server's preview URL, with the token, on an Android device on another host", async () => {
+    vi.spyOn(api, "createProjectPreview").mockResolvedValue({ slug: "abc" } as Preview);
+    vi.spyOn(api, "mintPreviewToken").mockResolvedValue({ token: "tok" });
+    const user = await openMenu([android({ hostId: "agent-1" })], true, "local", {
+      ...PREVIEWS_ON,
+      previewAuthRequired: true,
+    });
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open dev server on Pixel 10 (via preview)" }),
+    );
+    await waitFor(() =>
+      expect(api.openUrlOnDevice).toHaveBeenCalledWith(
+        9,
+        `${window.location.protocol}//preview-abc.mullion.example.com/?__mullion_preview=tok`,
+      ),
+    );
+  });
+
+  it("opens a named target on an Android device and lists one per running device", async () => {
+    vi.spyOn(api, "createTargetPreview").mockResolvedValue({ slug: "tgt" } as Preview);
+    const user = await openMenu([sim({}), android({})], true, "local", PREVIEWS_ON, [STAGING]);
+    expect(
+      await screen.findByRole("menuitem", { name: "Open Staging on iPhone 16" }),
+    ).toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: "Open Staging on Pixel 10" }));
+    await waitFor(() =>
+      expect(api.openUrlOnDevice).toHaveBeenCalledWith(
+        9,
+        `${window.location.protocol}//preview-tgt.mullion.example.com/`,
+      ),
+    );
+  });
+
+  it("lists an Android device on another host disabled, with the reason, when previews are off", async () => {
+    const user = await openMenu([android({ hostId: "agent-1" })], true, "local", PREVIEWS_OFF, [
+      STAGING,
+    ]);
+    const devServer = await screen.findByRole("menuitem", {
+      name: "Open dev server on Pixel 10 (on another host)",
+    });
+    expect(devServer).toHaveAttribute("aria-disabled", "true");
+    expect(devServer.getAttribute("title")).toMatch(/Previews are not enabled/);
+    const target = screen.getByRole("menuitem", { name: "Open Staging on Pixel 10 (unavailable)" });
+    expect(target.getAttribute("title")).toMatch(/Previews are not enabled/);
+    await user.click(devServer);
+    await user.click(target);
+    expect(api.openUrlOnDevice).not.toHaveBeenCalled();
+  });
+
+  it("keeps an iOS Simulator's rows enabled while its video stream is booting or failed", async () => {
+    const user = await openMenu([
+      sim({ live: { id: "7", status: "error" } as unknown as Device["live"] }),
+    ]);
+    await user.click(screen.getByRole("menuitem", { name: "Open dev server on iPhone 16" }));
+    expect(api.openUrlOnDevice).toHaveBeenCalledWith(7, "http://127.0.0.1:3005/");
+  });
+
+  it("lists a booting Android device disabled until it is running", async () => {
+    const user = await openMenu(
+      [android({ live: { id: "9", status: "booting" } as unknown as Device["live"] })],
+      true,
+      "local",
+      PREVIEWS_ON,
+      [STAGING],
+    );
+    const row = await screen.findByRole("menuitem", {
+      name: "Open dev server on Pixel 10 (booting)",
+    });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row.getAttribute("title")).toMatch(/still booting/);
+    expect(
+      screen.getByRole("menuitem", { name: "Open Staging on Pixel 10 (booting)" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await user.click(row);
+    expect(api.openUrlOnDevice).not.toHaveBeenCalled();
   });
 
   it("re-resolves the dev server's host when a Dock session starts", async () => {
@@ -245,13 +343,13 @@ describe("Preview menu: Open in simulator", () => {
       await waitFor(() => expect(info).toHaveBeenCalledTimes(1));
       await user.click(screen.getByRole("button", { name: "Preview" }));
       const row = await screen.findByRole("menuitem", {
-        name: "Open Staging in simulator — iPhone 16 (unavailable)",
+        name: "Open Staging on iPhone 16 (unavailable)",
       });
       expect(row.getAttribute("title")).toMatch(/Could not read the server's preview settings/);
       await vi.advanceTimersByTimeAsync(10_000);
       await waitFor(() => expect(info).toHaveBeenCalledTimes(2));
       expect(
-        await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
+        await screen.findByRole("menuitem", { name: "Open Staging on iPhone 16" }),
       ).not.toHaveAttribute("aria-disabled", "true");
     } finally {
       vi.useRealTimers();
@@ -261,9 +359,7 @@ describe("Preview menu: Open in simulator", () => {
   it("opens a named target from a simulator on another host", async () => {
     vi.spyOn(api, "createTargetPreview").mockResolvedValue({ slug: "tgt" } as Preview);
     const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON, [STAGING]);
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Open Staging in simulator — iPhone 16" }),
-    );
+    await user.click(await screen.findByRole("menuitem", { name: "Open Staging on iPhone 16" }));
     await waitFor(() =>
       expect(api.openUrlOnDevice).toHaveBeenCalledWith(
         7,
@@ -278,7 +374,7 @@ describe("Preview menu: Open in simulator", () => {
       previewBaseHost: "localhost:3000",
     });
     const item = await screen.findByRole("menuitem", {
-      name: "Open in simulator — iPhone 16 (on another host)",
+      name: "Open dev server on iPhone 16 (on another host)",
     });
     expect(item.getAttribute("title")).toMatch(/loopback/);
     await user.click(item);
@@ -294,10 +390,10 @@ describe("Preview menu: Open in simulator", () => {
     const user = await openMenu([sim({ hostId: "mac-1" })], true, "local", PREVIEWS_ON);
     useDashboardStore.setState({ reportError });
     await user.click(
-      await screen.findByRole("menuitem", { name: "Open in simulator — iPhone 16 (via preview)" }),
+      await screen.findByRole("menuitem", { name: "Open dev server on iPhone 16 (via preview)" }),
     );
     await waitFor(() =>
-      expect(reportError).toHaveBeenCalledWith("Could not open in simulator", "no dev server"),
+      expect(reportError).toHaveBeenCalledWith("Could not open on device", "no dev server"),
     );
     expect(api.openUrlOnDevice).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -314,9 +410,9 @@ describe("Preview menu: Open in simulator", () => {
     const reportError = vi.fn(() => 1);
     const user = await openMenu([sim({})], false);
     useDashboardStore.setState({ reportError });
-    await user.click(screen.getByRole("menuitem", { name: "Open in simulator — iPhone 16" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open dev server on iPhone 16" }));
     await waitFor(() =>
-      expect(reportError).toHaveBeenCalledWith("Could not open in simulator", "simctl failed"),
+      expect(reportError).toHaveBeenCalledWith("Could not open on device", "simctl failed"),
     );
     vi.unstubAllGlobals();
   });
