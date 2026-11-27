@@ -19,6 +19,7 @@ import {
   AGENT_CHANNEL_REQUESTS_OPERATION,
   AGENT_CHANNEL_SLOT_WAIT_MS,
   AGENT_CHANNEL_STREAMS_OPERATION,
+  formatByteLimit,
   type ChannelRequestHead,
   type ChannelResponseHead,
 } from "../shared/agent-channel.js";
@@ -137,9 +138,6 @@ export function maxResponseBodyBytesForPath(path: string): number {
   return AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES;
 }
 
-function formatLimit(bytes: number): string {
-  return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MiB` : `${bytes} bytes`;
-}
 /** A response that carries no body whatever its Content-Length says. */
 function responseHasNoBody(method: string, status: number): boolean {
   return (
@@ -150,14 +148,14 @@ function responseHasNoBody(method: string, status: number): boolean {
   );
 }
 function requestTooLargeMessage(cap: number): string {
-  return `request body exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
+  return `request body exceeds the ${formatByteLimit(cap)} limit of the outbound channel to this host`;
 }
 /** Set on the 413 the agent answers when a response head declares more than
  * the channel's limit, so it is not mistaken for the origin's own 413. */
 export const RESPONSE_TOO_LARGE_HEADER = "x-mullion-response-too-large";
 
 function responseTooLargeMessage(cap: number): string {
-  return `response exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
+  return `response exceeds the ${formatByteLimit(cap)} limit of the outbound channel to this host`;
 }
 
 // --- shared helpers ----------------------------------------------------------

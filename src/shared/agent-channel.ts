@@ -102,6 +102,18 @@ export type AgentChannelStreamKind = (typeof AGENT_CHANNEL_STREAM_KINDS)[number]
  * same 1 MiB cap the inbound sockets enforce (`maxPayload`). */
 export const AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES = 1024 * 1024;
 
+/**
+ * A byte limit in the words the user sees ("2 MiB").
+ *
+ * ONE helper for every limit the channel names — the tunnelled request and
+ * response body caps (services/agent-channel-tunnel.ts) and the per-message
+ * cap the device panel is told about (routes/device.ts) — so the two cannot
+ * drift apart.
+ */
+export function formatByteLimit(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MiB` : `${bytes} bytes`;
+}
+
 /** The first line of a stream channel (primary -> agent): JSON + "\n". It
  * is told apart from a request head by the `stream` key. */
 export interface ChannelStreamOpenHead {
@@ -114,6 +126,12 @@ export interface ChannelStreamOpenHead {
   /** True when the primary had a stream of this kind for this host before the
    * channel was lost, so the agent knows this is a re-establishment (#2571). */
   resumed?: boolean;
+  /** True when the primary READS the failure notice (the frame flag bit 1),
+   * so the agent may tell it why a stream died (#3402). A primary that
+   * predates the notice does not set it — it would read the frame as
+   * ordinary stream data — so the agent sends it to nobody it has not agreed
+   * this with. */
+  notices?: boolean;
 }
 
 /** The agent's answer (JSON + "\n"): 200 accepts, anything else rejects. */
@@ -122,6 +140,9 @@ export interface ChannelStreamAcceptHead {
   message?: string;
   /** Echo of `resumed`, so the primary's socket can surface it explicitly. */
   resumed?: boolean;
+  /** True when the agent READS the failure notice, so the primary may tell it
+   * why a stream died (#3402). See `ChannelStreamOpenHead.notices`. */
+  notices?: boolean;
 }
 
 /** How often an open channel's credential is re-validated (#2451). */
