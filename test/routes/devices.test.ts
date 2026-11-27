@@ -864,14 +864,14 @@ describe("devices routes", () => {
         };
         for (const port of [3000, 5173, 8080]) await (device as Device).reversePort(port);
 
-        const started = Date.now();
-        const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
-        const elapsed = Date.now() - started;
-        expect(stop.statusCode).toBe(204);
-        expect(remove).toHaveBeenCalledTimes(3);
-        // One shared bound, not one per port (3 x 2 s).
-        expect(elapsed).toBeGreaterThanOrEqual(REVERSE_REMOVE_TIMEOUT_MS - 50);
-        expect(elapsed).toBeLessThan(REVERSE_REMOVE_TIMEOUT_MS * 2);
+        const stopping = app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+        // All three removals start together, well inside the first bound: run
+        // one after another, only the first would have started by now.
+        await vi.waitFor(() => expect(remove).toHaveBeenCalledTimes(3), {
+          timeout: REVERSE_REMOVE_TIMEOUT_MS / 2,
+        });
+        // And the hanging removals do not hang the stop.
+        expect((await stopping).statusCode).toBe(204);
       });
 
       it("400s on a logcat action whose optional fields have the wrong type", async () => {
