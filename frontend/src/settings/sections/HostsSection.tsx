@@ -778,10 +778,7 @@ export function HostsSection() {
                             className={armedRejectHostId === host.id ? "danger armed" : undefined}
                             onClick={(e) => {
                               if (armedRejectHostId === host.id) {
-                                // Ignore the second click of a native double-click
-                                // so it cannot both arm and delete in one gesture.
-                                if (e.detail > 1) return;
-                                if (!confirmReject(host.id)) return;
+                                if (!confirmReject(host.id, e)) return;
                                 handleReject(host);
                               } else {
                                 armReject(host.id);

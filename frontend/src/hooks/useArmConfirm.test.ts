@@ -113,4 +113,27 @@ describe("hooks/useArmConfirm", () => {
     expect(confirmed).toBe(true);
     expect(result.current.armedKey).toBeNull();
   });
+
+  it("ignores the second click of a native double-click without disarming", () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useArmConfirm());
+
+    act(() => {
+      result.current.arm("host-1");
+    });
+
+    let doubleClickConfirmed = true;
+    act(() => {
+      doubleClickConfirmed = result.current.confirm("host-1", { detail: 2 });
+    });
+    expect(doubleClickConfirmed).toBe(false);
+    expect(result.current.armedKey).toBe("host-1");
+
+    let singleClickConfirmed = false;
+    act(() => {
+      singleClickConfirmed = result.current.confirm("host-1", { detail: 1 });
+    });
+    expect(singleClickConfirmed).toBe(true);
+    expect(result.current.armedKey).toBeNull();
+  });
 });

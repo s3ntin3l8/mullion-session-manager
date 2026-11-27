@@ -51,9 +51,12 @@ export function useArmConfirm(seconds = ARM_CONFIRM_SECONDS) {
   );
 
   // Re-check the wall-clock deadline at click time so a throttled/frozen tab
-  // cannot confirm after the arm window has already elapsed.
+  // cannot confirm after the arm window has already elapsed, and ignore the
+  // second click of a native double-click so one gesture cannot both arm and
+  // confirm without disarming.
   const confirm = useCallback(
-    (key: string): boolean => {
+    (key: string, e?: { detail: number }): boolean => {
+      if (e && e.detail > 1) return false;
       if (armedKey !== key) return false;
       if (deadlineRef.current === null || Date.now() >= deadlineRef.current) {
         disarm();

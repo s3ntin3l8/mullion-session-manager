@@ -273,7 +273,7 @@ export function KebabMenu({
     }
   }, [popoverOpen, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
 
-  const handleItemClick = (item: KebabMenuItem) => {
+  const handleItemClick = (item: KebabMenuItem, e?: React.MouseEvent) => {
     if (item.disabled) return;
     // The action is about to take focus somewhere else (another overlay).
     // Tell the focus trap not to pull it back to this menu's trigger when
@@ -282,7 +282,7 @@ export function KebabMenu({
     // (Escape, a press outside) must still return focus to the trigger.
     if (item.confirm) {
       if (armedKey === item.key) {
-        if (!confirmItem(item.key)) return;
+        if (!confirmItem(item.key, e)) return;
         if (item.opensOverlay) suppressRestore();
         setOpen(false);
         item.onClick();
@@ -387,7 +387,7 @@ export function KebabMenu({
           // this inert; aria-disabled is presentation + a11y only.
           aria-disabled={item.disabled || undefined}
           title={item.title}
-          onClick={() => handleItemClick(item)}
+          onClick={(e) => handleItemClick(item, e)}
         >
           {item.icon}
           <span style={{ flex: 1 }}>
