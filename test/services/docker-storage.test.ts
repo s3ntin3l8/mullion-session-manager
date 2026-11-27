@@ -6,6 +6,7 @@ import {
   DOCKER_PRUNE_AGGRESSIVE_ARGS,
   DOCKER_SAFE_PRUNE_STEPS,
   DOCKER_VOLUME_PRUNE_ARGS,
+  PRUNE_TIMEOUT_MS,
   estimateAggressivePrune,
   estimateSafePrune,
   inspectDockerStorage,
@@ -310,6 +311,29 @@ describe("Docker storage", () => {
     });
     expect(fake.child.kill).toHaveBeenCalledWith("SIGKILL");
     vi.useRealTimers();
+  });
+
+  it("lets a prune run past the read timeout, up to its own longer bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeSpawn({ hold: true });
+      let settled = false;
+      const prune = pruneDockerStorage("aggressive", fake.spawn);
+      prune.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      const rejected = expect(prune).rejects.toThrow("Docker command timed out");
+      // An aggressive prune of a few GB routinely outlasts 30 s.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBe(false);
+      expect(fake.child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(PRUNE_TIMEOUT_MS);
+      await rejected;
+      expect(fake.child.kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   describe("volumes", () => {
