@@ -30,6 +30,7 @@ import { resolveBackend } from "./session-backend.js";
 import { createSessionRecord } from "./session-lifecycle.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import { getStoredSettings } from "./settings.js";
+import { MAX_SESSION_ENV_ENTRIES } from "./session-limits.js";
 
 /*
  * Branch-scoped previews (issues #2016/#2018).
@@ -358,6 +359,14 @@ async function createBranchPreview(
     throw new BranchPreviewError(
       "no_preview_control",
       "Mark one dock control as serving branch previews (or keep a single control)",
+    );
+  }
+  // #3555 — the preview adds PORT to the control's env, and a session's env is
+  // capped (an agent host refuses more at spawn and at every reattach).
+  if (Object.keys(control.env ?? {}).length >= MAX_SESSION_ENV_ENTRIES) {
+    throw new BranchPreviewError(
+      "start_failed",
+      `The preview control "${control.title}" sets ${MAX_SESSION_ENV_ENTRIES} or more env vars; a branch preview adds PORT and a session allows at most ${MAX_SESSION_ENV_ENTRIES}. Remove one in Dock config.`,
     );
   }
 

@@ -235,6 +235,20 @@ describe("branch previews (issues #2016/#2018)", () => {
     expect(listUpstreamPorts(app, "local").has(preview.upstreamPort!)).toBe(true);
   });
 
+  it("refuses a preview control whose env leaves no room for PORT (#3555)", async () => {
+    const { cwd } = repo();
+    const env = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`V${i}`, "x"]));
+    writeDock(cwd, [{ id: "web", title: "Web", command: "vite", preview: true, env }]);
+    const projectId = insertProject(app, cwd);
+    const create = fakeCreate(app);
+
+    await expect(getOrCreateBranchPreview(app, projectId, "feat/x")).rejects.toMatchObject({
+      code: "start_failed",
+      message: expect.stringMatching(/adds PORT/),
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("never hands a port still held by an unbound create to a concurrent one", async () => {
     const { cwd } = repo();
     writeDock(cwd, [{ id: "dev", title: "Dev", command: "npm run dev" }]);
