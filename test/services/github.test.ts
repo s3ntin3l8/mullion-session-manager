@@ -9,6 +9,7 @@ import {
   MAX_CACHE_ENTRIES,
   fetchCheckRunsForHead,
   isRedCheckConclusion,
+  isPassingCheckConclusion,
   getDefaultBranch,
   detectReleasePleaseConfig,
   clearReleasePleaseConfigCacheForTests,
@@ -706,4 +707,19 @@ describe("isRedCheckConclusion", () => {
   it.each([null, "success", "skipped", "cancelled", "neutral"])("does not treat %s as red", (c) =>
     expect(isRedCheckConclusion(c)).toBe(false),
   );
+});
+
+describe("isPassingCheckConclusion", () => {
+  // GitHub's merge gate accepts these three and only these three.
+  it.each(["success", "skipped", "neutral"])("treats %s as passing", (c) =>
+    expect(isPassingCheckConclusion(c)).toBe(true),
+  );
+  // A cancelled check is not red (see above) but it does NOT satisfy the
+  // merge gate: a required check must be successful, skipped or neutral.
+  it.each(["cancelled", "failure", "timed_out", "action_required", "stale", "startup_failure"])(
+    "does not treat %s as passing",
+    (c) => expect(isPassingCheckConclusion(c)).toBe(false),
+  );
+  it("does not treat a check that has not finished as passing", () =>
+    expect(isPassingCheckConclusion(null)).toBe(false));
 });

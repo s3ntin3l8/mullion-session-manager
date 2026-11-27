@@ -2248,7 +2248,8 @@ red, so that path does not even look at it. When Codecov never resolves it, the
 PR stays `unstable` and the task never merges (the flip side above). The merge
 sweep's `unstable` arm now notices: a status posted by an app other than GitHub
 Actions that has been pending for more than 30 minutes
-(`COVERAGE_STATUS_STALL_MS`) on a head whose Actions checks are all green is
+(`COVERAGE_STATUS_STALL_MS`) on a head whose Actions checks are all green (every
+one of them completed and PASSING — `success`, `skipped` or `neutral`) is
 treated as stalled, and the Actions job that uploaded the coverage is re-run
 (`POST /actions/jobs/:id/rerun`) — Codecov reprocesses the commit and posts the
 status it never did, which is what unblocked PRs #2894 and #2897 by hand on
@@ -2289,16 +2290,33 @@ REQUIRED one, and Mullion cannot read branch protection to tell which it is —
 it reads the PR's check runs through the shared `readPrCheckRuns` lookup, so
 "no checks" and "couldn't ask" stay different answers and only a list that was
 actually read can name a stuck status. The two guards are the same ones: every
-Actions check on the head must be completed and green, and the head's own
-workflow runs must all have completed — a status pending because its own
-Actions job is still running is not a provider stall. The `blocked` arm's own
-explanations keep their meaning: a PR blocked on a required approving review,
-on unresolved review conversations, or on a red check keeps the message it
-already had, and the coverage message replaces the generic "Required checks are
-red or still pending" only when a stuck non-Actions status is what is actually
-holding the PR. A review decision that could not be READ is "couldn't ask",
-not "no approval required", so it does not license the coverage message
-either — the next tick reads it again.
+Actions check on the head must be completed and PASSING (`success`, `skipped`
+or `neutral`), and the head's own workflow runs must all have completed — a
+status pending because its own Actions job is still running is not a provider
+stall. The `blocked` arm's own explanations keep their meaning: a PR blocked on
+a required approving review, on unresolved review conversations, or on a red
+check keeps the message it already had, and the coverage message replaces the
+generic "Required checks are red or still pending" only when a stuck non-Actions
+status is what is actually holding the PR. A review decision that could not be
+READ is "couldn't ask", not "no approval required", so it does not license the
+coverage message either — the next tick reads it again.
+
+**A CANCELLED check is not a provider stall (`#3546`).** "Green" above means
+PASSING, not "not red": a `cancelled` check is not red — nothing about it needs
+a fix, so the red-check path must not send a worker back for it — but it does
+not satisfy GitHub's merge gate either (a required check must be successful,
+skipped or neutral), so the head is NOT green and a pending provider status
+next to it says nothing about the provider. This repo cancels its own
+superseded runs (`cancel-in-progress` in `.github/workflows/ci-cd.yml` and
+`visual.yml`), so a cancelled check on a head is an ordinary state, not an
+exotic one. Both arms therefore re-run nothing, spend no budget
+(`coverageReuploadCount` stays 0) and keep their OWN message — the `unstable`
+arm's "A non-required check is failing or still running", the `blocked` arm's
+"Required checks are red or still pending" — instead of naming a stuck status
+and telling the human to re-upload the coverage by hand, which is the wrong
+lever for a cancelled check. The two questions have two predicates:
+`isPassingCheckConclusion` (`github.ts`) asks whether a check satisfies the
+merge gate, `isRedCheckConclusion` asks whether it is red.
 
 **Exception — PR-title lint self-heals (`#1035`).** A failing **PR-title
 lint** check (e.g. `wagoid/commitlint-github-action` on repos that adopted
@@ -2581,8 +2599,12 @@ red. Either way the task's check runs are then read
 (`fetchCheckRunsForHead`, `github.ts`, `GET /commits/{sha}/check-runs`) and
 the worker is returned only if one has a red conclusion
 (`isRedCheckConclusion`: anything other than `success`, `skipped`,
-`cancelled` or `neutral` — GitHub's own not-passing set, so `timed_out`,
-`action_required`, `stale` and `startup_failure` count too). An `unstable` PR
+`cancelled` or `neutral`, so `timed_out`, `action_required`, `stale` and
+`startup_failure` count too). "Red" is not the same question as "does this
+check satisfy GitHub's merge gate" — a `cancelled` check is not red but does
+not satisfy the gate either, which is what `isPassingCheckConclusion`
+(`success`, `skipped`, `neutral`) answers; see "A CANCELLED check is not a
+provider stall" above. An `unstable` PR
 with only _pending_ checks is left alone, and the `unstable` trigger also waits
 for the head's Actions runs to finish (`unstable` means "failing or still
 running", and a push mid-run would cancel and restart them). The gate is
