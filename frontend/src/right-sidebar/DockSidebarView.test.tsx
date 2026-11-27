@@ -415,10 +415,11 @@ describe("DockSidebarView (#3012)", () => {
         expect(dd.dropdownLabel(picker())).toBe("dev-01");
       });
 
-      it("shows the server's reason when the chosen host has no checkout", async () => {
+      it("shows the server's reason when it refuses a start", async () => {
         resetStore({ projects: [spanning], sessions: [], hosts: [MAC] });
         createSession.mockRejectedValueOnce(
-          new ApiError("aurora-web has no checkout on Mac mini", 409, "no_checkout_on_host"),
+          // The shape POST /api/sessions refuses with: a 409 and no `code`.
+          new ApiError("no eligible host (the project has no checkout on a matching host)", 409),
         );
         useDashboardStore.setState({ createSession, deleteSession, sessionsLoaded: true });
         renderView();
@@ -429,7 +430,9 @@ describe("DockSidebarView (#3012)", () => {
           }),
         );
         expect(
-          await screen.findByText("aurora-web has no checkout on Mac mini"),
+          await screen.findByText(
+            "no eligible host (the project has no checkout on a matching host)",
+          ),
         ).toBeInTheDocument();
       });
     });

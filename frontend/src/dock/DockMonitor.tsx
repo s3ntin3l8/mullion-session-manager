@@ -444,6 +444,8 @@ export function DockMonitor({
           {checkStatus && (
             <span
               className={`dock-monitor-tag dock-monitor-check-status${checkStatus.isError ? " error" : ""}`}
+              // A server refusal can be a whole sentence; the tag ellipsizes.
+              title={checkStatus.message}
             >
               {checkStatus.message}
             </span>

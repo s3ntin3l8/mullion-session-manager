@@ -734,9 +734,10 @@ export function useDockProject(
             ...(Number.isInteger(holder) ? { holderSessionId: holder } : {}),
             message: err.message,
           });
-        } else if (err instanceof ApiError && err.code === "no_checkout_on_host") {
-          // #3556 — a locked host that has no checkout any more: retrying
-          // cannot help, the server's reason says what to do.
+        } else if (err instanceof ApiError && err.statusCode >= 400 && err.statusCode < 500) {
+          // #3556 — the server refused this start (e.g. a locked host with no
+          // checkout any more: POST /api/sessions answers 409 with no `code`).
+          // Retrying cannot help; its reason says what to do.
           showCheckStatus(control.id, err.message, true);
         } else {
           showCheckStatus(control.id, "Failed to start — try again", true);
