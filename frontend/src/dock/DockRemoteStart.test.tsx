@@ -309,6 +309,9 @@ describe("Dock: starting a control on another host (#3557)", () => {
     expect(screen.getByText("Error: .env not found")).toBeInTheDocument();
   });
 
+  // Unique surface vs. DockSidebarView.test.tsx (which covers the sidebar badge
+  // and selector label): pins the bottom <Dock>'s start-failure toast
+  // (reportStartFailure -> hostLabel(launchHostId)) for #3570.
   it("labels a remote-owned project's own host by name and local host by name when not own host (#3570)", async () => {
     const remoteProject = makeProject({
       id: 1,
