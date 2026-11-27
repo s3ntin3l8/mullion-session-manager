@@ -2290,7 +2290,8 @@ REQUIRED one, and Mullion cannot read branch protection to tell which it is —
 it reads the PR's check runs through the shared `readPrCheckRuns` lookup, so
 "no checks" and "couldn't ask" stay different answers and only a list that was
 actually read can name a stuck status. The two guards are the same ones: every
-Actions check on the head must be completed and PASSING (`success`, `skipped`
+Actions check on the head — the latest run of each check name, see below —
+must be completed and PASSING (`success`, `skipped`
 or `neutral`), and the head's own workflow runs must all have completed — a
 status pending because its own Actions job is still running is not a provider
 stall. The `blocked` arm's own explanations keep their meaning: a PR blocked on
@@ -2317,6 +2318,16 @@ and telling the human to re-upload the coverage by hand, which is the wrong
 lever for a cancelled check. The two questions have two predicates:
 `isPassingCheckConclusion` (`github.ts`) asks whether a check satisfies the
 merge gate, `isRedCheckConclusion` asks whether it is red.
+
+Only the LATEST run of each check name counts towards "green"
+(`latestCheckRunsByName`, `github.ts`): a head can carry several runs of one
+name — a re-run of the same workflow on the same SHA, a second trigger on it —
+and the superseded one stays on the head next to the newer one (a cancelled
+attempt next to a passing one). GitHub returns a commit's check runs
+most-recent-first and its merge gate reads the NEWEST run of each name, so a
+superseded cancelled run must not hold the head forever: the head is green
+again as soon as the newer run of that name passed, and a pending provider
+status next to it is a stall again.
 
 **Exception — PR-title lint self-heals (`#1035`).** A failing **PR-title
 lint** check (e.g. `wagoid/commitlint-github-action` on repos that adopted

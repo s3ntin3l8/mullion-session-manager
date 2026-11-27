@@ -34,6 +34,7 @@ import {
   fetchRunsForHeadChecked,
   getWorkflowRunJobsChecked,
   isPassingCheckConclusion,
+  latestCheckRunsByName,
   type CheckRunResult,
 } from "./github.js";
 import { rerunJob } from "./github-write.js";
@@ -184,12 +185,18 @@ export function findStuckNonActionsStatus(
  * nothing about the provider. This repo cancels superseded runs itself, so
  * a cancelled check on the head is an ordinary state, not an exotic one —
  * and a coverage re-upload cannot fix it anyway.
+ *
+ * Only the LATEST run of each name counts, among the head's Actions checks
+ * ({@link latestCheckRunsByName}): a head can carry several runs of one name
+ * (a re-run of the same workflow on the same SHA, a second trigger), and the
+ * superseded one stays on the head next to the newer one — a cancelled
+ * attempt next to a passing one. GitHub's merge gate reads the NEWEST run of
+ * each name, so a superseded cancelled run must not hold the head forever:
+ * the head is green again as soon as the newer run of that name passed.
  */
 export function actionsChecksFinishedGreen(checkRuns: readonly CheckRunResult[]): boolean {
-  return checkRuns.every(
-    (c) =>
-      !isActionsCheckRun(c) || (c.status === "completed" && isPassingCheckConclusion(c.conclusion)),
-  );
+  const latest = latestCheckRunsByName(checkRuns.filter(isActionsCheckRun));
+  return latest.every((c) => c.status === "completed" && isPassingCheckConclusion(c.conclusion));
 }
 
 /**

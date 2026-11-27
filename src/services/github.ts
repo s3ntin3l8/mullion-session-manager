@@ -1023,6 +1023,33 @@ export function isPassingCheckConclusion(conclusion: string | null): boolean {
 }
 
 /**
+ * The latest check run per name, in the order GitHub returned them.
+ *
+ * A head can carry SEVERAL check runs of one name: a re-run of the same
+ * workflow on the same SHA, or a second trigger on it. The superseded run
+ * stays on the head next to the newer one — a cancelled attempt reads
+ * `cancelled` — and GitHub's merge gate looks at the NEWEST run of each name
+ * (a re-run that passes unblocks the merge even though the earlier attempt is
+ * still listed). So a caller that asks the merge-gate question must not let a
+ * superseded run speak for the head.
+ *
+ * GitHub returns a commit's check runs most-recent-first (their ids descend,
+ * and the first run of a repeated name is the newer one — the same assumption
+ * `fetchRunsForHeadChecked` makes for workflow runs), so the FIRST run of a
+ * name is that name's latest run and the later ones are dropped.
+ */
+export function latestCheckRunsByName(checkRuns: readonly CheckRunResult[]): CheckRunResult[] {
+  const seen = new Set<string>();
+  const latest: CheckRunResult[] = [];
+  for (const c of checkRuns) {
+    if (seen.has(c.name)) continue;
+    seen.add(c.name);
+    latest.push(c);
+  }
+  return latest;
+}
+
+/**
  * The Actions workflow run a check run belongs to, read from its `details_url`
  * (`https://github.com/o/r/actions/runs/<run>/job/<job>`). `undefined` for a
  * check from another app (codecov, ...) or another repository, whose URL names

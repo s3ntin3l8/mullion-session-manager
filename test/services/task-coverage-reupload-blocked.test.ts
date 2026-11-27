@@ -455,6 +455,34 @@ describe("#2971 — a stuck non-Actions status on a blocked PR", () => {
     }
   });
 
+  it("re-runs the upload when the head's LATEST run of a check passed and an older one was cancelled", async () => {
+    const app = await buildApp();
+    try {
+      const id = await createTask(app);
+      // Two runs of the SAME check name on this head: a newer one that passed
+      // and the superseded one, cancelled, still listed next to it. GitHub
+      // returns check runs most-recent-first and its merge gate reads the
+      // NEWEST run of each name, so this head IS green — and the pending
+      // provider status next to it is the stall again.
+      mockFetchCheckRunsForHead.mockResolvedValue([
+        { ...greenActionsCheck("test-node / test-merge", 4243), startedAt: minutesAgo(10) },
+        { ...cancelledActionsCheck("test-node / test-merge", 4242), startedAt: minutesAgo(45) },
+        pendingCodecovCheck(),
+      ]);
+
+      await reconcileTasks(app);
+
+      expect(mockRerunJob).toHaveBeenCalledTimes(1);
+      const row = getTask(app, id);
+      expect(row.coverageReuploadCount).toBe(1);
+      // The status really is the thing holding the PR, so the message names it.
+      expect(row.mergeError).toContain("codecov/patch");
+      expect(row.mergeError).not.toBe("Required checks are red or still pending");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("does not re-run the upload while the head's workflow run is still going", async () => {
     const app = await buildApp();
     const id = await createTask(app);

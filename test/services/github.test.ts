@@ -10,6 +10,7 @@ import {
   fetchCheckRunsForHead,
   isRedCheckConclusion,
   isPassingCheckConclusion,
+  latestCheckRunsByName,
   getDefaultBranch,
   detectReleasePleaseConfig,
   clearReleasePleaseConfigCacheForTests,
@@ -722,4 +723,31 @@ describe("isPassingCheckConclusion", () => {
   );
   it("does not treat a check that has not finished as passing", () =>
     expect(isPassingCheckConclusion(null)).toBe(false));
+});
+
+describe("latestCheckRunsByName", () => {
+  const run = (name: string, conclusion: string | null) => ({ name, conclusion });
+
+  it("keeps a name that appears once", () => {
+    expect(latestCheckRunsByName([run("build", "success")])).toEqual([run("build", "success")]);
+  });
+
+  // GitHub returns a commit's check runs most-recent-first, so the FIRST run
+  // of a repeated name is its latest one — the one GitHub's merge gate reads.
+  it("keeps the first (latest) run of a repeated name", () => {
+    const latest = run("build", "success");
+    expect(latestCheckRunsByName([latest, run("build", "cancelled")])).toEqual([latest]);
+  });
+
+  it("drops the superseded run of every repeated name and keeps the rest", () => {
+    expect(
+      latestCheckRunsByName([
+        run("build", "success"),
+        run("build", "cancelled"),
+        run("lint", "skipped"),
+        run("lint", "failure"),
+        run("test", "success"),
+      ]),
+    ).toEqual([run("build", "success"), run("lint", "skipped"), run("test", "success")]);
+  });
 });
