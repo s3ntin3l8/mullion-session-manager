@@ -981,10 +981,14 @@ export interface CheckRunResult {
  * A finished check run that did not pass. The rule is a denylist, not a list of
  * known-bad conclusions: anything other than `success`, `skipped`, `cancelled`
  * or `neutral` is red (so `failure`, `timed_out`, `action_required`, `stale`,
- * `startup_failure`, and whatever GitHub adds next) — the set GitHub's own
- * merge gate treats as not-passing. `null` is a check still running, not red.
+ * `startup_failure`, and whatever GitHub adds next). `null` is a check still
+ * running, not red.
  * One definition for every "is this check red" question (title-lint self-heal,
  * the red-CI return to the worker), required or not.
+ *
+ * "Red" is NOT the same question as "does this check satisfy GitHub's merge
+ * gate" — `cancelled` is in this list's safe set but does NOT satisfy that
+ * gate. See {@link isPassingCheckConclusion} for the other question.
  */
 export function isRedCheckConclusion(conclusion: string | null): boolean {
   return (
@@ -994,6 +998,55 @@ export function isRedCheckConclusion(conclusion: string | null): boolean {
     conclusion !== "cancelled" &&
     conclusion !== "neutral"
   );
+}
+
+/**
+ * A check conclusion that satisfies GitHub's own merge gate.
+ *
+ * GitHub's required-status-check gate accepts `success`, `skipped` and
+ * `neutral`: a skipped job does not prevent a merge even when it is
+ * required, and a neutral result counts as a success for the checks that
+ * depend on it. A `cancelled` conclusion is NOT one of them — a required
+ * check must be successful, skipped or neutral, so a cancelled one holds the
+ * merge until the job is re-run and passes. `null` (a check that has not
+ * finished) is not passing either.
+ *
+ * This is deliberately NOT the negation of {@link isRedCheckConclusion}: a
+ * cancelled check is not red — the red-check path must not send a worker
+ * back for it — but it is not passing either. The two questions have
+ * different answers, so they have different predicates: only the callers
+ * that ask about the MERGE GATE (does this check let the PR merge?) use this
+ * one.
+ */
+export function isPassingCheckConclusion(conclusion: string | null): boolean {
+  return conclusion === "success" || conclusion === "skipped" || conclusion === "neutral";
+}
+
+/**
+ * The latest check run per name, in the order GitHub returned them.
+ *
+ * A head can carry SEVERAL check runs of one name: a re-run of the same
+ * workflow on the same SHA, or a second trigger on it. The superseded run
+ * stays on the head next to the newer one — a cancelled attempt reads
+ * `cancelled` — and GitHub's merge gate looks at the NEWEST run of each name
+ * (a re-run that passes unblocks the merge even though the earlier attempt is
+ * still listed). So a caller that asks the merge-gate question must not let a
+ * superseded run speak for the head.
+ *
+ * GitHub returns a commit's check runs most-recent-first (their ids descend,
+ * and the first run of a repeated name is the newer one — the same assumption
+ * `fetchRunsForHeadChecked` makes for workflow runs), so the FIRST run of a
+ * name is that name's latest run and the later ones are dropped.
+ */
+export function latestCheckRunsByName(checkRuns: readonly CheckRunResult[]): CheckRunResult[] {
+  const seen = new Set<string>();
+  const latest: CheckRunResult[] = [];
+  for (const c of checkRuns) {
+    if (seen.has(c.name)) continue;
+    seen.add(c.name);
+    latest.push(c);
+  }
+  return latest;
 }
 
 /**

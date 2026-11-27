@@ -146,6 +146,24 @@ function greenActionsCheck(name = "test-node / test-merge", runId = 4242) {
   };
 }
 
+/**
+ * An Actions check run that was CANCELLED — a superseded in-flight run.
+ *
+ * This repo cancels its own superseded runs (`cancel-in-progress` in
+ * `.github/workflows/ci-cd.yml` and `visual.yml`), so a cancelled check on a
+ * head is an ordinary state.
+ */
+function cancelledActionsCheck(name = "test-node / test-merge", runId = 4242) {
+  return {
+    name,
+    conclusion: "cancelled",
+    status: "completed",
+    app: "github-actions",
+    startedAt: minutesAgo(45),
+    url: runUrl(runId),
+  };
+}
+
 /** Codecov's `codecov/patch`: posted by the Codecov app, never completed. */
 function pendingCodecovCheck(pendingMinutes = 45) {
   return {
@@ -159,12 +177,15 @@ function pendingCodecovCheck(pendingMinutes = 45) {
 }
 
 /** A workflow run of the head — the layer that says whether CI is still going. */
-function workflowRun(status: "completed" | "in_progress" = "completed") {
+function workflowRun(
+  status: "completed" | "in_progress" = "completed",
+  conclusion: string | null = status === "completed" ? "success" : null,
+) {
   return {
     id: 4242,
     name: "CI/CD",
     status,
-    conclusion: status === "completed" ? "success" : null,
+    conclusion,
     htmlUrl: "https://x/1",
     headSha: HEAD,
   };
@@ -397,6 +418,69 @@ describe("#2971 — a stuck non-Actions status on a blocked PR", () => {
     // that is still running.
     expect(row.mergeError).toBe("Required checks are red or still pending");
     await app.close();
+  });
+
+  it("does not re-run the upload when an Actions check on the head was cancelled", async () => {
+    const app = await buildApp();
+    try {
+      const id = await createTask(app);
+      // The head's own Actions check was CANCELLED — a superseded in-flight
+      // run, which this repo produces itself. GitHub's merge gate does not
+      // accept a cancelled check (a required check must be successful, skipped
+      // or neutral), so the head is NOT green, and a pending provider status
+      // next to it says nothing about the provider.
+      mockFetchCheckRunsForHead.mockResolvedValue([cancelledActionsCheck(), pendingCodecovCheck()]);
+      mockFetchRunsForHeadChecked.mockResolvedValue({
+        ok: true,
+        runs: [workflowRun("completed", "cancelled")],
+      });
+
+      await reconcileTasks(app);
+
+      // The cancelled check is the blocker, and re-uploading the coverage
+      // cannot unblock it: nothing is re-run and no budget is spent.
+      expect(mockRerunJob).not.toHaveBeenCalled();
+      const row = getTask(app, id);
+      expect(row.coverageReuploadCount).toBe(0);
+      expect(row.coverageReuploadHeadSha).toBeNull();
+      // Not a provider stall: nobody is flagged for it.
+      expect(row.needsHumanReason).toBeNull();
+      // The blocked arm's own message stands, and it names no stuck status.
+      expect(row.mergeError).toBe("Required checks are red or still pending");
+      expect(row.mergeError).not.toContain("codecov/patch");
+    } finally {
+      // Closed even when an assertion fails: a leaked app keeps the hooks
+      // socket bound, and the NEXT test cannot even build one.
+      await app.close();
+    }
+  });
+
+  it("re-runs the upload when the head's LATEST run of a check passed and an older one was cancelled", async () => {
+    const app = await buildApp();
+    try {
+      const id = await createTask(app);
+      // Two runs of the SAME check name on this head: a newer one that passed
+      // and the superseded one, cancelled, still listed next to it. GitHub
+      // returns check runs most-recent-first and its merge gate reads the
+      // NEWEST run of each name, so this head IS green — and the pending
+      // provider status next to it is the stall again.
+      mockFetchCheckRunsForHead.mockResolvedValue([
+        { ...greenActionsCheck("test-node / test-merge", 4243), startedAt: minutesAgo(10) },
+        { ...cancelledActionsCheck("test-node / test-merge", 4242), startedAt: minutesAgo(45) },
+        pendingCodecovCheck(),
+      ]);
+
+      await reconcileTasks(app);
+
+      expect(mockRerunJob).toHaveBeenCalledTimes(1);
+      const row = getTask(app, id);
+      expect(row.coverageReuploadCount).toBe(1);
+      // The status really is the thing holding the PR, so the message names it.
+      expect(row.mergeError).toContain("codecov/patch");
+      expect(row.mergeError).not.toBe("Required checks are red or still pending");
+    } finally {
+      await app.close();
+    }
   });
 
   it("does not re-run the upload while the head's workflow run is still going", async () => {

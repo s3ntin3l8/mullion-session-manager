@@ -18,6 +18,12 @@
 // reads. The reconciler calls it and records the outcome as the merge error
 // (and the needs-human reason, once the budget is spent); it does not record
 // anything itself.
+//
+// #3546 — the head's own CI must be GREEN, not merely "not red", before a
+// pending status is called a provider stall. A `cancelled` check is not red
+// (nothing about it needs a fix) but it does not satisfy GitHub's merge gate
+// either, so it is not green: the head is held by the cancelled check, and
+// re-uploading the coverage cannot unblock it.
 
 import type { FastifyInstance } from "fastify";
 import { and, eq, isNull } from "drizzle-orm";
@@ -27,7 +33,8 @@ import {
   actionsRunIdFromCheckUrl,
   fetchRunsForHeadChecked,
   getWorkflowRunJobsChecked,
-  isRedCheckConclusion,
+  isPassingCheckConclusion,
+  latestCheckRunsByName,
   type CheckRunResult,
 } from "./github.js";
 import { rerunJob } from "./github-write.js";
@@ -161,19 +168,35 @@ export function findStuckNonActionsStatus(
 }
 
 /**
- * Has every Actions check on the head finished, and none of them red?
+ * Has every Actions check on the head finished, and has every one of them
+ * passed?
  *
  * This is the precondition for calling the status "stuck": while an Actions
  * job is still running, a pending status is the normal state of a CI that
  * has not reported yet, and the red-check path owns that case. A non-Actions
  * status is only evidence of a stalled provider once the head's own CI is
  * done and green.
+ *
+ * "Green" here is GitHub's own merge gate, not "not red"
+ * ({@link isPassingCheckConclusion}, not `isRedCheckConclusion`): a
+ * `cancelled` check is not red — nothing about it needs a fix — but it does
+ * NOT satisfy the gate either (a required check must be successful, skipped
+ * or neutral), so the head is not green and a pending status next to it says
+ * nothing about the provider. This repo cancels superseded runs itself, so
+ * a cancelled check on the head is an ordinary state, not an exotic one —
+ * and a coverage re-upload cannot fix it anyway.
+ *
+ * Only the LATEST run of each name counts, among the head's Actions checks
+ * ({@link latestCheckRunsByName}): a head can carry several runs of one name
+ * (a re-run of the same workflow on the same SHA, a second trigger), and the
+ * superseded one stays on the head next to the newer one — a cancelled
+ * attempt next to a passing one. GitHub's merge gate reads the NEWEST run of
+ * each name, so a superseded cancelled run must not hold the head forever:
+ * the head is green again as soon as the newer run of that name passed.
  */
 export function actionsChecksFinishedGreen(checkRuns: readonly CheckRunResult[]): boolean {
-  return checkRuns.every(
-    (c) =>
-      !isActionsCheckRun(c) || (c.status === "completed" && !isRedCheckConclusion(c.conclusion)),
-  );
+  const latest = latestCheckRunsByName(checkRuns.filter(isActionsCheckRun));
+  return latest.every((c) => c.status === "completed" && isPassingCheckConclusion(c.conclusion));
 }
 
 /**

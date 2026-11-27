@@ -83,6 +83,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks, resetMergeBackoff } = await import("../../src/services/task-reconciler.js");
+const { actionsChecksFinishedGreen } = await import("../../src/services/task-coverage-reupload.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
@@ -136,6 +137,24 @@ function greenActionsCheck(name = "test-node / test-merge", runId = 4242) {
   };
 }
 
+/**
+ * An Actions check run that was CANCELLED — a superseded in-flight run.
+ *
+ * This repo cancels its own superseded runs (`cancel-in-progress` in
+ * `.github/workflows/ci-cd.yml` and `visual.yml`), so a cancelled check on a
+ * head is an ordinary state.
+ */
+function cancelledActionsCheck(name = "test-node / test-merge", runId = 4242) {
+  return {
+    name,
+    conclusion: "cancelled",
+    status: "completed",
+    app: "github-actions",
+    startedAt: minutesAgo(45),
+    url: runUrl(runId),
+  };
+}
+
 /** Codecov's `codecov/patch`: posted by the Codecov app, never completed. */
 function pendingCodecovCheck(pendingMinutes = 45) {
   return {
@@ -149,12 +168,15 @@ function pendingCodecovCheck(pendingMinutes = 45) {
 }
 
 /** A workflow run of the head — the layer that says whether CI is still going. */
-function workflowRun(status: "completed" | "in_progress" = "completed") {
+function workflowRun(
+  status: "completed" | "in_progress" = "completed",
+  conclusion: string | null = status === "completed" ? "success" : null,
+) {
   return {
     id: 4242,
     name: "CI/CD",
     status,
-    conclusion: status === "completed" ? "success" : null,
+    conclusion,
     htmlUrl: "https://x/1",
     headSha: HEAD,
   };
@@ -402,6 +424,68 @@ describe("#2904 — a non-Actions status stuck pending after green CI", () => {
     await app.close();
   });
 
+  it("does not re-run the upload when an Actions check on the head was cancelled", async () => {
+    const app = await buildApp();
+    try {
+      const id = await createTask(app);
+      // The head's own Actions check was CANCELLED — a superseded in-flight
+      // run, which this repo produces itself. GitHub's merge gate does not
+      // accept a cancelled check (a required check must be successful, skipped
+      // or neutral), so the head is NOT green, and a pending provider status
+      // next to it says nothing about the provider.
+      mockFetchCheckRunsForHead.mockResolvedValue([cancelledActionsCheck(), pendingCodecovCheck()]);
+      mockFetchRunsForHeadChecked.mockResolvedValue({
+        ok: true,
+        runs: [workflowRun("completed", "cancelled")],
+      });
+
+      await reconcileTasks(app);
+
+      // The cancelled check is the blocker, and re-uploading the coverage
+      // cannot unblock it: nothing is re-run and no budget is spent.
+      expect(mockRerunJob).not.toHaveBeenCalled();
+      const row = getTask(app, id);
+      expect(row.coverageReuploadCount).toBe(0);
+      expect(row.coverageReuploadHeadSha).toBeNull();
+      // Not a provider stall: nobody is flagged for it.
+      expect(row.needsHumanReason).toBeNull();
+      // The arm's own message stands, and it names no stuck status.
+      expect(row.mergeError).toBe("A non-required check is failing or still running");
+      expect(row.mergeError).not.toContain("codecov/patch");
+    } finally {
+      // Closed even when an assertion fails: a leaked app keeps the hooks
+      // socket bound, and the NEXT test cannot even build one.
+      await app.close();
+    }
+  });
+
+  it("re-runs the upload when the head's LATEST run of a check passed and an older one was cancelled", async () => {
+    const app = await buildApp();
+    try {
+      const id = await createTask(app);
+      // Two runs of the SAME check name on this head: a newer one that
+      // passed and the superseded one, cancelled, still listed next to it.
+      // GitHub returns check runs most-recent-first and its merge gate reads
+      // the NEWEST run of each name, so this head IS green — and the pending
+      // provider status next to it is the stall again.
+      mockFetchCheckRunsForHead.mockResolvedValue([
+        { ...greenActionsCheck("test-node / test-merge", 4243), startedAt: minutesAgo(10) },
+        { ...cancelledActionsCheck("test-node / test-merge", 4242), startedAt: minutesAgo(45) },
+        pendingCodecovCheck(),
+      ]);
+
+      await reconcileTasks(app);
+
+      expect(mockRerunJob).toHaveBeenCalledTimes(1);
+      const row = getTask(app, id);
+      expect(row.coverageReuploadCount).toBe(1);
+      // The status really is the thing holding the PR, so the message names it.
+      expect(row.mergeError).toContain("codecov/patch");
+    } finally {
+      await app.close();
+    }
+  });
+
   it("does not re-run the upload while the head's workflow run is still going", async () => {
     const app = await buildApp();
     const id = await createTask(app);
@@ -600,5 +684,58 @@ describe("#2904 — a non-Actions status stuck pending after green CI", () => {
     expect(mockRerunJob).not.toHaveBeenCalled();
     expect(getTask(app, id).mergeError).toContain("a non-required check is red");
     await app.close();
+  });
+});
+
+describe("actionsChecksFinishedGreen", () => {
+  const actions = (name: string, conclusion: string | null, status = "completed") => ({
+    name,
+    conclusion,
+    status,
+    app: "github-actions",
+  });
+
+  it("is green when every Actions check finished passing", () => {
+    expect(
+      actionsChecksFinishedGreen([actions("build", "success"), actions("lint", "skipped")]),
+    ).toBe(true);
+  });
+
+  // #3546 — a cancelled check does not satisfy GitHub's merge gate.
+  it("is not green when a check was cancelled", () => {
+    expect(actionsChecksFinishedGreen([actions("build", "cancelled")])).toBe(false);
+  });
+
+  it("is not green while a check is still running", () => {
+    expect(actionsChecksFinishedGreen([actions("build", null, "in_progress")])).toBe(false);
+  });
+
+  // A status from another app (Codecov's) is not an Actions check: the head's
+  // own CI can be green while it is still pending.
+  it("ignores a check that Actions did not produce", () => {
+    expect(
+      actionsChecksFinishedGreen([
+        actions("build", "success"),
+        { name: "codecov/patch", conclusion: null, status: "in_progress", app: "codecov" },
+      ]),
+    ).toBe(true);
+  });
+
+  // #3546 — a head can carry several runs of one name (a re-run of the same
+  // workflow on the same SHA, a second trigger on it) and the superseded one
+  // stays on the head next to the newer one. GitHub returns them
+  // most-recent-first, so the FIRST run of a name is the latest one — and
+  // GitHub's merge gate reads that one. A superseded cancelled run must not
+  // hold the head forever.
+  it("reads the latest run of a repeated name, not the superseded one", () => {
+    expect(
+      actionsChecksFinishedGreen([actions("build", "success"), actions("build", "cancelled")]),
+    ).toBe(true);
+  });
+
+  it("is not green when the LATEST run of a repeated name was cancelled", () => {
+    expect(
+      actionsChecksFinishedGreen([actions("build", "cancelled"), actions("build", "success")]),
+    ).toBe(false);
   });
 });
