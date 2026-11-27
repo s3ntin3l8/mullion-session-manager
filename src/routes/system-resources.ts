@@ -6,7 +6,11 @@ import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { claudeSessionsDirsFor } from "../services/claude-scratch.js";
 import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
-import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-storage.js";
+import {
+  DOCKER_TIMEOUT_ERROR,
+  inspectDockerStorage,
+  pruneDockerStorage,
+} from "../services/docker-storage.js";
 import {
   ANDROID_PRUNE_IN_PROGRESS,
   inspectAndroidImages,
@@ -425,8 +429,10 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     plans.push({
       source: "docker",
       label: "Docker",
+      // A read that only ran out of time says the engine is slow, not missing:
+      // the prune has its own, longer bound and reports a real failure itself.
       skip:
-        dockerSeen && !dockerSeen.available
+        dockerSeen && !dockerSeen.available && dockerSeen.error !== DOCKER_TIMEOUT_ERROR
           ? `Docker unavailable: ${dockerSeen.error ?? "not installed, or permission denied"}`
           : null,
       run: step(docker, () => pruneDockerStorage(mode, undefined, { pruneVolumes })),

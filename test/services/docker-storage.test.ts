@@ -336,6 +336,38 @@ describe("Docker storage", () => {
     }
   });
 
+  it("gives the opted-in volume prune the same longer bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const children: Array<ReturnType<typeof fakeSpawn>> = [];
+      const spawn: SpawnDocker = (command, args) => {
+        calls.push(args.join(" "));
+        // The prune and version read answer at once; the volume prune hangs.
+        const fake =
+          args[0] === "volume"
+            ? fakeSpawn({ hold: true })
+            : fakeSpawn({ stdout: args[0] === "version" ? "27.1.0\n" : "" });
+        children.push(fake);
+        return fake.spawn(command, args);
+      };
+      let settled = false;
+      const prune = pruneDockerStorage("aggressive", spawn, { pruneVolumes: true });
+      prune.then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(calls.at(-1)).toBe(DOCKER_VOLUME_PRUNE_ARGS.join(" "));
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(PRUNE_TIMEOUT_MS);
+      await expect(prune).resolves.toMatchObject({ error: "Docker command timed out" });
+      expect(children.at(-1)?.child.kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   describe("volumes", () => {
     const anon = (c: string) => c.repeat(64);
     const verbose = JSON.stringify({

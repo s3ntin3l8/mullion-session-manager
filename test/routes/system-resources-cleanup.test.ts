@@ -46,6 +46,7 @@ const pruneDockerStorage = vi.fn(async (_mode?: string, _options?: unknown) => (
   reclaimedBytes: 5,
 }));
 vi.mock("../../src/services/docker-storage.js", () => ({
+  DOCKER_TIMEOUT_ERROR: "Docker command timed out",
   inspectDockerStorage: (...args: unknown[]) => inspectDockerStorage(...args),
   pruneDockerStorage: (mode?: string, _spawn?: unknown, options?: unknown) =>
     pruneDockerStorage(mode, options),
@@ -348,6 +349,18 @@ describe("/api/storage/cleanup", () => {
       expect(step(job, "docker")?.note).toContain("permission denied");
       expect(pruneDockerStorage).not.toHaveBeenCalled();
       expect(step(job, "temp")?.state).toBe("done");
+    });
+
+    it("still prunes Docker when the measurement only timed out: slow is not missing", async () => {
+      inspectDockerStorage.mockResolvedValueOnce(
+        dockerStatus({ available: false, error: "Docker command timed out" }),
+      );
+      const app = await buildTestApp();
+      await app.inject({ method: "GET", url: "/api/storage/docker" });
+      pruneDockerStorage.mockClear();
+      const { job } = await runCleanup(app);
+      expect(step(job, "docker")?.state).toBe("done");
+      expect(pruneDockerStorage).toHaveBeenCalledOnce();
     });
 
     it("ignores an old measurement: a Docker daemon that has since come up is not skipped", async () => {
