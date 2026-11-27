@@ -10,6 +10,7 @@ import { PathEscapeError, __testing } from "../../src/routes/project-setup.js";
 import { writeProjectSkill } from "../../src/services/project-tooling.js";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as ScaffoldGenerate from "../../src/services/scaffold-generate.js";
+import { seedHost } from "../helpers/hosts.js";
 
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GithubIntegration>();
@@ -125,12 +126,9 @@ describe("project-setup route", () => {
   // reuseOrCreateWorktree's own HostRequestError/other-throw split.
   it("surfaces a clean 500 (not a crash) when a remote-hosted project's own host is unreachable", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-setup-test", baseUrl: "http://127.0.0.1:59999", token: "t" },
-    });
-    const hostId = host.json().id as string;
+    const hostId = (
+      await seedHost(app, { name: "remote-setup-test", baseUrl: "http://127.0.0.1:59999" })
+    ).id;
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -1050,12 +1048,9 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
   // never called.
   it("surfaces a clean 500 (not a crash) when a remote-hosted project's own host is unreachable — never calls the generation agent", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-generate-test", baseUrl: "http://127.0.0.1:59998", token: "t" },
-    });
-    const hostId = host.json().id as string;
+    const hostId = (
+      await seedHost(app, { name: "remote-generate-test", baseUrl: "http://127.0.0.1:59998" })
+    ).id;
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",

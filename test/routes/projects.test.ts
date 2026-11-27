@@ -21,6 +21,7 @@ import { clearHermesKey, setHermesKey } from "../../src/services/hermes-integrat
 
 import { buildTestApp } from "../helpers/app.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -243,10 +244,10 @@ describe("projects route", () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
     // A REAL host: the map's keys must name hosts we know about, so the
     // test registers one rather than inventing an id.
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-a", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "remote-a",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
 
@@ -502,11 +503,7 @@ describe("projects route", () => {
   it("rejects a hostCwds key that names a host still waiting for its agent", async () => {
     const app = await buildApp();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "pending-box" },
-    });
+    const host = await seedHostResponse(app, { name: "pending-box" });
     expect(host.statusCode).toBe(201);
     const rejected = await app.inject({
       method: "POST",
@@ -606,10 +603,10 @@ describe("projects route", () => {
   it("excludes a host without the CLI of the previewed launch command (#2240)", async () => {
     const app = await buildApp();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-cli-"));
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "no-claude", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "no-claude",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = host.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(hostId);
@@ -941,10 +938,10 @@ describe("projects route", () => {
 
   it("createDir on a remote hostId 400s with PROJECT_DIR_REMOTE_UNSUPPORTED", async () => {
     const app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "remote-createdir", baseUrl: "http://127.0.0.1:59999", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "remote-createdir",
+      baseUrl: "http://127.0.0.1:59999",
+      token: "t",
     });
     const hostId = host.json().id as string;
 
@@ -1108,10 +1105,10 @@ describe("projects route", () => {
     it("serialises a remote-hosted project like its list row, degrading an unreachable host", async () => {
       const app = await buildApp();
       try {
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "single-read-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+        const host = await seedHostResponse(app, {
+          name: "single-read-host",
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const created = await app.inject({
           method: "POST",
@@ -2389,10 +2386,10 @@ describe("projects route", () => {
 
     it("is null for a project on an unreachable remote host, without failing the whole list", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "branch-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "branch-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const created = await app.inject({
         method: "POST",
@@ -2423,10 +2420,10 @@ describe("projects route", () => {
     // ENTIRE GET /api/projects list instead of just its own row degrading.
     it("degrades a single project with a dangling hostId instead of 500ing the whole list", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "dangling-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "dangling-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const created = await app.inject({
         method: "POST",
@@ -2486,10 +2483,10 @@ describe("projects route", () => {
 
     it("stores a remote project's cwd raw, without local ~-expansion", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "box", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "box",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const created = await app.inject({
         method: "POST",
@@ -2511,10 +2508,10 @@ describe("projects route", () => {
 
     it("keys discovery's isRegistered match by (hostId, cwd), not cwd alone", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "box-2", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "box-2",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       // A *local* project at the same cwd a remote discover candidate would
@@ -2552,10 +2549,10 @@ describe("projects route", () => {
 
     it("503s actions/dock for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "box-3", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "box-3",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -2608,10 +2605,10 @@ describe("projects route", () => {
 
     it("is null for a remote-hosted project, even with an active local-looking dock session row", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "detect-box", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "detect-box",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const created = await app.inject({
         method: "POST",
@@ -3134,11 +3131,7 @@ describe("projects route", () => {
     }
 
     async function addHost(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-      });
+      const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
       return res.json().id as string;
     }
 

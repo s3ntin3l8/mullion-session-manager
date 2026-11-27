@@ -7,6 +7,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { CODEX_REVIEWER_DELEGATION_CLAUSE } from "../../src/services/mullion-scaffold.js";
 import { CANARY_FILE } from "../../src/services/scaffold-canary.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #895 — end-to-end proof that `/setup/preview` and `/setup/apply`
 // actually work for a remote-hosted project, against two real buildApp()
@@ -162,14 +163,10 @@ describe("multi-host scaffold setup (issue #895)", () => {
       DATABASE_URL: `file:${path.join(os.tmpdir(), `multi-host-scaffold-setup-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`)}`,
     });
 
-    const hostRes = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: "integration-scaffold-setup-agent",
-        baseUrl: `http://127.0.0.1:${agent.port}`,
-        token: AGENT_TOKEN,
-      },
+    const hostRes = await seedHostResponse(primary.app, {
+      name: "integration-scaffold-setup-agent",
+      baseUrl: `http://127.0.0.1:${agent.port}`,
+      token: AGENT_TOKEN,
     });
     hostId = hostRes.json().id;
 

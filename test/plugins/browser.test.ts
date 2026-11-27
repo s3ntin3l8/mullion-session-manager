@@ -9,6 +9,7 @@ import { pendingBrowserCloses, projects } from "../../src/db/schema.js";
 import { PENDING_CLOSE_RETRY_INTERVAL_MS } from "../../src/plugins/browser.js";
 import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
 import { AGENT_OPERATIONS, PROTOCOL_VERSION } from "../../src/shared/agent-protocol.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // buildApp() constructs a real BrowserManager (src/plugins/browser.ts), but
 // never launches anything eagerly — only getOrLaunch() (driven here) hits
@@ -82,10 +83,10 @@ describe("browser plugin", () => {
     const timer = setIntervalSpy.mock.calls.find((c) => c[1] === PENDING_CLOSE_RETRY_INTERVAL_MS);
     expect(timer).toBeDefined();
 
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "retry-host", baseUrl: "http://127.0.0.1:1", token: "t".repeat(24) },
+    const host = await seedHostResponse(app, {
+      name: "retry-host",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t".repeat(24),
     });
     const hostId = host.json().id as string;
     app.hostAgentTracker?.record(hostId, {

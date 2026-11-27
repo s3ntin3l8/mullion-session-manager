@@ -16,7 +16,7 @@ import {
   projectOrigin,
 } from "../../src/services/host-checkout-detect.js";
 import { HostHeartbeatTracker } from "../../src/services/host-heartbeat.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import type { DiscoveredCandidate } from "../../src/services/project-config.js";
 import { parseHostCwds } from "../../src/services/placement.js";
 import { parseHostCwdsMeta } from "../../src/services/host-cwds-meta.js";
@@ -95,8 +95,16 @@ describe("host-checkout-detect", () => {
     applySettingsPatch(app, { autoDetectHostCheckouts: false });
     const tracker = new HostHeartbeatTracker();
     app.hostHeartbeatTracker = tracker;
-    macId = createHost(app, { name: "mac", baseUrl: "http://mac.test", token: "t" }).id;
-    boxId = createHost(app, { name: "box", baseUrl: "http://box.test", token: "t" }).id;
+    macId = createPairedHost(app, {
+      hostname: "mac",
+      name: "mac",
+      baseUrl: "http://mac.test",
+    }).hostId;
+    boxId = createPairedHost(app, {
+      hostname: "box",
+      name: "box",
+      baseUrl: "http://box.test",
+    }).hostId;
     tracker.recordSuccess(macId);
     tracker.recordSuccess(boxId);
   });
@@ -267,9 +275,15 @@ describe("host-checkout-detect", () => {
       // mac: has an entry. box: discovery fails. Neither yields a suggestion.
       expect(await detectCheckouts(app, row(project.id))).toEqual([]);
 
-      const down = createHost(app, { name: "down", baseUrl: "http://down.test", token: "t" });
+      const down = {
+        id: createPairedHost(app, { hostname: "down", name: "down", baseUrl: "http://down.test" })
+          .hostId,
+      };
       discovery.set(down.id, [repo("app")]); // never contacted: no heartbeat yet
-      const drained = createHost(app, { name: "parked", baseUrl: "http://p.test", token: "t" });
+      const drained = {
+        id: createPairedHost(app, { hostname: "parked", name: "parked", baseUrl: "http://p.test" })
+          .hostId,
+      };
       app.hostHeartbeatTracker!.recordSuccess(drained.id);
       app.db.update(hosts).set({ drained: true }).where(eq(hosts.id, drained.id)).run();
       discovery.set(drained.id, [repo("app")]);
@@ -503,8 +517,14 @@ describe("host-checkout-detect", () => {
     it("says WHY a one-host run found nothing: the host is offline, or parked", async () => {
       enable(true);
       localProject("app");
-      const down = createHost(app, { name: "down", baseUrl: "http://down.test", token: "t" });
-      const parked = createHost(app, { name: "parked", baseUrl: "http://p.test", token: "t" });
+      const down = {
+        id: createPairedHost(app, { hostname: "down", name: "down", baseUrl: "http://down.test" })
+          .hostId,
+      };
+      const parked = {
+        id: createPairedHost(app, { hostname: "parked", name: "parked", baseUrl: "http://p.test" })
+          .hostId,
+      };
       app.hostHeartbeatTracker!.recordSuccess(parked.id);
       app.db.update(hosts).set({ drained: true }).where(eq(hosts.id, parked.id)).run();
 

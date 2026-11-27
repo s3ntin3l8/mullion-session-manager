@@ -7,6 +7,7 @@ import { closeDb } from "../../src/db/client.js";
 import { projects } from "../../src/db/schema.js";
 import { HostRequestError, RemoteHostClient } from "../../src/services/remote-host-client.js";
 import { isCloneBusy, markCloneBusy, releaseClone } from "../../src/services/git-clone-busy.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `projects-host-git-pull-${process.pid}.db`);
 
@@ -23,10 +24,10 @@ describe("host-targeted project git pull", () => {
     process.env.DATABASE_URL = `file:${tmpDb}`;
     app = await buildApp();
     const addHost = async (name: string) => {
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t".repeat(24) },
+      const res = await seedHostResponse(app, {
+        name,
+        baseUrl: "http://127.0.0.1:1",
+        token: "t".repeat(24),
       });
       expect(res.statusCode).toBe(201);
       return res.json().id as string;

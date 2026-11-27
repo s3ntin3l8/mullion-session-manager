@@ -10,6 +10,7 @@ import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { eq, ne } from "drizzle-orm";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
@@ -52,10 +53,10 @@ describe("upload cwd on the session's own host", () => {
 
   // A local project whose session runs on a remote host, with no session cwd.
   async function setup(mapped: boolean) {
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "mac-agent", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const hostRes = await seedHostResponse(app, {
+      name: "mac-agent",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = hostRes.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(hostId);

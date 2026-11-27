@@ -7,6 +7,7 @@ import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { eq, ne } from "drizzle-orm";
 import { hosts, projects, sessions, tasks } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // M5 — never lets a real systemd-run fire (#1137): both node-pty and
 // node:child_process's spawn are faked, and every resolveBackend() call is
@@ -97,10 +98,10 @@ describe("placement decides where a session runs (issue #1724)", () => {
 
     // A remote host that is online and idle — the one an "auto" project
     // would be placed on.
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "idle-agent", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const hostRes = await seedHostResponse(app, {
+      name: "idle-agent",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = hostRes.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(hostId);

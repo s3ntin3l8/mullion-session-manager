@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterAll, beforeAll } from "vitest";
 import { plainNodePtyMock } from "../helpers/mock-pty.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => plainNodePtyMock());
 
@@ -18,10 +19,10 @@ describe("projects route - remote host outcome unknown", () => {
 
   it("surfaces outcome unknown when the host disconnects mid-pull", async () => {
     const { HostOutcomeUnknownError } = await import("../../src/services/remote-host-client.js");
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "git-pull-unknown-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "git-pull-unknown-host",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const project = await app.inject({
       method: "POST",
@@ -50,10 +51,10 @@ describe("projects route - remote host outcome unknown", () => {
 
   it("surfaces outcome unknown when the host disconnects mid-branch-delete", async () => {
     const { HostOutcomeUnknownError } = await import("../../src/services/remote-host-client.js");
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "branch-del-unknown-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "branch-del-unknown-host",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const project = await app.inject({
       method: "POST",

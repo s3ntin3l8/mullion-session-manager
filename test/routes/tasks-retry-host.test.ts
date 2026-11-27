@@ -8,6 +8,7 @@ import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import { sessions, tasks } from "../../src/db/schema.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
@@ -110,10 +111,10 @@ describe("POST /api/tasks/:id/retry worker host resolution (#3192)", () => {
     let resolveBackendSpy: ReturnType<typeof vi.spyOn> | undefined;
 
     try {
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "MacBook", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const hostRes = await seedHostResponse(app, {
+        name: "MacBook",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remoteHostId = hostRes.json().id as string;
 

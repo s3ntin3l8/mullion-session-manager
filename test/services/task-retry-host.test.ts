@@ -21,6 +21,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { eq } from "drizzle-orm";
 import type { PlacementTarget } from "../../src/services/placement.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("../../src/services/task-github-sync.js", () => ({
   syncTaskTransition: vi.fn().mockResolvedValue(undefined),
@@ -67,11 +68,7 @@ describe("decideRetryHost — where a retry runs (#3194)", () => {
     platform: string,
     opts: { online?: boolean; drained?: boolean; capabilities?: string[] } = {},
   ): Promise<string> {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
     const hostId = res.json().id as string;
     app.db
       .update(hosts)

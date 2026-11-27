@@ -34,6 +34,7 @@ import { eq } from "drizzle-orm";
 import type { SessionBackend } from "../../src/services/session-backend.js";
 import type * as CheckoutMaterialize from "../../src/services/checkout-materialize.js";
 import type * as ProjectOrigin from "../../src/services/project-origin.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({
@@ -201,19 +202,19 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
     app.db.delete(projects).run();
     app.db.delete(hosts).run();
 
-    const macRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: `${name}-mac`, baseUrl: "http://127.0.0.1:1", token: "t" },
+    const macRes = await seedHostResponse(app, {
+      name: `${name}-mac`,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const mac = macRes.json().id as string;
     app.db.update(hosts).set({ platform: "darwin" }).where(eq(hosts.id, mac)).run();
     app.hostHeartbeatTracker?.markOffline(mac);
 
-    const linuxRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: `${name}-linux`, baseUrl: "http://127.0.0.1:1", token: "t" },
+    const linuxRes = await seedHostResponse(app, {
+      name: `${name}-linux`,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const linux = linuxRes.json().id as string;
     app.db.update(hosts).set({ platform: "linux" }).where(eq(hosts.id, linux)).run();
@@ -519,10 +520,10 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
       app.db.delete(hosts).run();
 
       // The original (Mac) host: offline, so the retry cannot resume there.
-      const macRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "checkout-mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const macRes = await seedHostResponse(app, {
+        name: "checkout-mac",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const mac = macRes.json().id as string;
       app.db.update(hosts).set({ platform: "darwin" }).where(eq(hosts.id, mac)).run();
@@ -530,10 +531,10 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
 
       // The replacement (Linux) host: online and eligible, but the project is
       // NOT checked out there yet, so the placement computes needsCheckout.
-      const linuxRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "checkout-linux", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const linuxRes = await seedHostResponse(app, {
+        name: "checkout-linux",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const linux = linuxRes.json().id as string;
       app.db.update(hosts).set({ platform: "linux" }).where(eq(hosts.id, linux)).run();

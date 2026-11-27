@@ -95,15 +95,6 @@ process.env.HOST_HEARTBEAT_INTERVAL_SECONDS = "0";
 // "MULLION_TRUST_GATEWAY boot invariant" describe block explicitly deletes
 // this to exercise the real default.
 process.env.MULLION_TRUST_GATEWAY = "true";
-// On by default in tests (schema default is false) — issue #3477's legacy
-// gate: with it off, POST /api/hosts is refused and fleet-secret enrollment
-// is turned away. The bulk of this suite creates its hosts through
-// POST /api/hosts (and the enrollment suites enroll with the fleet secret),
-// so the harness opens the gate for them — the same "the harness trusts
-// itself" posture as MULLION_TRUST_GATEWAY above. The gate's own behaviour
-// is covered by test/routes/hosts-legacy-hosts.test.ts, which deletes this
-// var for its own scope.
-process.env.MULLION_ALLOW_LEGACY_HOSTS = "true";
 
 // Give every OTHER config var from the schema a clean (unset) starting
 // value too, once per test file, before that file's own beforeAll/beforeEach/
@@ -124,7 +115,6 @@ const PRESERVED_VARS = new Set([
   "FRONTEND_DIST",
   "HOST_HEARTBEAT_INTERVAL_SECONDS",
   "MULLION_TRUST_GATEWAY",
-  "MULLION_ALLOW_LEGACY_HOSTS",
 ]);
 for (const key of Object.keys(schema.properties)) {
   if (!PRESERVED_VARS.has(key)) delete process.env[key];

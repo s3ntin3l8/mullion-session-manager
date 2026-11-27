@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildTestApp } from "../helpers/app.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import {
   deleteDeviceRow,
   findActiveIosOwner,
@@ -67,7 +67,11 @@ describe("device-store", () => {
       name: null,
       ...(hostId ? { hostId } : {}),
     });
-    const mac2 = createHost(app, { name: "mac-2", baseUrl: "http://mac2.test", token: "t" }).id;
+    const mac2 = createPairedHost(app, {
+      hostname: "mac-2",
+      name: "mac-2",
+      baseUrl: "http://mac2.test",
+    }).hostId;
     const row = insertDevice(app, ios());
     expect(findActiveIosOwner(app, udid)).toEqual({ id: row.id });
     expect(findActiveIosOwner(app, "1A2B3C4D-1111-2222-3333-444455556666")).toBeUndefined();

@@ -7,6 +7,7 @@ import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { eq, ne } from "drizzle-orm";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Never lets a real systemd-run fire (#1137): node-pty and node:child_process's
 // spawn are faked, and every resolveBackend() call is replaced with a fake.
@@ -57,11 +58,7 @@ describe("a project's placement steering flags (issue #2241)", () => {
 
   /** An online remote host of `platform`, with a capacity reading. */
   async function addHost(platform: string, name = `h-${Math.random()}`) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
     const hostId = res.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(hostId);
     app.hostCapacityTracker?.record(hostId, {
@@ -246,10 +243,10 @@ describe("a project's placement steering flags (issue #2241)", () => {
 
   it("calls a refusal transient while a host that has not reported its platform might match", async () => {
     // No capacity reading and no self-reported platform: it cannot be told apart from a match.
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "unreported", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const res = await seedHostResponse(app, {
+      name: "unreported",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const project = addProject({ [res.json().id as string]: REMOTE_CWD }, { platform: [OTHER] });
 

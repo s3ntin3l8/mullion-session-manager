@@ -36,6 +36,7 @@ import {
 import { pendingBrowserCloses } from "../../src/db/schema.js";
 import { BrowserManager } from "../../src/services/browser-manager.js";
 import { EventEmitter } from "node:events";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2448 — the browser is bound to the session's execution target (host +
 // checkout), the same target for the panel and the agent's automation, and
@@ -79,10 +80,10 @@ describe("browser execution targets", () => {
   });
 
   async function addHost() {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: `bt-host-${++n}`, baseUrl: "http://127.0.0.1:1", token: "t".repeat(24) },
+    const res = await seedHostResponse(app, {
+      name: `bt-host-${++n}`,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t".repeat(24),
     });
     return res.json().id as string;
   }

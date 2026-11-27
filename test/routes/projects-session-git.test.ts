@@ -6,6 +6,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { projects, sessions } from "../../src/db/schema.js";
 import { HostRequestError, RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2570 — the git routes take an optional `?sessionId=` and then act on
 // that session's host and checkout (the execution-context resolver), never on
@@ -33,14 +34,10 @@ describe("session-scoped git routes", () => {
   afterEach(() => vi.restoreAllMocks());
 
   async function addHost(baseUrl: string | null = "http://127.0.0.1:1") {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: `sg-host-${++n}`,
-        ...(baseUrl === null ? {} : { baseUrl }),
-        token: "t".repeat(24),
-      },
+    const res = await seedHostResponse(app, {
+      name: `sg-host-${++n}`,
+      ...(baseUrl === null ? {} : { baseUrl }),
+      token: "t".repeat(24),
     });
     return res.json().id as string;
   }

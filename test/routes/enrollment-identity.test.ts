@@ -2,11 +2,12 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
-import { createHost, getHostRow, listHosts } from "../../src/services/host-registry.js";
+import { getHostRow, listHosts } from "../../src/services/host-registry.js";
 import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
 import { HostUnreachableError } from "../../src/services/remote-host-errors.js";
 
@@ -19,7 +20,6 @@ describe("machine identity (issue #2568)", () => {
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
   });
 
   // A fresh app per test: the register route is rate limited to 20/min per
@@ -35,7 +35,6 @@ describe("machine identity (issue #2568)", () => {
     closeDb();
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
-    delete process.env.MULLION_ENROLLMENT_SECRET;
   });
 
   const enrolledRows = () =>
@@ -52,8 +51,41 @@ describe("machine identity (issue #2568)", () => {
       payload: { baseUrl: "http://10.1.0.1:4000", hostname: "box", ...payload },
     });
 
-  const enroll = (payload: Record<string, unknown> = {}) =>
-    register({ token: "fleet-secret", wantsMachineCredential: true, ...payload });
+  const enroll = async (payload: Record<string, unknown> = {}) => {
+    const pairing = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      payload: {},
+    });
+    const { code } = pairing.json() as { code: string };
+    return app.inject({
+      method: "POST",
+      url: "/api/internal/pair",
+      payload: {
+        code,
+        requestId: crypto.randomUUID(),
+        baseUrl: "http://10.1.0.1:4000",
+        hostname: "box",
+        ...payload,
+      },
+    });
+  };
+
+  const seedManual = (opts: { name: string; baseUrl?: string; token: string }) => {
+    const id = crypto.randomUUID();
+    app.db
+      .insert(hosts)
+      .values({
+        id,
+        name: opts.name,
+        baseUrl: opts.baseUrl ?? null,
+        authTokenEnc: app.encryption.encryptString(opts.token),
+        origin: "manual",
+        approvedAt: new Date(),
+      })
+      .run();
+    return { id };
+  };
 
   it("issues a credential once on enrollment and stores it on the host row", async () => {
     const res = await enroll({ baseUrl: "http://10.1.0.10:4000" });
@@ -134,7 +166,7 @@ describe("machine identity (issue #2568)", () => {
   });
 
   it("treats revocation as final", async () => {
-    const created = createHost(app, {
+    const created = seedManual({
       name: "claimable",
       baseUrl: "http://placeholder:0",
       token: "claim-token", // pragma: allowlist secret
@@ -188,26 +220,6 @@ describe("machine identity (issue #2568)", () => {
     expect((await register({ machineCredential: "x" })).statusCode).toBe(400);
   });
 
-  it("leaves a legacy agent unchanged: no credential, baseUrl dedupe kept", async () => {
-    const one = (
-      await register({ token: "fleet-secret", baseUrl: "http://10.1.0.60:4000" })
-    ).json();
-    const two = (
-      await register({ token: "fleet-secret", baseUrl: "http://10.1.0.60:4000" })
-    ).json();
-    expect(one.machine_credential).toBeUndefined();
-    expect(two.host_id).toBe(one.host_id);
-    expect(getHostRow(app, one.host_id)!.machineCredentialEnc).toBeNull();
-  });
-
-  it("does not let a legacy agent take over an identity-bearing row by URL", async () => {
-    const identity = (await enroll({ baseUrl: "http://10.1.0.70:4000" })).json();
-    const legacy = (
-      await register({ token: "fleet-secret", baseUrl: "http://10.1.0.70:4000" })
-    ).json();
-    expect(legacy.host_id).not.toBe(identity.host_id);
-  });
-
   // Issue #2572 — an outbound-capable agent advertises no address.
   describe("registration without an advertised URL (issue #2572)", () => {
     const registerNoUrl = (payload: Record<string, unknown>) =>
@@ -217,15 +229,24 @@ describe("machine identity (issue #2568)", () => {
         payload: { hostname: "laptop", ...payload },
       });
 
+    const pairNoUrl = async (hostname = "laptop") => {
+      const pairing = await app.inject({ method: "POST", url: "/api/host-pairings", payload: {} });
+      const { code } = pairing.json() as { code: string };
+      return app.inject({
+        method: "POST",
+        url: "/api/internal/pair",
+        payload: { code, requestId: crypto.randomUUID(), hostname },
+      });
+    };
+
     it("enrolls a host with no baseUrl and keeps it addressable as a remote host", async () => {
-      const res = await registerNoUrl({ token: "fleet-secret", wantsMachineCredential: true });
+      const res = await pairNoUrl();
       expect(res.statusCode).toBe(200);
       const body = res.json();
       const row = getHostRow(app, body.host_id)!;
       expect(row.baseUrl).toBeNull();
       expect(row.origin).toBe("enrolled");
       expect(listHosts(app).find((h) => h.id === body.host_id)?.hasMachineIdentity).toBe(true);
-      await app.inject({ method: "POST", url: `/api/hosts/${body.host_id}/approve` });
       // Reached over its channel, so a client exists; an inbound-only call is
       // refused as unreachable instead of dialing nothing.
       const client = getRemoteHostClient(app, body.host_id);
@@ -236,12 +257,8 @@ describe("machine identity (issue #2568)", () => {
     });
 
     it("gives two url-less agents their own rows (identity, not address)", async () => {
-      const a = (
-        await registerNoUrl({ token: "fleet-secret", wantsMachineCredential: true })
-      ).json();
-      const b = (
-        await registerNoUrl({ token: "fleet-secret", wantsMachineCredential: true })
-      ).json();
+      const a = (await pairNoUrl()).json();
+      const b = (await pairNoUrl()).json();
       expect(a.host_id).not.toBe(b.host_id);
     });
 
@@ -262,7 +279,7 @@ describe("machine identity (issue #2568)", () => {
     });
 
     it("lets a claimed manual host keep its admin-set URL when the agent advertises none", async () => {
-      const manual = createHost(app, {
+      const manual = seedManual({
         name: "manual",
         baseUrl: "http://10.1.0.99:4000",
         token: "manual-token", // pragma: allowlist secret

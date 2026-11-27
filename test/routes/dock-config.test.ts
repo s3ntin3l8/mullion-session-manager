@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { closeDb } from "../../src/db/client.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `dock-config-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -380,10 +381,10 @@ describe("dock-config routes", () => {
       const { agentApp, port } = await startAgent(token);
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "dock-config-remote-host", baseUrl: `http://127.0.0.1:${port}`, token },
+      const host = await seedHostResponse(primary, {
+        name: "dock-config-remote-host",
+        baseUrl: `http://127.0.0.1:${port}`,
+        token,
       });
       const project = await primary.inject({
         method: "POST",
@@ -426,10 +427,10 @@ describe("dock-config routes", () => {
       const { agentApp, port } = await startAgent(token);
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "dock-config-remote-host-2", baseUrl: `http://127.0.0.1:${port}`, token },
+      const host = await seedHostResponse(primary, {
+        name: "dock-config-remote-host-2",
+        baseUrl: `http://127.0.0.1:${port}`,
+        token,
       });
       const project = await primary.inject({
         method: "POST",
@@ -463,14 +464,10 @@ describe("dock-config routes", () => {
       const { agentApp, port } = await startAgent("the-real-agent-token");
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "dock-config-wrong-token-host",
-          baseUrl: `http://127.0.0.1:${port}`,
-          token: "a-completely-different-token",
-        },
+      const host = await seedHostResponse(primary, {
+        name: "dock-config-wrong-token-host",
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: "a-completely-different-token",
       });
       const project = await primary.inject({
         method: "POST",
@@ -500,14 +497,10 @@ describe("dock-config routes", () => {
     // unwelcome one). No agent process at all here.
     it("503s with a host-unreachable message when the host can't be reached", async () => {
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "dock-config-unreachable-host",
-          baseUrl: "http://127.0.0.1:1",
-          token: "irrelevant",
-        },
+      const host = await seedHostResponse(primary, {
+        name: "dock-config-unreachable-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "irrelevant",
       });
       const project = await primary.inject({
         method: "POST",

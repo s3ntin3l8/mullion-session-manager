@@ -100,7 +100,7 @@ export function describeHostBadge(
     name,
     // The reason names the host by its id. Replacing it is a blind
     // substring replace, and that is safe because the id being replaced is
-    // a REMOTE host's — a UUID (host-registry.ts's createHost mints one),
+    // a REMOTE host's — a UUID (host-registry.ts's createPairedHost / randomUUID mints one),
     // which cannot be a substring of anything else in the sentence. (The
     // local host's id IS a short slug, "local" — handled above, never here.)
     title: reason ? reason.replaceAll(hostId, name) : `Runs on host: ${name}`,

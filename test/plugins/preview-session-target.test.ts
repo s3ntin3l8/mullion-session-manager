@@ -15,6 +15,7 @@ import {
   upsertBranchPreview,
 } from "../../src/services/preview-registry.js";
 import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2247 — a preview follows the execution host of the session it is
 // bound to, never the project's own host, and keeps that target.
@@ -47,14 +48,10 @@ describe("preview proxy session targets", () => {
   });
 
   async function addHost(baseUrl: string | null = "http://127.0.0.1:1") {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: `st-host-${++n}`,
-        ...(baseUrl === null ? {} : { baseUrl }),
-        token: "t".repeat(24),
-      },
+    const res = await seedHostResponse(app, {
+      name: `st-host-${++n}`,
+      ...(baseUrl === null ? {} : { baseUrl }),
+      token: "t".repeat(24),
     });
     return res.json().id as string;
   }

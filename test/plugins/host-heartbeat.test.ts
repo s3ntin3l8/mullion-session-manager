@@ -5,6 +5,7 @@ import fs from "node:fs";
 import net from "node:net";
 import http from "node:http";
 import { buildTestApp } from "../helpers/app.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Exercises the real background timer wiring end-to-end (plugin -> service
 // -> a genuine unreachable-host ping) — test/routes/hosts.test.ts covers
@@ -52,10 +53,10 @@ describe("hostHeartbeatPlugin: real sweep wiring (issue #246)", () => {
 
   it("degrades an unreachable host's health via the real background timer, with no manual ping", async () => {
     const app = await buildTestApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "unreachable", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "unreachable",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const { id } = created.json();
 
@@ -127,10 +128,10 @@ describe("hostHeartbeatPlugin: real sweep wiring (issue #246)", () => {
       }
 
       const app = await buildTestApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "slow-host", baseUrl: `http://127.0.0.1:${address.port}`, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "slow-host",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: "t",
       });
       const { id } = created.json();
 
@@ -239,10 +240,10 @@ describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #
     const agent = await startFakeAgent(200);
     try {
       const app = await buildTestApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "capacity-host", baseUrl: agent.baseUrl, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "capacity-host",
+        baseUrl: agent.baseUrl,
+        token: "t",
       });
       const { id } = created.json();
 
@@ -274,10 +275,10 @@ describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #
     const agent = await startFakeAgent(200, "not-a-timestamp");
     try {
       const app = await buildTestApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "bad-timestamp", baseUrl: agent.baseUrl, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "bad-timestamp",
+        baseUrl: agent.baseUrl,
+        token: "t",
       });
       const { id } = created.json();
 
@@ -302,10 +303,10 @@ describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #
     const agent = await startFakeAgent(404);
     try {
       const app = await buildTestApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "old-agent", baseUrl: agent.baseUrl, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "old-agent",
+        baseUrl: agent.baseUrl,
+        token: "t",
       });
       const { id } = created.json();
 
@@ -323,10 +324,10 @@ describe("hostHeartbeatPlugin: the capacity poll rides the health sweep (issue #
     const agent = await startFakeAgent(500);
     try {
       const app = await buildTestApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "broken-capacity", baseUrl: agent.baseUrl, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "broken-capacity",
+        baseUrl: agent.baseUrl,
+        token: "t",
       });
       const { id } = created.json();
 

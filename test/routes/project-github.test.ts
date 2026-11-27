@@ -21,6 +21,7 @@ import type * as HermesReview from "../../src/services/hermes-review.js";
 import { resolveGitHubToken } from "../../src/services/github-integration.js";
 import { getRunForTarget } from "../../src/services/hermes-review.js";
 import { buildTestApp } from "../helpers/app.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const { buildApp } = await import("../../src/app.js");
 
@@ -731,10 +732,10 @@ describe("projects route", () => {
       vi.unstubAllGlobals();
 
       const app = await buildTestApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "github-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "github-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",

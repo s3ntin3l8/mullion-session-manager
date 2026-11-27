@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-session-env-test-${process.pid}.db`);
 
@@ -21,10 +22,10 @@ describe("GET /api/hosts sessionEnv (issue #3156)", () => {
 
   it("is null while unknown and the tracker's reading once read", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "env", baseUrl: "http://127.0.0.1:4005", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "env",
+      baseUrl: "http://127.0.0.1:4005",
+      token: "t",
     });
     const { id } = created.json();
     const list = async () =>

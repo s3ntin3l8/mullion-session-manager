@@ -8,6 +8,7 @@ import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
 import { resolveExecutionContext } from "../../src/services/execution-context.js";
 import { HostRequestError, RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `execution-context-test-${process.pid}.db`);
 
@@ -34,14 +35,10 @@ describe("resolveExecutionContext", () => {
   afterEach(() => vi.restoreAllMocks());
 
   async function addHost(opts: { platform?: string; baseUrl?: string | null } = {}) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: `ec-host-${++n}`,
-        ...(opts.baseUrl === null ? {} : { baseUrl: opts.baseUrl ?? "http://127.0.0.1:1" }),
-        token: "t".repeat(24),
-      },
+    const res = await seedHostResponse(app, {
+      name: `ec-host-${++n}`,
+      ...(opts.baseUrl === null ? {} : { baseUrl: opts.baseUrl ?? "http://127.0.0.1:1" }),
+      token: "t".repeat(24),
     });
     const id = res.json().id as string;
     if (opts.platform)

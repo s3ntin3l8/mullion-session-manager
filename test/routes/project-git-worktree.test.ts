@@ -27,6 +27,7 @@ import type { SessionBackend } from "../../src/services/session-backend.js";
 // The relay's landed-check memo (issue #1630) — cleared per test so one
 // test's answer is not the next one's.
 import { gitEnv } from "../../src/services/git-env.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -634,10 +635,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "worktree-remove-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "worktree-remove-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -767,10 +768,10 @@ describe("projects route", () => {
       it("runs on the session's host against worktreeRepoCwd, with the live-session guard", async () => {
         const app = await buildApp();
         const sessionBackendModule = await import("../../src/services/session-backend.js");
-        const host = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "kept-worktree-remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+        const host = await seedHostResponse(app, {
+          name: "kept-worktree-remote",
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const remoteHostId = host.json().id as string;
         // A LOCAL project whose session was placed on the remote host.
@@ -1093,10 +1094,10 @@ describe("projects route", () => {
 
     it("503s for a project on an unreachable remote host", async () => {
       const app = await buildApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "worktree-prune-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "worktree-prune-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",

@@ -10,7 +10,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { HostUnreachableError } from "../../src/services/remote-host-errors.js";
 import { insertDevice, listDeviceRows } from "../../src/services/device-store.js";
 import type { IosEngine, IosEngineSpec } from "../../src/services/ios-device.js";
@@ -359,7 +359,8 @@ describe("iOS Simulator devices (#1943)", () => {
 
   describe("on an agent host", () => {
     const placeOnAgent = (app: App) =>
-      createHost(app, { name: "mac-mini", baseUrl: "http://mac.test", token: "t" }).id;
+      createPairedHost(app, { hostname: "mac-mini", name: "mac-mini", baseUrl: "http://mac.test" })
+        .hostId;
 
     it("creates a device on an agent that reports ios, sending the platform and udid", async () => {
       const app = await buildTestAppOnPlatform("darwin");

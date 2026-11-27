@@ -9,6 +9,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { pendingBrowserCloses, previews, projects, sessions } from "../../src/db/schema.js";
 import { AGENT_OPERATIONS, PROTOCOL_VERSION } from "../../src/shared/agent-protocol.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 import {
   closeSessionBrowserBindings,
   getOrBindEndpoint,
@@ -257,10 +258,10 @@ describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
       return { app, port: address.port };
     }
     async function addHost(port: number, operations: readonly string[]) {
-      const res = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: `bl-host-${++n}`, baseUrl: `http://127.0.0.1:${port}`, token: TOKEN },
+      const res = await seedHostResponse(primary, {
+        name: `bl-host-${++n}`,
+        baseUrl: `http://127.0.0.1:${port}`,
+        token: TOKEN,
       });
       const hostId = res.json().id as string;
       primary.hostAgentTracker?.record(hostId, {

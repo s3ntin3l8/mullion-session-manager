@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterAll, beforeAll, afterEach } from "vitest";
 import type * as UpdateChecker from "../../src/services/update-checker.js";
 import { plainNodePtyMock } from "../helpers/mock-pty.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 vi.mock("node-pty", () => plainNodePtyMock());
 vi.mock("../../src/services/update-checker.js", async (importActual) => ({
@@ -29,10 +30,10 @@ describe("remote mutations that lose the connection mid-request", () => {
 
   beforeAll(async () => {
     app = await buildApp();
-    const host = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "unknown-outcome-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const host = await seedHostResponse(app, {
+      name: "unknown-outcome-host",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     hostId = host.json().id;
     const project = await app.inject({

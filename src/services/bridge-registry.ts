@@ -234,7 +234,7 @@ export interface RedeemPairingInput {
  * Redeems a pairing code: single-use, and clears the pairing fields
  * unconditionally on a match (below) so the SAME code can never be
  * redeemed twice, even if the helper somehow retried the redeem call —
- * unlike enrollHost's baseUrl-keyed idempotent retry (host-registry.ts),
+ * unlike a baseUrl-keyed idempotent retry,
  * there's no stable identifier here to dedupe a retry against before a
  * session exists, so a second redeem attempt is simply refused (returns
  * null) rather than reused. A helper that never got the first response

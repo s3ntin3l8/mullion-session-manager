@@ -11,6 +11,7 @@ import type { SessionBackend } from "../../src/services/session-backend.js";
 import { eq } from "drizzle-orm";
 import { nullTaskFileReads } from "../helpers/null-task-file-reads.js";
 import { inertBranchOps } from "../helpers/inert-branch-ops.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
 // remote backend has to satisfy all of it — a fake missing members would
@@ -1032,11 +1033,7 @@ describe("claimTask", () => {
       platform: string,
       loadAverage1m: number,
     ) {
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-      });
+      const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
       const hostId = res.json().id as string;
       app.hostHeartbeatTracker?.recordSuccess(hostId);
       app.hostCapacityTracker?.record(hostId, {
@@ -1397,10 +1394,10 @@ describe("claimTask", () => {
     async function setup(body: string | null, constraints: object) {
       const app = await buildApp();
       const addHost = async (name: string, platform: string, load: number) => {
-        const res = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+        const res = await seedHostResponse(app, {
+          name,
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const hostId = res.json().id as string;
         app.hostHeartbeatTracker?.recordSuccess(hostId);
@@ -1531,10 +1528,10 @@ describe("claimTask", () => {
 
     async function setup(body: string) {
       const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "held-mac", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const res = await seedHostResponse(app, {
+        name: "held-mac",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const mac = res.json().id as string;
       app.hostHeartbeatTracker?.recordSuccess(mac);
@@ -2022,10 +2019,10 @@ describe("claimTask", () => {
       const task = insertReadyTask(app, projectId, 81);
       app.db.update(tasks).set({ status: "claimed" }).where(eq(tasks.id, task.id)).run();
       git(cwd, ["remote", "add", "origin", "https://github.com/acme/widget.git"]);
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "clone-target", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "clone-target",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       forceNeedsCheckout(hostId);

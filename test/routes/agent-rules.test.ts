@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { closeDb } from "../../src/db/client.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `agent-rules-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -273,14 +274,10 @@ describe("agent-rules routes", () => {
       }
 
       const primary = await buildApp();
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "agent-rules-remote-host",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          token: "agent-rules-remote-token",
-        },
+      const host = await seedHostResponse(primary, {
+        name: "agent-rules-remote-host",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: "agent-rules-remote-token",
       });
       const project = await primary.inject({
         method: "POST",
@@ -337,14 +334,10 @@ describe("agent-rules routes", () => {
       const primary = await buildApp();
       // Deliberately registers with the WRONG token, so the agent's own
       // bearer check rejects every request from this primary with 401.
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "agent-rules-wrong-token-host",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          token: "a-completely-different-token",
-        },
+      const host = await seedHostResponse(primary, {
+        name: "agent-rules-wrong-token-host",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: "a-completely-different-token",
       });
       const project = await primary.inject({
         method: "POST",

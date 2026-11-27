@@ -9,6 +9,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { getHostRow, resetHostRegistryNotices } from "../../src/services/host-registry.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #3439 — a per-host token cannot claim a host that already holds a
 // live machine identity. The per-host token never expires and is never
@@ -19,7 +20,6 @@ import { getHostRow, resetHostRegistryNotices } from "../../src/services/host-re
 // The fleet secret is configured for the whole file: a refused claim falls
 // through to that branch and must still answer 401.
 const tmpDb = path.join(os.tmpdir(), `enrollment-claim-refusal-test-${process.pid}.db`);
-const FLEET_SECRET = "fleet-secret-3439"; // pragma: allowlist secret
 
 const REFUSAL_MESSAGE =
   "a registration was refused: the host has a live machine identity; re-pair it from Settings → Hosts";
@@ -30,14 +30,12 @@ describe("a per-host token cannot claim a host with a live identity (issue #3439
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    process.env.MULLION_ENROLLMENT_SECRET = FLEET_SECRET;
   });
 
   afterAll(() => {
     closeDb();
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
-    delete process.env.MULLION_ENROLLMENT_SECRET;
   });
 
   // A fresh app per test: the register route is rate limited to 20/min per
@@ -59,7 +57,7 @@ describe("a per-host token cannot claim a host with a live identity (issue #3439
 
   // The operator pre-creates a row and the primary mints its per-host token.
   const createHostRow = async (name: string) =>
-    (await app.inject({ method: "POST", url: "/api/hosts", payload: { name } })).json() as {
+    (await seedHostResponse(app, { name })).json() as {
       id: string;
       token: string;
     };
@@ -67,7 +65,7 @@ describe("a per-host token cannot claim a host with a live identity (issue #3439
   // Two rows can carry the same token (Settings -> Add host -> "Use my own
   // token"), so the custom-token variant of the same call.
   const createHostRowWithToken = async (name: string, token: string) =>
-    (await app.inject({ method: "POST", url: "/api/hosts", payload: { name, token } })).json() as {
+    (await seedHostResponse(app, { name, token })).json() as {
       id: string;
     };
 
@@ -272,35 +270,5 @@ describe("a per-host token cannot claim a host with a live identity (issue #3439
     expect(refused.statusCode).toBe(unknown.statusCode);
     expect(refused.body).toBe(unknown.body);
     expect(refused.headers["content-type"]).toBe(unknown.headers["content-type"]);
-  });
-
-  it("leaves the fleet-secret path unchanged", async () => {
-    // A fleet-secret registration still enrolls a host of its own.
-    const enrolled = await register({
-      token: FLEET_SECRET,
-      wantsMachineCredential: true,
-      baseUrl: "http://127.0.0.1:1",
-      hostname: "fleet-box",
-    });
-    expect(enrolled.statusCode).toBe(200);
-    expect(enrolled.json().machine_credential).toMatch(/^[0-9a-f]{64}$/);
-    expect(getHostRow(app, enrolled.json().host_id)!.origin).toBe("enrolled");
-
-    // And a fleet secret is not refused by a row that holds a live identity:
-    // the refusal applies to a per-host token, not to the fleet path.
-    const created = await createHostRow("live-identity-fleet");
-    await register({
-      token: created.token,
-      wantsMachineCredential: true,
-      hostname: "the-real-agent",
-    });
-    const enrolledAgain = await register({
-      token: FLEET_SECRET,
-      wantsMachineCredential: true,
-      baseUrl: "http://127.0.0.1:2",
-      hostname: "another-fleet-box",
-    });
-    expect(enrolledAgain.statusCode).toBe(200);
-    expect(enrolledAgain.json().host_id).not.toBe(created.id);
   });
 });

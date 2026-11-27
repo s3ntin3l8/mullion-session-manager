@@ -6,6 +6,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-update-gate-${process.pid}.db`);
 
@@ -35,10 +36,10 @@ describe("per-host update probe, gated on negotiated support (issue #2569)", () 
     const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     try {
       const app = await buildApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "legacy-protocol-agent", baseUrl, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "legacy-protocol-agent",
+        baseUrl,
+        token: "t",
       });
       const { id } = created.json();
       app.hostAgentTracker?.record(id, {

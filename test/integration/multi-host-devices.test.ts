@@ -21,6 +21,7 @@ import {
 } from "../../src/services/device-store.js";
 import { DeviceActionError } from "../../src/services/device-drivers/types.js";
 import type { DeviceInfo, DeviceVideoPacket } from "../../src/services/device-drivers/types.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #3200 end to end: a real agent app and a real primary in one process,
 // the primary's /api/devices* and /ws/device/:id driving devices that live on
@@ -173,11 +174,7 @@ describe("devices on an agent host (issue #3200)", () => {
 
     const register = async (name: string, port: number, token: string) =>
       (
-        await primary.app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name, baseUrl: `http://127.0.0.1:${port}`, token },
-        })
+        await seedHostResponse(primary.app, { name, baseUrl: `http://127.0.0.1:${port}`, token })
       ).json().id as string;
     hostId = await register("device-agent", agent.port, AGENT_TOKEN);
     deadHostId = await register("dead-agent", await closedPort(), "unused-token");
@@ -664,10 +661,10 @@ describe("devices on an agent host (issue #3200)", () => {
       const { port } = stubServer.address() as net.AddressInfo;
       let stubHostId: string | undefined;
       try {
-        const reg = await primary.app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "bad-424-agent", baseUrl: `http://127.0.0.1:${port}`, token: "t" },
+        const reg = await seedHostResponse(primary.app, {
+          name: "bad-424-agent",
+          baseUrl: `http://127.0.0.1:${port}`,
+          token: "t",
         });
         stubHostId = reg.json().id as string;
         const row = insertDevice(primary.app, {
@@ -1196,14 +1193,10 @@ describe("devices on an agent host (issue #3200)", () => {
       if (!address || typeof address === "string") throw new Error("Expected TCP address");
 
       const oldHostId = (
-        await primary.app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: {
-            name: "old-agent",
-            baseUrl: `http://127.0.0.1:${address.port}`,
-            token: "unused-token",
-          },
+        await seedHostResponse(primary.app, {
+          name: "old-agent",
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: "unused-token",
         })
       ).json().id as string;
 

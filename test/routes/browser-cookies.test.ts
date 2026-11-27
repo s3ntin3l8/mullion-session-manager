@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import type * as BrowserCookiesService from "../../src/services/browser-cookies.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // The route layer only needs to exercise validation/wiring — the actual
 // host-file reading and encrypt-at-rest behavior are covered by
@@ -236,10 +237,10 @@ describe("browser cookies route (issue #184)", () => {
       // list/upload/delete run locally, and import 400s before reaching
       // RemoteHostClient at all. Any well-formed http(s) URL is enough to
       // satisfy /api/hosts' own validation.
-      const hostRes = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "remote", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const hostRes = await seedHostResponse(app, {
+        name: "remote",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = hostRes.json().id as string;
       const projectRes = await app.inject({

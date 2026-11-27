@@ -8,7 +8,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildTestAppOnPlatform, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { HostUnreachableError } from "../../src/services/remote-host-errors.js";
 
 const ptyMock = createNodePtyMock();
@@ -199,7 +199,11 @@ describe("iOS simulator catalog and create routes", () => {
 
   it("forwards both calls to a remote host that reports ios", async () => {
     const app = await buildTestAppOnPlatform("darwin");
-    const mac = createHost(app, { name: "mac-mini", baseUrl: "http://mac.test", token: "t" }).id;
+    const mac = createPairedHost(app, {
+      hostname: "mac-mini",
+      name: "mac-mini",
+      baseUrl: "http://mac.test",
+    }).hostId;
     devices.kinds.mockResolvedValue({ deviceKinds: [], platforms: ["ios"] });
     const catalog = { deviceTypes: [{ id: IPHONE, name: "iPhone 16" }], runtimes: [] };
     devices.simulatorCatalog.mockResolvedValue(catalog);
@@ -226,7 +230,11 @@ describe("iOS simulator catalog and create routes", () => {
 
   it("asks for an agent update on a null answer and 503s an unreachable host", async () => {
     const app = await buildTestAppOnPlatform("darwin");
-    const mac = createHost(app, { name: "mac-mini", baseUrl: "http://mac.test", token: "t" }).id;
+    const mac = createPairedHost(app, {
+      hostname: "mac-mini",
+      name: "mac-mini",
+      baseUrl: "http://mac.test",
+    }).hostId;
     devices.kinds.mockResolvedValue({ deviceKinds: [], platforms: ["ios"] });
     devices.simulatorCatalog.mockResolvedValueOnce(null);
     devices.createSimulator.mockResolvedValueOnce(null);

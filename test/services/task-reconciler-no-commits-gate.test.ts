@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { seedHostResponse } from "../helpers/hosts.js";
 import {
   reconcilerMocks,
   mockPushDeliveryFactory,
@@ -510,10 +511,10 @@ describe("reconcileTasks — reviewing gate (#722)", () => {
       app: Awaited<ReturnType<typeof buildApp>>,
       name: string,
     ) {
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: `Remote-${name}`, baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: `Remote-${name}`,
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const hostId = host.json().id as string;
       const project = await app.inject({

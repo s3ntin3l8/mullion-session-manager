@@ -9,6 +9,7 @@ import { closeDb } from "../../src/db/client.js";
 import { projects, sessions, tasks } from "../../src/db/schema.js";
 import { appVersion } from "../../src/routes/server-info.js";
 import { clearUpdateCheckCacheForTests } from "../../src/services/update-checker.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-update-guard-test-${process.pid}.db`);
 
@@ -114,10 +115,10 @@ describe("POST /api/hosts/:id/update/apply Task Master guard (issue #3180)", () 
 
     const app = await buildApp();
     try {
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "worker-guard-agent", baseUrl: agent.baseUrl, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "worker-guard-agent",
+        baseUrl: agent.baseUrl,
+        token: "t",
       });
       const { id: hostId } = created.json();
 
@@ -262,10 +263,10 @@ describe("POST /api/hosts/:id/update/apply Task Master guard (issue #3180)", () 
 
     const app = await buildApp();
     try {
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "idle-tasks-agent", baseUrl: agent.baseUrl, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "idle-tasks-agent",
+        baseUrl: agent.baseUrl,
+        token: "t",
       });
       const { id: hostId } = created.json();
 

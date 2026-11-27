@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +41,6 @@ const { heartbeatCapacityDeadlineMs, heartbeatProbeDeadlineMs } =
   await import("../../src/services/remote-host-client-core.js");
 
 const tmpDb = path.join(os.tmpdir(), `hosts-health-reconnect-${process.pid}.db`);
-const SECRET = "reconnect-secret"; // pragma: allowlist secret
 const never = () => new Promise<HostProbeResult>(() => undefined);
 
 describe("host health after a deregister and a reconnect (#3515)", () => {
@@ -49,8 +49,6 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    process.env.MULLION_ENROLLMENT_SECRET = SECRET;
-    process.env.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS = "127.0.0.1/32";
     app = await buildApp();
   });
   afterAll(async () => {
@@ -58,8 +56,6 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
     closeDb();
     fs.rmSync(tmpDb, { force: true });
     delete process.env.DATABASE_URL;
-    delete process.env.MULLION_ENROLLMENT_SECRET;
-    delete process.env.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS;
   });
   afterEach(() => {
     // Stops the fake-timer sweep before the real timers come back.
@@ -73,10 +69,12 @@ describe("host health after a deregister and a reconnect (#3515)", () => {
 
   /** An outbound-only agent: a machine identity and no address. */
   async function registerOutboundAgent(hostname: string) {
+    const pairing = await app.inject({ method: "POST", url: "/api/host-pairings", payload: {} });
+    const { code } = pairing.json() as { code: string };
     const res = await app.inject({
       method: "POST",
-      url: "/api/internal/register",
-      payload: { token: SECRET, hostname, wantsMachineCredential: true },
+      url: "/api/internal/pair",
+      payload: { code, requestId: crypto.randomUUID(), hostname },
     });
     expect(res.statusCode).toBe(200);
     const registered = res.json() as { host_id: string; session_id: string };

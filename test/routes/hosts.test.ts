@@ -6,8 +6,9 @@ import http from "node:http";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { appVersion } from "../../src/routes/server-info.js";
-import { enrollHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { clearUpdateCheckCacheForTests } from "../../src/services/update-checker.js";
+import { seedHost, seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-test-${process.pid}.db`);
 
@@ -39,10 +40,10 @@ describe("hosts route (issue #26)", () => {
   // the placement policy stops choosing it for new work.
   it("parks a host and un-parks it, and the flag survives a restart", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "parked", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "parked",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = created.json().id as string;
     // A new host is never parked.
@@ -86,10 +87,10 @@ describe("hosts route (issue #26)", () => {
 
   it("sets a remote host's role to burst and back; main and local are refused (issue #2239)", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "laptop", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "laptop",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = created.json().id as string;
     expect(created.json().role).toBe("worker");
@@ -171,10 +172,10 @@ describe("hosts route (issue #26)", () => {
     // worktree removed, no agent contacted. The host stays exactly as it
     // was — it just stops being CHOSEN for new work.
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "busy", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "busy",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = created.json().id as string;
 
@@ -198,10 +199,10 @@ describe("hosts route (issue #26)", () => {
 
   it("rejects a drain value that is not a boolean", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "h", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "h",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = created.json().id as string;
     const rejected = await app.inject({
@@ -244,10 +245,10 @@ describe("hosts route (issue #26)", () => {
 
   it("reports null capacity for a remote host that has never reported any", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "quiet", baseUrl: "http://127.0.0.1:4002", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "quiet",
+      baseUrl: "http://127.0.0.1:4002",
+      token: "t",
     });
     const { id } = created.json();
     const res = await app.inject({ method: "GET", url: "/api/hosts" });
@@ -258,10 +259,10 @@ describe("hosts route (issue #26)", () => {
 
   it("exposes a host's agent CLIs and Mullion version, null while unknown (#2240)", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "agents", baseUrl: "http://127.0.0.1:4004", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "agents",
+      baseUrl: "http://127.0.0.1:4004",
+      token: "t",
     });
     const { id } = created.json();
     const list = async () =>
@@ -287,10 +288,10 @@ describe("hosts route (issue #26)", () => {
 
   it("reports a remote host's cached capacity, with the age of the reading", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "busy", baseUrl: "http://127.0.0.1:4003", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "busy",
+      baseUrl: "http://127.0.0.1:4003",
+      token: "t",
     });
     const { id } = created.json();
     app.hostCapacityTracker?.record(
@@ -323,10 +324,10 @@ describe("hosts route (issue #26)", () => {
     // test reaches is defence in depth that can be deleted. This pins it:
     // a NaN straight into the tracker must still render the list.
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "bad-stamp", baseUrl: "http://127.0.0.1:4005", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "bad-stamp",
+      baseUrl: "http://127.0.0.1:4005",
+      token: "t",
     });
     const { id } = created.json();
     app.hostCapacityTracker?.record(
@@ -351,10 +352,10 @@ describe("hosts route (issue #26)", () => {
   it("invalidates the CAPACITY cache when a host's baseUrl/token is rotated via PATCH", async () => {
     // Numbers measured against the OLD baseUrl describe a different agent.
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-2c", baseUrl: "http://127.0.0.1:4004", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-2c",
+      baseUrl: "http://127.0.0.1:4004",
+      token: "t",
     });
     const { id } = created.json();
     app.hostCapacityTracker?.record(id, {
@@ -375,32 +376,17 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
-  it("creates a remote host and never returns its token", async () => {
+  it("rejects a non-http(s) baseUrl on PATCH", async () => {
     const app = await buildApp();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-1", baseUrl: "http://127.0.0.1:4001", token: "super-secret" },
-    });
-    expect(res.statusCode).toBe(201);
-    const body = res.json();
-    expect(body).toMatchObject({
-      name: "box-1",
+    const { id } = await seedHost(app, {
+      name: "bad",
       baseUrl: "http://127.0.0.1:4001",
-      isLocal: false,
-      hasToken: true,
+      token: "t",
     });
-    expect(res.body).not.toMatch(/super-secret/);
-    expect(typeof body.id).toBe("string");
-    await app.close();
-  });
-
-  it("rejects a non-http(s) baseUrl", async () => {
-    const app = await buildApp();
     const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "bad", baseUrl: "not-a-url", token: "t" },
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { baseUrl: "not-a-url" },
     });
     expect(res.statusCode).toBe(400);
     await app.close();
@@ -408,11 +394,16 @@ describe("hosts route (issue #26)", () => {
 
   it("rejects a baseUrl pointed at cloud instance metadata / link-local (Hermes review, PR #34)", async () => {
     const app = await buildApp();
+    const { id } = await seedHost(app, {
+      name: "ssrf",
+      baseUrl: "http://127.0.0.1:4001",
+      token: "t",
+    });
     for (const baseUrl of ["http://169.254.169.254", "http://100.64.0.1:8080"]) {
       const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "ssrf", baseUrl, token: "t" },
+        method: "PATCH",
+        url: `/api/hosts/${id}`,
+        payload: { baseUrl },
       });
       expect(res.statusCode).toBe(400);
     }
@@ -421,11 +412,16 @@ describe("hosts route (issue #26)", () => {
 
   it("rejects an IPv6 link-local or AWS IMDS baseUrl (Hermes review, PR #34)", async () => {
     const app = await buildApp();
+    const { id } = await seedHost(app, {
+      name: "ssrf-v6",
+      baseUrl: "http://127.0.0.1:4001",
+      token: "t",
+    });
     for (const baseUrl of ["http://[fe80::1]", "http://[fd00:ec2::254]"]) {
       const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "ssrf-v6", baseUrl, token: "t" },
+        method: "PATCH",
+        url: `/api/hosts/${id}`,
+        payload: { baseUrl },
       });
       expect(res.statusCode).toBe(400);
     }
@@ -434,11 +430,16 @@ describe("hosts route (issue #26)", () => {
 
   it("rejects an IPv4-mapped IPv6 literal pointed at IMDS/link-local (Hermes review, PR #34)", async () => {
     const app = await buildApp();
+    const { id } = await seedHost(app, {
+      name: "ssrf-mapped-v6",
+      baseUrl: "http://127.0.0.1:4001",
+      token: "t",
+    });
     for (const baseUrl of ["http://[::ffff:169.254.169.254]", "http://[::ffff:100.64.0.1]"]) {
       const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "ssrf-mapped-v6", baseUrl, token: "t" },
+        method: "PATCH",
+        url: `/api/hosts/${id}`,
+        payload: { baseUrl },
       });
       expect(res.statusCode).toBe(400);
     }
@@ -447,23 +448,33 @@ describe("hosts route (issue #26)", () => {
 
   it("still allows a loopback baseUrl (admin-trust boundary, not a link-local block)", async () => {
     const app = await buildApp();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "loopback", baseUrl: "http://127.0.0.1:4001", token: "t" },
+    const { id } = await seedHost(app, {
+      name: "loopback",
+      baseUrl: "http://127.0.0.1:4001",
+      token: "t",
     });
-    expect(res.statusCode).toBe(201);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { baseUrl: "http://127.0.0.1:4002" },
+    });
+    expect(res.statusCode).toBe(200);
     await app.close();
   });
 
   it("still allows IPv6 loopback too, consistent with IPv4 loopback being allowed", async () => {
     const app = await buildApp();
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "loopback-v6", baseUrl: "http://[::1]:4001", token: "t" },
+    const { id } = await seedHost(app, {
+      name: "loopback-v6",
+      baseUrl: "http://127.0.0.1:4001",
+      token: "t",
     });
-    expect(res.statusCode).toBe(201);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${id}`,
+      payload: { baseUrl: "http://[::1]:4001" },
+    });
+    expect(res.statusCode).toBe(200);
     await app.close();
   });
 
@@ -491,10 +502,10 @@ describe("hosts route (issue #26)", () => {
 
   it("rotates a host's name/baseUrl/token via PATCH", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-2", baseUrl: "http://127.0.0.1:4002", token: "old-token" },
+    const created = await seedHostResponse(app, {
+      name: "box-2",
+      baseUrl: "http://127.0.0.1:4002",
+      token: "old-token",
     });
     const { id } = created.json();
 
@@ -510,10 +521,10 @@ describe("hosts route (issue #26)", () => {
 
   it("invalidates the heartbeat tracker's entry when a host's baseUrl/token is rotated via PATCH", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-2b", baseUrl: "http://127.0.0.1:4002", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-2b",
+      baseUrl: "http://127.0.0.1:4002",
+      token: "t",
     });
     const { id } = created.json();
 
@@ -553,11 +564,7 @@ describe("hosts route (issue #26)", () => {
     await app.ready();
     const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
 
-    await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-3", baseUrl: "http://127.0.0.1:4003", token: "t" },
-    });
+    await seedHostResponse(app, { name: "box-3", baseUrl: "http://127.0.0.1:4003", token: "t" });
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenCalledWith();
 
@@ -567,10 +574,10 @@ describe("hosts route (issue #26)", () => {
   it("force-reconnects the events subscription when a host's baseUrl/token is rotated via PATCH", async () => {
     const app = await buildApp();
     await app.ready();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-4", baseUrl: "http://127.0.0.1:4004", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-4",
+      baseUrl: "http://127.0.0.1:4004",
+      token: "t",
     });
     const { id } = created.json();
     const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
@@ -597,10 +604,10 @@ describe("hosts route (issue #26)", () => {
   it("reconfigures remote event subscriptions after deleting a host", async () => {
     const app = await buildApp();
     await app.ready();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-5", baseUrl: "http://127.0.0.1:4005", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-5",
+      baseUrl: "http://127.0.0.1:4005",
+      token: "t",
     });
     const { id } = created.json();
     const spy = vi.spyOn(app, "reconfigureRemoteEventSubscriptions").mockImplementation(() => {});
@@ -655,10 +662,10 @@ describe("hosts route (issue #26)", () => {
 
   it("409s deleting a host that still has projects, without cascade", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-3", baseUrl: "http://127.0.0.1:4003", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-3",
+      baseUrl: "http://127.0.0.1:4003",
+      token: "t",
     });
     const { id } = created.json();
     await app.inject({
@@ -675,12 +682,10 @@ describe("hosts route (issue #26)", () => {
 
   it("cascade-deletes a host, its projects, and their sessions (best-effort, host unreachable)", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      // Deliberately not listening — cascade termination must be best-effort
-      // and not block the delete when the agent is unreachable.
-      payload: { name: "box-4", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-4",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const { id: hostId } = created.json();
     const project = await app.inject({
@@ -719,10 +724,10 @@ describe("hosts route (issue #26)", () => {
 
   it("reports offline for an unreachable remote host", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-5", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-5",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const { id } = created.json();
 
@@ -813,10 +818,10 @@ describe("hosts route (issue #26)", () => {
 
   it("503s getting config for an unreachable remote host", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-6-config", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-6-config",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const { id } = created.json();
 
@@ -844,10 +849,10 @@ describe("hosts route (issue #26)", () => {
       }
 
       const app = await buildApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "old-agent", baseUrl: `http://127.0.0.1:${address.port}`, token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "old-agent",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: "t",
       });
       const { id } = created.json();
 
@@ -889,14 +894,10 @@ describe("hosts route (issue #26)", () => {
         const address = server.address();
         if (address === null || typeof address === "string") throw new Error("no address");
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: {
-            name: `roots-${Math.random()}`,
-            baseUrl: `http://127.0.0.1:${address.port}`,
-            token: "t",
-          },
+        const created = await seedHostResponse(app, {
+          name: `roots-${Math.random()}`,
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          token: "t",
         });
         await run({ app, id: created.json().id, received: () => seen });
         await app.close();
@@ -972,10 +973,10 @@ describe("hosts route (issue #26)", () => {
 
     it("503s for an unreachable host", async () => {
       const app = await buildApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "roots-down", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "roots-down",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       expect((await put(app, created.json().id, ["/x"])).statusCode).toBe(503);
       await app.close();
@@ -992,10 +993,10 @@ describe("hosts route (issue #26)", () => {
     it("404s an unknown host and rejects a malformed body", async () => {
       const app = await buildApp();
       expect((await put(app, "does-not-exist", ["/x"])).statusCode).toBe(404);
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "roots-bad-body", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "roots-bad-body",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const res = await app.inject({
         method: "PUT",
@@ -1119,10 +1120,10 @@ describe("hosts route (issue #26)", () => {
       });
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "same-version-agent", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "same-version-agent",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1174,10 +1175,10 @@ describe("hosts route (issue #26)", () => {
       );
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "behind-agent", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "behind-agent",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1213,10 +1214,10 @@ describe("hosts route (issue #26)", () => {
       );
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "no-asset-agent", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "no-asset-agent",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1248,10 +1249,10 @@ describe("hosts route (issue #26)", () => {
       });
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "old-build-agent", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "old-build-agent",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1269,10 +1270,10 @@ describe("hosts route (issue #26)", () => {
 
     it("503s when the agent is unreachable", async () => {
       const app = await buildApp();
-      const created = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "unreachable-agent", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const created = await seedHostResponse(app, {
+        name: "unreachable-agent",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const { id } = created.json();
 
@@ -1291,10 +1292,10 @@ describe("hosts route (issue #26)", () => {
       });
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "already-current-agent", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "already-current-agent",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1320,10 +1321,10 @@ describe("hosts route (issue #26)", () => {
       );
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "no-asset-agent-2", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "no-asset-agent-2",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1365,10 +1366,10 @@ describe("hosts route (issue #26)", () => {
       );
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "apply-target-agent", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "apply-target-agent",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1412,10 +1413,10 @@ describe("hosts route (issue #26)", () => {
       );
       try {
         const app = await buildApp();
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: { name: "old-build-apply-agent", baseUrl: agent.baseUrl, token: "t" },
+        const created = await seedHostResponse(app, {
+          name: "old-build-apply-agent",
+          baseUrl: agent.baseUrl,
+          token: "t",
         });
         const { id } = created.json();
 
@@ -1437,10 +1438,10 @@ describe("hosts route (issue #26)", () => {
   // (test/plugins/host-heartbeat.test.ts covers the real timer wiring).
   it("merges live heartbeat health into GET /api/hosts", async () => {
     const app = await buildApp();
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "box-6", baseUrl: "http://127.0.0.1:4006", token: "t" },
+    const created = await seedHostResponse(app, {
+      name: "box-6",
+      baseUrl: "http://127.0.0.1:4006",
+      token: "t",
     });
     const { id } = created.json();
 
@@ -1481,60 +1482,10 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
-  describe("generated tokens, optional baseUrl and rotation", () => {
-    it("mints a token when none is given, returns it once, and never lists it", async () => {
+  describe("claim and token rotation", () => {
+    it("lets a pre-provisioned token claim the host, which fills in the baseUrl", async () => {
       const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "minted" },
-      });
-      expect(res.statusCode).toBe(201);
-      const body = res.json();
-      expect(body.token).toMatch(/^[0-9a-f]{64}$/);
-      // No baseUrl given: the host waits for its agent.
-      expect(body.baseUrl).toBeNull();
-      expect(body.hasToken).toBe(true);
-
-      const listed = await app.inject({ method: "GET", url: "/api/hosts" });
-      expect(listed.body).not.toContain(body.token);
-      const row = (listed.json() as Array<{ id: string; health: string }>).find(
-        (h) => h.id === body.id,
-      );
-      expect(row?.health).toBe("pending");
-      await app.close();
-    });
-
-    it("keeps a caller-supplied token and baseUrl exactly as given, without echoing the token", async () => {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "manual", baseUrl: "http://127.0.0.1:1", token: "my-own-token" },
-      });
-      expect(res.statusCode).toBe(201);
-      expect(res.json().baseUrl).toBe("http://127.0.0.1:1");
-      expect(res.body).not.toContain("my-own-token");
-      expect(res.json()).not.toHaveProperty("token");
-      await app.close();
-    });
-
-    it("still rejects an invalid baseUrl when one is given", async () => {
-      const app = await buildApp();
-      const res = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "bad", baseUrl: "not a url" },
-      });
-      expect(res.statusCode).toBe(400);
-      await app.close();
-    });
-
-    it("lets the minted token claim the host, which fills in the baseUrl", async () => {
-      const app = await buildApp();
-      const created = (
-        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "claimable" } })
-      ).json();
+      const created = await seedHost(app, { name: "claimable" });
       const reg = await app.inject({
         method: "POST",
         url: "/api/internal/register",
@@ -1552,9 +1503,7 @@ describe("hosts route (issue #26)", () => {
 
     it("rotates a token: the old one stops claiming, the new one claims", async () => {
       const app = await buildApp();
-      const created = (
-        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "rotating" } })
-      ).json();
+      const created = (await seedHostResponse(app, { name: "rotating" })).json();
       const rotated = await app.inject({
         method: "POST",
         url: `/api/hosts/${created.id}/rotate-token`,
@@ -1581,9 +1530,7 @@ describe("hosts route (issue #26)", () => {
 
     it("answers 409, not 500, for agent-bound routes on a host still waiting for its agent", async () => {
       const app = await buildApp();
-      const created = (
-        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "waiting" } })
-      ).json();
+      const created = (await seedHostResponse(app, { name: "waiting" })).json();
       for (const [method, url] of [
         ["POST", `/api/hosts/${created.id}/ping`],
         ["GET", `/api/hosts/${created.id}/config`],
@@ -1599,9 +1546,7 @@ describe("hosts route (issue #26)", () => {
 
     it("refuses to create a project on a host still waiting for its agent", async () => {
       const app = await buildApp();
-      const created = (
-        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "waiting-2" } })
-      ).json();
+      const created = (await seedHostResponse(app, { name: "waiting-2" })).json();
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -1614,7 +1559,7 @@ describe("hosts route (issue #26)", () => {
 
     it("refuses to rotate an enrolled host", async () => {
       const app = await buildApp();
-      const enrolled = enrollHost(app, {
+      const enrolled = createPairedHost(app, {
         baseUrl: "http://10.0.0.7:4000",
         hostname: "box-7",
       });

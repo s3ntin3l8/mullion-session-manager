@@ -2,14 +2,14 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import {
   claimHost,
-  createHost,
-  enrollHost,
+  createPairedHost,
   getHostRow,
   renewMachineCredential,
   revokeMachineIdentity,
@@ -36,10 +36,9 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
   it("clears the address of a host with a machine identity", async () => {
     const app = await buildApp();
     try {
-      const { hostId } = enrollHost(app, {
+      const { hostId } = createPairedHost(app, {
         baseUrl: "http://127.0.0.1:4701",
         hostname: "outbound",
-        wantsMachineCredential: true,
       });
       const res = await clear(app, hostId);
       expect(res.statusCode).toBe(200);
@@ -55,15 +54,22 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
   it("refuses a host without a machine identity, naming the reason, and keeps its address", async () => {
     const app = await buildApp();
     try {
-      const legacy = createHost(app, {
-        name: "legacy",
-        baseUrl: "http://127.0.0.1:4702",
-        token: "t",
-      });
-      const res = await clear(app, legacy.id);
+      const legacyId = crypto.randomUUID();
+      app.db
+        .insert(hosts)
+        .values({
+          id: legacyId,
+          name: "legacy",
+          baseUrl: "http://127.0.0.1:4702",
+          authTokenEnc: app.encryption.encryptString("t"),
+          origin: "manual",
+          approvedAt: new Date(),
+        })
+        .run();
+      const res = await clear(app, legacyId);
       expect(res.statusCode).toBe(400);
       expect(res.json().message).toMatch(/machine identity/);
-      expect(getHostRow(app, legacy.id)?.baseUrl).toBe("http://127.0.0.1:4702");
+      expect(getHostRow(app, legacyId)?.baseUrl).toBe("http://127.0.0.1:4702");
     } finally {
       await app.close();
     }
@@ -72,10 +78,9 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
   it("refuses a host whose identity was revoked", async () => {
     const app = await buildApp();
     try {
-      const { hostId } = enrollHost(app, {
+      const { hostId } = createPairedHost(app, {
         baseUrl: "http://127.0.0.1:4703",
         hostname: "revoked",
-        wantsMachineCredential: true,
       });
       expect(revokeMachineIdentity(app, hostId)).toBe(true);
       expect((await clear(app, hostId)).statusCode).toBe(400);
@@ -88,10 +93,9 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
   it("refuses a host whose identity has expired", async () => {
     const app = await buildApp();
     try {
-      const { hostId } = enrollHost(app, {
+      const { hostId } = createPairedHost(app, {
         baseUrl: "http://127.0.0.1:4706",
         hostname: "expired",
-        wantsMachineCredential: true,
       });
       const live = async () =>
         (await app.inject({ method: "GET", url: "/api/hosts" }))
@@ -118,10 +122,9 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
     try {
       expect((await clear(app, "no-such-host")).statusCode).toBe(404);
       expect((await clear(app, "local")).statusCode).toBe(400);
-      const { hostId } = enrollHost(app, {
+      const { hostId } = createPairedHost(app, {
         baseUrl: "http://127.0.0.1:4704",
         hostname: "blank",
-        wantsMachineCredential: true,
       });
       const blank = await app.inject({
         method: "PATCH",
@@ -138,19 +141,26 @@ describe("hosts route: clearing a host's address (issue #3091)", () => {
   it("keeps a manual row's cleared address cleared when the agent renews without advertising one", async () => {
     const app = await buildApp();
     try {
-      const created = createHost(app, {
-        name: "mac",
-        baseUrl: "http://127.0.0.1:4705",
-        token: "boot",
-      });
+      const createdId = crypto.randomUUID();
+      app.db
+        .insert(hosts)
+        .values({
+          id: createdId,
+          name: "mac",
+          baseUrl: "http://127.0.0.1:4705",
+          authTokenEnc: app.encryption.encryptString("boot"),
+          origin: "manual",
+          approvedAt: new Date(),
+        })
+        .run();
       const claimed = claimHost(app, "boot", {
         baseUrl: "http://127.0.0.1:4705",
         hostname: "mac",
         wantsMachineCredential: true,
       })!;
-      expect((await clear(app, created.id)).statusCode).toBe(200);
-      renewMachineCredential(app, created.id, claimed.machineCredential!, { hostname: "mac" });
-      expect(getHostRow(app, created.id)?.baseUrl).toBeNull();
+      expect((await clear(app, createdId)).statusCode).toBe(200);
+      renewMachineCredential(app, createdId, claimed.machineCredential!, { hostname: "mac" });
+      expect(getHostRow(app, createdId)?.baseUrl).toBeNull();
     } finally {
       await app.close();
     }

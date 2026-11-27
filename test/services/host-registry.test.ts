@@ -11,10 +11,9 @@ import {
   LOCAL_HOST_ID,
   claimHost,
   clearHostSession,
-  createHost,
+  createPairedHost,
   decryptToken,
   deleteHost,
-  enrollHost,
   findPossibleDuplicates,
   getHostRow,
   HostHasProjectsError,
@@ -26,6 +25,26 @@ import {
   updateHost,
   verifyHostSession,
 } from "../../src/services/host-registry.js";
+
+function createHost(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  input: { name: string; baseUrl?: string; token: string },
+) {
+  const id = crypto.randomUUID();
+  const [row] = app.db
+    .insert(hosts)
+    .values({
+      id,
+      name: input.name,
+      baseUrl: input.baseUrl ?? null,
+      authTokenEnc: app.encryption.encryptString(input.token),
+      origin: "manual",
+      approvedAt: new Date(),
+    })
+    .returning()
+    .all();
+  return { id: row.id, origin: row.origin, baseUrl: row.baseUrl };
+}
 
 const tmpDb = path.join(os.tmpdir(), `host-registry-test-${process.pid}.db`);
 
@@ -168,9 +187,20 @@ describe("host-registry", () => {
       const app = await buildApp();
       try {
         const manual = createHost(app, { name: "old", baseUrl: "http://old:3000", token: "t" });
-        const legacy = enrollHost(app, { baseUrl: "http://legacy:3000", hostname: "legacy" });
+        const legacyId = crypto.randomUUID();
+        app.db
+          .insert(hosts)
+          .values({
+            id: legacyId,
+            name: "legacy",
+            baseUrl: "http://legacy:3000",
+            authTokenEnc: null,
+            origin: "enrolled",
+            approvedAt: new Date(),
+          })
+          .run();
         expect(flagOf(app, manual.id)).toBe(true);
-        expect(flagOf(app, legacy.hostId)).toBe(true);
+        expect(flagOf(app, legacyId)).toBe(true);
         expect(flagOf(app, LOCAL_HOST_ID)).toBe(false);
       } finally {
         await app.close();
@@ -203,10 +233,9 @@ describe("host-registry", () => {
       try {
         const waiting = createHost(app, { name: "waiting", token: "t" });
         expect(flagOf(app, waiting.id)).toBe(false);
-        const { hostId } = enrollHost(app, {
+        const { hostId } = createPairedHost(app, {
           baseUrl: "http://revoked:3000",
           hostname: "revoked",
-          wantsMachineCredential: true,
         });
         expect(revokeMachineIdentity(app, hostId)).toBe(true);
         expect(flagOf(app, hostId)).toBe(false);
@@ -214,26 +243,10 @@ describe("host-registry", () => {
         await app.close();
       }
     });
-
-    it("logs the legacy-agent notice once per host, however often it re-registers", async () => {
-      const app = await buildApp();
-      try {
-        const warn = vi.spyOn(app.log, "warn");
-        const input = { baseUrl: "http://chatty:3000", hostname: "chatty" };
-        const { hostId } = enrollHost(app, input);
-        expect(enrollHost(app, input).hostId).toBe(hostId);
-        enrollHost(app, input);
-        const notices = warn.mock.calls.filter(([, msg]) => String(msg).includes("legacy agent"));
-        expect(notices).toHaveLength(1);
-        expect(notices[0]![0]).toEqual({ hostId });
-      } finally {
-        await app.close();
-      }
-    });
   });
 
   // Issue #245 / roadmap 7.1 — agent-initiated registration & rotation.
-  describe("claimHost / enrollHost / rotateSession", () => {
+  describe("claimHost / createPairedHost / rotateSession", () => {
     // Issue #3439 — a per-host token cannot claim a host that already holds
     // a live machine identity. The second agent is refused, the incumbent's
     // credential is untouched, and the incumbent keeps renewing (a renewal
@@ -404,11 +417,9 @@ describe("host-registry", () => {
       await app.close();
     });
 
-    it("enrollHost records the agent's reported platform", async () => {
+    it("createPairedHost records the agent's reported platform", async () => {
       const app = await buildApp();
-      const result = enrollHost(app, {
-        // A unique baseUrl: enrollHost dedupes on it, so a literal would
-        // re-use a row an earlier test in this shared DB already enrolled.
+      const result = createPairedHost(app, {
         baseUrl: `http://192.168.1.60:${crypto.randomUUID()}`,
         hostname: "box-60",
         platform: "linux",
@@ -418,27 +429,9 @@ describe("host-registry", () => {
       await app.close();
     });
 
-    it("does NOT erase a recorded platform when the agent RE-enrolls without one", async () => {
-      // An absent report is not a reset: an older build (or a downgrade)
-      // re-registering against a row that survived must not silently null
-      // the platform a newer build recorded — the same rule
-      // recordHostSelfReport() applies on the renewal path.
-      const app = await buildApp();
-      const baseUrl = `http://192.168.1.62:${crypto.randomUUID()}`;
-      const first = enrollHost(app, { baseUrl, hostname: "box-62", platform: "darwin" });
-      expect(getHostRow(app, first.hostId)!.platform).toBe("darwin");
-
-      // The same baseUrl re-enrolls (enrollHost dedupes on it) — this time
-      // without a platform.
-      const second = enrollHost(app, { baseUrl, hostname: "box-62" });
-      expect(second.hostId).toBe(first.hostId);
-      expect(getHostRow(app, second.hostId)!.platform).toBe("darwin");
-      await app.close();
-    });
-
     it("leaves the platform null when the agent reports none", async () => {
       const app = await buildApp();
-      const result = enrollHost(app, {
+      const result = createPairedHost(app, {
         baseUrl: `http://192.168.1.61:${crypto.randomUUID()}`,
         hostname: "box-61",
       });
@@ -578,9 +571,9 @@ describe("host-registry", () => {
       });
     });
 
-    it("enrollHost creates a brand-new host row with origin: enrolled and no manual token", async () => {
+    it("createPairedHost creates a brand-new host row with origin: enrolled and no manual token", async () => {
       const app = await buildApp();
-      const result = enrollHost(app, {
+      const result = createPairedHost(app, {
         baseUrl: "http://192.168.1.99:4000",
         hostname: "fresh-box",
         capabilities: { browser: true },
@@ -605,9 +598,9 @@ describe("host-registry", () => {
       await app.close();
     });
 
-    it("enrollHost prefers an explicit name over the hostname fallback", async () => {
+    it("createPairedHost prefers an explicit name over the hostname fallback", async () => {
       const app = await buildApp();
-      const result = enrollHost(app, {
+      const result = createPairedHost(app, {
         baseUrl: "http://x:1",
         hostname: "raw-hostname",
         name: "Home Server",
@@ -616,49 +609,9 @@ describe("host-registry", () => {
       await app.close();
     });
 
-    // Hermes review (PR #528): a lost registration response must not turn
-    // an agent's retry into a duplicate host row for the same box.
-    it("enrollHost reuses an existing enrolled row with the same baseUrl instead of duplicating it", async () => {
-      const app = await buildApp();
-      const first = enrollHost(app, { baseUrl: "http://10.0.0.5:4000", hostname: "box-5" });
-      const second = enrollHost(app, {
-        baseUrl: "http://10.0.0.5:4000",
-        hostname: "box-5",
-        name: "Renamed",
-      });
-
-      expect(second.hostId).toBe(first.hostId);
-      expect(second.sessionId).not.toBe(first.sessionId); // still a fresh session
-      // Filtered by this test's own baseUrl, not just origin — this file
-      // shares one DB across its whole describe block, so other tests'
-      // enrolled rows (different baseUrls) are also present here.
-      expect(
-        app.db.select().from(hosts).where(eq(hosts.baseUrl, "http://10.0.0.5:4000")).all(),
-      ).toHaveLength(1);
-      expect(getHostRow(app, second.hostId)!.name).toBe("Renamed");
-
-      await app.close();
-    });
-
-    it("enrollHost does not reuse a manually-created row that happens to share a baseUrl", async () => {
-      const app = await buildApp();
-      const manual = createHost(app, {
-        name: "manual",
-        baseUrl: "http://10.0.0.6:4000",
-        token: "t",
-      });
-      const enrolled = enrollHost(app, { baseUrl: "http://10.0.0.6:4000", hostname: "box-6" });
-
-      expect(enrolled.hostId).not.toBe(manual.id);
-      expect(getHostRow(app, manual.id)!.origin).toBe("manual");
-      expect(getHostRow(app, enrolled.hostId)!.origin).toBe("enrolled");
-
-      await app.close();
-    });
-
     it("rotateSession issues a fresh session when the presented session id matches", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
 
       const renewed = rotateSession(app, registered.hostId, registered.sessionId);
       expect(renewed).not.toBeNull();
@@ -678,7 +631,7 @@ describe("host-registry", () => {
 
     it("rotateSession returns null for a wrong session id", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       expect(rotateSession(app, registered.hostId, "not-the-right-session-id")).toBeNull();
       await app.close();
     });
@@ -688,7 +641,7 @@ describe("host-registry", () => {
     // purely advisory and never actually bounds a leaked credential.
     it("rotateSession returns null for a session id that matches but has already expired", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       app.db
         .update(hosts)
         .set({ sessionExpiresAt: new Date(Date.now() - 1000) })
@@ -717,14 +670,14 @@ describe("host-registry", () => {
   describe("verifyHostSession", () => {
     it("returns true for a live session's own id", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
       await app.close();
     });
 
     it("does not mint a new session as a side effect (unlike rotateSession)", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       verifyHostSession(app, registered.hostId, registered.sessionId);
       // The original session id must still verify — a side-effecting
       // implementation would have overwritten it, exactly like rotateSession
@@ -735,14 +688,14 @@ describe("host-registry", () => {
 
     it("returns false for a wrong session id", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       expect(verifyHostSession(app, registered.hostId, "not-the-right-session-id")).toBe(false);
       await app.close();
     });
 
     it("returns false for a session id that matches but has already expired", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       app.db
         .update(hosts)
         .set({ sessionExpiresAt: new Date(Date.now() - 1000) })
@@ -764,8 +717,8 @@ describe("host-registry", () => {
     // (attacker-controlled session) mark host B offline instead.
     it("returns false when one host's valid session id is presented against a different hostId", async () => {
       const app = await buildApp();
-      const hostA = enrollHost(app, { baseUrl: "http://a:1", hostname: "a" });
-      const hostB = enrollHost(app, { baseUrl: "http://b:1", hostname: "b" });
+      const hostA = createPairedHost(app, { baseUrl: "http://a:1", hostname: "a" });
+      const hostB = createPairedHost(app, { baseUrl: "http://b:1", hostname: "b" });
       expect(verifyHostSession(app, hostB.hostId, hostA.sessionId)).toBe(false);
       // Sanity check: each session does verify against its own host.
       expect(verifyHostSession(app, hostA.hostId, hostA.sessionId)).toBe(true);
@@ -786,7 +739,7 @@ describe("host-registry", () => {
   describe("clearHostSession", () => {
     it("makes the cleared session id fail verifyHostSession afterward", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       expect(verifyHostSession(app, registered.hostId, registered.sessionId)).toBe(true);
 
       clearHostSession(app, registered.hostId);
@@ -797,7 +750,7 @@ describe("host-registry", () => {
 
     it("also makes the cleared session id fail rotateSession afterward", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       clearHostSession(app, registered.hostId);
       expect(rotateSession(app, registered.hostId, registered.sessionId)).toBeNull();
       await app.close();
@@ -812,17 +765,17 @@ describe("host-registry", () => {
 
     it("does not delete the host row itself, only the session fields", async () => {
       const app = await buildApp();
-      const registered = enrollHost(app, { baseUrl: "http://x:1", hostname: "x" });
+      const registered = createPairedHost(app, { baseUrl: "http://x:1", hostname: "x" });
       clearHostSession(app, registered.hostId);
       expect(getHostRow(app, registered.hostId)).toBeDefined();
       await app.close();
     });
   });
   describe("findPossibleDuplicates (issue #2582)", () => {
-    // enrollHost stamps createdAt to the second; backdate so "older" is unambiguous.
+    // createPairedHost stamps createdAt to the second; backdate so "older" is unambiguous.
     const enroll = (baseUrl: string, hostname: string, ageSec: number) => {
       const app = appRef!;
-      const { hostId } = enrollHost(app, { baseUrl, hostname, wantsMachineCredential: true });
+      const { hostId } = createPairedHost(app, { baseUrl, hostname });
       app.db
         .update(hosts)
         .set({ createdAt: new Date(Date.now() - ageSec * 1000) })
@@ -866,11 +819,19 @@ describe("host-registry", () => {
       appRef = await buildApp();
       const name = `h-${crypto.randomUUID()}`;
       const mk = (ageSec: number) => {
-        const { hostId } = enrollHost(appRef!, { baseUrl: u(), hostname: name });
+        const hostId = crypto.randomUUID();
         appRef!.db
-          .update(hosts)
-          .set({ createdAt: new Date(Date.now() - ageSec * 1000) })
-          .where(eq(hosts.id, hostId))
+          .insert(hosts)
+          .values({
+            id: hostId,
+            name,
+            baseUrl: u(),
+            authTokenEnc: null,
+            origin: "enrolled",
+            agentMetadata: JSON.stringify({ hostname: name, capabilities: null }),
+            approvedAt: new Date(),
+            createdAt: new Date(Date.now() - ageSec * 1000),
+          })
           .run();
         return hostId;
       };
@@ -897,7 +858,7 @@ describe("host-registry", () => {
       appRef = await buildApp();
       const name = `h-${crypto.randomUUID()}`;
       const mk = (ageSec: number) => {
-        const { hostId } = enrollHost(appRef!, { hostname: name, wantsMachineCredential: true });
+        const { hostId } = createPairedHost(appRef!, { hostname: name });
         appRef!.db
           .update(hosts)
           .set({ createdAt: new Date(Date.now() - ageSec * 1000) })
@@ -920,7 +881,7 @@ describe("host-registry", () => {
       appRef = await buildApp();
       const name = `h-${crypto.randomUUID()}`;
       const mk = (ageSec: number) => {
-        const { hostId } = enrollHost(appRef!, { hostname: name, wantsMachineCredential: true });
+        const { hostId } = createPairedHost(appRef!, { hostname: name });
         appRef!.db
           .update(hosts)
           .set({ createdAt: new Date(Date.now() - ageSec * 1000) })

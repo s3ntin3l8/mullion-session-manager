@@ -7,7 +7,7 @@ import type { FastifyInstance } from "fastify";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 import { buildTestApp } from "../helpers/app.js";
 import { projects, tasks } from "../../src/db/schema.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { localProject, mergeDiscovery, remoteProject } from "../helpers/merge-fixtures.js";
 
 // Issue #2232 — GET /api/projects/duplicates and POST /api/projects/:id/merge.
@@ -41,7 +41,11 @@ describe("project merge routes", () => {
     app = await buildTestApp();
     await app.ready();
     app.db.delete(projects).run();
-    macId = createHost(app, { name: "mac", baseUrl: "http://mac.test", token: "t" }).id;
+    macId = createPairedHost(app, {
+      hostname: "mac",
+      name: "mac",
+      baseUrl: "http://mac.test",
+    }).hostId;
     survivorId = localProject(app, tmp, "app", new Date("2024-01-01T00:00:00Z")).id;
     dupId = remoteProject(app, macId, "app-mac", "/Users/me/app", new Date("2025-01-01")).id;
   });

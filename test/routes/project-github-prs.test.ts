@@ -18,6 +18,7 @@ import fs from "node:fs";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 import { buildTestApp } from "../helpers/app.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const { buildApp } = await import("../../src/app.js");
 
@@ -337,10 +338,10 @@ describe("projects route", () => {
       vi.unstubAllGlobals();
 
       const app = await buildTestApp();
-      const host = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "prs-remote-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const host = await seedHostResponse(app, {
+        name: "prs-remote-host",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const project = await app.inject({
         method: "POST",
@@ -412,14 +413,10 @@ describe("projects route", () => {
         url: "/api/integrations/github/token",
         payload: { token: "ghp_remote_prs_token" },
       });
-      const host = await primary.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "prs-remote-success-host",
-          baseUrl: `http://127.0.0.1:${address.port}`,
-          token: AGENT_TOKEN,
-        },
+      const host = await seedHostResponse(primary, {
+        name: "prs-remote-success-host",
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        token: AGENT_TOKEN,
       });
       const project = await primary.inject({
         method: "POST",

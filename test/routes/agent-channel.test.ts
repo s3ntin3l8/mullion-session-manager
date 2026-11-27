@@ -9,7 +9,7 @@ import { closeDb } from "../../src/db/client.js";
 import { eq } from "drizzle-orm";
 import { hosts } from "../../src/db/schema.js";
 import {
-  enrollHost,
+  createPairedHost,
   renewMachineCredential,
   revokeMachineIdentity,
 } from "../../src/services/host-registry.js";
@@ -52,10 +52,9 @@ async function handshake(frame: unknown): Promise<{ ws: NodeWebSocket; reply: Re
 }
 
 function enroll(): { hostId: string; credential: string } {
-  const reg = enrollHost(app, {
+  const reg = createPairedHost(app, {
     baseUrl: `http://agent-${Math.random().toString(36).slice(2)}:4000`,
     hostname: "laptop",
-    wantsMachineCredential: true,
   });
   return { hostId: reg.hostId, credential: reg.machineCredential! };
 }
@@ -110,7 +109,7 @@ describe("GET /ws/agent-channel (#2450)", () => {
   });
 
   it("reconnects the fan-outs when an outbound-only host's channel comes up (#2636)", async () => {
-    const reg = enrollHost(app, { hostname: "ob", wantsMachineCredential: true });
+    const reg = createPairedHost(app, { hostname: "ob" });
     const events = vi.fn();
     const relay = vi.fn();
     const sshAgent = vi.fn();

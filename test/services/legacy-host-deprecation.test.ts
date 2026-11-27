@@ -1,21 +1,14 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { buildApp } from "../../src/app.js";
+import { setDotenvPathForTests } from "../../src/plugins/env.js";
 import {
   LEGACY_ENROLLMENT_SECRET_WARNING,
-  LEGACY_FLEET_ENROLLMENT_WARNING,
   legacyHostDeprecationNotices,
 } from "../../src/services/legacy-host-deprecation.js";
 
-/**
- * Capture the log lines the app writes while `fn` runs.
- *
- * The startup notice is logged while buildApp() is still booting the plugin
- * tree, so no logger spy can be installed after the fact — the line is only
- * observable in the process's own output. Pino writes to process.stdout, and
- * a tampered process.stdout.write (which this spy is) makes pino use the
- * stream itself instead of writing to the file descriptor, so the line lands
- * here.
- */
 async function captureLogLines(fn: () => Promise<void>): Promise<string[]> {
   const lines: string[] = [];
   const origWrite = process.stdout.write.bind(process.stdout);
@@ -34,22 +27,21 @@ async function captureLogLines(fn: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
-// Issue #3476 — the deprecation notices for the legacy host kinds. They SAY
-// so; nothing is refused or gated on them yet.
-describe("the legacy host deprecation notices (issue #3476)", () => {
+// Issue #3535 (follows #3476, #3477) — fleet-secret enrollment has been
+// removed; if MULLION_ENROLLMENT_SECRET is still set in the environment, the
+// primary logs a boot-time warning saying it is gone and naming what replaces
+// it.
+describe("the removed legacy host boot notice (issue #3535)", () => {
   afterEach(() => {
     delete process.env.MULLION_ENROLLMENT_SECRET;
+    setDotenvPathForTests(null);
   });
 
-  it("warns exactly once at startup when the fleet enrollment secret is set", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret-3476"; // pragma: allowlist secret
+  it("warns exactly once at startup when the removed fleet enrollment secret is set", async () => {
+    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret-3535"; // pragma: allowlist secret
     const lines = await captureLogLines(async () => {
       const app = await buildApp();
       try {
-        // The notice is logged while the app is still building (buildApp
-        // boots the plugin tree before it returns), so the module's own
-        // record is what says it was said — and the LOGGED LINE is what
-        // says the operator saw it.
         expect([...legacyHostDeprecationNotices()]).toEqual([LEGACY_ENROLLMENT_SECRET_WARNING]);
       } finally {
         await app.close();
@@ -57,12 +49,39 @@ describe("the legacy host deprecation notices (issue #3476)", () => {
     });
     const warned = lines.filter((line) => line.includes("MULLION_ENROLLMENT_SECRET is set"));
     expect(warned).toHaveLength(1);
-    // A warn (level 40), not an info line that nobody reads.
     expect(warned[0]).toContain('"level":40');
-    expect(warned[0]).toContain("deprecated");
+    expect(warned[0]).toContain("removed");
+    expect(warned[0]).toContain("Add host");
+    expect(warned[0]).toContain("automation tokens");
   });
 
-  it("never warns when the fleet enrollment secret is not set", async () => {
+  it("warns at startup when MULLION_ENROLLMENT_SECRET is set only in .env (not process.env)", async () => {
+    delete process.env.MULLION_ENROLLMENT_SECRET;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-deprecation-dotenv-"));
+    const envPath = path.join(dir, ".env");
+    fs.writeFileSync(
+      envPath,
+      "MULLION_ENROLLMENT_SECRET=fleet-secret-from-dotenv\n", // pragma: allowlist secret
+    );
+    setDotenvPathForTests(envPath);
+    try {
+      const lines = await captureLogLines(async () => {
+        const app = await buildApp();
+        try {
+          expect([...legacyHostDeprecationNotices()]).toEqual([LEGACY_ENROLLMENT_SECRET_WARNING]);
+        } finally {
+          await app.close();
+        }
+      });
+      const warned = lines.filter((line) => line.includes("MULLION_ENROLLMENT_SECRET is set"));
+      expect(warned).toHaveLength(1);
+    } finally {
+      setDotenvPathForTests(null);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never warns when MULLION_ENROLLMENT_SECRET is not set", async () => {
     delete process.env.MULLION_ENROLLMENT_SECRET;
     const lines = await captureLogLines(async () => {
       const app = await buildApp();
@@ -73,32 +92,5 @@ describe("the legacy host deprecation notices (issue #3476)", () => {
       }
     });
     expect(lines.filter((line) => line.includes("MULLION_ENROLLMENT_SECRET"))).toHaveLength(0);
-  });
-
-  it("warns once per process on the first fleet-secret enrollment, and not again", async () => {
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret-3476"; // pragma: allowlist secret
-    const app = await buildApp();
-    try {
-      const warn = vi.spyOn(app.log, "warn");
-      const register = (hostname: string) =>
-        app.inject({
-          method: "POST",
-          url: "/api/internal/register",
-          payload: {
-            token: "fleet-secret-3476", // pragma: allowlist secret
-            hostname,
-            baseUrl: "http://127.0.0.1:4751",
-          },
-        });
-      expect((await register("box-1")).statusCode).toBe(200);
-      expect((await register("box-2")).statusCode).toBe(200);
-      const warnings = warn.mock.calls.filter(
-        ([msg]) => String(msg) === LEGACY_FLEET_ENROLLMENT_WARNING,
-      );
-      expect(warnings).toHaveLength(1);
-      expect(legacyHostDeprecationNotices().has(LEGACY_FLEET_ENROLLMENT_WARNING)).toBe(true);
-    } finally {
-      await app.close();
-    }
   });
 });

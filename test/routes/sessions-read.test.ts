@@ -13,6 +13,7 @@ import {
 } from "../helpers/sessions-routes.js";
 import { describe, expect, it, vi } from "vitest";
 import { sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 // Session creation spawns real OS processes (systemd-run, dtach) via
 // PtyManager — faked here the same way as test/helpers/pty-manager-harness.ts,
 // so these files exercise the route/DB layer without depending on a real
@@ -312,10 +313,10 @@ describe("sessions route: reading a session's row, transcript and scrollback", (
     it("reports an empty buffer instead of 500ing when the session's remote host is unreachable", async () => {
       const app = await buildApp();
 
-      const badHost = await app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: { name: "goes-down-scrollback", baseUrl: "http://127.0.0.1:1", token: "t" },
+      const badHost = await seedHostResponse(app, {
+        name: "goes-down-scrollback",
+        baseUrl: "http://127.0.0.1:1",
+        token: "t",
       });
       const remoteProject = await app.inject({
         method: "POST",

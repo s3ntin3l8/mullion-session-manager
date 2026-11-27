@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
@@ -9,13 +10,10 @@ import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
 import {
   claimHost,
-  createHost,
-  enrollHost,
   getHostRow,
   isHostIdApproved,
   listHosts,
 } from "../../src/services/host-registry.js";
-import { enrollmentRoute } from "../../src/routes/enrollment.js";
 import {
   resolveExecutionContext,
   executionContextErrorStatus,
@@ -55,17 +53,21 @@ describe("host approval gate (issue #3441)", () => {
     delete process.env.DATABASE_URL;
   });
 
-  it("approves createHost, claimHost, operator pairing, and non-requireApproval token pairing immediately", async () => {
-    const manual = createHost(app, { name: "manual-1", token: "tok-manual-1" });
-    expect(manual.approvalPending).toBe(false);
-    expect(manual.approvedAt).not.toBeNull();
-
-    const toClaim = createHost(app, { name: "claim-1", token: "tok-claim-1" });
-    // Simulate a pre-existing unapproved row being claimed by its per-host token
-    app.db.update(hosts).set({ approvedAt: null }).where(eq(hosts.id, toClaim.id)).run();
+  it("approves claimHost, operator pairing, and non-requireApproval token pairing immediately", async () => {
+    const toClaimId = crypto.randomUUID();
+    app.db
+      .insert(hosts)
+      .values({
+        id: toClaimId,
+        name: "claim-1",
+        authTokenEnc: app.encryption.encryptString("tok-claim-1"),
+        origin: "manual",
+        approvedAt: null,
+      })
+      .run();
     const claimed = claimHost(app, "tok-claim-1", { hostname: "claimed-box" }, "10.0.0.2");
     expect(claimed).not.toBeNull();
-    expect(getHostRow(app, toClaim.id)!.approvedAt).not.toBeNull();
+    expect(getHostRow(app, toClaimId)!.approvedAt).not.toBeNull();
 
     // Operator-minted pairing code
     const opMint = await app.inject({
@@ -334,71 +336,11 @@ describe("host approval gate (issue #3441)", () => {
     expect(approveLocal.statusCode).toBe(409);
   });
 
-  it("handles fleet-secret enrollment with MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS and raw TCP peer only", async () => {
-    app.config.MULLION_ENROLLMENT_SECRET = "fleet-secret-test-value-32chars!!"; // pragma: allowlist secret
-    app.config.MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS = "10.20.0.0/16";
-
-    // Non-matching peer (even with spoofed X-Forwarded-For!) -> pending
-    const nonMatching = await app.inject({
-      method: "POST",
-      url: "/api/internal/register",
-      remoteAddress: "192.168.1.50",
-      headers: { "x-forwarded-for": "10.20.1.5" },
-      payload: {
-        token: "fleet-secret-test-value-32chars!!",
-        hostname: "untrusted-peer",
-        wantsMachineCredential: true,
-      },
-    });
-    expect(nonMatching.statusCode).toBe(200);
-    const pendingId = (nonMatching.json() as { host_id: string }).host_id;
-    expect(getHostRow(app, pendingId)!.approvedAt).toBeNull();
-
-    // Reject (DELETE) removes the pending host
-    const delRes = await app.inject({ method: "DELETE", url: `/api/hosts/${pendingId}` });
-    expect(delRes.statusCode).toBe(204);
-    expect(getHostRow(app, pendingId)).toBeUndefined();
-
-    // Matching raw TCP peer -> approved immediately
-    const matching = await app.inject({
-      method: "POST",
-      url: "/api/internal/register",
-      remoteAddress: "10.20.1.5",
-      payload: {
-        token: "fleet-secret-test-value-32chars!!",
-        hostname: "trusted-peer",
-        wantsMachineCredential: true,
-      },
-    });
-    expect(matching.statusCode).toBe(200);
-    const approvedId = (matching.json() as { host_id: string }).host_id;
-    expect(getHostRow(app, approvedId)!.approvedAt).not.toBeNull();
-
-    // Direct enrollHost() defaults to approvedAt = null
-    const direct = enrollHost(app, { hostname: "direct-enroll", wantsMachineCredential: true });
-    expect(getHostRow(app, direct.hostId)!.approvedAt).toBeNull();
-  });
-
   it("fails closed for unknown hostIds and bare db.insert(hosts) without approvedAt", () => {
     expect(isHostIdApproved(app, "nonexistent-host-id")).toBe(false);
     app.db.insert(hosts).values({ id: "bare-insert", name: "bare-insert" }).run();
     const row = getHostRow(app, "bare-insert")!;
     expect(row.approvedAt).toBeNull();
     expect(isHostIdApproved(app, "bare-insert")).toBe(false);
-  });
-
-  it("warns once at boot when MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS is invalid", async () => {
-    const warn = vi.fn();
-    const fakeApp = {
-      config: { MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: "10.0.0.1, not-a-cidr" },
-      log: { warn },
-      post: vi.fn(),
-    } as unknown as FastifyInstance;
-    await enrollmentRoute(fakeApp);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      { value: "10.0.0.1, not-a-cidr" },
-      expect.stringContaining("MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS"),
-    );
   });
 });

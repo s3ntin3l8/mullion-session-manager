@@ -6,6 +6,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
 import type { SessionBackend } from "../../src/services/session-backend.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #3151 — a task's `Capability:` directive through the claim/placement
 // path. Same fakes as the requirement block in task-claim.test.ts (kept in a
@@ -75,11 +76,7 @@ describe("a task's Capability: requirement (#3151)", () => {
     platform: string,
     loadAverage1m: number,
   ) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
-    });
+    const res = await seedHostResponse(app, { name, baseUrl: "http://127.0.0.1:1", token: "t" });
     const hostId = res.json().id as string;
     app.hostHeartbeatTracker?.recordSuccess(hostId);
     app.hostCapacityTracker?.record(hostId, {

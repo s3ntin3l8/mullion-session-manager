@@ -11,7 +11,6 @@ import {
   UnknownHostError,
   acknowledgeHostIdentityReplacements,
   approveHost,
-  createHost,
   deleteHost,
   getHostRow,
   hasLiveMachineIdentity,
@@ -38,7 +37,6 @@ import { hostUrlPolicy, isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
-import { LEGACY_HOST_CREATE_REFUSED_MESSAGE } from "../services/legacy-host-deprecation.js";
 import { HOST_AWAITING_APPROVAL_MESSAGE } from "../services/remote-host-errors.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
@@ -54,14 +52,6 @@ import type { ReleaseByTagResult } from "../services/update-checker.js";
 import type { UpdateStatus } from "../services/update-apply.js";
 import { boundedProbe } from "../services/host-heartbeat.js";
 
-interface CreateHostBody {
-  name: string;
-  // Both optional: omit the token and the primary mints one (returned once);
-  // omit the baseUrl and the host stays pending until its agent claims it.
-  baseUrl?: string;
-  token?: string;
-}
-
 interface UpdateHostBody {
   name?: string;
   // `null` clears the address (issue #3091).
@@ -73,19 +63,6 @@ interface UpdateHostBody {
   // Issue #2239 — worker | burst. "main" is the primary's, fixed.
   role?: HostEditableRole;
 }
-
-const createHostSchema = {
-  body: {
-    type: "object",
-    required: ["name"],
-    additionalProperties: false,
-    properties: {
-      name: { type: "string", minLength: 1 },
-      baseUrl: { type: "string", minLength: 1 },
-      token: { type: "string", minLength: 1 },
-    },
-  },
-};
 
 const updateHostSchema = {
   body: {
@@ -314,61 +291,6 @@ export async function hostsRoute(app: FastifyInstance) {
       };
     });
   });
-
-  app.post<{ Body: CreateHostBody }>(
-    "/api/hosts",
-    { schema: createHostSchema },
-    async (request, reply) => {
-      // Issue #3477 — the legacy host kinds are gated (decision #3320). With
-      // MULLION_ALLOW_LEGACY_HOSTS off, a host may no longer be added by
-      // token: the row this route creates is the manual-token kind, and the
-      // replacement is a one-time pairing code (the _Add host_ flow) or an
-      // automation token, which mints one.
-      //
-      // Only NEW legacy hosts are refused. Everything that already exists
-      // keeps working with the gate off — a row created earlier still claims
-      // with its own token, renewals and the outbound channel are untouched.
-      if (!app.config.MULLION_ALLOW_LEGACY_HOSTS) {
-        return reply.badRequest(LEGACY_HOST_CREATE_REFUSED_MESSAGE);
-      }
-      const { name, baseUrl } = request.body;
-      if (
-        baseUrl !== undefined &&
-        !isValidHttpUrl(baseUrl, app.config.MULLION_ALLOW_TAILNET_HOSTS)
-      ) {
-        return reply.badRequest("baseUrl must be a valid http(s) URL");
-      }
-      // A caller-supplied token (manual / ansible-provisioned agent) is
-      // stored as given and never echoed back; a minted one is returned
-      // exactly once, on this response, since the DB only keeps it encrypted.
-      const minted = request.body.token === undefined ? mintHostToken() : undefined;
-      const token = request.body.token ?? minted!;
-      const created = createHost(app, { name, baseUrl, token });
-      // Issue #213 cross-host capture: opens this host's events
-      // subscription immediately rather than waiting up to
-      // EVENT_RETENTION_SWEEP_INTERVAL_MS for the hazard-5 fallback tick.
-      // A freshly-created row has no session yet (createHost's manual-token
-      // path, unlike enrollHost/claimHost) — the connection attempts will
-      // fail-auth (401, the agent hasn't presented this token yet) until it
-      // registers, cycling connect()'s own reconnect/backoff loop (bounded
-      // by the same 1s→30s ceiling every other reconnect uses) until then.
-      // The failure warn itself only logs once per failure streak
-      // (hasLoggedFailure, remote-event-subscriber.ts, Hermes review, PR
-      // #564 round 5), not on every attempt.
-      app.reconfigureRemoteEventSubscriptions();
-      // Issue #820 — same immediate-pickup reasoning as the events call
-      // just above, for ssh-agent-fanout.ts's own desired set (a no-op
-      // unless a bridge already happens to be connected). Unlike the
-      // events subscriber, this reconcile() has no forceReconnect —
-      // reasonable here since a freshly-created host has no OPEN fan-out
-      // connection yet to force; see the PATCH handler below for the one
-      // case where that gap is real.
-      app.reconfigureSshAgentFanout();
-      app.reconfigureControlRelayFanout();
-      reply.code(201);
-      return minted === undefined ? created : { ...created, token: minted };
-    },
-  );
 
   app.patch<{ Params: { id: string }; Body: UpdateHostBody }>(
     "/api/hosts/:id",

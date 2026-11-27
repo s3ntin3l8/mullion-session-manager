@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket } from "ws";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Real integration test: a genuine WebSocket client against a real listening
 // server, not app.inject() (which can't drive a full-duplex upgrade). The
@@ -237,10 +238,10 @@ describe("terminal route (/ws/terminal)", () => {
 
     // A remote host, and the session moved onto it (its project stays
     // local).
-    const remote = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "placed-terminal", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const remote = await seedHostResponse(app, {
+      name: "placed-terminal",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const remoteHostId = remote.json().id as string;
     app.db.update(sessions).set({ hostId: remoteHostId }).where(eq(sessions.id, sessionId)).run();

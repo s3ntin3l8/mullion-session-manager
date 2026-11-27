@@ -13,6 +13,7 @@ import {
   sessions,
 } from "../../src/db/schema.js";
 import { isLoopbackHostname } from "../../src/services/browser-handoff.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // #3373 — "open this address in the other browser". Both routes translate an
 // address between the preview (an iframe through the preview proxy) and the
@@ -38,14 +39,10 @@ describe("browser handoff routes", () => {
   });
 
   async function addHost() {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: `handoff-host-${++n}`,
-        baseUrl: "http://127.0.0.1:1",
-        token: "t".repeat(24),
-      },
+    const res = await seedHostResponse(app, {
+      name: `handoff-host-${++n}`,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t".repeat(24),
     });
     return res.json().id as string;
   }

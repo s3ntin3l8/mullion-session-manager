@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 import { buildTestApp } from "../helpers/app.js";
 import { projects } from "../../src/db/schema.js";
-import { createHost } from "../../src/services/host-registry.js";
+import { createPairedHost } from "../../src/services/host-registry.js";
 import { mergeProjects } from "../../src/services/project-merge.js";
 import { localProject, mergeDiscovery, remoteProject } from "../helpers/merge-fixtures.js";
 
@@ -47,7 +47,11 @@ describe("project merge forgets the duplicate's browser files", () => {
 
   it("deletes the duplicate's jar, claim, per-target files and downloads, and leaves the survivor's", async () => {
     const survivorId = localProject(app, tmp, "app", OLD).id;
-    const macId = createHost(app, { name: "mac", baseUrl: "http://mac.test", token: "t" }).id;
+    const macId = createPairedHost(app, {
+      hostname: "mac",
+      name: "mac",
+      baseUrl: "http://mac.test",
+    }).hostId;
     const duplicateId = remoteProject(app, macId, "app-mac", "/Users/me/app", NEW).id;
     const dataDir = (app.browser as unknown as { dataDir: string }).dataDir;
     fs.mkdirSync(path.join(dataDir, "downloads"), { recursive: true });

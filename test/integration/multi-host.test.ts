@@ -9,6 +9,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket } from "ws";
 import { overrideDefaultRequestTimeoutForTests } from "../../src/services/remote-host-client.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 import {
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
@@ -224,14 +225,10 @@ describe("multi-host proxy (issue #26)", () => {
     });
     primary = await buildAndListen({ DATABASE_URL: `file:${primaryDb}` });
 
-    const hostRes = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: "integration-agent",
-        baseUrl: `http://127.0.0.1:${agent.port}`,
-        token: AGENT_TOKEN,
-      },
+    const hostRes = await seedHostResponse(primary.app, {
+      name: "integration-agent",
+      baseUrl: `http://127.0.0.1:${agent.port}`,
+      token: AGENT_TOKEN,
     });
     hostId = hostRes.json().id;
 
@@ -685,14 +682,10 @@ describe("multi-host proxy (issue #26)", () => {
         // before any HTTP response comes back at all, unlike the sibling
         // test above where the agent responds fine and its own probe just
         // resolves false).
-        const deadPortHost = await primary.app.inject({
-          method: "POST",
-          url: "/api/hosts",
-          payload: {
-            name: "dev-server-status-dead-host",
-            baseUrl: "http://127.0.0.1:1",
-            token: "t",
-          },
+        const deadPortHost = await seedHostResponse(primary.app, {
+          name: "dev-server-status-dead-host",
+          baseUrl: "http://127.0.0.1:1",
+          token: "t",
         });
         const deadProject = await primary.app.inject({
           method: "POST",
@@ -738,10 +731,10 @@ describe("multi-host proxy (issue #26)", () => {
     // afterAll's app.close() below would run — simulate the same
     // "unreachable mid-lifetime" case here by hitting a closed local port
     // instead of tearing down the shared `agent` other tests still use).
-    const deadPortHost = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: "dead", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const deadPortHost = await seedHostResponse(primary.app, {
+      name: "dead",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const deadProject = await primary.app.inject({
       method: "POST",
@@ -816,14 +809,10 @@ describe("multi-host dock-preview worktrees (issue #345)", () => {
       DATABASE_URL: `file:${path.join(os.tmpdir(), `multi-host-dock-preview-primary-${process.pid}-${crypto.randomBytes(4).toString("hex")}.db`)}`,
     });
 
-    const hostRes = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: "integration-dock-preview-agent",
-        baseUrl: `http://127.0.0.1:${agent.port}`,
-        token: AGENT_TOKEN,
-      },
+    const hostRes = await seedHostResponse(primary.app, {
+      name: "integration-dock-preview-agent",
+      baseUrl: `http://127.0.0.1:${agent.port}`,
+      token: AGENT_TOKEN,
     });
     hostId = hostRes.json().id;
 
@@ -941,8 +930,6 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
     fs.rmSync(enrollmentPrimaryDb, { force: true });
     primary = await buildAndListen({
       DATABASE_URL: `file:${enrollmentPrimaryDb}`,
-      MULLION_ENROLLMENT_SECRET: "fleet-wide-secret", // pragma: allowlist secret
-      MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: "127.0.0.1/32",
     });
   });
 
@@ -955,12 +942,14 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
     "an agent with MULLION_PRIMARY_URL + MULLION_ENROLLMENT_TOKEN self-registers on boot, with zero manual steps",
     { timeout: 30_000 },
     async () => {
+      const { seedHost } = await import("../helpers/hosts.js");
+      await seedHost(primary.app, { name: "self-reg-1", token: "claim-secret-1" });
       const agentPort = await reserveFreePort();
       const agent = await buildAndListen(
         {
           MULLION_ROLE: "agent",
           MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
-          MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+          MULLION_ENROLLMENT_TOKEN: "claim-secret-1", // pragma: allowlist secret
           MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
           PROJECTS_ROOTS: os.tmpdir(),
         },
@@ -980,19 +969,16 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
         // well under the 30s per-test timeout above.
         await waitUntil(async () => {
           const res = await primary.app.inject({ method: "GET", url: "/api/hosts" });
-          const hosts = res.json() as Array<{ origin: string; baseUrl: string | null }>;
-          return hosts.some(
-            (h) => h.origin === "enrolled" && h.baseUrl === `http://127.0.0.1:${agentPort}`,
+          const hosts = res.json() as Array<{ id: string; baseUrl: string | null }>;
+          return (
+            Array.isArray(hosts) &&
+            hosts.some((h) => h.id !== "local" && h.baseUrl === `http://127.0.0.1:${agentPort}`)
           );
         }, 10_000);
 
-        // No manual token was ever configured — the enrolled host's ONLY
-        // credential is the session the primary just issued it. Proxying a
-        // real call through confirms the whole loop actually works, not just
-        // that a row appeared.
         const hostsRes = await primary.app.inject({ method: "GET", url: "/api/hosts" });
-        const enrolled = (hostsRes.json() as Array<{ id: string; origin: string }>).find(
-          (h) => h.origin === "enrolled",
+        const enrolled = (hostsRes.json() as Array<{ id: string; baseUrl: string | null }>).find(
+          (h) => h.id !== "local" && h.baseUrl === `http://127.0.0.1:${agentPort}`,
         )!;
         const discoverRes = await primary.app.inject({
           method: "GET",
@@ -1009,12 +995,14 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
   // MULLION_ENROLLMENT_TOKEN must not become a skeleton key for the
   // fleet's /internal/* APIs. Must be a test, not a convention.
   it("rejects MULLION_ENROLLMENT_TOKEN itself as an inbound /internal/* bearer token", async () => {
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary.app, { name: "ws-reg-1", token: "claim-secret-ws-1" });
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
         MULLION_ROLE: "agent",
         MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
-        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_ENROLLMENT_TOKEN: "claim-secret-ws-1", // pragma: allowlist secret
         MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
         PROJECTS_ROOTS: os.tmpdir(),
       },
@@ -1028,7 +1016,7 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
       const res = await agent.app.inject({
         method: "GET",
         url: "/internal/discover",
-        headers: { authorization: "Bearer fleet-wide-secret" }, // pragma: allowlist secret
+        headers: { authorization: "Bearer claim-secret-2" }, // pragma: allowlist secret
       });
       expect(res.statusCode).toBe(401);
     } finally {
@@ -1037,12 +1025,14 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
   });
 
   it("an agent's own current session id IS accepted as an inbound /internal/* bearer token once registered — but ONLY when properly signed (issue #249 / roadmap 7.5)", async () => {
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary.app, { name: "ws-reg-1", token: "claim-secret-ws-1" });
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
         MULLION_ROLE: "agent",
         MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
-        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_ENROLLMENT_TOKEN: "claim-secret-ws-1", // pragma: allowlist secret
         MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
         PROJECTS_ROOTS: os.tmpdir(),
       },
@@ -1163,14 +1153,10 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
       PROJECTS_ROOTS: os.tmpdir(),
     });
     try {
-      const created = await primary.app.inject({
-        method: "POST",
-        url: "/api/hosts",
-        payload: {
-          name: "manual-regression",
-          baseUrl: `http://127.0.0.1:${agent.port}`,
-          token: "manual-static-token",
-        },
+      const created = await seedHostResponse(primary.app, {
+        name: "manual-regression",
+        baseUrl: `http://127.0.0.1:${agent.port}`,
+        token: "manual-static-token",
       });
       expect(created.statusCode).toBe(201);
       const hostId = created.json().id as string;
@@ -1203,12 +1189,14 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
   // actual WS handshake over the primary's own /ws/terminal proxy — not
   // just that each side's logic is independently correct in isolation.
   it("a session-credentialed host's WS terminal attach succeeds through the primary's own /ws/terminal proxy (signed WS upgrade, end to end)", async () => {
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary.app, { name: "ws-reg-1", token: "claim-secret-ws-1" });
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
         MULLION_ROLE: "agent",
         MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
-        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_ENROLLMENT_TOKEN: "claim-secret-ws-1", // pragma: allowlist secret
         MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
         PROJECTS_ROOTS: os.tmpdir(),
       },
@@ -1271,12 +1259,14 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
   // always signs correctly) to prove a bad signature closes the connection
   // before any PTY is spawned.
   it("a session-credentialed agent rejects /internal/ws/attach with a missing or forged signature, without spawning a session", async () => {
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary.app, { name: "ws-reg-1", token: "claim-secret-ws-1" });
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
         MULLION_ROLE: "agent",
         MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
-        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_ENROLLMENT_TOKEN: "claim-secret-ws-1", // pragma: allowlist secret
         MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
         PROJECTS_ROOTS: os.tmpdir(),
       },
@@ -1369,8 +1359,6 @@ describe("graceful agent deregistration (issue #248 / roadmap 7.3)", () => {
     fs.rmSync(deregisterPrimaryDb, { force: true });
     primary = await buildAndListen({
       DATABASE_URL: `file:${deregisterPrimaryDb}`,
-      MULLION_ENROLLMENT_SECRET: "fleet-wide-secret", // pragma: allowlist secret
-      MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS: "127.0.0.1/32",
     });
   });
 
@@ -1380,12 +1368,14 @@ describe("graceful agent deregistration (issue #248 / roadmap 7.3)", () => {
   });
 
   it("a self-registered agent's SIGTERM-equivalent shutdown (app.close()) reflects as offline without waiting on the heartbeat sweep", async () => {
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary.app, { name: "deregister-1", token: "claim-secret-dereg" });
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
         MULLION_ROLE: "agent",
         MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
-        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_ENROLLMENT_TOKEN: "claim-secret-dereg", // pragma: allowlist secret
         MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
         PROJECTS_ROOTS: os.tmpdir(),
       },
@@ -1409,12 +1399,14 @@ describe("graceful agent deregistration (issue #248 / roadmap 7.3)", () => {
   });
 
   it("does not delete the host row or terminate its projects — status-only, sessions survive the restart", async () => {
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary.app, { name: "ws-reg-1", token: "claim-secret-ws-1" });
     const agentPort = await reserveFreePort();
     const agent = await buildAndListen(
       {
         MULLION_ROLE: "agent",
         MULLION_PRIMARY_URL: `http://127.0.0.1:${primary.port}`,
-        MULLION_ENROLLMENT_TOKEN: "fleet-wide-secret", // pragma: allowlist secret
+        MULLION_ENROLLMENT_TOKEN: "claim-secret-ws-1", // pragma: allowlist secret
         MULLION_AGENT_ADVERTISE_URL: `http://127.0.0.1:${agentPort}`,
         PROJECTS_ROOTS: os.tmpdir(),
       },
@@ -1447,14 +1439,10 @@ describe("graceful agent deregistration (issue #248 / roadmap 7.3)", () => {
       MULLION_AGENT_TOKEN: "manual-static-token-deregister",
       PROJECTS_ROOTS: os.tmpdir(),
     });
-    const created = await primary.app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: "manual-deregister-regression",
-        baseUrl: `http://127.0.0.1:${agent.port}`,
-        token: "manual-static-token-deregister",
-      },
+    const created = await seedHostResponse(primary.app, {
+      name: "manual-deregister-regression",
+      baseUrl: `http://127.0.0.1:${agent.port}`,
+      token: "manual-static-token-deregister",
     });
     const hostId = created.json().id as string;
 

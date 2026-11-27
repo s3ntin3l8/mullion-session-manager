@@ -7,6 +7,7 @@ import fs from "node:fs";
 import type * as ChildProcess from "node:child_process";
 import { eq, ne } from "drizzle-orm";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
@@ -142,10 +143,10 @@ describe("materializing a checkout", () => {
   async function addHost(
     opts: { platform?: string; roots?: string[] | null; online?: boolean } = {},
   ) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name: `h-${Math.random()}`, baseUrl: "http://127.0.0.1:1", token: "t" },
+    const res = await seedHostResponse(app, {
+      name: `h-${Math.random()}`,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = res.json().id as string;
     if (opts.online === false) return hostId;

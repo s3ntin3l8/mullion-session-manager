@@ -21,6 +21,7 @@ import { sessionBrowserTarget } from "../../src/services/session-browser-targets
 import { gitEnv } from "../../src/services/git-env.js";
 import { BROWSER_TARGET_SCHEMA } from "../../src/routes/internal-schemas.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2688 — a session's browser endpoint is decided when the session first
 // binds a browser, from the preview it serves, and is the same on the primary,
@@ -89,14 +90,10 @@ describe("browser endpoints (#2688)", () => {
   afterEach(() => vi.restoreAllMocks());
 
   async function addAgentHost(operations: readonly string[] = AGENT_OPERATIONS) {
-    const res = await primary.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: {
-        name: `be-host-${++n}`,
-        baseUrl: `http://127.0.0.1:${agentPort}`,
-        token: TOKEN,
-      },
+    const res = await seedHostResponse(primary, {
+      name: `be-host-${++n}`,
+      baseUrl: `http://127.0.0.1:${agentPort}`,
+      token: TOKEN,
     });
     const hostId = res.json().id as string;
     primary.hostAgentTracker?.record(hostId, {

@@ -41,25 +41,25 @@ stdin and redeems it for an identity in `$SESSIONS_DIR/agent-identity.json`
 (`0600`). It keeps the code out of `.env`, process arguments and logs.
 
 For **zero-touch fleet deploys** (e.g. an Ansible playbook provisioning many
-hosts without per-host codes), **self-registration** with
-`MULLION_ENROLLMENT_TOKEN` / `MULLION_ENROLLMENT_SECRET` stays supported.
-See [`deploy/README.md`](../deploy/README.md)'s "Automating agent deploys"
+hosts without manual per-host UI steps), mint one-off pairing codes via
+**automation tokens** (Settings → Hosts → _Automation tokens_). See
+[`deploy/README.md`](../deploy/README.md)'s "Automating agent deploys"
 section for the full deploy-tooling contract (`install.sh --role agent`,
 the systemd unit, an example Ansible role); the protocol itself is
-documented here. **Manual registration** (a pre-provisioned, per-agent
-static token, added by hand in Settings → Hosts & SSH bridges) is also
-supported as a deprecated advanced option, described below.
+documented here. (Legacy fleet-secret enrollment via `MULLION_ENROLLMENT_SECRET`
+and manual registration via `POST /api/hosts` were removed in issue #3535;
+existing hosts created by those paths continue to work.)
 
-### Self-registration (zero manual steps)
+### Pre-provisioned host claim (`MULLION_ENROLLMENT_TOKEN`)
 
-The agent registers itself against the primary's
-`POST /api/internal/register` endpoint on boot, with **no
-`MULLION_AGENT_TOKEN` at all**. Set, on the agent:
+An existing pre-provisioned host row with a per-host token can still be claimed
+via `POST /api/internal/register` on boot, with **no `MULLION_AGENT_TOKEN` at
+all**. Set, on the agent:
 
 ```bash
 MULLION_ROLE=agent
 MULLION_PRIMARY_URL=https://primary.example.com
-MULLION_ENROLLMENT_TOKEN=<fleet-wide-secret, matches the primary's MULLION_ENROLLMENT_SECRET>
+MULLION_ENROLLMENT_TOKEN=<per-host token matching the existing host row>
 MULLION_AGENT_ADVERTISE_URL=http://192.168.1.20:4000   # optional; leave unset for an outbound-only agent (below)
 MULLION_AGENT_NAME=home-server                          # optional; defaults to the hostname
 ```
@@ -75,46 +75,20 @@ Set `MULLION_AGENT_ADVERTISE_URL` only for a primary that must dial this agent.
 > is `http://` and not loopback; it does not refuse to run (a trusted LAN is a
 > legitimate setup), so terminate TLS in front of the primary for anything else.
 
-...and, on the primary:
-
-```bash
-MULLION_ENROLLMENT_SECRET=<the same fleet-wide secret>
-MULLION_ENROLLMENT_ALLOWED_CIDRS=10.0.0.0/8              # optional — restricts which peer IPs may enroll
-MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS=10.0.0.0/8         # optional — auto-approves matching peer IPs at enrollment
-```
-
-`MULLION_ENROLLMENT_ALLOWED_CIDRS` checks the raw TCP peer address
-(`request.raw.socket.remoteAddress` via `getRawRemoteAddress`, deliberately
-ignoring `X-Forwarded-For` even if `trustProxy` were enabled) — and
-`trustProxy` is off app-wide (see `docs/auth.md`), so if your primary sits
-behind a reverse proxy (Traefik, per `deploy/README.md`), every enroll
-attempt arrives from the proxy's own address, not the agent's. It is also
-IPv4-only and fails closed on anything it cannot parse, so if Traefik reaches
-the app over IPv6, every enrollment returns `403`. List the proxy's IPv4
-address in the range (or leave the setting unset and rely on
-`MULLION_ENROLLMENT_SECRET` alone) rather than debugging unexpected 403s.
-The same `trustProxy`-off consequence also flattens every IP-keyed rate
-limiter (including the login limiter and `/api/internal/pair`'s failure
-bucket) into one shared bucket behind a proxy — see `docs/auth.md`'s
-"Current limitations" for why that's an accepted trade-off rather than a bug
-(B5, audit remediation plan).
-
 On boot the agent presents `MULLION_ENROLLMENT_TOKEN` to the primary's
-register endpoint; the primary either **claims** an existing host row whose
-own `MULLION_AGENT_TOKEN` matches (letting you pre-provision a per-agent
-secret the same way as manual registration, just delivered automatically),
-or, if the token instead matches `MULLION_ENROLLMENT_SECRET`, **enrolls** a
-brand-new host row from the agent's self-reported name/URL. Either way the
-primary issues a short-lived session (`session_id`, 24 h TTL, expiry
-enforced on renewal too — not just advisory) that becomes the agent's
-_inbound_ credential from then on — the enrollment token is used exactly
-once per boot, never accepted as a bearer token itself. A `session_secret`
-is issued and stored alongside it — the HMAC signing key that every
-request covered by "Request signing" below is signed with; unlike
+register endpoint; the primary **claims** an existing host row whose own
+`MULLION_AGENT_TOKEN` matches (fleet-secret enrollment via
+`MULLION_ENROLLMENT_SECRET` was removed in #3535, so any unmatched token
+answers `401`). The primary issues a short-lived session (`session_id`, 24 h
+TTL, expiry enforced on renewal too — not just advisory) that becomes the
+agent's _inbound_ credential from then on — the enrollment token is used
+exactly once per boot, never accepted as a bearer token itself. A
+`session_secret` is issued and stored alongside it — the HMAC signing key
+that every request covered by "Request signing" below is signed with; unlike
 `session_id`, it's never re-sent after issuance or presented as a request
 credential itself.
 The agent renews its session at ~50% of its TTL, and re-runs the full
-enrollment call (with retry/backoff, so a briefly-down primary never blocks
+registration call (with retry/backoff, so a briefly-down primary never blocks
 the agent's own boot) if a renewal ever comes back `401`.
 
 Newly-enrolled hosts are distinguishable from manually-registered ones via
@@ -217,15 +191,12 @@ in `machine_credential`.
 - **`SESSIONS_DIR` must be persistent.** The identity lives in
   `agent-identity.json` under the agent's `SESSIONS_DIR`. A container or
   image-based agent whose data dir does not survive a restart (an ephemeral
-  container, a re-imaged VM) has no identity at boot, so it enrolls with the
-  fleet secret: with the legacy gate open (`MULLION_ALLOW_LEGACY_HOSTS=true`)
-  the primary creates a **new** host row each time, leaving the previous one
-  offline; with the gate closed (the default) that enrollment is **refused**
-  (401), so a container fleet that relied on it goes dark on the next
-  recreate instead of registering a second time. A row is matched by an
-  exact address compare either way: with the gate open a changed address
-  means a second row, with the gate closed it means a refusal until the row
-  carries the address the agent now advertises (see the gate section below).
+  container, a re-imaged VM) has no identity at boot: because fleet-secret
+  enrollment has been removed, any registration attempt with a fleet secret is
+  **refused** (401), so the agent goes dark on recreate until it is paired
+  again with a one-time pairing code (or an automation-token code). (Before
+  issue #3535, when `MULLION_ALLOW_LEGACY_HOSTS=true` was set, it created a
+  new duplicate host row on each restart.)
   Mount `SESSIONS_DIR` on a volume or other persistent storage. The agent
   logs once at info level when it registers without a stored identity ("no
   stored identity found at the state path"); seeing that on every restart
@@ -303,7 +274,7 @@ Every host identity lifecycle transition records an entry in `host_identity_even
 (with timestamp and raw TCP peer address when request-driven, never storing any
 credential, token, or code):
 
-- `enrolled` — a host enrolled via `MULLION_ENROLLMENT_SECRET`.
+- `enrolled` — historical only: a host enrolled via the removed `MULLION_ENROLLMENT_SECRET`; no code path writes this kind any more (pairing records `paired`).
 - `claimed` — an existing manual host row was claimed with its per-host token.
 - `paired` — a host was paired (or had its pairing response reissued on retry) via a one-time pairing code.
 - `replaced` — a re-pair replaced an already-live machine identity in place (no grace period, recorded alongside `paired`). Since issue #3439, claims on a row with a live identity are refused, so re-pairing via a host-bound pairing code is the only path that produces a `replaced` event (any rows written before #3439 came from a token claim).
@@ -336,10 +307,6 @@ Settings → Hosts & SSH bridges
   Add host → Generate pairing code
              ├─ Pairing link · server address · pairing code
              └─ Install command (Linux / macOS)
-           → Advanced: host the primary dials directly (deprecated)
-             └─ Add with a token → Generated token or Use my own token
-               (only while MULLION_ALLOW_LEGACY_HOSTS=true; with the default
-                configuration the entry is hidden and the API answers 400)
 ```
 
 **The link.** `mullion://pair?url=<primary url>&code=<code>`, both
@@ -447,77 +414,7 @@ identity that sees its bootstrap token rejected can also pick up the new
 
 ### Generated token (deprecated)
 
-Open **Settings → Hosts & SSH bridges → Add host**, expand **Advanced: host the primary
-dials directly (deprecated)**, select **Add with a token**, and enter a name.
-The primary mints a per-host token, shows it **once**, and prints a
-ready-to-paste install command for Windows (PowerShell) and Linux/macOS with
-the token, the primary's URL and the host's name filled in. The agent runs
-it, registers itself (`POST /api/internal/register` — the token matches this host's row, so it
-needs neither `MULLION_ENROLLMENT_SECRET` on the primary nor
-`MULLION_AGENT_TOKEN` on the agent), and the primary fills in the agent's own
-URL. Until then the host reads **pending** ("waiting for the agent to
-register"); give a Base URL up front if the agent should be dialled at a
-specific address.
-
-This whole flow is deprecated: it is only available while the primary runs
-with `MULLION_ALLOW_LEGACY_HOSTS=true`. With the default configuration the
-**Advanced** entry is hidden and `POST /api/hosts` answers **400** — use
-**Add host → Generate pairing code** instead (see "Deprecated host kinds"
-below).
-
-- **Primary URL the agent calls.** Defaults to the address the dashboard was
-  opened on. A login gateway in front of the primary (Authentik forwardAuth)
-  blocks `/api/internal/register`, so use the primary's direct address
-  (e.g. `http://dev-01:3100`) if that applies to you, or see
-  [Dedicated agent hostname behind Traefik](#dedicated-agent-hostname-behind-traefik)
-  for exposing only the agent endpoints over HTTPS.
-- Tick **Use my own token** to supply a token yourself instead (the manual
-  flow below).
-
-### Manual registration (deprecated)
-
-Use a pre-provisioned, per-agent static token to add a legacy host that
-the primary dials directly.
-
-1. **Install and configure Mullion on the remote machine** exactly like a
-   normal deploy (see the main [README](../README.md) Quick Start /
-   [`deploy/`](../deploy/) for a native `systemd --user` install) — same
-   `dtach` dependency, same build.
-2. **Set two environment variables** on that machine (`.env` or the
-   `systemd` unit's environment):
-
-   ```bash
-   MULLION_ROLE=agent
-   MULLION_AGENT_TOKEN=$(openssl rand -hex 32)
-   ```
-
-   Leave `DATABASE_URL`, `DB_ENCRYPTION_KEY`, `FRONTEND_DIST`, etc. unset —
-   an agent ignores them, since it never touches the DB or serves the
-   frontend.
-
-3. **Start it.** It boots to `/health`/`/ready` plus the internal API; there
-   is no UI to open on the agent itself — you never point a browser at it.
-4. **Register it on the primary**: open the primary's dashboard →
-   **Settings → Hosts & SSH bridges → Add host → Advanced: host the primary dials directly
-   (deprecated) → Add with a token**. Check **Use my own token** and fill in:
-   - **Name** — any label (e.g. `home-server`).
-   - **Base URL** — where the agent is reachable, e.g.
-     `http://192.168.1.20:4000`.
-   - **Token** — must exactly match that agent's `MULLION_AGENT_TOKEN`.
-
-   Step 4 is deprecated and only available while the primary runs with
-   `MULLION_ALLOW_LEGACY_HOSTS=true`; with the default configuration the
-   **Advanced** entry is hidden and `POST /api/hosts` answers **400** — pair
-   the agent with a one-time pairing code instead (see "Deprecated host kinds"
-   below).
-
-   Once saved, use **Test** in the Hosts list to confirm connectivity.
-
-5. **Create (or move) a project onto that host.** The project-creation modal
-   gets a host picker once at least one remote host is registered; every
-   session under that project spawns and runs on the agent, and terminal
-   attach streams through the primary's own `/ws/terminal` — the browser
-   only ever talks to the primary.
+> **Note (removed in issue #3535):** The _Advanced: host the primary dials directly (deprecated)_ UI, `POST /api/hosts`, and `MULLION_ALLOW_LEGACY_HOSTS` have been removed (`POST /api/hosts` answers `404`). Use **Add host → Generate pairing code** (or automation tokens) for new hosts. Existing manual-token hosts created before removal continue to work; see [Deprecated host kinds](#deprecated-host-kinds) below for how to migrate them.
 
 ### Dedicated agent hostname behind Traefik
 
@@ -561,43 +458,27 @@ mullion-agent:
 matchers rather than a broad `Host()`-only or prefix rule: a wrong rule exposes
 the whole API without SSO (which still has its own bearer auth when in-process
 auth is configured, or no auth at all when `MULLION_TRUST_GATEWAY=true`).
-`MULLION_ENROLLMENT_SECRET` is admin-grade for the whole fleet (see
-[Current limitations](#current-limitations)), so it must be a strong random
-value — it is the trust boundary for enrolling a new host (alongside any
-per-host tokens minted in Settings), while `/api/internal/pair`,
-`/api/internal/deregister`, and `/ws/agent-channel` carry their own
-credentials.
+`/api/internal/register`, `/api/internal/pair`, `/api/internal/deregister`,
+and `/ws/agent-channel` all carry their own credentials.
 
-**Shared rate-limit bucket and proxy peer address for
-`MULLION_ENROLLMENT_ALLOWED_CIDRS`.** As noted under
-[Self-registration](#self-registration-zero-manual-steps) and
-[`docs/auth.md`](auth.md#current-limitations), `trustProxy` is off app-wide and
-`MULLION_ENROLLMENT_ALLOWED_CIDRS` evaluates the raw TCP peer
-(`request.raw.socket.remoteAddress`, IPv4-only, failing closed). Behind Traefik,
-every IP-keyed rate limiter (the app-wide bucket, register and deregister at
-20/min, and `/api/internal/pair`'s failure bucket) and
-`MULLION_ENROLLMENT_ALLOWED_CIDRS` therefore see the proxy's address rather
-than the connecting agent's; `MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS` (for the
-legacy fleet-secret path only; removed together with `MULLION_ENROLLMENT_SECRET`)
-reads that same raw TCP peer address (`getRawRemoteAddress`, never
-`X-Forwarded-For`), so a fleet-secret host enrolled from a non-matching peer
-waits in **Awaiting approval** until an operator approves it in Settings → Hosts
-(`POST /api/hosts/:id/approve`).
+**Shared rate-limit bucket behind a proxy.** As noted in
+[`docs/auth.md`](auth.md#current-limitations), `trustProxy` is off app-wide.
+Behind Traefik, every IP-keyed rate limiter (the app-wide bucket, register and
+deregister at 20/min, and `/api/internal/pair`'s failure bucket) sees the
+proxy's raw TCP peer address rather than the connecting agent's.
 
 ### Host approval (hosts nobody explicitly created)
 
-Hosts created in Settings → Hosts, paired from an operator-minted code, paired
-from an automation token without `requireApproval`, or claimed with a per-host
-token are approved at creation (`hosts.approved_at`). Hosts created without an
-operator present — from an automation-token pairing code with `requireApproval`
-set, or via `MULLION_ENROLLMENT_SECRET` when the raw TCP peer does not match
-`MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS` — start with `approved_at` unset
-(`approvalPending: true`). While awaiting approval, the host may still register,
-renew its credential, and keep its outbound channel connected so it shows online
-in Settings → Hosts, but it is excluded from placement and `list_spawn_targets`,
-and direct operations or spawns targeting it fail with `409 host is awaiting
-approval`. An operator approves the host in Settings → Hosts (**Approve**) or
-removes it (**Reject**).
+Hosts paired from an operator-minted code, paired from an automation token
+without `requireApproval`, or claimed with an existing per-host token are
+approved at creation (`hosts.approved_at`). Hosts created from an
+automation-token pairing code with `requireApproval` set start with
+`approved_at` unset (`approvalPending: true`). While awaiting approval, the host
+may still register, renew its credential, and keep its outbound channel
+connected so it shows online in Settings → Hosts, but it is excluded from
+placement and `list_spawn_targets`, and direct operations or spawns targeting
+it fail with `409 host is awaiting approval`. An operator approves the host in
+Settings → Hosts (**Approve**) or removes it (**Reject**).
 
 **Do not put the user-facing hostname's SSO bypass on `/api/internal/*`.** Keep
 the unauthenticated agent endpoints isolated on their own dedicated hostname
@@ -606,7 +487,7 @@ configuration or main Traefik router.
 
 ### Automation tokens (minting pairing codes from Ansible or CI)
 
-For automated fleets that want to avoid a standing fleet-wide `MULLION_ENROLLMENT_SECRET` on every agent, operators can mint **automation tokens** (`mat_<64 hex>`) in Settings → Hosts → _Automation tokens_ (or `POST /api/automation-tokens`):
+For automated fleets (replacing the removed fleet-wide `MULLION_ENROLLMENT_SECRET`), operators can mint **automation tokens** (`mat_<64 hex>`) in Settings → Hosts → _Automation tokens_ (or `POST /api/automation-tokens`):
 
 - **Single capability:** an automation token is accepted **only** on `POST /api/host-pairings` to mint one-off pairing codes (`POST /api/internal/pair` still redeems every code). It is rejected with `401` on every other route, including `GET /api/hosts` and `/api/automation-tokens`.
 - **Scopes:** `enroll` allows minting a code without `hostId` (new hosts); `repair` allows minting a host-bound code with `hostId` (rebuilding/re-pairing an existing host). Calling with the wrong scope returns `403`.
@@ -615,17 +496,15 @@ For automated fleets that want to avoid a standing fleet-wide `MULLION_ENROLLMEN
 
 ## Deprecated host kinds
 
-Three ways of putting a host on a primary are deprecated (issue #3476, decision
-[#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)). Each
-one is on its way out: new legacy hosts are gated behind
-`MULLION_ALLOW_LEGACY_HOSTS` (see "The gate" below), and the paths themselves
-are removed in the next minor release.
+The legacy entry points for adding a host — adding a host by token (`POST /api/hosts` and the _Advanced: host the primary dials directly_ UI) and fleet-secret enrollment (`MULLION_ENROLLMENT_SECRET`, `MULLION_ENROLLMENT_ALLOWED_CIDRS`, `MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS`), along with the `MULLION_ALLOW_LEGACY_HOSTS` flag — are **gone** (issue #3535, following #3476/#3477 and decision [#3320](https://github.com/s3ntin3l8/mullion-session-manager/issues/3320)).
 
-| Deprecated kind                                           | What it is                                                                                                                                             | Replace it with                                                                                                                                                                     |
+Use the **Add host** pairing flow (Settings → Hosts → **Add host** → _Generate pairing code_) for interactive setups, or **automation tokens** (Settings → Hosts → _Automation tokens_) for scripted/automated deploys.
+
+| Legacy kind                                               | Status / What it is                                                                                                                                    | Replace it with                                                                                                                                                                     |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **legacy agent**                                          | an agent without a machine identity, so the primary has to dial it at the address it stored (`hosts.base_url`) — unreachable off the primary's network | **Upgrade the agent to v0.3.59 or later** and set `MULLION_PRIMARY_URL`, so it registers with a machine identity — or replace the host with one paired from a one-time pairing code |
-| **manual-token host** (`MULLION_AGENT_TOKEN`)             | a host whose agent authenticates with the row's own static token — a credential that never expires                                                     | **Replace the static token with a one-time pairing code**: mint a code and redeem it on the agent, so it holds a machine identity (a host-bound code keeps the same host row)       |
-| **fleet-secret enrollment** (`MULLION_ENROLLMENT_SECRET`) | a host that enrolled with the fleet-wide secret on the primary                                                                                         | **Automation tokens** (see "Automation tokens" above), which mint one-off pairing codes                                                                                             |
+| **manual-token host** (`MULLION_AGENT_TOKEN`)             | **entry point removed** (`POST /api/hosts` is 404); existing rows whose agent still authenticates with a static per-host token keep working            | **Replace the static token with a one-time pairing code**: mint a code and redeem it on the agent, so it holds a machine identity (a host-bound code keeps the same host row)       |
+| **fleet-secret enrollment** (`MULLION_ENROLLMENT_SECRET`) | **removed** (`POST /api/internal/register` answers 401 and creates no host row)                                                                        | **Automation tokens** (see "Automation tokens" above) or the **Add host** pairing flow, which mint one-off pairing codes                                                            |
 
 **How to move a host that is already on the list.** The row menu's _Re-pair_
 entry only appears once a host holds a machine identity (or had one revoked),
@@ -635,8 +514,8 @@ so a host that is still fully on a legacy path has no _Re-pair_ entry yet:
   `MULLION_PRIMARY_URL` in its `.env`; it registers with a machine identity and
   the qualifier clears by itself (see "An agent that works at home and goes
   dark away from it" below). To replace the host instead, mint a one-time
-  pairing code (Settings → Hosts → **Pair a desktop** → _Generate pairing
-  link_) and redeem it on the agent; the new host row holds a machine
+  pairing code (Settings → Hosts → **Add host** → _Generate pairing
+  code_) and redeem it on the agent; the new host row holds a machine
   identity, and the old row goes with _Delete host_.
 - **manual-token host** — mint a **host-bound** code with
   `POST /api/host-pairings` and `{"hostId": "<id>"}` and redeem it on the agent
@@ -644,7 +523,7 @@ so a host that is still fully on a legacy path has no _Re-pair_ entry yet:
   `MULLION_PRIMARY_URL` set in the agent's `.env`, because the redeem dials out
   to the primary). The same row then holds a machine identity and the static
   token is no longer used; drop it from the agent's `.env`. An unbound code
-  (the _Generate pairing link_ button) creates a _new_ host row instead —
+  (the _Generate pairing code_ button) creates a _new_ host row instead —
   remove the old one with _Delete host_.
 
 The row menu's delete entry reads _Delete host_, or _Remove stale host_ once
@@ -655,71 +534,15 @@ both entries delete the row.
 `"manual-token"`, or `null` for a host that is on the current path). The host's
 status chip — the one beside a host name in a session row or a pane tab —
 carries a "(deprecated)" qualifier for the first two kinds, and the primary
-logs a warning at startup while `MULLION_ENROLLMENT_SECRET` is set.
+logs a warning at startup if `MULLION_ENROLLMENT_SECRET` is still set in `.env`
+or the environment.
 
-**The gate (`MULLION_ALLOW_LEGACY_HOSTS`, off by default).** The gate stops
-**new** legacy hosts from appearing. It sits on the two entry points that
-create one, not on the hosts themselves:
-
-- **Adding a host by token is refused.** `POST /api/hosts` answers **400** and
-  names the replacements — the _Add host_ flow (a one-time pairing code) and
-  automation tokens. In the UI, the _Advanced: host the primary dials directly
-  (deprecated)_ entry is shown only while the server reports the gate open
-  (`GET /api/server-info` → `allowLegacyHosts`), so the operator is never
-  walked into a refusal.
-- **Fleet-secret enrollment no longer creates a host.** The fleet-wide secret
-  (`MULLION_ENROLLMENT_SECRET`) does not enroll a new host row:
-  `POST /api/internal/register` answers the same **401** an unknown credential
-  gets — the refusal tells the caller nothing about the secret — and the
-  primary logs the reason once per process.
-
-**What keeps working with the gate off.** Every host that already exists: its
-renewals, its outbound channel, a per-host token claiming a row created
-earlier, a legacy agent registering on every boot with its own row's token —
-and an agent that enrolled with the **fleet secret**, which still registers
-with it on every boot. Such a registration is served by the row the agent
-already owns (the row is matched by the address it advertises), so no second
-row appears. The claim path is how an existing host proves itself, and it is
-not gated.
-
-**That match is on the advertised address, exactly.** The address is what the
-agent advertises — by default `http://<hostname>:<port>`, or whatever
-`MULLION_AGENT_ADVERTISE_URL` names — so a host that renamed its box, that
-came back as a container with another address, or whose Base URL an operator
-edited in Settings no longer matches its row. Its registration is then
-refused with the same 401, for as long as the mismatch lasts, and the
-primary's log says so (once per process; it names the row it expects when it
-can tell). The row is still there; only the address on it is stale. Put the
-address the agent now advertises on the row — Settings → Hosts → **Edit**
-(`PATCH /api/hosts/:id { "baseUrl": "…" }`) — or pair the host again with a
-one-time pairing code. Flipping `MULLION_ALLOW_LEGACY_HOSTS` back on works
-too, but it lets the agent through as a **new** host — a second row for a
-box the operator already has.
-
-**What the gate does break.** A host that does not exist yet cannot be
-created through a legacy path: `POST /api/hosts` answers 400 and a
-fleet-secret enrollment answers 401. Mint a one-time pairing code instead
-(_Add host_ → **Generate pairing code**, or an automation token) and redeem
-it on the agent.
-
-**A fleet-secret agent that asks for an identity.** An agent that enrolled
-with the fleet secret and now runs a release that persists a machine identity
-(v0.3.59 or later) presents the fleet secret once more and asks for a
-credential: the primary hands it one **on the row it already owns**, so the
-host leaves the fleet-secret path and no second row appears. (With the gate
-open, the old behaviour stands: that registration creates a second row.) A row
-that already holds an identity is never taken over by a fleet secret (issue
-[#3439](https://github.com/s3ntin3l8/mullion-session-manager/issues/3439)) —
-an agent that lost its state file has to be re-paired from Settings → Hosts
-instead.
-
-Set `MULLION_ALLOW_LEGACY_HOSTS=true` to keep the old behaviour exactly as it
-is today — the same requests, the same answers, the same rows.
-
-**Schedule.** The gate is here now; the legacy paths are **removed** in the
-next minor release, together with the flag. The hosts that exist keep working
-when the gate lands — the gate is what to plan for, and the removal is what
-to plan for after it.
+**What keeps working.** Every existing host row keeps working: its renewals,
+its outbound channel, and a pre-provisioned host claiming its own row with its
+per-host token (`claimHost`). What is gone is creating new hosts via
+`POST /api/hosts` (404) or `MULLION_ENROLLMENT_SECRET` (401). Mint a one-time
+pairing code instead (_Add host_ → **Generate pairing code**, or an automation
+token) and redeem it on the agent.
 
 ## Automatic placement
 

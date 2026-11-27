@@ -615,14 +615,11 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
   async function makeRemoteHost() {
     const { buildApp } = await import("../../src/app.js");
     const app = await buildApp();
-    const hostRes = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      // Deliberately unreachable — every test in this describe block either
-      // mocks RemoteHostClient.prototype's methods directly, or (for the
-      // "host genuinely unreachable" case) relies on THIS being unreachable
-      // on purpose.
-      payload: { name: "gen-remote-test", baseUrl: "http://127.0.0.1:1", token: "t" },
+    const { seedHostResponse } = await import("../helpers/hosts.js");
+    const hostRes = await seedHostResponse(app, {
+      name: "gen-remote-test",
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     const hostId = hostRes.json().id as string;
     return { app, hostId };

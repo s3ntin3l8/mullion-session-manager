@@ -8,6 +8,7 @@ import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { identityStatePath, loadAgentIdentity } from "../../src/services/agent-identity.js";
 import { setDotenvPathForTests } from "../../src/plugins/env.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 // Issue #2452 — headless enrollment end to end: a REAL primary behind a fetch
 // adapter, an agent that advertises no URL, and repeated agent daemon restarts.
@@ -32,7 +33,6 @@ const AGENT_ENV = [
   "MULLION_AGENT_ADVERTISE_URL",
   "PROJECTS_ROOTS",
   "SESSIONS_DIR",
-  "MULLION_ENROLLMENT_SECRET",
   "MULLION_HOME",
 ];
 
@@ -46,7 +46,6 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
     primary = await buildApp();
   });
   afterAll(async () => {
@@ -81,15 +80,13 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
   }
 
   // Boot the agent daemon the way the installed .env does: no advertised URL.
-  async function bootAgent(enrollmentToken = "fleet-secret") {
+  async function bootAgent(enrollmentToken = "claim-secret") {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
     process.env.MULLION_ENROLLMENT_TOKEN = enrollmentToken;
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
-    delete process.env.MULLION_ENROLLMENT_SECRET;
     const agent = await buildApp();
-    process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
     agents.push(agent);
     await agent.ready();
     return agent;
@@ -100,7 +97,7 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
       .select()
       .from(hosts)
       .all()
-      .filter((h) => h.origin === "enrolled");
+      .filter((h) => h.id !== "local");
 
   afterEach(async () => {
     while (agents.length) await agents.pop()!.close();
@@ -112,12 +109,14 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
     newSessionsDir();
     stubPrimaryFetch();
     const before = enrolledRows().length;
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary, { name: "restart-1", token: "claim-secret-1" });
 
-    await bootAgent();
+    await bootAgent("claim-secret-1");
     await waitUntil(() => loadAgentIdentity(statePath) !== null);
     const first = loadAgentIdentity(statePath)!;
     expect(registerBodies[0]).toMatchObject({
-      token: "fleet-secret",
+      token: "claim-secret-1",
       wantsMachineCredential: true,
     });
     expect(registerBodies[0].baseUrl).toBeUndefined();
@@ -129,7 +128,7 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
       registerBodies.length = 0;
       // The rerun's environment carries a ROTATED enrollment token: an
       // enrolled agent must keep using its identity, never the bootstrap token.
-      await bootAgent(restart === 2 ? "rotated-fleet-secret" : "fleet-secret"); // pragma: allowlist secret
+      await bootAgent(restart === 2 ? "rotated-claim-secret" : "claim-secret-1"); // pragma: allowlist secret
       await waitUntil(
         () => loadAgentIdentity(statePath)?.machineCredential !== previous.machineCredential,
       );
@@ -150,7 +149,9 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
   it("stays out of the primary's table after an operator revoke, and does not fall back to the bootstrap token", async () => {
     newSessionsDir();
     stubPrimaryFetch();
-    await bootAgent();
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary, { name: "restart-2", token: "claim-secret-2" });
+    await bootAgent("claim-secret-2");
     await waitUntil(() => loadAgentIdentity(statePath) !== null);
     const identity = loadAgentIdentity(statePath)!;
     const rows = enrolledRows().length;
@@ -162,7 +163,7 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
 
     await agents.pop()!.close();
     registerBodies.length = 0;
-    const agent = await bootAgent();
+    const agent = await bootAgent("claim-secret-2");
     // The agent's own retry state, not a timing window: the rejection is
     // terminal, so it is not retrying (no failed attempt, no backoff pending).
     await waitUntil(() => agent.agentEnrollment?.state === "rejected");
@@ -178,13 +179,16 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
   it("re-enrolls as a NEW host (never taking another identity) when the state file is lost", async () => {
     newSessionsDir();
     stubPrimaryFetch();
-    await bootAgent();
+    const { seedHost } = await import("../helpers/hosts.js");
+    await seedHost(primary, { name: "restart-3a", token: "claim-secret-3a" });
+    await bootAgent("claim-secret-3a");
     await waitUntil(() => loadAgentIdentity(statePath) !== null);
     const lost = loadAgentIdentity(statePath)!;
 
     await agents.pop()!.close();
     fs.rmSync(statePath);
-    await bootAgent();
+    await seedHost(primary, { name: "restart-3b", token: "claim-secret-3b" });
+    await bootAgent("claim-secret-3b");
     await waitUntil(() => loadAgentIdentity(statePath) !== null);
     const fresh = loadAgentIdentity(statePath)!;
 
@@ -233,7 +237,6 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
       process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
       process.env.MULLION_ENROLLMENT_TOKEN = ansibleToken;
       setDotenvPathForTests(envPath());
-      delete process.env.MULLION_ENROLLMENT_SECRET;
       try {
         const agent = await buildApp();
         agents.push(agent);
@@ -241,7 +244,6 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
         return agent;
       } finally {
         setDotenvPathForTests(null);
-        process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
       }
     }
 
@@ -249,9 +251,10 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
       newSessionsDir();
       home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-recipe-home-"));
       stubPrimaryFetch();
-      const created = (
-        await primary.inject({ method: "POST", url: "/api/hosts", payload: { name: "recipe" } })
-      ).json() as { id: string; token: string };
+      const created = (await seedHostResponse(primary, { name: "recipe" })).json() as {
+        id: string;
+        token: string;
+      };
       writeEnvFile(created.token);
 
       await startAgentUnit(created.token);
@@ -298,9 +301,10 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
       newSessionsDir();
       home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-recipe-old-home-"));
       stubPrimaryFetch();
-      const created = (
-        await primary.inject({ method: "POST", url: "/api/hosts", payload: { name: "recipe-old" } })
-      ).json() as { id: string; token: string };
+      const created = (await seedHostResponse(primary, { name: "recipe-old" })).json() as {
+        id: string;
+        token: string;
+      };
       writeEnvFile(created.token);
       await startAgentUnit(created.token);
       await waitUntil(() => loadAgentIdentity(statePath) !== null);
@@ -380,9 +384,10 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
     it("does not log the hint when the .env token changed and the retry succeeds", async () => {
       newSessionsDir();
       home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-hint-fresh-home-"));
-      const created = (
-        await primary.inject({ method: "POST", url: "/api/hosts", payload: { name: "hint-fresh" } })
-      ).json() as { id: string; token: string };
+      const created = (await seedHostResponse(primary, { name: "hint-fresh" })).json() as {
+        id: string;
+        token: string;
+      };
       writeEnvFile("stale-bootstrap-token-9f3a"); // pragma: allowlist secret
       const { release, presented } = gatedPrimaryFetch();
 

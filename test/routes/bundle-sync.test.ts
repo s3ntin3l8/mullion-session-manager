@@ -288,12 +288,14 @@ describe("POST /api/bundle-sync/remove", () => {
   describe("fan-out to registered agent hosts", () => {
     it("calls removeAgentBundle on a registered agent host, and the primary's own removal still succeeds", async () => {
       const app = await buildTestApp();
-      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-      const host = createHost(app, {
-        name: "agent-1",
-        baseUrl: "http://agent-1.example:4000",
-        token: "tok",
-      });
+      const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const host = {
+        id: createPairedHost(app, {
+          hostname: "agent-1",
+          name: "agent-1",
+          baseUrl: "http://agent-1.example:4000",
+        }).hostId,
+      };
       const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 2, legacySwept: 0 });
       mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
 
@@ -318,12 +320,14 @@ describe("POST /api/bundle-sync/remove", () => {
       await setInjectMullionBundle(app, true);
       await app.inject({ method: "POST", url: "/api/bundle-sync/resync" });
 
-      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-      const host = createHost(app, {
-        name: "unreachable-agent",
-        baseUrl: "http://nope.example:4000",
-        token: "tok",
-      });
+      const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const host = {
+        id: createPairedHost(app, {
+          hostname: "unreachable-agent",
+          name: "unreachable-agent",
+          baseUrl: "http://nope.example:4000",
+        }).hostId,
+      };
       const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
       mockGetRemoteHostClient.mockReturnValue({
         removeAgentBundle: vi
@@ -361,10 +365,12 @@ describe("POST /api/bundle-sync/remove", () => {
     // nothing to reach is skipped.
     it("sweeps an outbound-only host whose channel is bound but currently disconnected", async () => {
       const app = await buildTestApp();
-      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
       const { bindChannelHost, unbindChannelHost } =
         await import("../../src/services/agent-channel-tunnel.js");
-      const host = createHost(app, { name: "outbound-only", token: "tok" });
+      const host = {
+        id: createPairedHost(app, { hostname: "outbound-only", name: "outbound-only" }).hostId,
+      };
       expect(app.agentChannels.has(host.id)).toBe(false);
       bindChannelHost(app, host.id);
       const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 1, legacySwept: 0 });
@@ -382,8 +388,11 @@ describe("POST /api/bundle-sync/remove", () => {
 
     it("skips a host with no address and no channel, bound or connected", async () => {
       const app = await buildTestApp();
-      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-      const host = createHost(app, { name: "nothing-to-reach", token: "tok" });
+      const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const host = {
+        id: createPairedHost(app, { hostname: "nothing-to-reach", name: "nothing-to-reach" })
+          .hostId,
+      };
       mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: vi.fn() });
 
       try {
@@ -397,17 +406,21 @@ describe("POST /api/bundle-sync/remove", () => {
 
     it("with TWO registered agent hosts, one unreachable does not prevent the other from being dispatched to", async () => {
       const app = await buildTestApp();
-      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-      const badHost = createHost(app, {
-        name: "bad-agent",
-        baseUrl: "http://nope.example:4000",
-        token: "tok",
-      });
-      const goodHost = createHost(app, {
-        name: "good-agent",
-        baseUrl: "http://good-agent.example:4000",
-        token: "tok",
-      });
+      const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const badHost = {
+        id: createPairedHost(app, {
+          hostname: "bad-agent",
+          name: "bad-agent",
+          baseUrl: "http://nope.example:4000",
+        }).hostId,
+      };
+      const goodHost = {
+        id: createPairedHost(app, {
+          hostname: "good-agent",
+          name: "good-agent",
+          baseUrl: "http://good-agent.example:4000",
+        }).hostId,
+      };
       const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
       const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 1, legacySwept: 0 });
       mockGetRemoteHostClient.mockImplementation((_app: unknown, hostId: string) => {
@@ -458,12 +471,14 @@ describe("re-enabling sessions.injectMullionBundle fans out to registered agent 
   it("calls removeAgentBundle(false) on a registered agent host", async () => {
     const app = await buildTestApp();
     await setInjectMullionBundle(app, false);
-    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-    const host = createHost(app, {
-      name: "agent-1",
-      baseUrl: "http://agent-1.example:4000",
-      token: "tok",
-    });
+    const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = {
+      id: createPairedHost(app, {
+        hostname: "agent-1",
+        name: "agent-1",
+        baseUrl: "http://agent-1.example:4000",
+      }).hostId,
+    };
     const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
     mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
 
@@ -482,11 +497,15 @@ describe("re-enabling sessions.injectMullionBundle fans out to registered agent 
   it("re-enables on an outbound-only host whose channel is bound but disconnected, and skips an unreachable one", async () => {
     const app = await buildTestApp();
     await setInjectMullionBundle(app, false);
-    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
     const { bindChannelHost, unbindChannelHost } =
       await import("../../src/services/agent-channel-tunnel.js");
-    const outbound = createHost(app, { name: "outbound-only", token: "tok" });
-    const nothing = createHost(app, { name: "nothing-to-reach", token: "tok" });
+    const outbound = {
+      id: createPairedHost(app, { hostname: "outbound-only", name: "outbound-only" }).hostId,
+    };
+    const nothing = {
+      id: createPairedHost(app, { hostname: "nothing-to-reach", name: "nothing-to-reach" }).hostId,
+    };
     bindChannelHost(app, outbound.id);
     const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
     mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
@@ -509,12 +528,14 @@ describe("re-enabling sessions.injectMullionBundle fans out to registered agent 
   it("does not fire on a redundant true -> true re-write of the same field", async () => {
     const app = await buildTestApp();
     await setInjectMullionBundle(app, true);
-    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-    const host = createHost(app, {
-      name: "agent-1",
-      baseUrl: "http://agent-1.example:4000",
-      token: "tok",
-    });
+    const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = {
+      id: createPairedHost(app, {
+        hostname: "agent-1",
+        name: "agent-1",
+        baseUrl: "http://agent-1.example:4000",
+      }).hostId,
+    };
     const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
     mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
 
@@ -540,12 +561,14 @@ describe("re-enabling sessions.injectMullionBundle fans out to registered agent 
   it("does not fire on an unrelated settings field patch while injectMullionBundle stays true", async () => {
     const app = await buildTestApp();
     await setInjectMullionBundle(app, true);
-    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-    const host = createHost(app, {
-      name: "agent-1",
-      baseUrl: "http://agent-1.example:4000",
-      token: "tok",
-    });
+    const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = {
+      id: createPairedHost(app, {
+        hostname: "agent-1",
+        name: "agent-1",
+        baseUrl: "http://agent-1.example:4000",
+      }).hostId,
+    };
     const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
     mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
 
@@ -570,12 +593,14 @@ describe("re-enabling sessions.injectMullionBundle fans out to registered agent 
   it("does not fire on the /remove route's own true -> false write", async () => {
     const app = await buildTestApp();
     await setInjectMullionBundle(app, true);
-    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-    const host = createHost(app, {
-      name: "agent-1",
-      baseUrl: "http://agent-1.example:4000",
-      token: "tok",
-    });
+    const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = {
+      id: createPairedHost(app, {
+        hostname: "agent-1",
+        name: "agent-1",
+        baseUrl: "http://agent-1.example:4000",
+      }).hostId,
+    };
     const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
     mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
 
@@ -593,12 +618,14 @@ describe("re-enabling sessions.injectMullionBundle fans out to registered agent 
   it("an unreachable agent host is logged and skipped", async () => {
     const app = await buildTestApp();
     await setInjectMullionBundle(app, false);
-    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
-    const host = createHost(app, {
-      name: "unreachable-agent",
-      baseUrl: "http://nope.example:4000",
-      token: "tok",
-    });
+    const { createPairedHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const host = {
+      id: createPairedHost(app, {
+        hostname: "unreachable-agent",
+        name: "unreachable-agent",
+        baseUrl: "http://nope.example:4000",
+      }).hostId,
+    };
     const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
     mockGetRemoteHostClient.mockReturnValue({
       removeAgentBundle: vi

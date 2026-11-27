@@ -7,6 +7,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { DEGRADED_AFTER_BUSY } from "../../src/services/host-heartbeat.js";
+import { seedHostResponse } from "../helpers/hosts.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-health-test-${process.pid}.db`);
 
@@ -25,10 +26,10 @@ describe("hosts route: ping and health (issue #2702)", () => {
   });
 
   async function addHost(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
-    const created = await app.inject({
-      method: "POST",
-      url: "/api/hosts",
-      payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+    const created = await seedHostResponse(app, {
+      name,
+      baseUrl: "http://127.0.0.1:1",
+      token: "t",
     });
     return created.json().id as string;
   }
