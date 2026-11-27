@@ -457,6 +457,13 @@ describe("HostsSection", () => {
     expect(screen.getByTestId("host-identity-replaced-h1")).toHaveTextContent(
       /Identity replaced 5 min ago/,
     );
+    expect(screen.getByTestId("host-identity-replaced-h1")).toHaveAttribute(
+      "title",
+      expect.stringContaining("Re-pairing is the operator's way to replace an agent"),
+    );
+    expect(screen.getByTestId("host-identity-replaced-h1").getAttribute("title")).not.toContain(
+      "rotate the per-host token",
+    );
     expect(screen.getByTestId("host-identity-replaced-detail-h1")).toHaveTextContent("10.0.0.42");
     expect(screen.queryByTestId("host-identity-replaced-h2")).not.toBeInTheDocument();
 

@@ -781,7 +781,7 @@ export function HostsSection() {
                         <span
                           data-testid={`host-identity-replaced-${host.id}`}
                           style={{ color: "var(--y)" }}
-                          title="A registration replaced this host's live machine identity. Expected after an operator re-enroll; if unexpected, revoke the identity or rotate the per-host token."
+                          title="This host's machine identity was replaced in place. Re-pairing is the operator's way to replace an agent; if unexpected, revoke the identity."
                         >
                           Identity replaced{" "}
                           {formatIdentityReplacementAge(host.recentIdentityReplacement.at, now)}
