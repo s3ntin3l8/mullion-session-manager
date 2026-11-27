@@ -413,7 +413,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
             // normal backoff alive in case the route/proxy recovers.
             loggedRedirectRejected = true;
             app.log.warn(
-              `[agent-enrollment] ${formatPrimaryRedirectMessage("registration failed", err.status)}`,
+              `[agent-enrollment] ${formatPrimaryRedirectMessage("registration failed", err.status)} — the agent reads MULLION_PRIMARY_URL at boot, so restart it after editing .env (only the tokens are re-read on a 401)`,
             );
           }
           enrollment.failedAttempts++;

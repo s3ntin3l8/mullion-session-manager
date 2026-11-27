@@ -251,6 +251,7 @@ describe("agentEnrollmentPlugin", () => {
       expect(diagnosis).toContain("302");
       expect(diagnosis).toContain("MULLION_AGENT_PRIMARY_URL");
       expect(diagnosis).toContain("MULLION_PRIMARY_URL");
+      expect(diagnosis).toMatch(/restart/i);
       expect(diagnosis).not.toBe("registration request failed: HTTP 302");
 
       const allWarnings = warnMessages.join("\n");
