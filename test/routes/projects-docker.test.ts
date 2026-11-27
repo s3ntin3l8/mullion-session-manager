@@ -21,7 +21,7 @@ import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 //
 // Session creation (the /docker/update route) spawns real OS processes
 // (systemd-run, dtach) via PtyManager — faked the same way
-// test/routes/sessions.test.ts fakes them, so this exercises the route/DB
+// test/helpers/sessions-routes.ts fakes them, so this exercises the route/DB
 // layer without depending on a real systemd --user session in CI.
 vi.mock("node-pty", () => ({
   spawn: vi.fn(() => ({

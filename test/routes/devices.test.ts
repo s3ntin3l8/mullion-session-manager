@@ -16,7 +16,7 @@ import { devices } from "../../src/db/schema.js";
 
 // A device's spawn() bootstraps a real systemd-run scope the same way a
 // session's master does — faked here for the same reason
-// test/routes/sessions.test.ts fakes it (AGENTS.md's "a test must never let
+// test/helpers/sessions-routes.ts fakes it (AGENTS.md's "a test must never let
 // a real systemd-run fire" invariant, issue #1137). This file never awaits
 // spawn() to actually finish (it's fire-and-forget from getOrCreate, per
 // device-manager.ts's own doc comment) — every test here asserts the

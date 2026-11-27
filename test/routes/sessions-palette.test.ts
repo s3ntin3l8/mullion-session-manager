@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 // Must come before any import below that could load "node-pty" or
-// "node:child_process" (see test/routes/sessions.test.ts, which this mirrors).
+// "node:child_process" (see test/helpers/sessions-routes.ts, which this mirrors).
 import { createNodePtyMock } from "../helpers/mock-pty.js";
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
 import type * as ChildProcess from "node:child_process";

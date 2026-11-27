@@ -8,7 +8,7 @@ import { closeDb } from "../../src/db/client.js";
 import { DEFAULT_WORKSPACE_NAME } from "../../src/routes/workspaces.js";
 
 // Workspaces are pure view metadata (a saved dockview layout) — no
-// node-pty/dtach bootstrap involved, so unlike sessions.test.ts this file
+// node-pty/dtach bootstrap involved, so unlike test/helpers/sessions-routes.ts this file
 // needs no child_process mocking.
 const tmpDb = path.join(os.tmpdir(), `workspaces-test-${process.pid}.db`);
 

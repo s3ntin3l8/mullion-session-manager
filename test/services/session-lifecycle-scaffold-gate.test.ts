@@ -33,7 +33,7 @@ vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
 // This file's worktree-regression suite (below) needs a REAL `git worktree
 // add` to run (checkoutBranchWorktree/resolveWorktreeCwd, git-worktree.ts)
 // — "git" passes through, everything else (systemd-run, dtach) stays faked,
-// same posture as test/routes/sessions.test.ts's own worktree-exercising
+// same posture as test/routes/sessions-worktree.test.ts's own worktree-exercising
 // suite.
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();

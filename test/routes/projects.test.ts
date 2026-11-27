@@ -24,7 +24,7 @@ import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
-// test/helpers/pty-manager-harness.ts and test/routes/sessions.test.ts, so
+// test/helpers/pty-manager-harness.ts and test/helpers/sessions-routes.ts, so
 // this file exercises the route/DB layer without depending on a real
 // `systemd --user` session existing in CI. This file is the one place
 // `POST /api/sessions` was still hitting a real spawn: CI's runner can't
@@ -34,7 +34,7 @@ import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 // `SocketAlreadyListeningError` for every later test in this file that
 // builds its own `buildApp()`.
 //
-// Unlike sessions.test.ts (which fakes every non-`git` command), this file
+// Unlike test/helpers/sessions-routes.ts (which fakes every non-`git` command), this file
 // also exercises real `docker` (docker-service-detect.ts, via the dock
 // route) and real `git`/shell subprocesses well beyond worktree setup —
 // faking anything broader than the one command that's actually

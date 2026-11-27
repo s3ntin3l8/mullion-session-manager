@@ -821,7 +821,7 @@ describe("session lifecycle ops: core session, review, triage (Phase 4, #187)", 
     // Independent review, PR #426 — an invalid value used to fall through
     // silently to the REST route's own default ("detach") instead of
     // surfacing an error, unlike the identical bad input over REST
-    // directly (sessions.test.ts's "rejects an invalid ?cascade= value").
+    // directly (sessions-parent-child.test.ts's "rejects an invalid ?cascade= value").
     it("400s an invalid body.cascade value, rather than silently defaulting", async () => {
       app = await buildApp();
       await app.ready();
