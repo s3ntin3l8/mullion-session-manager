@@ -7,12 +7,7 @@ import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { AgentInstallInstructions } from "../../AgentInstallInstructions.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
-import {
-  deriveHostStatus,
-  legacyAgentLabels,
-  legacyAgentTitle,
-  type PingState,
-} from "../../hostStatus.js";
+import { deriveHostStatus, legacyChip, type PingState } from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { formatRelativeUntil } from "../../relativeTime.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
@@ -657,6 +652,15 @@ export function HostsSection() {
           .map((host) => {
             const click = pingStatus[host.id] ?? { status: "unknown", lastCheckedAtSnapshot: null };
             const display = deriveHostStatus(host, click);
+            // Issue #3573 — the row's chip comes from the same shared function
+            // as the places that name a host, so it shows the deprecation
+            // qualifier too (and a manual-token host that is no legacy agent
+            // gets a chip here at all). `long` asks for the row's own longer
+            // wording, which only a host with NO deprecation kind can reach —
+            // the API flags every legacy agent with a kind — so a real host
+            // reads the qualified chip here too. The primary's version goes
+            // into the hover, which only Settings can know.
+            const chip = legacyChip(host, { primaryVersion, long: true });
             return (
               <ListRow
                 key={host.id}
@@ -690,14 +694,11 @@ export function HostsSection() {
                             : host.hasMachineIdentity
                               ? "outbound only — waiting for the agent to connect"
                               : "waiting for the agent to register")}
-                    {host.legacyAgent && (
+                    {chip && (
                       <>
                         {" · "}
-                        <span
-                          style={{ color: "var(--y)" }}
-                          title={legacyAgentTitle(host, primaryVersion)}
-                        >
-                          {legacyAgentLabels(host).long}
+                        <span style={{ color: "var(--y)" }} title={chip.title}>
+                          {chip.text}
                         </span>
                       </>
                     )}

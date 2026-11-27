@@ -7,6 +7,7 @@ import {
   legacyAgentFix,
   legacyAgentLabels,
   legacyAgentTitle,
+  legacyChip,
   type PingState,
 } from "./hostStatus.js";
 import { makeHost } from "./test/fixtures.js";
@@ -313,5 +314,49 @@ describe("the deprecation qualifier (issue #3476)", () => {
     const manual = deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }));
     expect(manual).toMatch(/hostId/);
     expect(manual).toMatch(/NEW host row/);
+  });
+});
+
+// Issue #3573 — ONE chip for every surface that shows it: the places that
+// name a host and the Settings → Hosts row. The row used to build its own
+// from the legacy-agent words, so a deprecated host read "Outdated agent —
+// upgrade" there and never showed the qualifier.
+describe("the shared legacy chip (issue #3573)", () => {
+  it("shows the deprecation qualifier, not the bare legacy-agent words", () => {
+    const host = makeHost({
+      legacyAgent: true,
+      deprecatedKind: "manual-token",
+      mullionVersion: "0.3.50",
+    });
+    expect(legacyChip(host)).toEqual({
+      text: "outdated agent · manual token (deprecated)",
+      title: expect.stringContaining("Deprecated:"),
+    });
+  });
+
+  it("gives a manual-token host that is no legacy agent a chip of its own", () => {
+    const chip = legacyChip(makeHost({ deprecatedKind: "manual-token" }));
+    expect(chip?.text).toBe("manual token (deprecated)");
+    expect(chip?.title).toMatch(/Deprecated:/);
+    // The hover names the credential that has to change.
+    expect(chip?.title).toMatch(/MULLION_AGENT_TOKEN/);
+  });
+
+  it("keeps the longer wording for a host with no deprecation kind, and the primary's version in its hover", () => {
+    // Issue #3573 — this fixture is a shape the API cannot return: the server
+    // gives EVERY legacy agent a deprecatedKind, so a real host reads the
+    // qualified chip on every surface. The longer wording is kept for the
+    // shape a caller can still build (see LegacyChipOptions.long).
+    const host = makeHost({ legacyAgent: true, mullionVersion: "0.3.50" });
+    expect(legacyChip(host)?.text).toBe("outdated agent");
+    expect(legacyChip(host, { long: true })?.text).toBe("Outdated agent — upgrade");
+    expect(legacyChip(host, { primaryVersion: "0.3.62" })?.title).toMatch(
+      /this server runs v0\.3\.62/,
+    );
+  });
+
+  it("has no chip for a host on the current path", () => {
+    expect(legacyChip(makeHost())).toBeNull();
+    expect(legacyChip(makeHost({ hasLiveMachineIdentity: true }))).toBeNull();
   });
 });
