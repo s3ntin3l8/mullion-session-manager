@@ -129,6 +129,8 @@ describe("the card-sized CI-hold note", () => {
     expect(ciHoldNoteSummary("a, b (1), c — why")).toBe("3 checks");
     expect(ciHoldNoteSummary(null)).toBeNull();
     expect(ciHoldNoteSummary("")).toBeNull();
+    // No check names, only a reason (a park whose red-check list was empty).
+    expect(ciHoldNoteSummary(" — why")).toBeNull();
   });
 
   it("only shortens the CI-hold reasons", () => {
