@@ -415,7 +415,10 @@ waiting for a free concurrency slot. It never holds a session; see the
      could not confirm it, and it never claims the work is stranded there on
      a check that never happened. The exemption ends with the wait: the retry
      starts (on the original host or on a replacement one), or the operator
-     starts the task fresh.
+     starts the task fresh. It also ends early when a later check positively
+     confirms the branch **is** on `origin`: the work is on `origin` then, so
+     failing the task would no longer throw it away, and the wait becomes an
+     ordinary placement wait again (the 6-hour give-up applies to it).
 
      **Start fresh** (`POST /api/tasks/:id/start-fresh`, offered on the card
      and in the task sidebar) is the operator's way out of a wait that never
@@ -1133,7 +1136,10 @@ The reason is not hidden:
   both things while that lasts: the branch is confirmed missing from
   `origin`, **and** the latest check could not confirm it. The exemption ends
   with the wait — the retry starts (on the original host or on a replacement
-  one), or the operator starts the task fresh.
+  one), or the operator starts the task fresh — and it also ends early when a
+  later check positively confirms the branch **is** on `origin`: the work is
+  on `origin` then, so failing the task would no longer throw it away, and the
+  wait is an ordinary placement wait again (the 6-hour give-up applies to it).
 
 ## Where a task runs: `Platform:`, `Host:` and `Capability:`
 

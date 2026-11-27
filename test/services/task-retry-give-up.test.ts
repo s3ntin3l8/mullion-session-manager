@@ -184,13 +184,17 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
    * 404 (the branch is CONFIRMED to be only on the Mac), "unknown" is a
    * lookup that could not be made at all (a rate limit, a network error) —
    * the branch's whereabouts are then UNKNOWN, and the wait must not claim
-   * the work is stranded on the Mac.
+   * the work is stranded on the Mac. "present" is a positive answer: the
+   * branch IS on origin.
    *
    * The returned `origin` controller lets a test DEGRADE the lookup between
    * two sweeps (issue #3232): one sweep confirms the branch is only on the
    * Mac, the next one's lookup cannot be made.
    */
-  async function setupWaitingRetry(name: string, originLookup: "absent" | "unknown" = "absent") {
+  async function setupWaitingRetry(
+    name: string,
+    originLookup: "absent" | "unknown" | "present" = "absent",
+  ) {
     const app = await buildApp();
     app.db.delete(sessions).run();
     app.db.delete(tasks).run();
@@ -265,10 +269,12 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
     // (the branch is CONFIRMED to be only on the Mac), "unknown" is a lookup
     // that could not be made at all (a rate limit, a network error). The
     // branch's whereabouts are then UNKNOWN, which is NOT a confirmation
-    // that it is stranded on the Mac.
+    // that it is stranded on the Mac. "present" is a positive answer — the
+    // branch IS on origin, which REFUTES a standing confirmation.
     const origin = { lookup: originLookup };
     vi.spyOn(githubRequestModule, "githubRequest").mockImplementation(async () => {
       if (origin.lookup === "absent") throw new GitHubApiError("Not Found", 404);
+      if (origin.lookup === "present") return { ref: `refs/heads/${BRANCH}` } as never;
       throw new GitHubApiError("Bad gateway", 502);
     });
 
@@ -279,7 +285,7 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
       expect(row?.retryHostId).toBe(mac);
     });
 
-    return { app, mac, task, origin };
+    return { app, mac, linux, task, origin };
   }
 
   it("leaves a retry waiting for its original host queued past the 6-hour give-up", async () => {
@@ -393,6 +399,60 @@ describe("the 6-hour give-up and the retry's original-host wait (#3194)", () => 
       expect(row?.status).toBe("claimed");
       expect(row?.retryHostId).toBe(mac);
       expect(row?.retryStrandedOnHost).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("withdraws a CONFIRMED stranded wait's exemption when a later sweep CONFIRMS the branch is on origin (#3232)", async () => {
+    const { app, mac, linux, task, origin } = await setupWaitingRetry("give-up-refuted");
+    try {
+      // The first sweep CONFIRMED the branch is only on the Mac (GitHub's
+      // 404), so the wait is exempt from the give-up.
+      const held = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(held?.retryHostId).toBe(mac);
+      expect(held?.retryStrandedOnHost).toBe(true);
+
+      // A later sweep REFUTES that confirmation: the branch IS on origin
+      // now, so the work is safe there and nothing is stranded on the Mac.
+      //
+      // The other host goes offline too, so no replacement host can take
+      // the retry and the wait CONTINUES — that is what makes the
+      // withdrawal visible on the row instead of being masked by the retry
+      // simply starting somewhere else.
+      app.hostHeartbeatTracker?.markOffline(linux);
+      origin.lookup = "present";
+
+      await dispatchQueuedTasks(app);
+
+      const refuted = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(refuted?.status).toBe("claimed");
+      expect(refuted?.retryHostId).toBe(mac);
+      // The confirmation is WITHDRAWN: the branch is on origin, so it is
+      // not stranded on the host the retry waits for — and the wait is an
+      // ordinary placement wait again.
+      expect(refuted?.retryStrandedOnHost).toBe(false);
+      // The reason says the branch is on origin; it never claims the work
+      // is stranded on the Mac.
+      expect(refuted?.failureReason).toContain("the task's branch is on origin");
+      expect(refuted?.failureReason).not.toContain("only on");
+
+      // So the 6-hour bound applies to it again: past the mark the wait is
+      // given up on.
+      app.db
+        .update(tasks)
+        .set({ dispatchFailingSince: new Date(Date.now() - 7 * 60 * 60 * 1000) })
+        .where(eq(tasks.id, task.id))
+        .run();
+
+      await dispatchQueuedTasks(app);
+
+      const failed = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get();
+      expect(failed?.status).toBe("failed");
+      expect(failed?.failureReason).toContain("gave up after 6h");
+      // The preserved branch survives the give-up: a later Retry resumes it
+      // instead of cutting a brand-new one.
+      expect(failed?.branchName).toBe(BRANCH);
     } finally {
       await app.close();
     }
