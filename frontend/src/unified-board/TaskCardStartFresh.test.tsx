@@ -186,4 +186,51 @@ describe("a card for a retry waiting for its host (#3194)", () => {
     expect(screen.getByText(/Not dispatched yet/)).toBeInTheDocument();
     expect(screen.queryByText("Queued — waiting for a free slot")).toBeNull();
   });
+
+  // Issue #3229 — the branch a "Start fresh" abandoned stays on its host,
+  // with the worker's commits: the card has to name it, or the operator
+  // cannot find the work they just abandoned.
+  it("names the abandoned branch and the host it was left on", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "claimed",
+        sessionId: null,
+        abandonedBranches: JSON.stringify([
+          { hostId: "macbook", branch: "mullion/task-1-start-fresh" },
+        ]),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(
+      screen.getByText(/Abandoned branch mullion\/task-1-start-fresh on macbook/),
+    ).toBeInTheDocument();
+  });
+
+  it("names every branch when the task was started fresh more than once", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "claimed",
+        sessionId: null,
+        abandonedBranches: JSON.stringify([
+          { hostId: "macbook", branch: "mullion/task-1-start-fresh" },
+          { hostId: "linux", branch: "mullion/task-1-start-fresh-attempt-2" },
+        ]),
+      }),
+    ];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(
+      screen.getByText(/Abandoned branch mullion\/task-1-start-fresh on macbook/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Abandoned branch mullion\/task-1-start-fresh-attempt-2 on linux/),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing about an abandoned branch when there is none", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", sessionId: null })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByText(/Abandoned branch/)).toBeNull();
+  });
 });

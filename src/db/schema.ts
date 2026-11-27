@@ -1407,6 +1407,25 @@ export const tasks = sqliteTable(
     // doc comment for why renaming on a title edit would break retry.
     // Recorded here so cleanup/push never have to re-derive it.
     branchName: text("branch_name"),
+    // Issue #3229 — the branches this task's "Start fresh" ABANDONED, and the
+    // hosts they were abandoned on: JSON
+    // `[{"hostId":"macbook","branch":"mullion/task-7-foo"}]`, oldest first.
+    //
+    // A "Start fresh" (issue #3194) abandons a waiting retry's preserved
+    // branch: it stays on the host that owns it, with the worker's commits,
+    // and the task is re-queued as a NEW claim. The branch NAME is
+    // deterministic, so that new claim would derive the very name the
+    // abandoned branch still holds — and its orphan-clear would delete it,
+    // destroying the only copy of those commits. This column is the record
+    // that stops it: the claim path derives a name that differs from every
+    // name listed here (see git-worktree.ts's deriveTaskBranchName), and
+    // clearOrphanedTaskWorktree never deletes a branch it names.
+    //
+    // Written ONLY by task-start-fresh.ts (appended to, never rewritten),
+    // read by the claim path and by the orphan-clear's guard. It is a list
+    // rather than a single name because a task can be started fresh more than
+    // once, and each of those branches is equally worth keeping.
+    abandonedBranches: text("abandoned_branches"),
     // #491 — the resolved commit SHA the worktree was actually branched
     // from, captured at claim time (local-hosted projects only — remote
     // projects branch from the literal "HEAD" and this stays null, same

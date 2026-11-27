@@ -15,6 +15,11 @@
 import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, tasks } from "../db/schema.js";
+import {
+  abandonedBranchesOf,
+  serializeAbandonedBranches,
+  type AbandonedBranch,
+} from "../shared/abandoned-branches.js";
 import { enqueueTask } from "./task-claim.js";
 import { recordTaskTransition } from "./task-state.js";
 
@@ -55,6 +60,16 @@ export async function startFreshTask(
     ) {
       return { reset: false as const };
     }
+    // Issue #3229 — the abandoned branch is recorded ON THE ROW, not only in
+    // the transition context below: the claim path reads it (so the new
+    // claim derives a branch name of its own instead of colliding with this
+    // one) and the orphan-clear reads it (so it never deletes this branch —
+    // the only copy of the worker's commits). The list is APPENDED to: a
+    // second "Start fresh" must not make the first one's branch reusable.
+    const abandoned: AbandonedBranch[] = abandonedBranchesOf(current);
+    if (current.branchName !== null && current.branchName.length > 0) {
+      abandoned.push({ hostId: current.retryHostId, branch: current.branchName });
+    }
     tx.update(tasks)
       .set({
         status: "ready",
@@ -71,6 +86,8 @@ export async function startFreshTask(
         // claim derives its own branch name and worktree path.
         branchName: null,
         worktreePath: null,
+        abandonedBranches:
+          abandoned.length > 0 ? serializeAbandonedBranches(abandoned) : current.abandonedBranches,
       })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();

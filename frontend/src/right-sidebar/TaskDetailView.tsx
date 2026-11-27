@@ -1,9 +1,10 @@
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { SessionTimeline } from "../SessionTimeline.js";
 import { TaskActions } from "../TaskActions.js";
 import { useCanPopOutTask } from "../hooks/useOpenTask.js";
 import { DeleteTaskAction } from "../DeleteTaskAction.js";
 import { canDeleteTask } from "../lib/canDeleteTask.js";
+import { describeAbandonedBranches } from "../lib/abandonedBranches.js";
 import { WorkflowChangeApproval } from "../WorkflowChangeApproval.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
@@ -238,6 +239,11 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
     (task.subIssueTotal !== null && task.subIssueTotal > 0);
   const body = task.body?.trim() ?? "";
   const longBody = body.length > BODY_COLLAPSED_CHARS;
+  // #3229 — the branch a "Start fresh" abandoned, and the host it was left
+  // on: its commits are still there, and the operator has to be able to find
+  // them. A task can be started fresh MORE THAN ONCE, so every one of those
+  // branches is named — not just the newest.
+  const abandonedBranches = describeAbandonedBranches(task.abandonedBranches);
 
   return (
     <div
@@ -405,6 +411,19 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
               "none (local task)"
             )}
           </dd>
+          {/* #3229 — every branch a "Start fresh" abandoned, each with the
+              host it was left on: the commits are still there, and the
+              operator has to be able to find them. A task can be started
+              fresh more than once, so there can be more than one. */}
+          {abandonedBranches.map((branch) => (
+            <Fragment key={branch}>
+              <dt>Abandoned branch</dt>
+              <dd>
+                {branch}
+                <span className="sb-dim"> · its commits stay there</span>
+              </dd>
+            </Fragment>
+          ))}
         </dl>
         <TaskAgents task={task} />
         {body && (

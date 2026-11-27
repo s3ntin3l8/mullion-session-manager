@@ -96,6 +96,13 @@ const TASK_ROW_COLUMNS = {
   projectDefaultReviewAgent: projects.defaultReviewAgent,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
+  // Issue #3229 — the branches a "Start fresh" abandoned, and the hosts they
+  // were abandoned on (JSON). Written by task-start-fresh.ts; the board card
+  // and the task sidebar read it to tell the operator where those commits
+  // are. Without this entry it would be written but never reach
+  // GET /api/tasks or GET /api/tasks/:id — the same TASK_ROW_COLUMNS silent
+  // drop the comments above record.
+  abandonedBranches: tasks.abandonedBranches,
   baseSha: tasks.baseSha,
   agent: tasks.agent,
   reviewAgent: tasks.reviewAgent,

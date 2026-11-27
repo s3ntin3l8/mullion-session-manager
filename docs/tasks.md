@@ -431,6 +431,16 @@ waiting for a free concurrency slot. It never holds a session; see the
      without the branch ever being abandoned. Only the **give-up
      exemption** is narrower — it applies to a wait whose branch is
      _confirmed_ to be on that host and nowhere else.
+
+     The abandoned branch is recorded on the task row (`abandonedBranches`:
+     the branch name and the host it was abandoned on, oldest first), and
+     the new claim never reuses that name — it gets one of its own
+     (`mullion/task-<id>-<slug>-attempt-<n>`). The branch names are
+     deterministic, so a claim that reused the abandoned one would delete it
+     (the only copy of the worker's commits) or refuse to start at all. The
+     orphan-clear refuses to delete any branch the row records as abandoned,
+     and the board card and the task sidebar name the branch and its host so
+     the operator can find (or clear) it by hand.
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same
