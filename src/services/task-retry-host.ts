@@ -23,6 +23,16 @@
 //      is safely on origin — or whose origin state could not be confirmed —
 //      is an ordinary placement wait and keeps the 6-hour give-up.
 //
+// The CONFIRMATION outlives a degraded lookup (issue #3232): a later sweep
+// whose origin lookup fails (a 502, a rate limit, a missing token, a
+// repository that cannot be resolved) says NOTHING about the branch, so it
+// does not withdraw a confirmation an earlier sweep made — the give-up would
+// otherwise fire on the LOOKUP's failure instead of on the wait's own clock,
+// and the task would be failed the moment GitHub has a bad minute. Only a
+// positive "the branch IS on origin" withdraws it (the branch is then not
+// stranded anywhere), and the wait's reason always says which of the two it
+// is describing.
+//
 // The placement decision itself is NOT re-implemented here: the same
 // `resolveTargetHost`/`resolvePlacement` calls a fresh claim makes decide
 // eligibility (online, un-parked, capacity reported, the project mapped or
@@ -73,6 +83,12 @@ export type RetryHostDecision =
    * wait — but "Start fresh" is STILL offered, because the retry is waiting
    * for a host either way (the two answers live in two columns:
    * `tasks.retryHostId` and `tasks.retryStrandedOnHost`).
+   *
+   * Issue #3232 — the CONFIRMATION survives a degraded lookup: once this wait
+   * has confirmed the branch is only on that host, a later sweep whose origin
+   * lookup could not be made (a 502, a rate limit, a missing token) does not
+   * withdraw it, so the exemption lasts as long as the wait does. Only a
+   * positive "the branch IS on origin" withdraws it.
    */
   | { kind: "wait"; hostId: string; detail: string; strandedOnHost: boolean };
 
@@ -234,6 +250,22 @@ export async function decideRetryHost(
   });
 
   const origin = await branchOnOrigin(app, project, task.branchName ?? "");
+  // Issue #3232 — the give-up exemption is a STANDING fact about the wait,
+  // not a per-sweep reading of the origin lookup. A lookup that DEGRADED (a
+  // 502, a rate limit, a missing token, a repository that cannot be
+  // resolved) says nothing about the branch, so it must not withdraw the
+  // confirmation an earlier sweep made: the give-up would then fire on the
+  // LOOKUP's failure instead of on the wait's own clock, and the task would
+  // be failed the moment GitHub has a bad minute — throwing away a branch
+  // that is provably on the host the retry waits for.
+  //
+  // The standing confirmation belongs to THIS wait: the row carries it for
+  // the host the retry waits for (`tasks.retryHostId`), so a wait for a
+  // different host starts over — and a fresh wait (a new Retry) starts
+  // without it (task-retry.ts's own reset).
+  const stranded = strandedOnHostFor(origin, {
+    confirmed: task.retryStrandedOnHost && task.retryHostId === originalHostId,
+  });
   if (candidate === null) {
     // No other host can take the retry right now.
     if (origin === "present") {
@@ -243,9 +275,10 @@ export async function decideRetryHost(
       return {
         kind: "wait",
         hostId: originalHostId,
-        strandedOnHost: false,
+        strandedOnHost: stranded,
         detail: waitDetail({
           origin,
+          stranded,
           originalHostId,
           state: originalHostState,
           candidateHostId: null,
@@ -256,10 +289,12 @@ export async function decideRetryHost(
       kind: "wait",
       hostId: originalHostId,
       // Only a CONFIRMED 404 proves the branch is on the original host alone;
-      // an unconfirmed lookup must not claim the work is stranded there.
-      strandedOnHost: origin === "absent",
+      // an unconfirmed lookup must not claim the work is stranded there — but
+      // it must not withdraw a confirmation this wait already holds either.
+      strandedOnHost: stranded,
       detail: waitDetail({
         origin,
+        stranded,
         originalHostId,
         state: originalHostState,
         candidateHostId: null,
@@ -272,9 +307,10 @@ export async function decideRetryHost(
     return {
       kind: "wait",
       hostId: originalHostId,
-      strandedOnHost: origin === "absent",
+      strandedOnHost: stranded,
       detail: waitDetail({
         origin,
+        stranded,
         originalHostId,
         state: originalHostState,
         candidateHostId: candidate.hostId,
@@ -282,6 +318,31 @@ export async function decideRetryHost(
     };
   }
   return { kind: "replace", hostId: candidate.hostId, placement: candidate };
+}
+
+/**
+ * Is the preserved branch stranded on the host the retry waits for?
+ *
+ * The three origin states answer three different questions:
+ *
+ *   - "absent" CONFIRMS it — GitHub says there is no such ref, so the branch
+ *     is on that host alone. Failing the task would free nothing (the commits
+ *     stay there), so the wait is exempt from the 6-hour give-up.
+ *   - "present" REFUTES it — the branch IS on origin, so it is not stranded
+ *     anywhere. The wait is an ordinary placement wait, and failing it frees
+ *     something.
+ *   - "unknown" says NOTHING — the lookup never happened. It must not claim
+ *     the work is stranded there (issue #3194), and it must not withdraw a
+ *     confirmation this wait already holds (issue #3232): the standing
+ *     confirmation is what the exemption is made of.
+ *
+ * `standing.confirmed` is the wait's own standing confirmation — the one an
+ * earlier sweep of THIS wait made.
+ */
+function strandedOnHostFor(origin: BranchOriginState, standing: { confirmed: boolean }): boolean {
+  if (origin === "absent") return true;
+  if (origin === "present") return false;
+  return standing.confirmed;
 }
 
 /**
@@ -310,11 +371,15 @@ const REQUIREMENT_NAME = "the task's Platform:/Host:/Capability: requirement";
  * The reason a retry is waiting, in the words the card shows.
  *
  * It says what is actually known:
- *   - "it is only on <host> (it is not on origin)" only when GitHub CONFIRMED
- *     the ref is missing (a 404) — the branch really is only on the original
- *     host;
- *   - "could not confirm" when the lookup itself failed, so the operator does
- *     not go hunting for a branch that may well be on origin;
+ *   - "it is only on <host> (it is not on origin)" only when the branch's
+ *     whereabouts on origin are CONFIRMED — either by this sweep (GitHub's
+ *     404 for the ref) or by an EARLIER sweep of this same wait (issue
+ *     #3232), in which case the reason also says the latest check could not
+ *     confirm it, so the operator is never told a fresh check happened when
+ *     none did;
+ *   - "could not confirm" when the lookup itself failed and no confirmation
+ *     was ever made, so the operator does not go hunting for a branch that
+ *     may well be on origin;
  *   - the original host's REAL state (offline, parked, no longer eligible)
  *     rather than a blanket "is offline";
  *   - and WHAT the retry waits for: the host coming back, or the task's
@@ -324,11 +389,13 @@ const REQUIREMENT_NAME = "the task's Platform:/Host:/Capability: requirement";
  */
 function waitDetail(opts: {
   origin: BranchOriginState;
+  /** The wait's effective answer: is the branch stranded on the wait host? */
+  stranded: boolean;
   originalHostId: string;
   state: OriginalHostState;
   candidateHostId: string | null;
 }): string {
-  const { origin, originalHostId, state, candidateHostId } = opts;
+  const { origin, stranded, originalHostId, state, candidateHostId } = opts;
   const hostState = `${originalHostId} is ${state.phrase}`;
   const tail =
     state.waitsFor === "host"
@@ -339,7 +406,12 @@ function waitDetail(opts: {
       ? `the task's branch is only on ${originalHostId} (it is not on origin)`
       : origin === "present"
         ? "the task's branch is on origin"
-        : "could not confirm that the task's branch is on origin";
+        : stranded
+          ? // Issue #3232 — the confirmation stands (an earlier sweep of this
+            // wait made it), but this sweep's lookup did not happen: the
+            // reason says BOTH, so it never claims a fresh confirmation.
+            `the task's branch is only on ${originalHostId} (it was confirmed missing from origin; the latest check could not confirm it)`
+          : "could not confirm that the task's branch is on origin";
   if (candidateHostId === null) {
     if (origin === "present") {
       // The branch is safely on origin, so nothing is stranded on the

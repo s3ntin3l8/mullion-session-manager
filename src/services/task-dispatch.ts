@@ -365,6 +365,15 @@ function giveUpIfOverdue(app: FastifyInstance, taskId: number, now: number): boo
   // could not be confirmed, and those keep the 6-hour bound — their branch
   // may well be on origin, so failing them frees something. The two answers
   // live in two columns for exactly that reason.
+  //
+  // Issue #3232 — the confirmation SURVIVES a degraded origin lookup: a
+  // sweep whose lookup could not be made (a 502, a rate limit, a missing
+  // token) leaves the column alone, so the exemption lasts as long as the
+  // wait does. Without that, the give-up would fire on the LOOKUP's failure
+  // rather than on the wait's own clock — against the original
+  // `dispatchFailingSince` — and the task would be failed the moment GitHub
+  // had a bad minute, throwing away a branch that is provably on the host
+  // the retry waits for.
   if (row.retryStrandedOnHost) return false;
   if (now - row.since.getTime() < DISPATCH_GIVE_UP_AFTER_MS) return false;
   const hours = DISPATCH_GIVE_UP_AFTER_MS / (60 * 60 * 1000);
