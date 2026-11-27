@@ -354,6 +354,10 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
     // #3589 — the rail's own Browser view, as a preview opened from the
     // rail does (#3372).
     onOpenBrowser: () => useDashboardStore.getState().openRailBrowserPreview(null, projectId),
+    onOpenBrowserUrl: (url) =>
+      useDashboardStore
+        .getState()
+        .openRailBrowserPreview({ kind: "external", url, projectId }, projectId),
   });
   const {
     hostPicker,

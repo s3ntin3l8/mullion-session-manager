@@ -50,6 +50,7 @@ let previewsEnabled: boolean;
 // The Browser quick pick's running entries (services/browser-destinations.ts).
 let destinations: unknown[];
 let destinationPreviewStatus: number;
+let fetchMock: ReturnType<typeof mockFetch>["fetchMock"];
 
 /** The body of the first `selector { … }` rule in a stylesheet. */
 function ruleBody(css: string, selector: string): string {
@@ -92,7 +93,7 @@ describe("Dock header and rows (#3589)", () => {
     previewsEnabled = true;
     destinations = [];
     destinationPreviewStatus = 200;
-    const { fetchMock } = mockFetch({
+    const { fetchMock: mocked } = mockFetch({
       "GET /api/projects/:id/browser-destinations": () =>
         jsonResponse(200, { destinations, runningNote: null }),
       "POST /api/projects/:id/browser-destinations/preview": () =>
@@ -104,6 +105,7 @@ describe("Dock header and rows (#3589)", () => {
       "GET /api/projects/:id/github": () => jsonResponse(204),
       "GET /api/projects/:id/github/prs": () => jsonResponse(204),
     });
+    fetchMock = mocked;
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal(
       "ResizeObserver",
@@ -122,8 +124,18 @@ describe("Dock header and rows (#3589)", () => {
     localStorage.clear();
   });
 
-  const renderDock = (onOpenBrowser = vi.fn()) =>
-    render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={onOpenBrowser} />);
+  const renderDock = (
+    onOpenBrowser = vi.fn(),
+    onOpenBrowserUrl?: (projectId: number, url: string, label: string) => void,
+  ) =>
+    render(
+      <Dock
+        workspaceProjectIds={[1]}
+        onOpenGitHub={vi.fn()}
+        onOpenBrowser={onOpenBrowser}
+        onOpenBrowserUrl={onOpenBrowserUrl}
+      />,
+    );
   const picker = () => screen.getByRole("combobox", { name: /^Run dock controls on host/ });
 
   describe("the project header", () => {
@@ -142,12 +154,15 @@ describe("Dock header and rows (#3589)", () => {
       // The selector and Preview are one unit that never shrinks or splits:
       // beside the name, or together on the next line of a narrow rail.
       expect(ruleBody(dockCss, ".dock-group-tools")).toMatch(/flex: 0 0 auto/);
-      expect(ruleBody(dockCss, ".dock-group-tools")).not.toMatch(/flex-wrap/);
+      expect(ruleBody(dockCss, ".dock-group-tools")).not.toMatch(/flex-wrap/); // rule asserted above
       expect(ruleBody(dockCss, ".dock-group-tools .dock-host-picker")).toMatch(/flex: 0 0 auto/);
       // The GitHub glance takes only the room left on the name's line, so it
       // never forces a line of its own.
       expect(ruleBody(dockCss, ".dock-group-header .dock-github-row")).toMatch(/flex: 1 1 0/);
-      // The note that used to span a whole line inside the header is gone from it.
+      // The note that used to span a whole line inside the header is gone from
+      // it. Anchored on the rule's own padding first: `ruleBody` is "" for a
+      // missing rule, which a negative assertion alone would let pass.
+      expect(ruleBody(dockCss, ".dock-host-picker-hint")).toMatch(/padding:/);
       expect(ruleBody(dockCss, ".dock-host-picker-hint")).not.toMatch(/flex-basis/);
     });
 
@@ -356,6 +371,80 @@ describe("Dock header and rows (#3589)", () => {
         expect(useDashboardStore.getState().toasts.map((t) => t.message)).toEqual([
           expect.stringMatching(/^Could not open preview/),
         ]),
+      );
+    });
+
+    const DETECTED_3000 = {
+      key: "dock:7",
+      group: "running",
+      kind: "dock",
+      label: "Dev server",
+      detail: "Dock · port 3000",
+      address: "http://localhost:3000/",
+      hostId: "local",
+      previewSlug: null,
+      targetId: null,
+    };
+
+    it("opens a detected port's address itself when previews are off", async () => {
+      destinations = [DETECTED_3000];
+      // 409: no PREVIEW_BASE_HOST, as the quick pick handles it.
+      destinationPreviewStatus = 409;
+      seed({ project: devProject(), sessions: [dockSession({ resolvedHostId: "local" })] });
+      const onOpenBrowserUrl = vi.fn();
+      renderDock(vi.fn(), onOpenBrowserUrl);
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Open Dev server in browser" }),
+      );
+      await waitFor(() =>
+        expect(onOpenBrowserUrl).toHaveBeenCalledWith(1, "http://localhost:3000/", "Dev server"),
+      );
+      expect(useDashboardStore.getState().toasts).toEqual([]);
+    });
+
+    it("polls the detected ports once per project for every surface showing it", async () => {
+      destinations = [DETECTED_3000];
+      seed({ project: devProject(), sessions: [dockSession({ resolvedHostId: "local" })] });
+      const destinationCalls = () =>
+        fetchMock.mock.calls.filter(([url]) => String(url).includes("/browser-destinations"))
+          .length;
+      renderDock();
+      render(
+        <DockSidebarView
+          projectId={1}
+          actions={{ onOpenDockConfig: vi.fn() } as unknown as RightSidebarActions}
+        />,
+      );
+      await waitFor(() =>
+        expect(
+          screen.getAllByRole("button", { name: /Open (Dev server )?in browser/ }),
+        ).toHaveLength(2),
+      );
+      expect(destinationCalls()).toBe(1);
+    });
+
+    it("opens a detected port's address in the rail when previews are off, from the Dock view", async () => {
+      destinations = [DETECTED_3000];
+      destinationPreviewStatus = 409;
+      seed({ project: devProject(), sessions: [dockSession({ resolvedHostId: "local" })] });
+      const openRailBrowserPreview = vi.fn();
+      useDashboardStore.setState({ openRailBrowserPreview });
+      render(
+        <DockSidebarView
+          projectId={1}
+          actions={{ onOpenDockConfig: vi.fn() } as unknown as RightSidebarActions}
+        />,
+      );
+      await userEvent.click(
+        await screen.findByRole("button", { name: "Dev server, running on this server" }),
+      );
+      const group = screen.getByRole("group", { name: "Dev server actions" });
+      await userEvent.click(await within(group).findByRole("button", { name: "Open in browser" }));
+      await waitFor(() =>
+        expect(openRailBrowserPreview).toHaveBeenCalledWith(
+          { kind: "external", url: "http://localhost:3000/", projectId: 1 },
+          1,
+        ),
       );
     });
 

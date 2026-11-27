@@ -69,6 +69,7 @@ export function DockProjectGroup({
   onOpenGitHub,
   onOpenBrowser,
   onOpenBlankBrowser,
+  onOpenBrowserUrl,
   onManagePreviews,
   onOpenSession,
   onRemove,
@@ -106,6 +107,7 @@ export function DockProjectGroup({
   onOpenGitHub: (projectId: number) => void;
   onOpenBrowser: (projectId: number) => void;
   onOpenBlankBrowser?: () => void;
+  onOpenBrowserUrl?: (projectId: number, url: string, label: string) => void;
   onManagePreviews?: (projectId: number) => void;
   // Issue #2069 — "Open holder" on a port-in-use row.
   onOpenSession?: (session: Session) => void;
@@ -137,6 +139,11 @@ export function DockProjectGroup({
     surface: "bottom-dock",
     onOpenSession,
     onOpenBrowser: () => onOpenBrowser(projectId),
+    ...(onOpenBrowserUrl
+      ? {
+          onOpenBrowserUrl: (url: string, label: string) => onOpenBrowserUrl(projectId, url, label),
+        }
+      : {}),
   });
 
   // ---- Collapsible project section (unified-rail dock rework) ----
@@ -393,7 +400,8 @@ export function DockProjectGroup({
         selectedValue={view.selectedValue}
         worktreeOptions={view.worktreeOptions}
         onWorktreeChange={view.changeWorktree}
-        onOpenInBrowser={view.openInBrowser}
+        // Inert while held, like every other action on the row.
+        onOpenInBrowser={view.held ? null : view.openInBrowser}
         updateAvailable={view.updateAvailable}
         dockerStatus={view.dockerStatus}
         held={view.held}
