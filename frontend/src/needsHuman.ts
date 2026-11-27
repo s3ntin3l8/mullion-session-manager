@@ -34,7 +34,8 @@ export function isCiHoldReason(
  * there is one, else a count. The note is `names` or `names — workerReason`
  * (services/task-ci-return-hold.ts), and the reason can run to a paragraph, so
  * the board card shows this and keeps the full note for its tooltip and the
- * task drawer. */
+ * task drawer. Assumes no check name contains ", " (none here does; a
+ * multi-parameter matrix name like `build (ubuntu, 20)` would be miscounted). */
 export function ciHoldNoteSummary(note: string | null | undefined): string | null {
   if (!note) return null;
   const names = note.split(" — ")[0].split(", ").filter(Boolean);
