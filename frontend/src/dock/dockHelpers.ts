@@ -824,6 +824,8 @@ export function cwdForOtherHost(params: {
   if (target === root) return { ok: true, cwd: undefined };
   if (!target.startsWith(`${root}/`)) return { ok: false };
   const rel = target.slice(root.length + 1);
+  // `..` would climb out of the checkout on the other host.
+  if (rel.split("/").some((seg) => seg === "..")) return { ok: false };
   // A Windows agent's root uses backslashes; keep the relative part in kind.
   const windows = hostRoot.includes("\\") && !hostRoot.includes("/");
   return {

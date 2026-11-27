@@ -886,6 +886,7 @@ describe("cwdForOtherHost", () => {
   it("refuses what exists on the own host only", () => {
     expect(cwdForOtherHost({ ...base, cwd: "/home/x/aurora-other" })).toEqual({ ok: false });
     expect(cwdForOtherHost({ ...base, cwd: "/srv/elsewhere" })).toEqual({ ok: false });
+    expect(cwdForOtherHost({ ...base, cwd: "/home/x/aurora/../secrets" })).toEqual({ ok: false });
     expect(
       cwdForOtherHost({ ...base, cwd: "/home/x/aurora/.wt/feature", isLinkedWorktree: true }),
     ).toEqual({ ok: false });

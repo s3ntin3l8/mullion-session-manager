@@ -734,12 +734,14 @@ export function useDockProject(
                 effectiveCwd !== undefined &&
                 worktrees.some((w) => w.path === effectiveCwd && !w.isMain),
             });
-      return mapped.ok
-        ? mapped
-        : {
-            ok: false,
-            message: `${effectiveCwd} is a checkout on ${hostLabel(project.hostId)} only. Run the main checkout or a branch preview on ${hostLabel(launchHostId)}.`,
-          };
+      if (mapped.ok) return mapped;
+      return {
+        ok: false,
+        message:
+          project.hostCwds?.[launchHostId] === undefined
+            ? `${hostLabel(launchHostId)} has no checkout of this project.`
+            : `${effectiveCwd} is a checkout on ${hostLabel(project.hostId)} only. Run the main checkout or a branch preview on ${hostLabel(launchHostId)}.`,
+      };
     };
     const reportStartFailure = (err: unknown) => {
       const host = hostLabel(launchHostId);
@@ -841,7 +843,10 @@ export function useDockProject(
         .getState()
         .deleteSession(holderId)
         .then(() => launchForValue(selectedValue))
-        .catch(() => showCheckStatus(control.id, "Failed to start — try again", true));
+        .catch((err: unknown) => {
+          showCheckStatus(control.id, "Failed to start", true);
+          reportStartFailure(err);
+        });
     };
     // The ONLY place a running stream gets killed from, and it never touches
     // selection OR activation, same as before this extraction.
@@ -851,8 +856,8 @@ export function useDockProject(
         disarmKill(control.id);
         bumpToggleGen(control.id);
         // The failure is reported on the row, the same way its two
-        // siblings in this file report theirs — "Failed to start — try
-        // again" and "Failed to switch — try again". This one used to
+        // siblings in this file report theirs — "Failed to start" and
+        // "Failed to switch" (plus a toast with the reason). This one used to
         // reject unhandled, so a kill that failed was completely silent
         // and the row just sat there looking alive (audit finding 10).
         void useDashboardStore
@@ -893,7 +898,7 @@ export function useDockProject(
             });
           }
         } catch {
-          showCheckStatus(control.id, "Failed to switch — try again", true);
+          showCheckStatus(control.id, "Failed to switch", true);
         }
       })();
     };
