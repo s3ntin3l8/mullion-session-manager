@@ -30,6 +30,19 @@ export function isCiHoldReason(
   return reason === "ci-unfixable" || reason === "ci-still-red";
 }
 
+/** The card-sized stand-in for a `ciHoldNote`: the failing check's name when
+ * there is one, else a count. The note is `names` or `names — workerReason`
+ * (services/task-ci-return-hold.ts), and the reason can run to a paragraph, so
+ * the board card shows this and keeps the full note for its tooltip and the
+ * task drawer. Assumes no check name contains ", " (none here does; a
+ * multi-parameter matrix name like `build (ubuntu, 20)` would be miscounted). */
+export function ciHoldNoteSummary(note: string | null | undefined): string | null {
+  if (!note) return null;
+  const names = note.split(" — ")[0].split(", ").filter(Boolean);
+  if (names.length === 0) return null;
+  return names.length === 1 ? names[0] : `${names.length} checks`;
+}
+
 /** What a human can do about a parked red check. */
 export const CI_HOLD_HINT =
   'Approve the task, then use "Merge anyway" if the failing check is not required. If it is required, fix the cause on the base branch and update this branch, which re-arms the task.';
@@ -50,7 +63,13 @@ export function isMergeNeedsHumanReason(
 export function needsHumanText(
   reason: NeedsHumanReason | null | undefined,
   note?: string | null,
+  /** "short": a CI-hold note becomes `(name)` / `(N checks)` — the board card. */
+  form: "full" | "short" = "full",
 ): string {
+  if (form === "short" && isCiHoldReason(reason)) {
+    const summary = ciHoldNoteSummary(note);
+    return `${needsHumanText(reason)}${summary ? ` (${summary})` : ""}`;
+  }
   switch (reason) {
     case "worker-not-started":
       return "worker has not started a turn — check its terminal for a startup prompt";

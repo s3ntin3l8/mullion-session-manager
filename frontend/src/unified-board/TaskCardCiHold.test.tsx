@@ -81,9 +81,12 @@ describe("a parked red CI check", () => {
       }),
     ];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
-    expect(screen.getByTestId("ci-hold-needs-human")).toHaveTextContent(
-      "a CI check can't be fixed from this PR: dependency-audit — no patched release, needs a human",
+    const line = screen.getByTestId("ci-hold-needs-human");
+    // The card names the check; the worker's reason stays in the tooltip.
+    expect(line).toHaveTextContent(
+      "a CI check can't be fixed from this PR (dependency-audit), needs a human",
     );
+    expect(line).toHaveAttribute("title", "dependency-audit — no patched release");
   });
 
   it("shows once, not also as a Round line, when rounds were spent and nothing is approved", () => {
@@ -99,9 +102,21 @@ describe("a parked red CI check", () => {
     ];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByTestId("ci-hold-needs-human")).toHaveTextContent(
-      "CI still red after the worker and two reruns: codecov/patch, needs a human",
+      "CI still red after the worker and two reruns (codecov/patch), needs a human",
     );
     expect(screen.queryByText(/Round 5/)).toBeNull();
+  });
+
+  it("counts the checks instead of listing several, with the full note in the tooltip", () => {
+    const note =
+      "test-frontend / test-merge, test-frontend / test-shard (1), test-frontend / lint-and-test — a base-branch regression";
+    tasks = [makeTask({ id: 1, ...parked, needsHumanReason: "ci-unfixable", ciHoldNote: note })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    const line = screen.getByTestId("ci-hold-needs-human");
+    expect(line).toHaveTextContent(
+      "a CI check can't be fixed from this PR (3 checks), needs a human",
+    );
+    expect(line).toHaveAttribute("title", note);
   });
 
   it("clears when the task is re-armed (no stop stamp)", () => {

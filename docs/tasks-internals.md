@@ -2744,7 +2744,9 @@ same backend → `/internal/task-ci-unfixable` path as the re-review request; th
 route validates `headSha` as a 40-char lowercase hex SHA) BEFORE any rerun and
 parks at once with `needsHumanReason: "ci-unfixable"`. The worker's text is
 flattened to one line, run through `redactSecrets`, and capped at 500 characters
-before it is stored in `ciHoldNote` (kept raw for plain-text board display), and
+before it is stored in `ciHoldNote` (kept raw: the board card shows only the
+check's name or a check count and puts the full note in its tooltip, the task
+drawer shows it whole), and
 check names plus the reason are neutralised (`neutraliseCiHoldCommentText`,
 including breaking `#<digits>` auto-links) when building the PR comment. A host
 that is unreachable or busy holds the tick; any other read error

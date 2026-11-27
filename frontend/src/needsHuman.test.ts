@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  ciHoldNoteSummary,
   isCiHoldReason,
   isMergeNeedsHumanReason,
   needsHumanText,
@@ -119,5 +120,26 @@ describe("the red-CI hold reasons", () => {
     expect(isCiHoldReason(null)).toBe(false);
     expect(isMergeNeedsHumanReason("ci-unfixable")).toBe(false);
     expect(isMergeNeedsHumanReason("ci-still-red")).toBe(false);
+  });
+});
+
+describe("the card-sized CI-hold note", () => {
+  it("names one check, counts several, and drops the worker's reason", () => {
+    expect(ciHoldNoteSummary("dependency-audit — no patched release")).toBe("dependency-audit");
+    expect(ciHoldNoteSummary("a, b (1), c — why")).toBe("3 checks");
+    expect(ciHoldNoteSummary(null)).toBeNull();
+    expect(ciHoldNoteSummary("")).toBeNull();
+    // No check names, only a reason (a park whose red-check list was empty).
+    expect(ciHoldNoteSummary(" — why")).toBeNull();
+  });
+
+  it("only shortens the CI-hold reasons", () => {
+    expect(needsHumanText("ci-still-red", "x, y", "short")).toBe(
+      "CI still red after the worker and two reruns (2 checks)",
+    );
+    expect(needsHumanText("ci-unfixable", null, "short")).toBe(
+      "a CI check can't be fixed from this PR",
+    );
+    expect(needsHumanText("cap", "x", "short")).toBe("round cap reached");
   });
 });
