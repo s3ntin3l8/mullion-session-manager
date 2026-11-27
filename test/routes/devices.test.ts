@@ -795,6 +795,56 @@ describe("devices routes", () => {
         ]);
       });
 
+      it("opens a URL on an Android row, reversing a loopback port and dropping it on stop (#3559)", async () => {
+        const app = await buildTestAppOnPlatform("linux");
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/devices",
+          payload: { avdName: "dev35" },
+        });
+        const id = created.json().id;
+        const device = app.device.get(String(id))!;
+
+        const spawnWaitText = vi
+          .fn()
+          .mockResolvedValue("Starting: Intent { act=android.intent.action.VIEW }");
+        const addExternal = vi.fn().mockResolvedValue("tcp:5173");
+        const remove = vi.fn().mockResolvedValue(undefined);
+        (device as unknown as { adb: unknown }).adb = {
+          subprocess: { noneProtocol: { spawnWaitText } },
+          reverse: { addExternal, remove },
+          close: vi.fn().mockResolvedValue(undefined),
+        };
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "openurl", url: "http://127.0.0.1:5173/" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({ ok: true });
+        expect(addExternal).toHaveBeenCalledWith("tcp:5173", "tcp:5173");
+        expect(spawnWaitText).toHaveBeenCalledWith([
+          "'am'",
+          "'start'",
+          "'-a'",
+          "'android.intent.action.VIEW'",
+          "'-d'",
+          "'http://127.0.0.1:5173/'",
+        ]);
+
+        const bad = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "openurl", url: "tel:123" },
+        });
+        expect(bad.statusCode).toBe(400);
+
+        const stop = await app.inject({ method: "POST", url: `/api/devices/${id}/stop` });
+        expect(stop.statusCode).toBe(204);
+        expect(remove).toHaveBeenCalledWith("tcp:5173");
+      });
+
       it("400s on a logcat action whose optional fields have the wrong type", async () => {
         const app = await buildTestAppOnPlatform("linux");
         const created = await app.inject({

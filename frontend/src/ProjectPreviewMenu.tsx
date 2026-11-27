@@ -2,8 +2,13 @@ import { useEffect, useState } from "react";
 import { api } from "./api/index.js";
 import type { Device, NamedPreviewTarget, ProjectPreviewConfig, ServerInfo } from "./api/index.js";
 import { buildPreviewSrc, mintPreviewTokenIfRequired } from "./lib/previewSrc.js";
-import { simulatorDevServerRoute, simulatorTargetRoute } from "./lib/simulatorUrl.js";
-import type { SimulatorRoute } from "./lib/simulatorUrl.js";
+import {
+  deviceDevServerRoute,
+  deviceTargetRoute,
+  isDeviceBooting,
+  isOpenableDevice,
+} from "./lib/deviceUrl.js";
+import type { DeviceRoute } from "./lib/deviceUrl.js";
 import { useDashboardStore } from "./store/index.js";
 import { KebabMenu } from "./ui/KebabMenu.js";
 import type { KebabMenuItem } from "./ui/KebabMenu.js";
@@ -45,14 +50,15 @@ function usePreviewConfig(projectId: number) {
 /** Where the project's dev server runs and its address from there, from the
  * same browser-destinations answer the Browser pane uses (it resolves the host
  * from the running Dock control, which is not always the project's own host).
- * Fetched only when a running iOS Simulator exists, and again if the saved dev
+ * Fetched only when a running device (iOS Simulator or Android) exists, and
+ * again if the saved dev
  * server or the project's running Dock sessions change. */
 function useDevServerDestination(
   projectId: number,
   devices: Device[],
   devServerUrl: string | null | undefined,
 ): { address: string; hostId: string } | null {
-  const hasSimulator = devices.some(isRunningSimulator);
+  const hasDevice = devices.some(isOpenableDevice);
   const [found, setFound] = useState<{ key: string; address: string; hostId: string } | null>(null);
   // The dev-server host follows the running Dock control, so starting or
   // stopping one re-resolves it. A primitive, so it only changes with the set.
@@ -64,7 +70,7 @@ function useDevServerDestination(
   );
   const key = `${projectId}:${devServerUrl ?? ""}:${dockSessions}`;
   useEffect(() => {
-    if (!hasSimulator || !devServerUrl) return;
+    if (!hasDevice || !devServerUrl) return;
     let cancelled = false;
     void api
       .getBrowserDestinations(projectId)
@@ -79,27 +85,23 @@ function useDevServerDestination(
     return () => {
       cancelled = true;
     };
-  }, [projectId, devServerUrl, hasSimulator, key]);
+  }, [projectId, devServerUrl, hasDevice, key]);
   return found && found.key === key ? found : null;
-}
-
-function isRunningSimulator(d: Device): boolean {
-  return d.platform === "ios" && d.status === "active" && d.live != null;
 }
 
 /** How long a failed server-info read waits before it is retried. */
 const SERVER_INFO_RETRY_MS = 10_000;
 
-/** The preview proxy's settings, fetched once a running iOS Simulator exists:
- * a simulator that cannot reach the dev server's loopback, and every named
+/** The preview proxy's settings, fetched once a running device exists: a
+ * device that cannot reach the dev server's loopback, and every named
  * target, open through the Mullion preview URL. "loading" until the first
  * answer; a failed read reports "failed" (not "previews off") and is retried. */
 function usePreviewServerInfo(devices: Device[]): ServerInfo | "loading" | "failed" {
-  const hasSimulator = devices.some(isRunningSimulator);
+  const hasDevice = devices.some(isOpenableDevice);
   const [info, setInfo] = useState<ServerInfo | "loading" | "failed">("loading");
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    if (!hasSimulator) return;
+    if (!hasDevice) return;
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     void api
@@ -116,15 +118,15 @@ function usePreviewServerInfo(devices: Device[]): ServerInfo | "loading" | "fail
       cancelled = true;
       if (retry) clearTimeout(retry);
     };
-  }, [hasSimulator, attempt]);
+  }, [hasDevice, attempt]);
   return info;
 }
 
-/** Hands a simulator the entry's Mullion preview URL. With preview auth on it
+/** Hands a device the entry's Mullion preview URL. With preview auth on it
  * carries a fresh 60-second bootstrap token, minted at click time: the
- * simulator's Safari has no dashboard session, and the proxy trades the token
+ * device's browser has no dashboard session, and the proxy trades the token
  * for its own preview cookie on that first load (docs/device-panel.md). */
-async function openPreviewInSimulator(
+async function openPreviewOnDevice(
   projectId: number,
   deviceId: number,
   targetId: string | null,
@@ -141,10 +143,10 @@ async function openPreviewInSimulator(
   await api.openUrlOnDevice(deviceId, url);
 }
 
-function simulatorRow(
+function deviceRow(
   key: string,
   label: string,
-  route: SimulatorRoute,
+  route: DeviceRoute,
   open: () => Promise<unknown>,
 ): KebabMenuItem {
   if (route.kind === "unavailable") {
@@ -158,7 +160,7 @@ function simulatorRow(
         useDashboardStore
           .getState()
           .reportError(
-            "Could not open in simulator",
+            "Could not open on device",
             err instanceof Error ? err.message : String(err),
           ),
       );
@@ -166,45 +168,47 @@ function simulatorRow(
   };
 }
 
-/** "Open in simulator" rows per running iOS Simulator: the project's dev
- * server, then each named preview target. Manual only; a row the simulator
- * cannot open is listed disabled with the reason, not hidden. */
-function simulatorItems(
+/** "Open … on <device>" rows per running iOS Simulator or Android device: the
+ * project's dev server, then each named preview target. Manual only; a row the
+ * device cannot open is listed disabled with the reason, not hidden. */
+function deviceItems(
   projectId: number,
   devServer: { address: string; hostId: string } | null,
   targets: NamedPreviewTarget[],
   devices: Device[],
   info: ServerInfo | "loading" | "failed",
 ): KebabMenuItem[] {
-  return devices.filter(isRunningSimulator).flatMap((d) => {
-    const name = d.name ?? `Simulator ${d.id}`;
+  return devices.filter(isOpenableDevice).flatMap((d) => {
+    const name = d.name ?? `${d.platform === "ios" ? "Simulator" : "Device"} ${d.id}`;
     const rows: KebabMenuItem[] = [];
     if (devServer) {
-      const route = simulatorDevServerRoute(devServer.address, d, devServer.hostId, info);
+      const route = deviceDevServerRoute(devServer.address, d, devServer.hostId, info);
       const suffix =
         route.kind === "preview"
           ? " (via preview)"
           : route.kind === "unavailable"
-            ? d.hostId === devServer.hostId
-              ? " (unavailable)"
-              : " (on another host)"
+            ? isDeviceBooting(d)
+              ? " (booting)"
+              : d.hostId === devServer.hostId
+                ? " (unavailable)"
+                : " (on another host)"
             : "";
       rows.push(
-        simulatorRow(`simulator-${d.id}`, `Open in simulator — ${name}${suffix}`, route, () =>
+        deviceRow(`device-${d.id}`, `Open dev server on ${name}${suffix}`, route, () =>
           route.kind === "direct"
             ? api.openUrlOnDevice(d.id, route.url)
-            : openPreviewInSimulator(projectId, d.id, null, info),
+            : openPreviewOnDevice(projectId, d.id, null, info),
         ),
       );
     }
     for (const target of targets) {
-      const route = simulatorTargetRoute(d, info);
+      const route = deviceTargetRoute(d, info);
       rows.push(
-        simulatorRow(
-          `simulator-${d.id}-${target.id}`,
-          `Open ${target.name} in simulator — ${name}${route.kind === "unavailable" ? " (unavailable)" : ""}`,
+        deviceRow(
+          `device-${d.id}-${target.id}`,
+          `Open ${target.name} on ${name}${route.kind === "unavailable" ? " (unavailable)" : ""}`,
           route,
-          () => openPreviewInSimulator(projectId, d.id, target.id, info),
+          () => openPreviewOnDevice(projectId, d.id, target.id, info),
         ),
       );
     }
@@ -276,7 +280,7 @@ export function ProjectPreviewMenu({
   const serverInfo = usePreviewServerInfo(devices);
   const items = [
     ...choices(projectId, config, onOpenDefault),
-    ...simulatorItems(projectId, devServer, config?.targets ?? [], devices, serverInfo),
+    ...deviceItems(projectId, devServer, config?.targets ?? [], devices, serverInfo),
   ];
   if (!config)
     items.push({

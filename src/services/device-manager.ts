@@ -333,6 +333,19 @@ const PHYSICAL_CONNECT_TIMEOUT_MS = 15_000;
 const EMULATOR_PORT_BASE = 5554;
 const EMULATOR_PORT_MAX = 5682;
 
+// How long teardown waits to remove one `adb reverse` mapping (#3559).
+const REVERSE_REMOVE_TIMEOUT_MS = 2_000;
+
+/** `promise`, or a rejection once `ms` has passed. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     // unref() — the boot-wait poll loop below can run for up to
@@ -448,6 +461,13 @@ export class Device {
    * routes/device.ts additionally gates each socket on a keyframe and
    * requests one on attach. */
   private lastConfigPacket: ScrcpyMediaStreamPacket | null = null;
+  /** Host ports this device was given an `adb reverse tcp:<port> tcp:<port>`
+   * mapping for (AndroidDriver.openUrl, #3559), so `http://127.0.0.1:<port>`
+   * on the device reaches the dev server on this host. Removed again in
+   * teardownProcess(): a physical device keeps its adbd running after Mullion
+   * lets go of it, and a mapping left behind would keep pointing the device's
+   * own loopback port at this host. */
+  private reversedPorts = new Set<number>();
 
   constructor(
     opts: DeviceSpawnOptions,
@@ -497,6 +517,18 @@ export class Device {
    * action shouldn't require an active viewer at all. */
   get adbConnection(): Adb | undefined {
     return this.adb ?? undefined;
+  }
+
+  /** Maps the device's own `tcp:<port>` to this host's `tcp:<port>` through
+   * the adb server (`adb reverse tcp:<port> tcp:<port>`), so a loopback URL
+   * opened on the device reaches a dev server on the host running adb. Works
+   * the same on an emulator and a USB/wireless physical device. Re-adding an
+   * existing mapping is a no-op on adbd's side. */
+  async reversePort(port: number): Promise<void> {
+    const adb = this.adb;
+    if (!adb) throw new Error(`device ${this.id} has no live adb connection`);
+    await adb.reverse.addExternal(`tcp:${port}`, `tcp:${port}`);
+    this.reversedPorts.add(port);
   }
 
   /** Starts the emulator's systemd scope, waits for adb to see it, then
@@ -869,6 +901,18 @@ export class Device {
    * connection itself is deliberately left alone too — see kill()'s own
    * comment on why disconnect() never happens here either. */
   private async teardownProcess(): Promise<void> {
+    // Before adb.close(): the removal goes over the same connection.
+    for (const port of this.reversedPorts) {
+      try {
+        // Bounded: on a device that already dropped off adb the request
+        // would otherwise wait on a transport that never answers.
+        const adb = this.adb;
+        if (adb) await withTimeout(adb.reverse.remove(`tcp:${port}`), REVERSE_REMOVE_TIMEOUT_MS);
+      } catch {
+        // Best-effort — an emulator that is going away takes its mappings with it.
+      }
+    }
+    this.reversedPorts.clear();
     try {
       await this.scrcpyClient?.close();
     } catch {

@@ -1,16 +1,23 @@
 import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import type { Device } from "../api/index.js";
 
-/** The URL to hand a simulator's browser for a project's dev server, or null
- * when the simulator cannot reach it.
+// How the Dock's Preview menu hands a URL to a running device's browser: an
+// iOS Simulator (`simctl openurl`) or an Android emulator/phone (`am start`
+// with a VIEW intent), both through the same `openurl` device action
+// (#3429, #3491, #3559).
+
+/** The URL to hand a device's browser for a project's dev server, or null
+ * when the device cannot reach it.
  *
  * `address` is the dev server's address as seen from `devServerHostId` (the
  * browser-destinations entry), and `localhost` in it points at that host's own
- * loopback. A simulator on that same host opens `http://127.0.0.1:<port><path>`;
- * a simulator on any other host has no route to that loopback and gets null.
+ * loopback. A device on that same host opens `http://127.0.0.1:<port><path>`:
+ * an iOS Simulator shares its Mac's loopback, and for an Android device the
+ * backend maps the port back to the host with `adb reverse` before opening
+ * it. A device on any other host has no route to that loopback and gets null.
  * The scheme is forced to http: a certificate issued for `localhost` can never
- * match `127.0.0.1`, so https would only show Safari's certificate error. */
-export function simulatorOpenUrl(
+ * match `127.0.0.1`, so https would only show the browser's certificate error. */
+export function deviceOpenUrl(
   address: string,
   device: Pick<Device, "hostId">,
   devServerHostId: string,
@@ -32,9 +39,13 @@ export function simulatorOpenUrl(
   return u.toString();
 }
 
-/** How a simulator reaches a Preview-menu entry (#3491). */
-export type SimulatorRoute =
-  /** Open this URL as is (the dev server on the simulator's own loopback). */
+/** The slice of a device a route depends on; `live` is optional so a caller
+ * that only knows the host gets the host-based answer. */
+type DeviceRef = Pick<Device, "hostId"> & Partial<Pick<Device, "live">>;
+
+/** How a device reaches a Preview-menu entry. */
+export type DeviceRoute =
+  /** Open this URL as is (the dev server on the device host's loopback). */
   | { kind: "direct"; url: string }
   /** Open the entry's Mullion preview URL (`preview-<slug>.<base host>`). */
   | { kind: "preview" }
@@ -49,8 +60,34 @@ export type PreviewAvailability =
 const PREVIEWS_OFF =
   "Previews are not enabled on this server (PREVIEW_BASE_HOST), so there is no preview URL to open";
 
+/** Whether the Preview menu lists a device at all: an iOS Simulator or an
+ * Android emulator/phone whose row is active and that has a live process
+ * which has not exited. */
+export function isOpenableDevice(d: Device): boolean {
+  return (
+    (d.platform === "ios" || d.platform === "android") &&
+    d.status === "active" &&
+    d.live != null &&
+    d.live.status !== "exited" &&
+    d.live.status !== "error"
+  );
+}
+
+/** Whether the device is still starting or booting, so it cannot take a URL yet. */
+export function isDeviceBooting(device: DeviceRef): boolean {
+  const status = device.live?.status;
+  return status === "starting" || status === "booting";
+}
+
+/** A reason the device cannot take a URL yet, or null when it can. */
+function notReady(device: DeviceRef): string | null {
+  return isDeviceBooting(device)
+    ? "The device is still booting; try again once it is running"
+    : null;
+}
+
 /** A base host that only ever resolves to the primary's own loopback, which a
- * simulator on another host (an agent Mac) cannot reach. */
+ * device on another host (an agent Mac, a phone on an agent host) cannot reach. */
 function isLoopbackHost(host: string): boolean {
   const raw = host.trim().toLowerCase();
   if (raw === "::1") return true;
@@ -65,9 +102,9 @@ function isLoopbackHost(host: string): boolean {
   );
 }
 
-/** Whether a preview URL can work for a simulator on `deviceHostId`, or the
+/** Whether a preview URL can work for a device on `deviceHostId`, or the
  * reason it cannot. */
-function previewRoute(deviceHostId: string, previews: PreviewAvailability): SimulatorRoute {
+function previewRoute(deviceHostId: string, previews: PreviewAvailability): DeviceRoute {
   if (previews === "loading") {
     return { kind: "unavailable", reason: "Checking whether previews are enabled…" };
   }
@@ -83,22 +120,24 @@ function previewRoute(deviceHostId: string, previews: PreviewAvailability): Simu
   if (deviceHostId !== LOCAL_HOST_ID && isLoopbackHost(previews.previewBaseHost)) {
     return {
       kind: "unavailable",
-      reason: `The preview host (${previews.previewBaseHost}) is a loopback name, which a simulator on another host cannot reach`,
+      reason: `The preview host (${previews.previewBaseHost}) is a loopback name, which a device on another host cannot reach`,
     };
   }
   return { kind: "preview" };
 }
 
-/** The project's dev server: a simulator on the dev server's own host opens
- * its loopback URL directly (no proxy, no auth); one on any other host goes
+/** The project's dev server: a device on the dev server's own host opens its
+ * loopback URL directly (no proxy, no auth); one on any other host goes
  * through the Mullion preview, which proxies to the dev server's host. */
-export function simulatorDevServerRoute(
+export function deviceDevServerRoute(
   address: string,
-  device: Pick<Device, "hostId">,
+  device: DeviceRef,
   devServerHostId: string,
   previews: PreviewAvailability,
-): SimulatorRoute {
-  const url = simulatorOpenUrl(address, device, devServerHostId);
+): DeviceRoute {
+  const booting = notReady(device);
+  if (booting) return { kind: "unavailable", reason: booting };
+  const url = deviceOpenUrl(address, device, devServerHostId);
   if (url) return { kind: "direct", url };
   // Same host but no loopback URL: the address itself is unusable, and the
   // preview would proxy to the same unusable address.
@@ -112,11 +151,10 @@ export function simulatorDevServerRoute(
 }
 
 /** A named preview target: always through its Mullion preview, whatever host
- * the simulator is on (the target's own address is resolved by the proxy,
- * with the target's connection origin). */
-export function simulatorTargetRoute(
-  device: Pick<Device, "hostId">,
-  previews: PreviewAvailability,
-): SimulatorRoute {
+ * the device is on (the target's own address is resolved by the proxy, with
+ * the target's connection origin). */
+export function deviceTargetRoute(device: DeviceRef, previews: PreviewAvailability): DeviceRoute {
+  const booting = notReady(device);
+  if (booting) return { kind: "unavailable", reason: booting };
   return previewRoute(device.hostId, previews);
 }

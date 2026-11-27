@@ -8,6 +8,7 @@ import type {
 import type { Adb } from "@yume-chan/adb";
 import { CLIPBOARD_MAX_BYTES } from "../device-defaults.js";
 import { pngDimensions } from "../screenshot-image.js";
+import { isOpenableUrl } from "./actions.js";
 import {
   DeviceActionError,
   type DeviceActionName,
@@ -43,6 +44,17 @@ function shellExecArgv(argv: string[]): string[] {
   return argv.map(shellQuoteArg);
 }
 
+/** A URL hostname that, on the device, would point at the device itself. */
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    // Chrome resolves every *.localhost name to loopback itself.
+    hostname.endsWith(".localhost") ||
+    hostname === "[::1]" ||
+    /^127(\.\d{1,3}){3}$/.test(hostname)
+  );
+}
+
 const PNG_IEND = Buffer.from("IEND");
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -71,6 +83,7 @@ export interface AndroidDeviceHandle {
   toInfo(): DeviceInfo;
   kill(): Promise<void>;
   setClipboard(text: string, paste: boolean): Promise<void>;
+  reversePort(port: number): Promise<void>;
   onVideoPacket(listener: (packet: DeviceVideoPacket) => void): Unsubscribe;
   onExit(listener: () => void): Unsubscribe;
   onClipboard(listener: (text: string) => void): Unsubscribe;
@@ -130,7 +143,7 @@ export class AndroidDriver implements DeviceDriver {
   }
 
   supports(action: DeviceActionName): boolean {
-    return action !== "button" && action !== "openurl";
+    return action !== "button";
   }
 
   // --- live input -------------------------------------------------------
@@ -321,6 +334,40 @@ export class AndroidDriver implements DeviceDriver {
     const args = ["logcat", "-d", "-t", String(options.lines ?? 200)];
     if (options.filter) args.push(options.filter);
     return this.shell().spawnWaitText(shellExecArgv(args));
+  }
+
+  /** Opens an http(s) URL in the device's default browser with a VIEW
+   * intent. A loopback URL (`127.0.0.1`, `localhost`, `[::1]`) means "the
+   * host running this adb server", not the device itself, so its port is
+   * first mapped back with `adb reverse` (Device.reversePort) — the same
+   * route on an emulator and a USB/wireless physical device, where an
+   * emulator's own `10.0.2.2` alias would not exist. Any other host is
+   * opened as is (a Mullion preview URL, say). The mapping stays until the
+   * device is stopped (Device.teardownProcess removes it). */
+  async openUrl(url: string): Promise<void> {
+    if (!isOpenableUrl(url)) {
+      throw new DeviceActionError(400, "openurl takes an http(s) URL");
+    }
+    const shell = this.shell();
+    const u = new URL(url);
+    if (isLoopbackHostname(u.hostname)) {
+      const port = Number(u.port || (u.protocol === "https:" ? 443 : 80));
+      try {
+        await this.device.reversePort(port);
+      } catch (err) {
+        throw new DeviceActionError(
+          502,
+          `adb reverse tcp:${port} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    const out = await shell.spawnWaitText(
+      shellExecArgv(["am", "start", "-a", "android.intent.action.VIEW", "-d", u.href]),
+    );
+    // `am start` exits 0 even when no activity takes the intent; it says so
+    // on a line starting with "Error".
+    const error = out.split("\n").find((line) => line.startsWith("Error"));
+    if (error) throw new DeviceActionError(502, `am start failed: ${error.trim()}`);
   }
 
   readonly clipboard = {

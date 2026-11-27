@@ -1415,7 +1415,7 @@ const deviceCommands = {
       throw new CliUsageError(`button must be one of: ${DEVICE_BUTTON_VALUES.join(", ")}`);
     return { json: await client.request("device.action", { deviceId, action: "button", button }) };
   },
-  // iOS Simulator only: opens an http(s) URL in the simulator's browser.
+  // Opens an http(s) URL in the device's browser (iOS Simulator or Android).
   async openurl(client, args) {
     const deviceId = requireOne(args, "device id");
     const url = args[1];

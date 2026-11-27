@@ -20,6 +20,7 @@ function fakeDevice(over: Record<string, unknown> = {}): Device {
     toInfo: () => ({ status: "booting" }),
     kill: vi.fn().mockResolvedValue(undefined),
     setClipboard: vi.fn().mockResolvedValue(undefined),
+    reversePort: vi.fn().mockResolvedValue(undefined),
     onVideoPacket: vi.fn(),
     onExit: vi.fn(),
     onClipboard: vi.fn(),
@@ -39,6 +40,7 @@ describe("AndroidDriver", () => {
       "key",
       "logcat",
       "clipboard",
+      "openurl",
     ] as const) {
       expect(driver.supports(action)).toBe(true);
     }
@@ -100,6 +102,106 @@ describe("AndroidDriver", () => {
     await expect(driver.clipboard.set("a", false)).rejects.toThrow(
       /no live scrcpy control connection yet/,
     );
+  });
+});
+
+describe("AndroidDriver.openUrl (#3559)", () => {
+  const STARTING =
+    "Starting: Intent { act=android.intent.action.VIEW dat=http://127.0.0.1:5173/... }";
+
+  function liveDevice(output = STARTING) {
+    const spawnWaitText = vi.fn().mockResolvedValue(output);
+    const device = fakeDevice({
+      adbConnection: { subprocess: { noneProtocol: { spawnWaitText } } },
+    });
+    return { device, spawnWaitText, reversePort: device.reversePort as ReturnType<typeof vi.fn> };
+  }
+
+  it("reverses a loopback URL's port, then fires a VIEW intent with the URL", async () => {
+    const { device, spawnWaitText, reversePort } = liveDevice();
+    await new AndroidDriver(device).openUrl("http://127.0.0.1:5173/app?x=1&y=2");
+    expect(reversePort).toHaveBeenCalledWith(5173);
+    expect(spawnWaitText).toHaveBeenCalledWith([
+      "'am'",
+      "'start'",
+      "'-a'",
+      "'android.intent.action.VIEW'",
+      "'-d'",
+      "'http://127.0.0.1:5173/app?x=1&y=2'",
+    ]);
+    expect(reversePort.mock.invocationCallOrder[0]).toBeLessThan(
+      spawnWaitText.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("reverses the scheme's default port and every loopback spelling", async () => {
+    for (const [url, port] of [
+      ["http://localhost/", 80],
+      ["https://localhost/", 443],
+      ["http://preview-abc.localhost:3000/", 3000],
+      ["http://[::1]:8080/", 8080],
+      ["http://127.0.0.2:9000/", 9000],
+    ] as const) {
+      const { device, reversePort } = liveDevice();
+      await new AndroidDriver(device).openUrl(url);
+      expect(reversePort).toHaveBeenCalledWith(port);
+    }
+  });
+
+  it("opens any other host as is, without a reverse mapping", async () => {
+    const { device, spawnWaitText, reversePort } = liveDevice();
+    await performDeviceAction(new AndroidDriver(device), {
+      action: "openurl",
+      url: "https://preview-abc.mullion.example.com/?__mullion_preview=t%2Fk",
+    });
+    expect(reversePort).not.toHaveBeenCalled();
+    expect(spawnWaitText.mock.calls[0][0].at(-1)).toBe(
+      "'https://preview-abc.mullion.example.com/?__mullion_preview=t%2Fk'",
+    );
+  });
+
+  it("quotes a URL carrying shell metacharacters as one argument", async () => {
+    const { device, spawnWaitText } = liveDevice();
+    await new AndroidDriver(device).openUrl("http://example.com/'$(reboot)';x");
+    // The embedded quote closes and re-opens the quoted word ('\''), so the
+    // device's `sh -c` sees one argument, never a `$(...)` or `;`.
+    expect(spawnWaitText.mock.calls[0][0].at(-1)).toBe(
+      "'http://example.com/'\\''$(reboot)'\\'';x'",
+    );
+  });
+
+  it("400s a non-http(s) URL before touching adb", async () => {
+    const { device, spawnWaitText, reversePort } = liveDevice();
+    const err = await new AndroidDriver(device).openUrl("tel:123").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(DeviceActionError);
+    expect((err as DeviceActionError).statusCode).toBe(400);
+    expect(reversePort).not.toHaveBeenCalled();
+    expect(spawnWaitText).not.toHaveBeenCalled();
+  });
+
+  it("400s while adb is not live, before any reverse", async () => {
+    const device = fakeDevice();
+    const err = await new AndroidDriver(device).openUrl("http://127.0.0.1:1/").catch((e) => e);
+    expect((err as DeviceActionError).statusCode).toBe(400);
+    expect(device.reversePort).not.toHaveBeenCalled();
+  });
+
+  it("502s when am start reports an error or the reverse fails", async () => {
+    const { device } = liveDevice(
+      "Starting: Intent { ... }\nError: Activity not started, unable to resolve Intent { ... }\n",
+    );
+    const err = await new AndroidDriver(device).openUrl("http://x.example/").catch((e) => e);
+    expect((err as DeviceActionError).statusCode).toBe(502);
+    expect((err as Error).message).toMatch(/am start failed: Error: Activity not started/);
+
+    const failing = liveDevice();
+    failing.reversePort.mockRejectedValue(new Error("device offline"));
+    const err2 = await new AndroidDriver(failing.device)
+      .openUrl("http://127.0.0.1:5173/")
+      .catch((e) => e);
+    expect((err2 as DeviceActionError).statusCode).toBe(502);
+    expect((err2 as Error).message).toBe("adb reverse tcp:5173 failed: device offline");
+    expect(failing.spawnWaitText).not.toHaveBeenCalled();
   });
 });
 

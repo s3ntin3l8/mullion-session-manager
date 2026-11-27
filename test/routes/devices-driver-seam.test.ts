@@ -175,7 +175,7 @@ describe("POST /api/devices/:id/action through the DeviceDriver seam", () => {
     expect(androidDriver.button).not.toHaveBeenCalled();
   });
 
-  it("runs openurl on an iOS driver, 400s a non-http(s) URL and an Android driver (#3429)", async () => {
+  it("runs openurl on a driver, 400s a non-http(s) URL and a driver without openUrl (#3429)", async () => {
     const app = await buildTestAppOnPlatform("linux");
     const id = await createDevice(app);
     const openUrl = vi.fn().mockResolvedValue(undefined);
@@ -198,9 +198,9 @@ describe("POST /api/devices/:id/action through the DeviceDriver seam", () => {
     expect(bad.statusCode).toBe(400);
     expect(openUrl).toHaveBeenCalledTimes(1);
 
-    vi.spyOn(app.device, "getDriver").mockReturnValue(
-      fakeDriver({ platform: "android", unsupported: ["openurl"] }),
-    );
+    // A driver that claims the action but implements no openUrl still 400s
+    // (the real Android driver implements it since #3559; see devices.test.ts).
+    vi.spyOn(app.device, "getDriver").mockReturnValue(fakeDriver({ platform: "android" }));
     const android = await app.inject({
       method: "POST",
       url: `/api/devices/${id}/action`,
