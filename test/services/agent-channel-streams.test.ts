@@ -13,12 +13,17 @@ import {
   type AgentStreamHandlers,
 } from "../../src/services/agent-channel-streams.js";
 import type { ChannelSocket } from "../../src/services/channel-socket.js";
+import {
+  ChannelStreamFailure,
+  CHANNEL_FAILURE_TOO_LARGE,
+} from "../../src/services/channel-socket.js";
 import { acceptDeviceStream, deviceQueryError } from "../../src/services/internal-streams.js";
 import { channelFetch } from "../../src/services/agent-channel-tunnel.js";
 import { RemoteHostClient } from "../../src/services/remote-host-client.js";
 import type { ConnectedAgentChannel } from "../../src/plugins/agent-channel.js";
 import {
   carriedOperationsFor,
+  AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES,
   AGENT_CHANNEL_REQUESTS_OPERATION,
   AGENT_CHANNEL_STREAMS_OPERATION,
 } from "../../src/shared/agent-channel.js";
@@ -717,5 +722,32 @@ describe("the device stream with the agent's own handlers (#3273)", () => {
     // [type=1 (data)][flags=1 (keyframe)][payload 1, 2] — the device's own
     // framing, unchanged by the transport.
     expect(frames).toEqual([["01010102", true]]);
+  });
+
+  it("tells the primary why the stream died when a device frame is over the cap (#3402)", async () => {
+    const { app, state } = agentApp(true);
+    const r = await rig({
+      validateDevice: (query) => deviceQueryError(app, query, query.id ?? ""),
+      device: (socket, query) => acceptDeviceStream(app, socket, query, query.id ?? ""),
+    });
+    const s = openChannelStream(
+      r.app,
+      r.entry,
+      "device",
+      { id: "7", kind: "emulator" },
+      "7",
+    ) as never as ChannelSocket;
+    await opened(s);
+    const failure = new Promise<Error>((res) => s.once("error", res));
+    // A frame past the channel's per-message cap: the agent cannot carry it,
+    // and the primary hears WHY instead of seeing a bare disconnect.
+    state.video?.({
+      type: "data",
+      keyframe: true,
+      data: new Uint8Array(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1),
+    });
+    const err = await failure;
+    expect(err).toBeInstanceOf(ChannelStreamFailure);
+    expect((err as ChannelStreamFailure).code).toBe(CHANNEL_FAILURE_TOO_LARGE);
   });
 });

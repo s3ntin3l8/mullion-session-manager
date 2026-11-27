@@ -1,7 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { ChannelSocket } from "../../src/services/channel-socket.js";
+import {
+  ChannelSocket,
+  ChannelStreamFailure,
+  CHANNEL_FAILURE_TOO_LARGE,
+} from "../../src/services/channel-socket.js";
 import type { MuxChannel } from "../../src/services/ssh-agent-mux.js";
-import { AGENT_CHANNEL_MAX_BUFFERED_BYTES } from "../../src/shared/agent-channel.js";
+import {
+  AGENT_CHANNEL_MAX_BUFFERED_BYTES,
+  AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES,
+} from "../../src/shared/agent-channel.js";
 
 // A MuxChannel double with a controllable send window, to see backpressure.
 function fakeChannel(initialWindow: number) {
@@ -123,6 +130,34 @@ describe("ChannelSocket (#2571)", () => {
     t.on("close", (code: number) => codes.push(code));
     g.raw.close();
     expect(codes).toEqual([1006]);
+  });
+
+  it("tells the peer WHY the stream died when a message is over the cap (#3402)", () => {
+    // The failure rides the channel as a notice, so the far end can name
+    // the cap instead of reporting a bare disconnect.
+    const f = fakeChannel(1 << 20);
+    const s = new ChannelSocket({ expectHead: false });
+    s.bind(f.ch);
+    const local: Error[] = [];
+    s.on("error", (e: Error) => local.push(e));
+    s.send(Buffer.alloc(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1, 1));
+    expect(local[0]).toBeInstanceOf(ChannelStreamFailure);
+    expect((local[0] as ChannelStreamFailure).code).toBe(CHANNEL_FAILURE_TOO_LARGE);
+
+    // The peer reads the notice and raises the same failure.
+    const g = fakeChannel(1 << 20);
+    const peer = new ChannelSocket({ expectHead: false });
+    peer.bind(g.ch);
+    const remote: Error[] = [];
+    peer.on("error", (e: Error) => remote.push(e));
+    const messages: unknown[] = [];
+    peer.on("message", (d: Buffer) => messages.push(d));
+    peer.ingest(Buffer.concat(f.sent));
+    expect(remote[0]).toBeInstanceOf(ChannelStreamFailure);
+    expect((remote[0] as ChannelStreamFailure).code).toBe(CHANNEL_FAILURE_TOO_LARGE);
+    // The notice is consumed by the transport, never handed to the stream.
+    expect(messages).toEqual([]);
+    expect(peer.readyState).toBe(peer.CLOSED);
   });
 
   it("surfaces an agent refusal as unexpected-response, not as an error", () => {

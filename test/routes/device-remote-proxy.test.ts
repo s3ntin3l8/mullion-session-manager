@@ -8,6 +8,11 @@ import type { DeviceRow } from "../../src/services/device-store.js";
 import type * as RemoteHostClientModule from "../../src/services/remote-host-client.js";
 import type * as DeviceHostModule from "../../src/services/device-host.js";
 import type * as DeviceStoreModule from "../../src/services/device-store.js";
+import {
+  CHANNEL_FAILURE_TOO_LARGE,
+  ChannelStreamFailure,
+} from "../../src/services/channel-socket.js";
+import { AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES } from "../../src/shared/agent-channel.js";
 
 // Unit coverage for proxyToRemoteDevice (issue #3200): the primary's relay of a
 // device panel socket to the agent that runs the device. Driven against fake
@@ -283,6 +288,33 @@ describe("proxyToRemoteDevice (issue #3200)", () => {
         type: "error",
         message: "Host agent-1 did not accept the device socket",
       });
+    });
+
+    it("names the channel's message cap when a device frame is too big (#3402)", async () => {
+      // A frame past the channel's per-message cap is not a refusal: the
+      // stream could not carry it, so the panel is told the cap (and the
+      // host it is on) instead of "did not accept the device socket".
+      const app = fakeApp();
+      await proxyToRemoteDevice(app, browser as unknown as WebSocket, ROW);
+      upstream.emit(
+        "error",
+        new ChannelStreamFailure(CHANNEL_FAILURE_TOO_LARGE, "message too large"),
+      );
+      expect(JSON.parse(browser.sendSpy.mock.calls[0][0] as string)).toEqual({
+        type: "error",
+        message:
+          "Host agent-1's device stream exceeded the 1 MiB limit of the outbound channel to this host",
+      });
+      // The log names the host, the device and the bound.
+      expect(app.log.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "agent-1",
+          deviceId: 7,
+          maxBytes: AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES,
+        }),
+        "remote device stream exceeds the outbound channel's message limit",
+      );
+      expect(browser.closeSpy).toHaveBeenCalled();
     });
 
     it("a refused socket says why, like a failed upgrade does (#3273)", async () => {

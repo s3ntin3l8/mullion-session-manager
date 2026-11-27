@@ -12,6 +12,8 @@ import {
   BACKPRESSURE_MAX_BUFFERED_BYTES,
   KEYFRAME_STALL_MS,
 } from "../services/device-attach.js";
+import { CHANNEL_FAILURE_TOO_LARGE, ChannelStreamFailure } from "../services/channel-socket.js";
+import { AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES } from "../shared/agent-channel.js";
 
 // The primary's half of the device panel: `/ws/device/:deviceId` serves the
 // panel's socket for a device on THIS host, and proxies it to the agent that
@@ -161,6 +163,19 @@ function readRefusalReason(res: IncomingMessage): Promise<string | null> {
 
 /** A relay step that did not finish in time. */
 class RelayTimeoutError extends Error {}
+
+/**
+ * The channel's per-message limit in the words the panel sees ("1 MiB").
+ *
+ * A raw byte count means nothing at a glance, and the tunnel already names
+ * its own limits this way ("request body exceeds the 2 MiB limit of the
+ * outbound channel to this host").
+ */
+function messageCapText(bytes: number): string {
+  if (bytes >= 1024 * 1024 && bytes % (1024 * 1024) === 0) return `${bytes / (1024 * 1024)} MiB`;
+  if (bytes >= 1024 && bytes % 1024 === 0) return `${bytes / 1024} KiB`;
+  return `${bytes} bytes`;
+}
 
 /** `promise`, failed with a RelayTimeoutError after `ms`. The promise itself is
  *  not cancelled: a late outcome is ignored. */
@@ -446,6 +461,21 @@ export async function proxyToRemoteDevice(
     // A refusal is its own event, reported below with the agent's reason; the
     // error that follows it is only the teardown of a socket we closed.
     if (refused) return;
+    // A message past the channel's per-message cap is not a refusal: the
+    // stream could not carry it, so the panel is told the cap (and the host
+    // it is on) instead of "did not accept the device socket" (#3402).
+    if (err instanceof ChannelStreamFailure && err.code === CHANNEL_FAILURE_TOO_LARGE) {
+      app.log.error(
+        { err, hostId, deviceId, maxBytes: AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES },
+        "remote device stream exceeds the outbound channel's message limit",
+      );
+      fail(
+        `Host ${hostId}'s device stream exceeded the ${messageCapText(
+          AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES,
+        )} limit of the outbound channel to this host`,
+      );
+      return;
+    }
     app.log.error({ err, hostId, deviceId }, "remote device ws upstream error");
     // Say why, instead of a bare disconnect (a refused upgrade lands here).
     fail(`Host ${hostId} did not accept the device socket`);

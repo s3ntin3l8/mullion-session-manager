@@ -141,7 +141,11 @@ and the device panel's socket ride the channel when the host negotiated
    stream) and closes the channel.
 3. After that both sides exchange WebSocket-shaped messages, framed
    `[flags:1][length:4 BE][payload]` (flag bit 0 = binary; at most 1 MiB), so
-   attach keeps its text-control / binary-PTY distinction. This is
+   attach keeps its text-control / binary-PTY distinction. Flag bit 1 is a
+   failure notice — a small `{code, reason}` message the transport consumes,
+   not stream data: a stream that cannot carry a message says so before it
+   dies, so the far end names the cause instead of reporting a bare
+   disconnect. This is
    `src/services/channel-socket.ts`: a `ws`-surfaced view of the channel, which
    is why the existing callers (`proxyToRemoteAttach`, `relayRemoteEventsHost`,
    the event subscriber, the control-relay and ssh-agent fan-outs) are unchanged.
@@ -168,7 +172,14 @@ attach query validation is shared, not copied.
   the stream, where the inbound socket (dialled with `capPayload: false`, so
   `ws`'s own 100 MiB default applies) took it. At the default
   `DEVICE_VIDEO_MAX_SIZE` (1280) frames are far below the bound; a much
-  larger `DEVICE_VIDEO_MAX_SIZE` can produce an IDR past it. A refusal is
+  larger `DEVICE_VIDEO_MAX_SIZE` can produce an IDR past it. The failure is
+  reported to the panel by name: the agent's stream carries the reason in
+  band (the failure notice above), and the primary tells the panel which
+  cap it hit and on which host, instead of the generic "did not accept the
+  device socket" a refusal gets. Lowering `DEVICE_VIDEO_MAX_SIZE` on that
+  host is what brings the frames back under the bound. An agent that
+  predates the notice still fails the frame silently, and the panel sees a
+  bare disconnect. A refusal is
   reported to the panel with the agent's own reason (the panel gate's
   message, `kind must be emulator or physical`, …): over the channel it rides
   the accept head's message, and over the inbound transport the refusal's

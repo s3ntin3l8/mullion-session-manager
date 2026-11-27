@@ -27,6 +27,50 @@ const WRITE_CHUNK_BYTES = 32 * 1024;
 const CLOSE_NORMAL = 1000;
 const CLOSE_ABNORMAL = 1006;
 
+/** The flags byte of one channel message: bit 0 = binary, bit 1 = a failure
+ *  notice (the payload is JSON `{code, reason}`, not stream data). */
+const FLAG_BINARY = 1;
+const FLAG_FAILURE = 2;
+
+/** The failure code for a message past the channel's per-message cap. */
+export const CHANNEL_FAILURE_TOO_LARGE = "message-too-large";
+
+/**
+ * A stream that failed for a reason the far end must hear about.
+ *
+ * The channel carries the reason IN BAND: a stream that cannot carry a
+ * message says so with a failure notice before it dies, and the far end
+ * raises this on its own socket. Without it the far end only sees the
+ * stream close, and the user gets a bare disconnect instead of the reason
+ * (#3402).
+ */
+export class ChannelStreamFailure extends Error {
+  /** What failed: {@link CHANNEL_FAILURE_TOO_LARGE} for a message past the
+   *  channel's per-message cap. */
+  readonly code: string;
+
+  constructor(code: string, reason: string) {
+    super(reason);
+    this.name = "ChannelStreamFailure";
+    this.code = code;
+  }
+}
+
+/** The failure a notice frame carries, or a generic one when the notice is
+ *  unreadable: the stream is over either way. */
+function failureFromNotice(payload: Buffer): ChannelStreamFailure {
+  try {
+    const parsed = JSON.parse(payload.toString("utf8")) as { code?: unknown; reason?: unknown };
+    if (typeof parsed.code === "string") {
+      const reason = typeof parsed.reason === "string" ? parsed.reason : parsed.code;
+      return new ChannelStreamFailure(parsed.code, reason);
+    }
+  } catch {
+    // An unreadable notice is still a failure — not a reason to keep going.
+  }
+  return new ChannelStreamFailure("channel-failed", "the peer failed the stream");
+}
+
 export type ChannelSocketData = string | Buffer | ArrayBuffer | Buffer[];
 
 export class ChannelSocket extends EventEmitter {
@@ -148,13 +192,20 @@ export class ChannelSocket extends EventEmitter {
     while (this.readyState === this.OPEN && this.parseBuffer.length >= FRAME_HEADER_BYTES) {
       const flags = this.parseBuffer[0]!;
       const length = this.parseBuffer.readUInt32BE(1);
-      if (length > AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES) return this.fail("message too large");
+      if (length > AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES) return this.failTooLarge();
       if (this.parseBuffer.length < FRAME_HEADER_BYTES + length) return;
       const payload = Buffer.from(
         this.parseBuffer.subarray(FRAME_HEADER_BYTES, FRAME_HEADER_BYTES + length),
       );
       this.parseBuffer = this.parseBuffer.subarray(FRAME_HEADER_BYTES + length);
-      this.emit("message", payload, (flags & 1) === 1);
+      if ((flags & FLAG_FAILURE) !== 0) {
+        // The peer is telling us why the stream is over. The notice is
+        // consumed here — it is never handed to the stream's consumers.
+        this.emitError(failureFromNotice(payload));
+        this.close();
+        return;
+      }
+      this.emit("message", payload, (flags & FLAG_BINARY) === 1);
     }
   }
 
@@ -171,10 +222,14 @@ export class ChannelSocket extends EventEmitter {
           : Buffer.from(data);
     const isBinary = opts?.binary ?? typeof data !== "string";
     if (payload.length > AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES) {
-      return this.fail("message too large");
+      // The message cannot cross the channel. Say so IN BAND first — the far
+      // end names the cap for the user instead of reporting a bare
+      // disconnect — and only then let the stream die (#3402).
+      this.sendFailure(CHANNEL_FAILURE_TOO_LARGE, "message too large");
+      return this.failTooLarge();
     }
     const header = Buffer.alloc(FRAME_HEADER_BYTES);
-    header[0] = isBinary ? 1 : 0;
+    header[0] = isBinary ? FLAG_BINARY : 0;
     header.writeUInt32BE(payload.length, 1);
     this.enqueue(header);
     if (payload.length > 0) this.enqueue(payload);
@@ -206,6 +261,25 @@ export class ChannelSocket extends EventEmitter {
     this.queuedBytes += buf.length;
   }
 
+  /**
+   * Tells the peer why the stream is about to die: one small message the far
+   * end turns back into an error on this socket.
+   *
+   * It is written BEFORE the stream closes (the close carries no reason), so
+   * the far end can name the cause instead of reporting a bare disconnect. It
+   * rides the same queue as the data does, so a peer that is not draining
+   * loses it with the rest of the stream.
+   */
+  private sendFailure(code: string, reason: string): void {
+    const body = Buffer.from(JSON.stringify({ code, reason }), "utf8");
+    const header = Buffer.alloc(FRAME_HEADER_BYTES);
+    header[0] = FLAG_FAILURE;
+    header.writeUInt32BE(body.length, 1);
+    this.enqueue(header);
+    this.enqueue(body);
+    this.pump();
+  }
+
   private pump(): void {
     while (this.bound && this.queue.length > 0 && !this.channel.closed) {
       const head = this.queue[0]!;
@@ -220,6 +294,16 @@ export class ChannelSocket extends EventEmitter {
 
   private fail(message: string): void {
     this.emitError(new Error(message));
+    this.close();
+  }
+
+  /**
+   * Fails the stream because a message was past the channel's per-message
+   * cap. The peer knows either way: it sent the message that did not fit, or
+   * it was told (see `sendFailure`).
+   */
+  private failTooLarge(): void {
+    this.emitError(new ChannelStreamFailure(CHANNEL_FAILURE_TOO_LARGE, "message too large"));
     this.close();
   }
 
