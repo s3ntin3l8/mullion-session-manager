@@ -15,6 +15,7 @@ import {
 } from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { formatRelativeUntil } from "../../relativeTime.js";
+import { HOST_UPDATE_POLL_MS, useHostUpdateStatusPoll } from "../useHostUpdateStatusPoll.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { useArmConfirm } from "../../hooks/useArmConfirm.js";
 import { useCoarsePointer } from "../../lib/layoutTier.js";
@@ -33,12 +34,6 @@ import { HostPairingDialog, HostPairings } from "./HostPairings.js";
 import { AutomationTokensSection } from "./AutomationTokensSection.js";
 import { HostHeartbeatSetting, HostStaleAfterSetting } from "../RuntimeSettings.js";
 import { Presence } from "../../ui/Presence.js";
-
-// Issue #647 / roadmap 7.8 — separate from ServerInfoSection's own
-// UPDATE_STATUS_POLL_MS (2000ms), which only gates the primary's own
-// single global updater; N hosts need their own keyed poll, not a shared
-// flat useState (same reasoning pingStatus below already follows).
-const HOST_UPDATE_POLL_MS = 2000;
 
 // Mirrors the backend's IN_FLIGHT_PHASES (src/services/update-apply.ts) —
 // used only to recognize "an update is already running on this host" from a
@@ -298,51 +293,24 @@ export function HostsSection() {
   // I" is the first question a user has about their own box.
   const localHost = hosts.find((h) => h.id === LOCAL_HOST_ID);
 
-  const refreshHostUpdate = (hostId: string) => {
-    api
-      .getHostUpdateStatus(hostId)
-      .then((info) => {
-        setUpdateInfo((prev) => ({ ...prev, [hostId]: info }));
-        // Recognizes an update already in flight on this host (e.g. this
-        // tab reloaded mid-update, or a different tab started it) so the
-        // poll effect below picks it up instead of the row looking idle.
-        if (HOST_UPDATE_IN_FLIGHT_PHASES.has(info.status.phase)) {
-          setApplyingUpdate((prev) => (prev[hostId] ? prev : { ...prev, [hostId]: true }));
-        }
-      })
-      .catch(() => {
-        // A failed fetch (host unreachable, old build) just means no
-        // version/update UI renders for this row — the health dot already
-        // communicates connectivity, no need for a second error surface.
-      });
-  };
-
-  // Fetches each remote host's update status once the row appears — not on
-  // every LIVE_REFRESH_INTERVAL_MS (4s) tick below, which would mean a
-  // proxied round-trip to every agent every few seconds just to render a
-  // version label. Re-runs when the set of remote host ids changes (a host
-  // added/removed), keyed on a joined id string so it doesn't re-fire on
-  // every unrelated `hosts` field update (e.g. the 4s health-dot refresh).
-  const remoteHostIds = hosts
-    .filter((h) => h.id !== LOCAL_HOST_ID)
-    .map((h) => h.id)
-    .join(",");
-  usePolling(
-    () => {
-      for (const id of remoteHostIds.split(",").filter(Boolean)) {
-        // Independent review — a host currently applying is owned by the
-        // in-flight poll below instead. Without this, an in-flight
-        // response from THIS 4s loop can land after that 2s loop has
-        // already observed a terminal "done"/"failed" phase, overwriting
-        // updateInfo back to an earlier phase and re-arming the in-flight
-        // UI for an update that already finished.
-        if (applyingUpdate[id]) continue;
-        refreshHostUpdate(id);
+  // Issue #3574 — the update-status poll is its own hook, with a cadence
+  // that follows what each host can answer: a host awaiting approval (409)
+  // or with no connected agent (503) is not asked at all, or is asked with
+  // a backoff, instead of every couple of seconds forever. The server's
+  // answers are unchanged.
+  useHostUpdateStatusPoll({
+    hosts,
+    applying: applyingUpdate,
+    onStatus: (hostId, status) => {
+      setUpdateInfo((prev) => ({ ...prev, [hostId]: status }));
+      // Recognizes an update already in flight on this host (e.g. this
+      // tab reloaded mid-update, or a different tab started it) so the
+      // in-flight poll below picks it up instead of the row looking idle.
+      if (HOST_UPDATE_IN_FLIGHT_PHASES.has(status.status.phase)) {
+        setApplyingUpdate((prev) => (prev[hostId] ? prev : { ...prev, [hostId]: true }));
       }
     },
-    LIVE_REFRESH_INTERVAL_MS,
-    { deps: [remoteHostIds], enabled: remoteHostIds.length > 0, pauseWhenHidden: true },
-  );
+  });
 
   // Polls only the hosts with an update actually running — same
   // poll-until-terminal-state shape as ServerInfoSection's own update-apply

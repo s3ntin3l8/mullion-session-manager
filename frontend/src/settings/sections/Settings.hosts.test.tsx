@@ -432,11 +432,19 @@ describe("Settings -> Hosts", () => {
 
   // Issue #647 / roadmap 7.8.
   describe("agent updates", () => {
+    // Issue #3574 — the update status is no longer read the moment the row
+    // appears: it is read on the update-status poll's own ticks, the first
+    // one a base interval (2s) after the row shows up, so the row's version
+    // lands a beat later than it used to.
+    const UPDATE_STATUS_TIMEOUT = 5000;
+
     it("shows 'up to date' with no Update button when the agent matches the primary's version", async () => {
       render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
       const row = await screen.findByTestId("host-row-remote-1");
-      expect(await within(row).findByText(/up to date/)).toBeInTheDocument();
+      expect(
+        await within(row).findByText(/up to date/, undefined, { timeout: UPDATE_STATUS_TIMEOUT }),
+      ).toBeInTheDocument();
       expect(within(row).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
     });
 
@@ -455,7 +463,11 @@ describe("Settings -> Hosts", () => {
       render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
       const row = await screen.findByTestId("host-row-remote-1");
-      expect(await within(row).findByText("v0.2.18 → v0.2.20")).toBeInTheDocument();
+      expect(
+        await within(row).findByText("v0.2.18 → v0.2.20", undefined, {
+          timeout: UPDATE_STATUS_TIMEOUT,
+        }),
+      ).toBeInTheDocument();
 
       await user.click(within(row).getByRole("button", { name: "Update" }));
 
@@ -486,7 +498,11 @@ describe("Settings -> Hosts", () => {
       render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
       const row = await screen.findByTestId("host-row-remote-1");
-      expect(await within(row).findByText("update unavailable")).toBeInTheDocument();
+      expect(
+        await within(row).findByText("update unavailable", undefined, {
+          timeout: UPDATE_STATUS_TIMEOUT,
+        }),
+      ).toBeInTheDocument();
       expect(within(row).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
     });
 
@@ -508,7 +524,12 @@ describe("Settings -> Hosts", () => {
       render(<Settings onClose={vi.fn()} initialSection="hosts" />);
 
       const row = await screen.findByTestId("host-row-remote-1");
-      await user.click(within(row).getByRole("button", { name: "Update" }));
+      const updateButton = await within(row).findByRole(
+        "button",
+        { name: "Update" },
+        { timeout: UPDATE_STATUS_TIMEOUT },
+      );
+      await user.click(updateButton);
 
       const prompt = await screen.findByTestId("update-force-prompt");
       expect(
