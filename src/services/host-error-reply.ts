@@ -16,6 +16,7 @@ import type { FastifyReply } from "fastify";
 import type { HostRequestError } from "./remote-host-client.js";
 import {
   HostAwaitingApprovalError,
+  hostRequestReason,
   isOutcomeUnknown,
   unknownOutcomeDetail,
   unknownOutcomeText,
@@ -55,18 +56,5 @@ export function forwardHostRequestError(reply: FastifyReply, err: HostRequestErr
   if (err.statusCode === 401 || err.statusCode === 403) {
     return reply.serviceUnavailable("Host rejected the request — check its agent token");
   }
-  let message = err.message;
-  try {
-    const parsed: unknown = JSON.parse(err.body);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      typeof (parsed as { message?: unknown }).message === "string"
-    ) {
-      message = (parsed as { message: string }).message;
-    }
-  } catch {
-    // Not a JSON body — fall back to HostRequestError's own message.
-  }
-  return reply.code(err.statusCode).send({ message });
+  return reply.code(err.statusCode).send({ message: hostRequestReason(err) });
 }

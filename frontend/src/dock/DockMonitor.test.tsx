@@ -3146,7 +3146,7 @@ describe("Dock", () => {
 
         await user.click(header);
 
-        expect(await screen.findByText("Failed to start — try again")).toBeInTheDocument();
+        expect(await screen.findByText("Failed to start")).toBeInTheDocument();
       });
 
       // Issue #2069 — a 409 port_in_use is a refusal with something to act on,
@@ -3180,7 +3180,7 @@ describe("Dock", () => {
 
         await user.click(await screen.findByText("Dev server"));
         expect(await screen.findByText(/Port 5173 is in use by session 7/)).toBeInTheDocument();
-        expect(screen.queryByText("Failed to start — try again")).not.toBeInTheDocument();
+        expect(screen.queryByText("Failed to start")).not.toBeInTheDocument();
 
         await user.click(screen.getByText("Open holder"));
         expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));

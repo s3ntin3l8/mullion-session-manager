@@ -1,4 +1,5 @@
 import { TerminalPane } from "../TerminalPane.js";
+import type { DockEndedReport } from "./useDockProject.js";
 
 // Dock master-detail rework — ONE terminal per dock column, rendered here
 // instead of once per `.dock-monitor` row (see DockMonitor.tsx's own header
@@ -20,8 +21,13 @@ export function DockLogPane({
   minWidthPx,
   minHeightPx,
   flex,
+  ended,
 }: {
   sessionId: number | null;
+  // #3557 — with no live session: the last run's report, when it ended right
+  // after it started (its exit code and last output, read from the host it
+  // ran on), instead of the bare "select a row" hint.
+  ended?: DockEndedReport;
   // Both required, not optional the way DockMonitor's old minWidthPx/
   // minHeightPx were — this is now the ONLY place either floor applies, so
   // there is no longer a caller-without-settings fallback case to make
@@ -51,7 +57,21 @@ export function DockLogPane({
         ...(flex !== undefined ? { flex } : {}),
       }}
     >
-      {sessionId === null ? (
+      {sessionId === null && ended ? (
+        <div className="dock-log-pane-ended" role="status">
+          <div className="dock-log-pane-ended-title">
+            {ended.title} exited right after starting on {ended.hostLabel}
+            {ended.exitCode !== null ? ` (exit code ${ended.exitCode})` : ""}.
+          </div>
+          {ended.lines.length > 0 ? (
+            <pre className="dock-log-pane-ended-output">{ended.lines.join("\n")}</pre>
+          ) : (
+            <div className="dock-log-pane-hint">
+              The host kept no output for it. Start it again to watch its log.
+            </div>
+          )}
+        </div>
+      ) : sessionId === null ? (
         <div className="dock-log-pane-hint">Select a row to view its log</div>
       ) : (
         <div className="dock-log-pane-body">

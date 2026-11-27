@@ -22,6 +22,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const { createSessionRecord } = await import("../../src/services/session-lifecycle.js");
+const { HostRequestError } = await import("../../src/services/remote-host-errors.js");
 
 // Issue #1951 — a caller can NAME the host (or platform) a session runs on.
 // Unlike automatic placement, a target is a hard requirement: when nothing
@@ -182,6 +183,48 @@ describe("launcher host target: placement:auto and targetHostId (issue #2237)", 
     // The wire shape (what the agent receives), not whether the key is present.
     const body = JSON.parse(JSON.stringify(backend.spawn.mock.calls[0]![0]));
     expect(body).not.toHaveProperty("palette");
+  });
+
+  // #3557 — a Dock start on a Mac agent whose launch failed THERE: the
+  // host's own reason reaches the caller (and the row is rolled back), rather
+  // than a bare "Failed to spawn session on host".
+  it("a launch the target host refuses answers 502 with the host's reason (#3557)", async () => {
+    const { projectId, hostId, backend } = await setup();
+    backend.spawn.mockRejectedValue(
+      new HostRequestError(
+        hostId,
+        422,
+        JSON.stringify({ message: "master bootstrap failed: cwd does not exist: /home/x/proj" }),
+      ),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: {
+        projectId,
+        command: "make dev",
+        kind: "dock",
+        dockControlId: "dev",
+        targetHostId: hostId,
+      },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().message).toBe(
+      "mac-agent: master bootstrap failed: cwd does not exist: /home/x/proj",
+    );
+    expect(app.db.select().from(sessions).all()).toEqual([]);
+  });
+
+  it("a launch that fails for another reason still names it (#3557)", async () => {
+    const { projectId, hostId, backend } = await setup();
+    backend.spawn.mockRejectedValue(new Error("dtach is not installed"));
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", targetHostId: hostId },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().message).toBe("dtach is not installed");
   });
 
   it("POST targetHostId for a host with no path for the project is a 409 (issue #2237)", async () => {

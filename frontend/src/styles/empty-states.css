@@ -1823,6 +1823,32 @@
   font-size: 0.75rem;
 }
 
+/* #3557 — a run that ended right after it started: its exit and last output,
+   in place of the stream that can no longer be attached. */
+.dock-log-pane-ended {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 8px 10px;
+  gap: 6px;
+}
+.dock-log-pane-ended-title {
+  color: var(--fg);
+  font-size: 0.75rem;
+}
+.dock-log-pane-ended-output {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  color: var(--muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* GitHub panel (GitHubPanel.tsx, issue #27) — a dockview panel, opened from
    the Dock's .dock-github-row above or CommandPalette's Integrations entry. */
 .github-panel {

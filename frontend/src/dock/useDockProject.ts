@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, ApiError } from "../api/index.js";
+import { api, ApiError, LOCAL_HOST_ID } from "../api/index.js";
 import type {
   DockControl,
   DockerUpdateCheckResult,
@@ -14,6 +14,8 @@ import type { CustomSelectOption } from "../ui/CustomSelect.js";
 import {
   composeProjectForControl,
   composeProjectFromContainerName,
+  cwdForOtherHost,
+  lastOutputLines,
   dockerSessionIdentity,
   groupDockerControls,
   holdVanishedDockerControls,
@@ -69,6 +71,24 @@ import {
 // service actually removed via `compose down` still disappears promptly.
 const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS + 5_000;
 
+// #3557 — a session that ends this soon after its start is reported (toast +
+// its last output in the log pane): a dev server that dies on startup (a
+// missing .env in a remote checkout) otherwise just flips the row back to
+// off. Generous because the row only reads "exited" once the server's
+// reconciler has noticed, which can take tens of seconds for a remote host.
+const EARLY_EXIT_WINDOW_MS = 2 * 60_000;
+const EARLY_EXIT_LINES = 40;
+
+/** #3557 — a control's run that ended right after it started: what the log
+ * pane shows in place of the stream that is gone. */
+export interface DockEndedReport {
+  sessionId: number;
+  title: string;
+  hostLabel: string;
+  exitCode: number | null;
+  lines: string[];
+}
+
 // A control's state and actions, bound to it. What DockMonitor renders and
 // what the Dock view's action buttons call.
 export interface DockControlCardView {
@@ -84,6 +104,8 @@ export interface DockControlCardView {
   portConflict: { port: number; holderSessionId?: number; message: string } | undefined;
   armed: boolean;
   confirmBeforeKill: boolean;
+  /** #3557 — set when the control's last run ended right after it started. */
+  ended: DockEndedReport | undefined;
   /** Starts the control (from the selected worktree or branch). Resolves
    * false when the start failed; the failure is already on the row. */
   start: () => Promise<boolean>;
@@ -188,6 +210,12 @@ export function useDockProject(
     setEphemeralControls((prev) => [...prev.filter((c) => c.id !== control.id), control]);
   const [updateChecks, setUpdateChecks] = useState<Record<string, DockerUpdateCheckResult>>({});
   const { statusById: checkStatusById, show: showCheckStatus } = useTransientStatus(4000);
+  // #3557 — each control's latest launch, watched for an early exit, and the
+  // report of one that did end early.
+  const launchWatchRef = useRef(
+    new Map<string, { sessionId: number; at: number; title: string; hostLabel: string }>(),
+  );
+  const [endedById, setEndedById] = useState<Record<string, DockEndedReport>>({});
   // Issue #2069 — a start the backend refused with 409 `port_in_use`. Kept
   // until the next start attempt (not a transient tag) because it carries
   // actions: the holder may need opening or stopping, not just reading about.
@@ -299,6 +327,61 @@ export function useDockProject(
           onChange: setHostChoice,
         }
       : null;
+
+  const hostLabel = (hostId: string | undefined): string => {
+    const id = hostId ?? project?.hostId ?? LOCAL_HOST_ID;
+    if (id === LOCAL_HOST_ID) return "this server";
+    return hosts.find((h) => h.id === id)?.name ?? id;
+  };
+
+  // #3557 — a watched launch whose session has ended is reported once: a
+  // toast naming the host and exit code, and its last output kept for the log
+  // pane (the stream itself can no longer be attached).
+  useEffect(() => {
+    const watches = launchWatchRef.current;
+    if (watches.size === 0) return;
+    const now = Date.now();
+    for (const [controlId, watch] of watches) {
+      if (now - watch.at > EARLY_EXIT_WINDOW_MS) {
+        watches.delete(controlId);
+        continue;
+      }
+      const session = sessions.find((s) => s.id === watch.sessionId);
+      if (!session) continue;
+      if (session.status !== "exited" && session.sessionStatus !== "exited") continue;
+      watches.delete(controlId);
+      void (async () => {
+        let lines: string[] = [];
+        try {
+          const { text } = await api.getRenderedScrollback(session.id);
+          lines = lastOutputLines(text, EARLY_EXIT_LINES);
+        } catch {
+          // The host no longer answers for it: the report says so.
+        }
+        const exitCode = typeof session.exitCode === "number" ? session.exitCode : null;
+        setEndedById((prev) => ({
+          ...prev,
+          [controlId]: {
+            sessionId: session.id,
+            title: watch.title,
+            hostLabel: watch.hostLabel,
+            exitCode,
+            lines,
+          },
+        }));
+        useDashboardStore
+          .getState()
+          .reportError(
+            `${watch.title} exited right after starting on ${watch.hostLabel}${
+              exitCode !== null ? ` (exit code ${exitCode})` : ""
+            }.`,
+            lines.length > 0
+              ? `Last output: ${lines[lines.length - 1]}`
+              : "It left no output to show.",
+          );
+      })();
+    }
+  }, [sessions]);
 
   const gitRefs: GitBranchesResult | undefined = gitBranchesByProject[projectId];
   const worktrees = gitRefs?.worktrees ?? [];
@@ -622,7 +705,7 @@ export function useDockProject(
 
     const dockIdentity = dockerSessionIdentity(control);
     const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
-    const launchForValue = (value: string) => {
+    const launchOnHost = (value: string) => {
       const effectiveCwd = value.length > 0 ? value : control.cwd;
       if (effectiveCwd && effectiveCwd.startsWith("branch:")) {
         const branchName = effectiveCwd.slice("branch:".length);
@@ -636,14 +719,57 @@ export function useDockProject(
           ...(control.env ? { env: control.env } : {}),
         });
       }
+      // #3557 — the selector's paths are on the project's own host; another
+      // host gets the same directory under its own checkout, or a refusal.
+      let cwd = effectiveCwd;
+      if (project && launchHostId !== undefined && launchHostId !== project.hostId) {
+        const mapped =
+          effectiveCwd !== undefined && effectiveCwd === mainCheckout?.path
+            ? { ok: true as const, cwd: undefined }
+            : cwdForOtherHost({
+                cwd: effectiveCwd,
+                projectRoot: project.cwd,
+                hostRoot: project.hostCwds?.[launchHostId],
+                isLinkedWorktree:
+                  effectiveCwd !== undefined &&
+                  worktrees.some((w) => w.path === effectiveCwd && !w.isMain),
+              });
+        if (!mapped.ok) {
+          return Promise.reject(
+            new Error(
+              `${effectiveCwd} is a checkout on ${hostLabel(project.hostId)} only. Run the main checkout or a branch preview on ${hostLabel(launchHostId)}.`,
+            ),
+          );
+        }
+        cwd = mapped.cwd;
+      }
       return useDashboardStore.getState().createSession(projectId, control.command, {
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        ...(cwd ? { cwd } : {}),
         kind: "dock",
         dockControlId: control.id,
         ...(launchHostId !== undefined ? { targetHostId: launchHostId } : {}),
         ...identityOpts,
         ...(control.env ? { env: control.env } : {}),
       });
+    };
+
+    // Every launch of this row clears its last early-exit report and watches
+    // the new session for one (#3557).
+    const launchForValue = async (value: string) => {
+      setEndedById((prev) => {
+        if (!(control.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[control.id];
+        return next;
+      });
+      const session = await launchOnHost(value);
+      launchWatchRef.current.set(control.id, {
+        sessionId: session.id,
+        at: Date.now(),
+        title: control.title,
+        hostLabel: hostLabel(launchHostId),
+      });
+      return session;
     };
 
     const updateAvailable = isUpdateStillAvailable(
@@ -669,7 +795,15 @@ export function useDockProject(
             message: err.message,
           });
         } else {
-          showCheckStatus(control.id, "Failed to start — try again", true);
+          // #3557 — the reason, not just "try again": a remote host's own
+          // refusal (a missing directory there) or the server's message.
+          showCheckStatus(control.id, "Failed to start", true);
+          useDashboardStore
+            .getState()
+            .reportError(
+              `Couldn't start ${control.title} on ${hostLabel(launchHostId)}:`,
+              err instanceof Error ? err.message : String(err),
+            );
         }
         return false;
       }
@@ -755,6 +889,7 @@ export function useDockProject(
       portConflict,
       armed: killArmedIds.has(control.id),
       confirmBeforeKill,
+      ended: endedById[control.id],
       start,
       stop,
       restart,
@@ -811,6 +946,7 @@ export function useDockProject(
     dockerStackGroups,
     allRenderedControls,
     runningFor,
+    endedFor: (control: DockControl) => endedById[control.id],
     controlView,
     stackActions,
   };

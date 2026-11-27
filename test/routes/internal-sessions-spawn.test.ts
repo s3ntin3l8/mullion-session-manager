@@ -11,6 +11,8 @@ import {
   buildAndListen,
 } from "../helpers/internal-routes.js";
 import os from "node:os";
+import path from "node:path";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { WebSocket as NodeWebSocket } from "ws";
 
@@ -222,6 +224,41 @@ describe("internal routes: session spawn, liveness, and attach", () => {
     expect(terminateRes.statusCode).toBe(204);
 
     await app.close();
+  });
+
+  // #3557 — a launch that fails on this host is reported to the primary
+  // with its reason. It used to answer 201 before the launch ran, so a Dock
+  // start on a Mac agent into a missing directory showed nothing at all.
+  // 4xx on purpose: the primary reads a 5xx as "unreachable" and drops the body.
+  it("answers 422 with the classified reason when the launch fails here", async () => {
+    const app = await buildApp();
+    const spawnMock = vi.mocked(childProcessSpawn);
+    const passThrough = spawnMock.getMockImplementation()!;
+    spawnMock.mockImplementation(((file: string, args: string[], options: unknown) => {
+      if (file !== "systemd-run") return passThrough(file, args as never, options as never);
+      const ee = new EventEmitter() as EventEmitter & { unref?: () => void };
+      ee.unref = () => {};
+      setImmediate(() =>
+        ee.emit("error", Object.assign(new Error("spawn systemd-run ENOENT"), { code: "ENOENT" })),
+      );
+      return ee as never;
+    }) as never);
+    try {
+      const missing = path.join(os.tmpdir(), `no-such-dir-3557-${process.pid}`);
+      const spawnRes = await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id: "3557", cwd: missing, command: "make dev", cols: 80, rows: 24 },
+      });
+      expect(spawnRes.statusCode).toBe(422);
+      expect(spawnRes.json().message).toContain(`cwd does not exist: ${missing}`);
+      // Nothing is left tracked for the id: a retry spawns afresh.
+      expect(app.pty.get("3557")).toBeUndefined();
+    } finally {
+      spawnMock.mockImplementation(passThrough);
+      await app.close();
+    }
   });
 
   // Issue #1265 — an explicit regression guard on this route's WIRE FORMAT

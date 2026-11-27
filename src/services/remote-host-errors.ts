@@ -163,6 +163,34 @@ export class HostRequestError extends Error {
   }
 }
 
+/** The reason a host gave for refusing a request: its JSON body's `message`,
+ * else HostRequestError's own message. */
+export function hostRequestReason(err: HostRequestError): string {
+  try {
+    const parsed: unknown = JSON.parse(err.body);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { message?: unknown }).message === "string"
+    ) {
+      return (parsed as { message: string }).message;
+    }
+  } catch {
+    // Not a JSON body — fall back to HostRequestError's own message.
+  }
+  return err.message;
+}
+
+/**
+ * #3557 — what a failed spawn tells its caller. A remote host's refusal is its
+ * own reason (e.g. "cwd does not exist: /home/me/proj"), named after the host,
+ * rather than "Host <uuid> rejected the request: HTTP 422 — {json}".
+ */
+export function spawnFailureDetail(hostName: string, err: unknown): string | undefined {
+  if (err instanceof HostRequestError) return `${hostName}: ${hostRequestReason(err)}`;
+  return err instanceof Error ? err.message : undefined;
+}
+
 /** The host's RESPONSE outgrew the channel's limit, not the caller's request.
  * Still a 413 `HostRequestError` for callers that only check the status; the
  * preview proxy tells the two apart by class (#2702). */
