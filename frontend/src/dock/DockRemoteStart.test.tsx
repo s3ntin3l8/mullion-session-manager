@@ -252,7 +252,7 @@ describe("Dock: starting a control on another host (#3557)", () => {
     expect(toasts()).toEqual([]);
   });
 
-  it("refuses a Restart onto a worktree the chosen host lacks, before stopping the run", async () => {
+  it("restarts a running control where it runs: the host selector is locked meanwhile (#3556)", async () => {
     const running = makeSession({
       id: 42,
       projectId: 1,
@@ -265,19 +265,18 @@ describe("Dock: starting a control on another host (#3557)", () => {
     } as Partial<Session>);
     const deleteSession = vi.fn().mockResolvedValue(undefined);
     useDashboardStore.setState({ sessions: [running], deleteSession });
+    createSession.mockResolvedValue(makeSession({ id: 43, projectId: 1, kind: "dock" }));
     render(<DockSidebarView projectId={1} actions={{ onOpenDockConfig: vi.fn() } as never} />);
     await userEvent.click(await screen.findByRole("button", { name: /^Dev server, running/ }));
-    runOnMac();
+    // A Restart onto a host the worktree lacks cannot be asked for any more:
+    // the selector shows where it runs and is disabled until it stops.
+    expect(screen.getByRole("combobox", { name: /^Run dock controls on host/ })).toBeDisabled();
     const group = screen.getByRole("group", { name: "Dev server actions" });
     await userEvent.click(within(group).getByRole("button", { name: "Restart" }));
-    expect(await screen.findByText("Failed to switch")).toBeInTheDocument();
-    expect(deleteSession).not.toHaveBeenCalled();
-    expect(createSession).not.toHaveBeenCalled();
-    expect(toasts()).toEqual([
-      expect.stringMatching(
-        /^Couldn't start Dev server on macbook: .* is a checkout on this server only\./,
-      ),
-    ]);
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    expect(deleteSession).toHaveBeenCalledWith(42);
+    expect(createSession.mock.calls[0][2]).not.toHaveProperty("targetHostId");
+    expect(toasts()).toEqual([]);
   });
 
   it("shows the report in the Dock view too", async () => {

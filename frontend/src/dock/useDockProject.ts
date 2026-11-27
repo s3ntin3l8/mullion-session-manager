@@ -26,7 +26,7 @@ import {
   runningSessionFor,
 } from "./dockHelpers.js";
 import type { DockerStackGroup } from "./dockHelpers.js";
-import { DOCKER_STACK_SESSION_NAME_PREFIX, LOCAL_HOST_ID } from "../../../src/shared/constants.js";
+import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
 import {
@@ -317,11 +317,13 @@ export function useDockProject(
   const multiHost = project !== null && hostOptions.length > 1;
   // #3556 — the name a host goes by in the Dock, by buildHostTargetOptions's
   // rule: "this server" for the project's own host when that is the local one,
-  // else the host's name.
-  const hostLabel = (hostId: string): string =>
-    project && hostId === project.hostId && hostId === LOCAL_HOST_ID
-      ? "this server"
-      : (hosts.find((h) => h.id === hostId)?.name ?? hostId);
+  // else the host's name (and "this server" for a local host with no row).
+  // No id means the project's own host (#3557).
+  const hostLabel = (hostId: string | undefined): string => {
+    const id = hostId ?? project?.hostId ?? LOCAL_HOST_ID;
+    if (id === LOCAL_HOST_ID && (!project || id === project.hostId)) return "this server";
+    return hosts.find((h) => h.id === id)?.name ?? (id === LOCAL_HOST_ID ? "this server" : id);
+  };
   // The option value that stands for a host: the project's own host is the
   // OWN sentinel, any other host its id.
   const hostValue = (hostId: string): string =>
@@ -390,12 +392,6 @@ export function useDockProject(
         lockedBy,
       }
     : null;
-
-  const hostLabel = (hostId: string | undefined): string => {
-    const id = hostId ?? project?.hostId ?? LOCAL_HOST_ID;
-    if (id === LOCAL_HOST_ID) return "this server";
-    return hosts.find((h) => h.id === id)?.name ?? id;
-  };
 
   // #3557 — a watched launch whose session has ended is reported once: a
   // toast naming the host and exit code, and its last output kept for the log
