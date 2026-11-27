@@ -29,7 +29,10 @@ afterEach(async () => {
   if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
-async function listener(onLines: (socket: net.Socket, lines: Record<string, unknown>[]) => void) {
+async function listener(
+  onLines: (socket: net.Socket, lines: Record<string, unknown>[]) => void,
+  messageCount = 1,
+) {
   dir = mkdtempSync(path.join(os.tmpdir(), "stop-bg-"));
   const target = path.join(dir, "hooks.sock");
   server = net.createServer({ allowHalfOpen: true }, (socket) => {
@@ -45,7 +48,7 @@ async function listener(onLines: (socket: net.Socket, lines: Record<string, unkn
         lines.push(JSON.parse(buffer.slice(0, newline)));
         buffer = buffer.slice(newline + 1);
       }
-      if (lines.length >= 2) onLines(socket, lines);
+      if (lines.length >= messageCount + 1) onLines(socket, lines);
     });
   });
   await new Promise<void>((resolve) => server!.listen(target, resolve));
@@ -135,7 +138,14 @@ describe("mcode Stop background delivery (#3189)", () => {
     expect(ids[1]).toBe("handed-off-id");
   });
 
-  it.each(["fork throw", "worker error", "send error", "send error after delivery"])(
+  it.each([
+    "fork throw",
+    "worker error",
+    "send error",
+    "send error after delivery",
+    "refused",
+    "unresponsive",
+  ])(
     "falls back to foreground delivery on %s with the same identity",
     async (failure) => {
       const { HookDeliveryRegistry } = await import("../../src/services/hook-deliveries.js");
@@ -147,11 +157,17 @@ describe("mcode Stop background delivery (#3189)", () => {
         ids.push(id);
         expect(lines[0].token).toBe("test-token");
         expect(lines[1]).toEqual({ kind: "progress", phase: "done" });
-        if (ledger.claim("session", `${id}:0`)) dispatched++;
+        if (failure === "refused") {
+          socket.end('{"ack":"refused"}\n');
+          return;
+        }
+        if (failure === "unresponsive") return;
+        if (ledger.claim("session", `${id}#0`)) dispatched++;
         socket.end('{"ack":"accepted"}\n{"ack":"delivered"}\n');
       });
       // Patch only this subprocess's fork API, then run the real entry point
       // against a real socket. A send callback can fail AFTER IPC delivery.
+      const started = Date.now();
       const hook = spawn(
         process.execPath,
         [
@@ -207,8 +223,10 @@ describe("mcode Stop background delivery (#3189)", () => {
       expect(ids).toHaveLength(failure === "send error after delivery" ? 2 : 1);
       expect(typeof ids[0]).toBe("string");
       expect(new Set(ids).size).toBe(1);
-      expect(dispatched).toBe(1);
+      expect(dispatched).toBe(["refused", "unresponsive"].includes(failure) ? 0 : 1);
+      expect(Date.now() - started).toBeLessThan(8000);
     },
+    10000,
   );
 
   it("exits the hook promptly and delivers after refusals lasting beyond mcode's 10s ceiling", async () => {
@@ -246,15 +264,26 @@ describe("mcode Stop background delivery (#3189)", () => {
       // An accepted delivery is dispatched, but the first delivered ack is
       // lost. The worker must retry with exactly the same identity.
       socket.write('{"ack":"accepted"}\n');
-      if (ledger.claim("session", `${id}:0`)) {
-        dispatched++;
-      }
-      socket.end(ids.length === 1 ? "" : '{"ack":"delivered"}\n');
-    });
-    const agent = mcodeAgent(target, "20,20");
-    await once(agent, "message");
-    await expect.poll(() => ids.length).toBe(2);
-    expect(dispatched).toBe(1);
+      if (ledger.claim("session", `${id}#0`)) dispatched++;
+      if (ledger.claim("session", `${id}#1`)) dispatched++;
+      expect(lines.slice(1)).toEqual([
+        { kind: "cwd_changed", cwd: "/test" },
+        { kind: "progress", phase: "done" },
+      ]);
+      socket.end(ids.length === 1 ? "" : '{"ack":"delivered"}\n{"ack":"delivered"}\n');
+    }, 2);
+    const { startBackgroundStop } = await import("../../src/hooks/forwarder-background.mjs");
+    await startBackgroundStop(
+      target,
+      "test-token",
+      [
+        { kind: "cwd_changed", cwd: "/test" },
+        { kind: "progress", phase: "done" },
+      ],
+      "two-message-id",
+    );
+    await expect.poll(() => ids.length, { timeout: 5000 }).toBe(2);
+    expect(dispatched).toBe(2);
     expect(ids[0]).toBe(ids[1]);
   });
 

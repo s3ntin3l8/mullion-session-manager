@@ -275,7 +275,10 @@ async function forward() {
       try {
         // A failed send may still have reached the worker: reuse its id so
         // concurrent deliveries remain at most once at the socket ledger.
-        await deliverStop(socketPath, token, messages, deliveryId);
+        // mcode fallback gets one attempt (at most 5s), leaving room below
+        // its 10s ceiling even when the socket is unresponsive.
+        const delays = agent === "mcode" ? [] : undefined;
+        await deliverStop(socketPath, token, messages, deliveryId, delays);
       } catch {
         // Hook failures must never surface to the agent.
       }

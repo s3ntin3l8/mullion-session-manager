@@ -54,11 +54,16 @@ export const STOP_ATTEMPT_TIMEOUT_MS = 5_000;
  * the forwarder gave up on it. Never rejects and never throws: a hook
  * failure must never surface to the agent.
  */
-export async function deliverStop(socketPath, token, messages, deliveryId = randomUUID()) {
+export async function deliverStop(
+  socketPath,
+  token,
+  messages,
+  deliveryId = randomUUID(),
+  delays = stopRetryDelays(),
+) {
   // ONE delivery id for the whole retry sequence: every attempt is the same
   // delivery, so the socket can recognise a retry of a message it already
   // dispatched and skip it (see src/services/hook-deliveries.ts).
-  const delays = stopRetryDelays();
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) {
       await sleep(delays[attempt - 1]);

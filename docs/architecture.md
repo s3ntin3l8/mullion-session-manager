@@ -620,7 +620,7 @@ export`/`import --standalone`, re-keying the imported session to the
   exits first or the outage exceeds the bound (issue #3189).
   A failed worker hand-off falls back to foreground delivery using the same
   id, preserving deduplication if the worker also received it; this fallback
-  remains subject to mcode's ten-second hook timeout.
+  makes one attempt with a five-second timeout, below mcode's ten-second ceiling.
   `opencode-plugin.js` is OpenCode's own bridge,
   auto-injected as a per-session plugin directory referenced from
   `OPENCODE_CONFIG_CONTENT`, with the TUI launched `--standalone` (OpenCode
