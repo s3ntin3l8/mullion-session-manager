@@ -61,6 +61,8 @@ function rowDetail(view: DockControlCardView): string {
   if (view.held) return "recreating…";
   if (view.dockerStatus) return view.dockerStatus.label;
   if (rowKind(view.control) === "log") return view.running ? "running" : "ended";
+  // #3556 — where it runs, from its session, when the project spans hosts.
+  if (view.running && view.runHostLabel) return `running on ${view.runHostLabel}`;
   return view.running ? "running" : "stopped";
 }
 

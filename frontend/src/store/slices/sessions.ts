@@ -101,6 +101,12 @@ export function __resetRefreshSessionsInFlightForTests(): void {
 const MATERIALIZE_POLL_MS = 2_000;
 const MATERIALIZE_MAX_WAIT_MS = 15 * 60_000;
 
+/** A checkout on another host could not be prepared for a launch: its message
+ * names the host and the reason, so a caller can show it as is (#3556). */
+export class CheckoutPrepareError extends Error {
+  override name = "CheckoutPrepareError";
+}
+
 /**
  * POST /api/sessions answers 202 `{preparingCheckout}` when placement picked a
  * host the project is not cloned on yet: no session exists, a clone job is
@@ -124,11 +130,11 @@ async function createWhenCheckoutReady(
       toastId ??= get().pushToast({ message: `Preparing checkout on ${hostName}…` });
       for (;;) {
         if (Date.now() > deadline)
-          throw new Error(`Preparing the checkout on ${hostName} timed out.`);
+          throw new CheckoutPrepareError(`Preparing the checkout on ${hostName} timed out.`);
         await new Promise((resolve) => setTimeout(resolve, MATERIALIZE_POLL_MS));
         const status = await api.materializeStatus(projectId, hostId);
         if (status.state === "failed") {
-          throw new Error(
+          throw new CheckoutPrepareError(
             `Could not prepare a checkout on ${hostName}: ${status.detail ?? "the clone failed"}`,
           );
         }

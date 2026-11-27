@@ -98,21 +98,31 @@ as the Settings editor.
 
 A dock control is a session, so it runs where the project is placed. To run one
 on another host the project has a checkout on (its `hostCwds`) — a Mac agent for
-an iOS Simulator, say — pick the host in the Dock's **Run on** dropdown (it
+an iOS Simulator, say — pick the host in the Dock's **Next start on** dropdown (it
 appears when the project reaches more than one host), or pass `--host <hostId>`
 to `mullion dock start`/`switch` or `host` to the MCP `start_dock_session` /
-`switch_dock_branch`. The choice is per launch and is not stored: a fresh Dock
-starts on the project's own placement again.
+`switch_dock_branch`. The dropdown picks where the **next** Start runs: that
+host's checkout, with that host's own `.env`. The choice is per launch and is
+not stored: a fresh Dock starts on the project's own placement again.
 
+- A running control shows the host it runs on beside its name (`on this server`,
+  `on Mac mini`; the Dock view's row says `running on …`). The badge comes from
+  the control's session, never from the dropdown, and a stopped control shows
+  none. A project on one host shows no badge unless a control landed elsewhere.
+- While any of the project's commands runs, the dropdown reads **Running on**,
+  shows that control's host and is disabled; its tooltip names the control to
+  stop. A choice made earlier cannot contradict the log pane beside it. With
+  controls on two hosts (`--host` from the CLI or MCP), it shows the newest one
+  on a host other than the project's own, and a stopped control starts there.
+  Compose service log streams do not lock it.
 - A control runs in one place at a time: starting one that is already running
-  (on any host) answers `409`. To move it, pick the host and **Restart** (or
+  (on any host) answers `409`. To move it, stop it, pick the host and Start (or
   `mullion dock switch <control> <branch> --host <id>`). Until you pick, the
   dropdown follows where the project's dock already runs (the newest control on
   another host), and starting a stopped control goes there. Restart keeps a
-  running control on the host its own session is on, so a control at home is not
-  moved by a dev server running on the Mac; pick a host to move it. This holds
-  for a project placed automatically too: a dock control is a persistent monitor,
-  so Restart does not hand it back to placement to re-decide.
+  running control on the host its own session is on. This holds for a project
+  placed automatically too: a dock control is a persistent monitor, so Restart
+  does not hand it back to placement to re-decide.
 - The control is read from `.crs/dock.json` **in the checkout on that host**, so
   its command and `cwd` are that checkout's. A host the project has no checkout
   on is refused with `409 no_checkout_on_host`, before anything stops.

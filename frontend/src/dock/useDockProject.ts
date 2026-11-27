@@ -7,6 +7,7 @@ import type {
   Session,
 } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
+import { CheckoutPrepareError } from "../store/slices/sessions.js";
 import { useShallow } from "zustand/react/shallow";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "../dockerServiceStatus.js";
@@ -25,7 +26,7 @@ import {
   runningSessionFor,
 } from "./dockHelpers.js";
 import type { DockerStackGroup } from "./dockHelpers.js";
-import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
+import { DOCKER_STACK_SESSION_NAME_PREFIX, LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
 import {
@@ -94,6 +95,9 @@ export interface DockEndedReport {
 export interface DockControlCardView {
   control: DockControl;
   running: Session | undefined;
+  /** #3556 — the host the running session is on ("this server" or the host's
+   * name), or null when it is not running or the project has one host. */
+  runHostLabel: string | null;
   showSelector: boolean;
   selectedValue: string;
   worktreeOptions: CustomSelectOption[];
@@ -142,12 +146,15 @@ export interface DockStackActions {
 
 export type DockSurface = "bottom-dock" | "sidebar-view";
 
-/** The "Run on" choice for a project that reaches more than one host. */
+/** The Dock's host choice ("Next start on") for a project that reaches more than one host. */
 export interface DockHostPicker {
   projectId: number;
   value: string;
   options: { value: string; label: string; disabled: boolean }[];
   onChange: (value: string) => void;
+  /** #3556 — the titles of the running controls that pin the selector to the
+   * host they run on; empty when nothing runs and it picks the next start's. */
+  lockedBy: string[];
 }
 
 export function useDockProject(
@@ -299,37 +306,90 @@ export function useDockProject(
   );
   // #3425 — where a Start runs. Per launch and per mount: nothing is stored.
   // Until the user picks, it follows where the project's dock already runs
-  // (a control running on the Mac is not offered "this server" by default, and
-  // Restart brings it back where it was), else the project's own placement.
+  // (a control running on the Mac is not offered "this server" by default),
+  // else the project's own placement.
   const [hostChoice, setHostChoice] = useState<string | null>(null);
   // Own host first, then each host the project has a checkout on. Auto is not
   // offered: a dock control is somewhere on purpose.
   const hostOptions = project
     ? buildHostTargetOptions(project, hosts).filter((o) => o.value !== AUTO_VALUE)
     : [];
-  const runningElsewhere =
-    project && hostOptions.length > 1
-      ? [...dockSessions]
-          .sort((a, b) => b.id - a.id)
-          .map((s) => s.resolvedHostId)
-          .find((h) => h && h !== project.hostId && hostOptions.some((o) => o.value === h))
-      : undefined;
-  const effectiveHostChoice = hostChoice ?? runningElsewhere ?? OWN_HOST_VALUE;
+  const multiHost = project !== null && hostOptions.length > 1;
+  // #3556 — the name a host goes by in the Dock, by buildHostTargetOptions's
+  // rule: "this server" for the project's own host when that is the local one,
+  // else the host's name.
+  const hostLabel = (hostId: string): string =>
+    project && hostId === project.hostId && hostId === LOCAL_HOST_ID
+      ? "this server"
+      : (hosts.find((h) => h.id === hostId)?.name ?? hostId);
+  // The option value that stands for a host: the project's own host is the
+  // OWN sentinel, any other host its id.
+  const hostValue = (hostId: string): string =>
+    project && hostId === project.hostId ? OWN_HOST_VALUE : hostId;
+  // #3556 — the project's configured controls that are running now (a Compose
+  // service's log stream is not a dev server the selector would move). While
+  // any runs, the selector shows where and is locked: a choice that differs
+  // from where the control runs would contradict the log pane beside it.
+  const runningConfigured = multiHost
+    ? controls
+        .filter((c) => c.source !== "docker")
+        .flatMap((c) => {
+          const s = runningSessionFor(c, dockSessions);
+          return s ? [{ control: c, session: s }] : [];
+        })
+        .sort((a, b) => b.session.id - a.session.id)
+    : [];
+  // With controls on two hosts (only `mullion dock start --host` gets there),
+  // the newest one on another host wins, as it did before the lock.
+  const lockingRun =
+    runningConfigured.find((r) => project && r.session.resolvedHostId !== project.hostId) ??
+    runningConfigured[0];
+  const lockedHostValue = lockingRun ? hostValue(lockingRun.session.resolvedHostId) : undefined;
+  const runningElsewhere = multiHost
+    ? [...dockSessions]
+        .sort((a, b) => b.id - a.id)
+        .map((s) => s.resolvedHostId)
+        .find((h) => h && h !== project?.hostId && hostOptions.some((o) => o.value === h))
+    : undefined;
+  const effectiveHostChoice = lockedHostValue ?? hostChoice ?? runningElsewhere ?? OWN_HOST_VALUE;
+  // A locked host is used even when it has left the options (removed, or no
+  // longer in `hostCwds`): Start must go where the selector says, and the
+  // server refuses a host it cannot use rather than the Dock silently picking
+  // another (#3556).
   const targetHostId =
     project &&
     effectiveHostChoice !== OWN_HOST_VALUE &&
-    hostOptions.some((o) => o.value === effectiveHostChoice)
+    (effectiveHostChoice === lockedHostValue ||
+      hostOptions.some((o) => o.value === effectiveHostChoice))
       ? effectiveHostChoice
       : undefined;
-  const hostPicker: DockHostPicker | null =
-    project && hostOptions.length > 1
-      ? {
-          projectId,
-          value: targetHostId ?? OWN_HOST_VALUE,
-          options: hostOptions,
-          onChange: setHostChoice,
-        }
-      : null;
+  const lockedBy = runningConfigured.map((r) => r.control.title);
+  // A locked value must be one of the options; a host that left the list
+  // (removed, or no longer in `hostCwds`) is shown as itself, disabled.
+  const pickerOptions =
+    lockedHostValue !== undefined &&
+    lockingRun &&
+    !hostOptions.some((o) => o.value === lockedHostValue)
+      ? [
+          ...hostOptions,
+          {
+            value: lockedHostValue,
+            label: hostLabel(lockingRun.session.resolvedHostId),
+            disabled: true,
+          },
+        ]
+      : hostOptions;
+  const hostPicker: DockHostPicker | null = multiHost
+    ? {
+        projectId,
+        value: lockedHostValue ?? targetHostId ?? OWN_HOST_VALUE,
+        options: pickerOptions,
+        onChange: (value: string) => {
+          if (lockedBy.length === 0) setHostChoice(value);
+        },
+        lockedBy,
+      }
+    : null;
 
   const hostLabel = (hostId: string | undefined): string => {
     const id = hostId ?? project?.hostId ?? LOCAL_HOST_ID;
@@ -699,17 +759,24 @@ export function useDockProject(
     });
 
     // Where this row launches. Start (nothing running) uses the group's choice.
-    // Restart keeps the control on the host its OWN session runs on unless the
-    // user picked a host: with `dev` on the Mac and `logs` at home, Restart on
-    // `logs` must not move it to the Mac. (#3425)
+    // Restart keeps the control on the host its OWN session runs on: with
+    // `dev` on the Mac and `logs` at home, Restart on `logs` must not move it
+    // to the Mac (#3425), and the selector is locked while it runs, so a
+    // choice made before the start cannot move it either (#3556).
+    // A host that has left the options is kept too, as Start does for a
+    // locked host: the server refuses it rather than the row moving home.
     const rowHostId =
-      running &&
-      project &&
-      running.resolvedHostId !== project.hostId &&
-      hostOptions.some((o) => o.value === running.resolvedHostId)
+      running && project && running.resolvedHostId !== project.hostId
         ? running.resolvedHostId
         : undefined;
-    const launchHostId = hostChoice !== null ? targetHostId : running ? rowHostId : targetHostId;
+    const launchHostId = running ? rowHostId : targetHostId;
+    // #3556 — where it runs, from the session, never from the selector. Only
+    // where the project reaches more than one host, or the session landed off
+    // the project's own host: a single-host Dock has nothing to tell apart.
+    const runHostLabel =
+      running && project && (multiHost || running.resolvedHostId !== project.hostId)
+        ? hostLabel(running.resolvedHostId)
+        : null;
 
     const dockIdentity = dockerSessionIdentity(control);
     const identityOpts = dockIdentity ? { name: dockIdentity, nameLocked: true } : {};
@@ -820,6 +887,14 @@ export function useDockProject(
             ...(Number.isInteger(holder) ? { holderSessionId: holder } : {}),
             message: err.message,
           });
+        } else if (
+          (err instanceof ApiError && err.statusCode >= 400 && err.statusCode < 500) ||
+          err instanceof CheckoutPrepareError
+        ) {
+          // #3556 — the server refused this start (e.g. a locked host with no
+          // checkout any more: POST /api/sessions answers 409 with no `code`).
+          // Retrying cannot help; its reason says what to do.
+          showCheckStatus(control.id, err.message, true);
         } else {
           // #3557 — the reason, not just "try again": a remote host's own
           // refusal (a missing directory there) or the server's message.
@@ -914,6 +989,7 @@ export function useDockProject(
     return {
       control,
       running,
+      runHostLabel,
       showSelector: controlShowSelector,
       selectedValue,
       worktreeOptions: allOptions,
