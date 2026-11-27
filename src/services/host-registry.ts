@@ -1058,7 +1058,7 @@ export function createPairedHost(
     })
     .run();
   recordHostIdentityEvent(app, id, "paired", peer);
-  return { ...issueSession(app, id), machineCredential: issueMachineCredential(app, id, peer) };
+  return { ...issueSession(app, id), machineCredential: issueMachineCredential(app, id) };
 }
 
 /**
@@ -1099,7 +1099,7 @@ export function rePairHost(
   }
   return {
     ...issueSession(app, hostId),
-    machineCredential: issueMachineCredential(app, hostId, peer, { noGrace: true }),
+    machineCredential: issueMachineCredential(app, hostId, { noGrace: true }),
   };
 }
 
@@ -1141,7 +1141,6 @@ export function reissuePairedIdentity(
 function issueMachineCredential(
   app: FastifyInstance,
   hostId: string,
-  peer: string | null = null,
   opts: { noGrace?: boolean } = {},
 ): string {
   const credential = crypto.randomBytes(32).toString("hex");
@@ -1166,13 +1165,6 @@ function issueMachineCredential(
   // An expired credential is already dead (renewMachineCredential rejects the
   // row), so it must not be revived into the grace slot.
   const replacesLive = prevEnc !== null;
-  if (replacesLive) {
-    app.log.warn(
-      { hostId },
-      "[host-registry] a registration replaced a live machine identity; the displaced agent " +
-        "(if any) converges via the grace credential. Expected after an operator re-enroll; a collision if two agents share one per-host token.",
-    );
-  }
   app.db
     .update(hosts)
     .set({
@@ -1184,9 +1176,6 @@ function issueMachineCredential(
     })
     .where(eq(hosts.id, hostId))
     .run();
-  if (replacesLive) {
-    recordHostIdentityEvent(app, hostId, "replaced", peer);
-  }
   return credential;
 }
 
@@ -1194,7 +1183,7 @@ function withMachineCredential(
   app: FastifyInstance,
   registration: HostRegistration,
   input: RegisterAgentInput,
-  peer: string | null = null,
+  _peer: string | null = null,
 ): HostRegistration {
   if (!input.wantsMachineCredential) {
     noteLegacyAgent(app, registration.hostId);
@@ -1203,7 +1192,7 @@ function withMachineCredential(
   legacyAgentNoticed.delete(registration.hostId);
   return {
     ...registration,
-    machineCredential: issueMachineCredential(app, registration.hostId, peer),
+    machineCredential: issueMachineCredential(app, registration.hostId),
   };
 }
 

@@ -306,7 +306,7 @@ credential, token, or code):
 - `enrolled` — a host enrolled via `MULLION_ENROLLMENT_SECRET`.
 - `claimed` — an existing manual host row was claimed with its per-host token.
 - `paired` — a host was paired (or had its pairing response reissued on retry) via a one-time pairing code.
-- `replaced` — a re-pair replaced an already-live machine identity in place (no grace period, recorded alongside `paired`). Since issue #3439, claims on a row with a live identity are refused, so re-pairing via a host-bound pairing code is the only path that produces a `replaced` event.
+- `replaced` — a re-pair replaced an already-live machine identity in place (no grace period, recorded alongside `paired`). Since issue #3439, claims on a row with a live identity are refused, so re-pairing via a host-bound pairing code is the only path that produces a `replaced` event (any rows written before #3439 came from a token claim).
 - `revoked` — an operator revoked the host's machine identity (`POST /api/hosts/:id/revoke`).
 - `token_rotated` — an operator rotated the host's per-host token (`POST /api/hosts/:id/rotate-token`).
 - `code_minted` — an automation token minted a one-off pairing code on `POST /api/host-pairings` (`hostId` is `null` for `enroll` mints and set for `repair` mints; records the token label and raw TCP peer, never the token or code).
