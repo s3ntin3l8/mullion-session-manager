@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HostsSection } from "./HostsSection.js";
 import { useDashboardStore } from "../../store/index.js";
@@ -518,7 +518,120 @@ describe("HostsSection", () => {
 
     const rejectDetail = screen.getByTestId("host-approval-detail-h-reject");
     await user.click(within(rejectDetail).getByRole("button", { name: "Reject" }));
+    expect(calls).not.toContain("DELETE /api/hosts/h-reject");
+    await user.click(within(rejectDetail).getByRole("button", { name: "Click again to reject" }));
     await vi.waitFor(() => expect(calls).toContain("DELETE /api/hosts/h-reject"));
+  });
+
+  it("arms Reject for 3s, disarms on timeout or blur, uses touch wording, and keeps Approve single-click", async () => {
+    vi.useFakeTimers();
+    try {
+      useDashboardStore.setState({
+        hosts: [
+          makeHost({
+            id: "h-pending",
+            name: "new-worker",
+            baseUrl: null,
+            health: "online",
+            approvalPending: true,
+            enrollmentPeer: "10.0.0.55",
+          }),
+          makeHost({
+            id: "h-reject",
+            name: "bad-worker",
+            baseUrl: null,
+            health: "online",
+            approvalPending: true,
+            enrollmentPeer: "10.0.0.99",
+          }),
+        ],
+      });
+      const calls = stubFetch({
+        approve: () => {
+          useDashboardStore.setState((state) => ({
+            hosts: state.hosts.map((h) =>
+              h.id === "h-pending" ? { ...h, approvalPending: false, enrollmentPeer: null } : h,
+            ),
+          }));
+          return jsonResponse(200, { ok: true });
+        },
+        deleteHost: () => jsonResponse(204, null),
+      });
+
+      const { unmount } = render(<HostsSection />);
+
+      const rejectDetail = screen.getByTestId("host-approval-detail-h-reject");
+      const rejectBtn = within(rejectDetail).getByRole("button", { name: "Reject" });
+
+      // First click arms Reject without deleting.
+      fireEvent.click(rejectBtn);
+      expect(rejectBtn).toHaveTextContent("Click again to reject");
+      expect(calls.filter((c) => c === "DELETE /api/hosts/h-reject")).toHaveLength(0);
+
+      // After 3s without a second click, label returns to "Reject" and nothing was deleted.
+      act(() => {
+        vi.advanceTimersByTime(3000);
+      });
+      expect(rejectBtn).toHaveTextContent("Reject");
+      expect(calls.filter((c) => c === "DELETE /api/hosts/h-reject")).toHaveLength(0);
+
+      // Focus leaving also disarms without deleting.
+      fireEvent.click(rejectBtn);
+      expect(rejectBtn).toHaveTextContent("Click again to reject");
+      fireEvent.blur(rejectBtn);
+      expect(rejectBtn).toHaveTextContent("Reject");
+      expect(calls.filter((c) => c === "DELETE /api/hosts/h-reject")).toHaveLength(0);
+
+      // Second click within 3s calls DELETE once.
+      fireEvent.click(rejectBtn);
+      expect(rejectBtn).toHaveTextContent("Click again to reject");
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(rejectBtn).toHaveTextContent("Click again to reject");
+      fireEvent.click(rejectBtn);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(calls.filter((c) => c === "DELETE /api/hosts/h-reject")).toHaveLength(1);
+
+      // Approve still acts on a single click.
+      const pendingDetail = screen.getByTestId("host-approval-detail-h-pending");
+      fireEvent.click(within(pendingDetail).getByRole("button", { name: "Approve" }));
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(calls.filter((c) => c === "POST /api/hosts/h-pending/approve")).toHaveLength(1);
+
+      unmount();
+
+      // Coarse pointer uses "Tap again to reject".
+      const origMatchMedia = window.matchMedia;
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: query === "(pointer: coarse)",
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })),
+      );
+      try {
+        render(<HostsSection />);
+        const touchRejectDetail = screen.getByTestId("host-approval-detail-h-reject");
+        const touchRejectBtn = within(touchRejectDetail).getByRole("button", { name: "Reject" });
+        fireEvent.click(touchRejectBtn);
+        expect(touchRejectBtn).toHaveTextContent("Tap again to reject");
+      } finally {
+        window.matchMedia = origMatchMedia;
+      }
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   const code = "a".repeat(64);

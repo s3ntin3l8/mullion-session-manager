@@ -478,7 +478,8 @@ may still register, renew its credential, and keep its outbound channel
 connected so it shows online in Settings → Hosts, but it is excluded from
 placement and `list_spawn_targets`, and direct operations or spawns targeting
 it fail with `409 host is awaiting approval`. An operator approves the host in
-Settings → Hosts (**Approve**) or removes it (**Reject**).
+Settings → Hosts (**Approve**) or removes it (**Reject**, which asks for a
+second click to confirm).
 
 **Do not put the user-facing hostname's SSO bypass on `/api/internal/*`.** Keep
 the unauthenticated agent endpoints isolated on their own dedicated hostname

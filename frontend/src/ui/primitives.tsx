@@ -524,17 +524,26 @@ export function StyledList({ children }: { children: ReactNode }) {
 
 export function SecondaryButton({
   onClick,
+  onBlur,
   icon,
   children,
   disabled,
+  className,
 }: {
   onClick: () => void;
+  onBlur?: () => void;
   icon?: ReactNode;
   children: ReactNode;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
-    <button className="settings-secondary-btn" onClick={onClick} disabled={disabled}>
+    <button
+      className={`settings-secondary-btn${className ? ` ${className}` : ""}`}
+      onClick={onClick}
+      onBlur={onBlur}
+      disabled={disabled}
+    >
       {icon}
       {children}
     </button>
