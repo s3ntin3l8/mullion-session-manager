@@ -1076,6 +1076,7 @@ export function rePairHost(
 ): HostRegistration | null {
   const row = getHostRow(app, hostId);
   if (!row || row.id === LOCAL_HOST_ID) return null;
+  const hadLiveIdentity = hasLiveMachineIdentity(row);
   app.db
     .update(hosts)
     .set({
@@ -1093,6 +1094,9 @@ export function rePairHost(
     .where(eq(hosts.id, hostId))
     .run();
   recordHostIdentityEvent(app, hostId, "paired", peer);
+  if (hadLiveIdentity) {
+    recordHostIdentityEvent(app, hostId, "replaced", peer);
+  }
   return {
     ...issueSession(app, hostId),
     machineCredential: issueMachineCredential(app, hostId, peer, { noGrace: true }),
@@ -1150,9 +1154,8 @@ function issueMachineCredential(
   // path reaches here with a live credential any more — a claim matches only
   // a row without a live identity, an enrollment creates a fresh row and a
   // re-pair passes noGrace. So the grace copy and the rotation stamp below
-  // are always written empty from here, and with them the `replaced` identity
-  // event has no producer: the `replaced` rows still in the table are
-  // historic. #3507 restores the event on the re-pair path. The grace slot
+  // are always written empty from here; #3507 moved the `replaced` event to
+  // `rePairHost`, where a live identity is replaced in place. The grace slot
   // itself is untouched by this — a renewal rotates the credential and keeps
   // the previous one valid (see renewMachineCredential).
   const existing = getHostRow(app, hostId);

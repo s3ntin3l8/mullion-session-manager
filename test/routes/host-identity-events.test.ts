@@ -403,4 +403,151 @@ describe("host identity events (issue #3435)", () => {
       peer: "10.9.0.2",
     });
   });
+
+  // Issue #3507 — re-pairing a host with a live identity is the sole producer
+  // of `replaced` events, surfaced on /api/hosts until acknowledged.
+  it("writes `replaced` with the peer on re-pair of a live identity and surfaces it until acknowledged", async () => {
+    const initialMint = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      headers: { host: "primary.example:3000" },
+      payload: { label: "repair-target" },
+    });
+    expect(initialMint.statusCode).toBe(200);
+    const { code: initialCode } = initialMint.json() as { code: string };
+
+    const initialRedeem = await app.inject({
+      method: "POST",
+      url: "/api/internal/pair",
+      remoteAddress: "10.10.0.1",
+      payload: {
+        code: initialCode,
+        requestId: "req-3507-init",
+        hostname: "repair-target",
+      },
+    });
+    expect(initialRedeem.statusCode).toBe(200);
+    const { host_id: hostId, machine_credential: initialCred } = initialRedeem.json() as {
+      host_id: string;
+      machine_credential: string;
+    };
+
+    const repairMint = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      headers: { host: "primary.example:3000" },
+      payload: { hostId },
+    });
+    expect(repairMint.statusCode).toBe(200);
+    const { code: repairCode } = repairMint.json() as { code: string };
+
+    const repairRedeem = await app.inject({
+      method: "POST",
+      url: "/api/internal/pair",
+      remoteAddress: "10.10.0.2",
+      payload: {
+        code: repairCode,
+        requestId: "req-3507-repair",
+        hostname: "repair-target",
+      },
+    });
+    expect(repairRedeem.statusCode).toBe(200);
+    const { machine_credential: newCred } = repairRedeem.json() as {
+      machine_credential: string;
+    };
+
+    const eventsRes = await app.inject({
+      method: "GET",
+      url: `/api/hosts/${hostId}/identity-events`,
+    });
+    expect(eventsRes.statusCode).toBe(200);
+    const events = eventsRes.json() as Array<{
+      id: number;
+      kind: string;
+      peer: string | null;
+      acknowledgedAt: string | null;
+    }>;
+    const replaced = events.filter((e) => e.kind === "replaced");
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0].peer).toBe("10.10.0.2");
+    expect(replaced[0].acknowledgedAt).toBeNull();
+    expect(events.filter((e) => e.kind === "paired").map((e) => e.peer)).toEqual([
+      "10.10.0.2",
+      "10.10.0.1",
+    ]);
+
+    const serialized = JSON.stringify(events);
+    for (const secret of [initialCode, repairCode, initialCred, newCred]) {
+      expect(serialized).not.toContain(secret);
+    }
+
+    const listBefore = await app.inject({ method: "GET", url: "/api/hosts" });
+    expect(listBefore.statusCode).toBe(200);
+    const itemBefore = (listBefore.json() as Array<Record<string, unknown>>).find(
+      (h) => h.id === hostId,
+    );
+    expect(itemBefore?.recentIdentityReplacement).toMatchObject({
+      id: replaced[0].id,
+      peer: "10.10.0.2",
+    });
+
+    const ackRes = await app.inject({
+      method: "POST",
+      url: `/api/hosts/${hostId}/identity-events/acknowledge`,
+    });
+    expect(ackRes.statusCode).toBe(200);
+
+    const listAfter = await app.inject({ method: "GET", url: "/api/hosts" });
+    const itemAfter = (listAfter.json() as Array<Record<string, unknown>>).find(
+      (h) => h.id === hostId,
+    );
+    expect(itemAfter?.recentIdentityReplacement).toBeNull();
+  });
+
+  it("does not write `replaced` when re-pairing a revoked host", async () => {
+    const initialMint = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      headers: { host: "primary.example:3000" },
+      payload: { label: "revoked-repair-target" },
+    });
+    const { code: initialCode } = initialMint.json() as { code: string };
+    const initialRedeem = await app.inject({
+      method: "POST",
+      url: "/api/internal/pair",
+      remoteAddress: "10.11.0.1",
+      payload: { code: initialCode, requestId: "req-3507-rev-init", hostname: "revoked-box" },
+    });
+    const { host_id: hostId } = initialRedeem.json() as { host_id: string };
+
+    const revokeRes = await app.inject({
+      method: "POST",
+      url: `/api/hosts/${hostId}/revoke`,
+      remoteAddress: "10.11.0.2",
+    });
+    expect(revokeRes.statusCode).toBe(204);
+
+    const repairMint = await app.inject({
+      method: "POST",
+      url: "/api/host-pairings",
+      headers: { host: "primary.example:3000" },
+      payload: { hostId },
+    });
+    const { code: repairCode } = repairMint.json() as { code: string };
+    const repairRedeem = await app.inject({
+      method: "POST",
+      url: "/api/internal/pair",
+      remoteAddress: "10.11.0.3",
+      payload: { code: repairCode, requestId: "req-3507-rev-repair", hostname: "revoked-box" },
+    });
+    expect(repairRedeem.statusCode).toBe(200);
+
+    const eventsRes = await app.inject({
+      method: "GET",
+      url: `/api/hosts/${hostId}/identity-events`,
+    });
+    const events = eventsRes.json() as Array<{ kind: string }>;
+    expect(events.some((e) => e.kind === "replaced")).toBe(false);
+    expect(events.map((e) => e.kind)).toEqual(["paired", "revoked", "paired"]);
+  });
 });
