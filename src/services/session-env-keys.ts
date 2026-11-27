@@ -4,6 +4,7 @@ import {
   GIT_CONFIG_TASK_PUSH_BLOCK_ENV,
   SERVER_ENV_KEYS,
 } from "./session-env.js";
+import { MAX_SESSION_ENV_ENTRIES } from "./session-limits.js";
 
 // Issue #822 — the reserved-key predicate shared by dock-config.ts's write
 // path (throws on a reserved key), project-config.ts's read path (drops one
@@ -70,6 +71,16 @@ export function isReservedSessionEnvKey(key: string): boolean {
   if (RESERVED_GIT_CONFIG_TASK_PUSH_KEYS.has(key)) return true;
   if (RESERVED_GIT_CONFIG_IDENTITY_KEYS.has(key)) return true;
   return false;
+}
+
+/**
+ * Issue #3555 — whether a caller's `env` leaves room for the `PORT` that
+ * `previewPort` adds (resolveCreateSessionEnv below) within the session env
+ * cap: an agent host refuses more entries at spawn and on every reattach, so a
+ * `previewPort` caller checks this first to refuse with a readable message.
+ */
+export function hasRoomForPreviewPort(env: Record<string, string> | undefined): boolean {
+  return Object.keys(env ?? {}).length < MAX_SESSION_ENV_ENTRIES;
 }
 
 /**

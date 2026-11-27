@@ -235,10 +235,13 @@ describe("branch previews (issues #2016/#2018)", () => {
     expect(listUpstreamPorts(app, "local").has(preview.upstreamPort!)).toBe(true);
   });
 
-  it("refuses a preview control whose env leaves no room for PORT (#3555)", async () => {
+  // #3555 — the session env cap is 16 (an agent refuses more on attach):
+  // 15 control vars + PORT fit, 16 + PORT do not.
+  it("starts a preview control with 15 env vars and refuses one with 16 (#3555)", async () => {
+    const envOf = (n: number) =>
+      Object.fromEntries(Array.from({ length: n }, (_, i) => [`V${i}`, "x"]));
     const { cwd } = repo();
-    const env = Object.fromEntries(Array.from({ length: 16 }, (_, i) => [`V${i}`, "x"]));
-    writeDock(cwd, [{ id: "web", title: "Web", command: "vite", preview: true, env }]);
+    writeDock(cwd, [{ id: "web", title: "Web", command: "vite", preview: true, env: envOf(16) }]);
     const projectId = insertProject(app, cwd);
     const create = fakeCreate(app);
 
@@ -247,6 +250,12 @@ describe("branch previews (issues #2016/#2018)", () => {
       message: expect.stringMatching(/adds PORT/),
     });
     expect(create).not.toHaveBeenCalled();
+
+    writeDock(cwd, [{ id: "web", title: "Web", command: "vite", preview: true, env: envOf(15) }]);
+    const preview = await getOrCreateBranchPreview(app, projectId, "feat/x");
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(Object.keys(create.mock.calls[0][1].env ?? {})).toHaveLength(15);
+    expect(create.mock.calls[0][1].previewPort).toBe(preview.upstreamPort);
   });
 
   it("never hands a port still held by an unbound create to a concurrent one", async () => {
