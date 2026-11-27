@@ -542,10 +542,10 @@ both entries delete the row.
 
 `GET /api/hosts` carries the signal as `deprecatedKind` (`"legacy-agent"`,
 `"manual-token"`, or `null` for a host that is on the current path). The host's
-status chip — the one beside a host name in a session row or a pane tab —
-carries a "(deprecated)" qualifier for the first two kinds, and the primary
-logs a warning at startup if `MULLION_ENROLLMENT_SECRET` is still set in `.env`
-or the environment.
+status chip — the one beside a host name in a session row or a pane tab, and the
+one on the Settings → Hosts row — carries a "(deprecated)" qualifier for the
+first two kinds, and the primary logs a warning at startup if
+`MULLION_ENROLLMENT_SECRET` is still set in `.env` or the environment.
 
 **What keeps working.** Every existing host row keeps working: its renewals,
 its outbound channel, and a pre-provisioned host claiming its own row with its
@@ -2447,27 +2447,26 @@ channel. The primary has to dial the agent's stored `baseUrl`, which is an
 address only the home network can route.
 
 **How to see it.** Wherever the app names a host — the Settings → Hosts row,
-the sidebar project header, pane tabs and session rows — it shows the legacy
-agent's chip: `outdated agent (deprecated)` beside the name, or **Outdated agent
-— upgrade** on the Settings row for a host that is not on a deprecated path yet
-(the suffix says what to do). The "(deprecated)" qualifier marks the setup as on
-its way out (see "Deprecated host kinds"). An agent that already reports
-v0.3.59 or later reads **Not registered — set primary URL** on the Settings row
-(`not registered (deprecated)` as the chip) instead, because upgrading would
-change nothing for it; see Fix. A host whose agent authenticates
+the sidebar project header, pane tabs and session rows — it shows the SAME chip:
+`outdated agent (deprecated)` for an agent that predates the channel, or
+`not registered (deprecated)` for one that already reports v0.3.59 or later and
+is flagged anyway (upgrading would change nothing for it: it has never
+registered; see Fix). The "(deprecated)" qualifier marks the setup as on its
+way out (see "Deprecated host kinds"). A host whose agent authenticates
 with the row's own static token (`MULLION_AGENT_TOKEN`) reads
 `manual token (deprecated)` — the kind is ADDED to the chip, not swapped in: a
 host that is both (no machine identity AND a static token) reads
 `not registered · manual token (deprecated)` (or `outdated agent · manual token
 (deprecated)`), because that credential — not the agent's version — is what has
-to change. Every surface has a hover with the agent's reported version, but only
-the Settings hover also gives the primary's version. The `GET /api/hosts` field
-is `legacyAgent`: true for a non-local host that has a `baseUrl`, no machine
-identity and no revoked identity; `deprecatedKind` says which legacy path a
-host is on (`"legacy-agent"`, `"manual-token"`, or `null`). An older row that a
-newer registration replaced is not flagged (it shows as a possible duplicate
-instead). The server logs the "legacy agent registered" notice once per host
-per process, not on every renewal.
+to change. The chip says what is wrong; the hover says what to do, and the Fix
+section below has the steps. Every surface has a hover with the agent's reported
+version, but only the Settings hover also gives the primary's version. The
+`GET /api/hosts` field is `legacyAgent`: true for a non-local host that has a
+`baseUrl`, no machine identity and no revoked identity; `deprecatedKind` says
+which legacy path a host is on (`"legacy-agent"`, `"manual-token"`, or `null`).
+An older row that a newer registration replaced is not flagged (it shows as a
+possible duplicate instead). The server logs the "legacy agent registered"
+notice once per host per process, not on every renewal.
 
 **Fix.** Upgrade the agent to v0.3.59 or later and restart it. It then
 registers with a machine identity and dials out to `MULLION_PRIMARY_URL`; the

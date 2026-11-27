@@ -655,9 +655,11 @@ export function HostsSection() {
             // Issue #3573 — the row's chip comes from the same shared function
             // as the places that name a host, so it shows the deprecation
             // qualifier too (and a manual-token host that is no legacy agent
-            // gets a chip here at all). `long` keeps the row's own longer
-            // wording; the primary's version goes into the hover, which only
-            // Settings can know.
+            // gets a chip here at all). `long` asks for the row's own longer
+            // wording, which only a host with NO deprecation kind can reach —
+            // the API flags every legacy agent with a kind — so a real host
+            // reads the qualified chip here too. The primary's version goes
+            // into the hover, which only Settings can know.
             const chip = legacyChip(host, { primaryVersion, long: true });
             return (
               <ListRow

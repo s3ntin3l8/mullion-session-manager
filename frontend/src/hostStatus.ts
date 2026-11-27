@@ -69,6 +69,12 @@ export function legacyAgentFix(host: Host): "upgrade" | "register" {
  *
  * The suffix is applied by legacyChip, so the Settings row gets its longer
  * wording FROM the shared function instead of building a second copy of it.
+ *
+ * The longer wording only reaches a host with NO deprecation kind: the server
+ * gives every host it flags `legacyAgent` a kind too (a legacy agent either
+ * has a static token of its own — "manual-token" — or none, which leaves it
+ * "legacy-agent"), so such a host reads the qualified chip on every surface.
+ * See LegacyChipOptions.long.
  */
 const LEGACY_AGENT_LABEL = {
   upgrade: { short: "outdated agent", suffix: "upgrade" },
@@ -83,7 +89,8 @@ function legacyAgentLongText(short: string, suffix: string): string {
 /**
  * The words shown for a flagged agent, from the same decision as the hover so
  * the two cannot disagree. `short` is the chip beside a host name; `long` is
- * the Settings row's label.
+ * the Settings row's label — and, like legacyChip's `long` option, it only
+ * reaches a host with no deprecation kind (one the API cannot return).
  */
 export function legacyAgentLabels(host: Host): { short: string; long: string } {
   const { short, suffix } = LEGACY_AGENT_LABEL[legacyAgentFix(host)];
@@ -218,6 +225,16 @@ export interface LegacyChipOptions {
    * The Settings row's longer wording ("Outdated agent — upgrade"). The
    * suffix is applied HERE, by the shared function, so the row is not a
    * second copy of the label logic.
+   *
+   * It only reaches a host with NO `deprecatedKind`. The server derives the
+   * two flags from the same row, and a host it flags `legacyAgent` always
+   * carries a kind as well: a legacy agent either has a static token of its
+   * own ("manual-token") or none, which leaves it "legacy-agent". So
+   * `GET /api/hosts` cannot produce a legacy agent without a kind, and every
+   * real host takes the deprecation branch below and reads the qualified chip
+   * on EVERY surface — the Settings row included. The option is kept for the
+   * shape a caller can build but the API cannot return, so no caller expects
+   * a suffix that never appears.
    */
   long?: boolean;
 }
@@ -258,7 +275,9 @@ export function legacyChip(host: Host, options: LegacyChipOptions = {}): LegacyC
   // The Settings row keeps its longer wording ("Outdated agent — upgrade"):
   // the suffix is added HERE, by the shared function, out of the same words
   // the short chip is built from — so the row is not a second copy of the
-  // label logic.
+  // label logic. Only a host with NO deprecation kind reaches this branch
+  // (see LegacyChipOptions.long): the API flags every legacy agent with a
+  // kind, so a real host reads the qualified chip above.
   const { suffix } = LEGACY_AGENT_LABEL[legacyAgentFix(host)];
   return {
     text: options.long ? legacyAgentLongText(labels.short, suffix) : labels.short,

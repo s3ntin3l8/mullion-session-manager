@@ -342,7 +342,11 @@ describe("the shared legacy chip (issue #3573)", () => {
     expect(chip?.title).toMatch(/MULLION_AGENT_TOKEN/);
   });
 
-  it("keeps the Settings row's longer wording, and the primary's version in its hover", () => {
+  it("keeps the longer wording for a host with no deprecation kind, and the primary's version in its hover", () => {
+    // Issue #3573 — this fixture is a shape the API cannot return: the server
+    // gives EVERY legacy agent a deprecatedKind, so a real host reads the
+    // qualified chip on every surface. The longer wording is kept for the
+    // shape a caller can still build (see LegacyChipOptions.long).
     const host = makeHost({ legacyAgent: true, mullionVersion: "0.3.50" });
     expect(legacyChip(host)?.text).toBe("outdated agent");
     expect(legacyChip(host, { long: true })?.text).toBe("Outdated agent — upgrade");

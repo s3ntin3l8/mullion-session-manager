@@ -133,36 +133,49 @@ describe("HostsSection", () => {
     expect(screen.getByText("2 leaked browsers")).toBeInTheDocument();
   });
 
-  it("flags an outdated agent with both versions in the explanation (issue #2969)", () => {
+  it("flags an outdated agent with both versions in the explanation (issue #2969, #3573)", () => {
     stubFetch({});
     useDashboardStore.setState({
       hosts: [
         makeHost({ id: "local", name: "This machine", isLocal: true, mullionVersion: "0.3.62" }),
+        // Issue #3573 — the shape the API really returns for a legacy agent:
+        // a deprecatedKind comes with EVERY legacyAgent (the server derives
+        // both flags from the same row), so the row reads the qualified chip
+        // and the hover still names both versions.
         makeHost({
           id: "old",
           name: "macbook",
           baseUrl: "http://192.168.2.92:3000",
           legacyAgent: true,
+          deprecatedKind: "legacy-agent",
           mullionVersion: "0.3.50",
         }),
         makeHost({ id: "new", name: "current", legacyAgent: false }),
       ],
     });
     render(<HostsSection />);
-    const badge = screen.getByText("Outdated agent — upgrade");
+    const badge = screen.getByText("outdated agent (deprecated)");
     expect(badge).toHaveAttribute("title", expect.stringMatching(/v0\.3\.50.*v0\.3\.62/s));
-    expect(screen.getAllByText("Outdated agent — upgrade")).toHaveLength(1);
+    expect(screen.getAllByText("outdated agent (deprecated)")).toHaveLength(1);
   });
 
-  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969)", () => {
+  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969, #3573)", () => {
     stubFetch({});
     useDashboardStore.setState({
-      hosts: [makeHost({ id: "h", name: "mac", legacyAgent: true, mullionVersion: "0.3.62" })],
+      hosts: [
+        makeHost({
+          id: "h",
+          name: "mac",
+          legacyAgent: true,
+          deprecatedKind: "legacy-agent",
+          mullionVersion: "0.3.62",
+        }),
+      ],
     });
     render(<HostsSection />);
-    const label = screen.getByText("Not registered — set primary URL");
+    const label = screen.getByText("not registered (deprecated)");
     expect(label).toHaveAttribute("title", expect.stringMatching(/MULLION_PRIMARY_URL/));
-    expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
+    expect(screen.queryByText(/outdated agent/)).toBeNull();
   });
 
   // Issue #3573 — the row shows the same chip as the places that name a host,
@@ -186,7 +199,8 @@ describe("HostsSection", () => {
     expect(chip).toHaveAttribute("title", expect.stringContaining("Deprecated:"));
     // The hover names the credential that has to change.
     expect(chip).toHaveAttribute("title", expect.stringContaining("MULLION_AGENT_TOKEN"));
-    expect(screen.queryByText("Outdated agent — upgrade")).toBeNull();
+    // The unqualified legacy-agent words are never the chip on their own.
+    expect(screen.queryByText(/^outdated agent$/)).toBeNull();
   });
 
   it("shows a chip for a manual-token host that is not a legacy agent (issue #3573)", () => {
@@ -224,7 +238,7 @@ describe("HostsSection", () => {
     });
     render(<HostsSection />);
     expect(screen.queryByText(/deprecated/)).toBeNull();
-    expect(screen.queryByText(/Outdated agent/)).toBeNull();
+    expect(screen.queryByText(/outdated agent/)).toBeNull();
   });
 
   it("shows the same chip and hover as the places that name a host (issue #3573)", () => {
