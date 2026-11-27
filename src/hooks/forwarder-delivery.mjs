@@ -33,8 +33,9 @@ import { randomUUID } from "node:crypto";
 // STOP_ATTEMPT_TIMEOUT_MS (5s) before that attempt is abandoned. The worst
 // case is therefore 67s + 6 × 5s ≈ 97s — inside the two minutes issue #3174
 // allows, and short enough that the agent CLI's own exit is not held up for
-// long. The agent adapters' Stop hook timeout is raised to match (see
-// src/services/hook-adapters/claude-code.ts's STOP_HOOK_TIMEOUT_SECONDS,
+// long. mcode hands this sequence to a background worker because its 10s
+// ceiling cannot be raised. Other adapters' Stop hook timeout is raised to
+// match (claude-code.ts's STOP_HOOK_TIMEOUT_SECONDS in hook-adapters/,
 // 120s — above that 97s worst case), because an agent that kills the hook at
 // its own timeout would cut the retry sequence short — and a cut-short retry
 // is a lost Stop, exactly as before.
@@ -53,12 +54,16 @@ export const STOP_ATTEMPT_TIMEOUT_MS = 5_000;
  * the forwarder gave up on it. Never rejects and never throws: a hook
  * failure must never surface to the agent.
  */
-export async function deliverStop(socketPath, token, messages) {
+export async function deliverStop(
+  socketPath,
+  token,
+  messages,
+  deliveryId = randomUUID(),
+  delays = stopRetryDelays(),
+) {
   // ONE delivery id for the whole retry sequence: every attempt is the same
   // delivery, so the socket can recognise a retry of a message it already
   // dispatched and skip it (see src/services/hook-deliveries.ts).
-  const deliveryId = randomUUID();
-  const delays = stopRetryDelays();
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) {
       await sleep(delays[attempt - 1]);

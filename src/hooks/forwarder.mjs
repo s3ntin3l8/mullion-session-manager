@@ -62,6 +62,7 @@ import {
 // own hook runner, so nothing here is ever instrumented by the coverage
 // run.
 import { deliverStop } from "./forwarder-delivery.mjs";
+import { startBackgroundStop } from "./forwarder-background.mjs";
 
 // Bounded below claude-code.ts's own PermissionRequest hook `timeout`
 // (PERMISSION_REQUEST_TIMEOUT_SECONDS, 300s) so THIS process controls the
@@ -260,7 +261,28 @@ async function forward() {
   // until its budget expires. Every other hook keeps the fire-and-forget
   // behaviour below — connect, write, exit.
   if (kind === "Stop") {
-    await deliverStop(socketPath, token, messages);
+    const deliveryId = randomUUID();
+    let handedOff = false;
+    if (agent === "mcode") {
+      try {
+        handedOff = await startBackgroundStop(socketPath, token, messages, deliveryId);
+      } catch {
+        // Fork/send can throw under resource pressure. Keep the foreground
+        // attempts available even when a detached worker cannot be started.
+      }
+    }
+    if (!handedOff) {
+      try {
+        // A failed send may still have reached the worker: reuse its id so
+        // concurrent deliveries remain at most once at the socket ledger.
+        // mcode fallback gets one attempt (at most 5s), leaving room below
+        // its 10s ceiling even when the socket is unresponsive.
+        const delays = agent === "mcode" ? [] : undefined;
+        await deliverStop(socketPath, token, messages, deliveryId, delays);
+      } catch {
+        // Hook failures must never surface to the agent.
+      }
+    }
     return nudge ? { type: "postToolUse", additionalContext: nudge } : null;
   }
 

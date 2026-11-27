@@ -275,7 +275,9 @@ describe("buildMcodeHooksJson", () => {
       { hooks: { command: string }[] }[],
     ][]) {
       for (const entry of entries) {
-        expect(entry.hooks[0].command).toBe(`"/host/shim.sh" mcode ${event}`);
+        expect(entry.hooks[0].command).toBe(
+          `${event === "Stop" ? "exec " : ""}"/host/shim.sh" mcode ${event}`,
+        );
       }
     }
   });
