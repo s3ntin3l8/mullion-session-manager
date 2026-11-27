@@ -9,7 +9,7 @@
 // `.settings-*` rules in styles.css for a file move is pure
 // visual-regression risk for zero functional gain.
 import { createContext, useContext, useId, useRef } from "react";
-import type { ComponentPropsWithRef, ReactNode } from "react";
+import type { ComponentPropsWithRef, MouseEvent, ReactNode } from "react";
 import { useCoarsePointer } from "../lib/layoutTier.js";
 import { DropdownListbox } from "./DropdownListbox.js";
 import type { DropdownAction } from "./DropdownListbox.js";
@@ -524,17 +524,26 @@ export function StyledList({ children }: { children: ReactNode }) {
 
 export function SecondaryButton({
   onClick,
+  onBlur,
   icon,
   children,
   disabled,
+  className,
 }: {
-  onClick: () => void;
+  onClick: (e: MouseEvent<HTMLButtonElement>) => void;
+  onBlur?: () => void;
   icon?: ReactNode;
   children: ReactNode;
   disabled?: boolean;
+  className?: string;
 }) {
   return (
-    <button className="settings-secondary-btn" onClick={onClick} disabled={disabled}>
+    <button
+      className={`settings-secondary-btn${className ? ` ${className}` : ""}`}
+      onClick={onClick}
+      onBlur={onBlur}
+      disabled={disabled}
+    >
       {icon}
       {children}
     </button>

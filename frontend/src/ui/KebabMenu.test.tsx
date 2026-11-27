@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { KebabMenu } from "./KebabMenu.js";
 import {
@@ -799,5 +799,38 @@ describe("ui/KebabMenu confirm + opensOverlay", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(trigger).toHaveFocus();
     expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it("ignores a native double-click (detail > 1) on a confirm item without disarming", async () => {
+    const user = userEvent.setup();
+    const onClick = vi.fn();
+    render(
+      <KebabMenu
+        title="Manage"
+        items={[
+          {
+            key: "delete",
+            label: "Delete",
+            armLabel: "Click again to delete",
+            confirm: true,
+            onClick,
+          },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Manage" }));
+    const item = screen.getByRole("menuitem", { name: "Delete" });
+    fireEvent.click(item, { detail: 1 });
+    expect(screen.getByRole("menuitem", { name: /Click again to delete/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Click again to delete/ }), {
+      detail: 2,
+    });
+    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("menuitem", { name: /Click again to delete/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: /Click again to delete/ }), {
+      detail: 1,
+    });
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });

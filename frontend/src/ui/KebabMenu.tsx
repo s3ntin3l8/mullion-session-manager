@@ -6,6 +6,7 @@ import type { LayoutMode } from "../api/index.js";
 import { themeClassName } from "../store/theme.js";
 import { OverflowIcon } from "./icons.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
+import { useArmConfirm } from "../hooks/useArmConfirm.js";
 import { useCoarsePointer, useLayoutTier } from "../lib/layoutTier.js";
 import { BottomSheet } from "./BottomSheet.js";
 import { usePresence } from "../hooks/usePresence.js";
@@ -30,8 +31,6 @@ import {
 //
 // PaneTab.tsx itself is deliberately NOT migrated to this component this
 // pass — it already works, no reason to churn it.
-const ARM_MS = 3000;
-const ARM_SECONDS = ARM_MS / 1000;
 
 export interface KebabMenuItem {
   key: string;
@@ -137,16 +136,13 @@ export function KebabMenu({
   const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
   const [menuHeight, setMenuHeight] = useState(0);
   const [menuWidth, setMenuWidth] = useState(0);
-  const [armedKey, setArmedKey] = useState<string | null>(null);
-  // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting static
-  // for the whole arm window — a countdown that doesn't move reads as stuck.
-  const [armSecondsLeft, setArmSecondsLeft] = useState(ARM_SECONDS);
-  // Mirrors armSecondsLeft so the interval callback below can branch on the
-  // current count without reaching into a setState updater — calling
-  // setArmedKey/clearInterval (side effects) from inside a setArmSecondsLeft
-  // updater function is impure and can warn under StrictMode.
-  const armSecondsRef = useRef(ARM_SECONDS);
-  const armIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const {
+    armedKey,
+    secondsLeft: armSecondsLeft,
+    arm: armItem,
+    disarm: disarmItem,
+    confirm: confirmItem,
+  } = useArmConfirm();
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -173,9 +169,8 @@ export function KebabMenu({
   const { present, state: presence } = usePresence(popoverOpen, menuRef);
 
   const close = () => {
-    clearArmTimer();
+    disarmItem();
     setOpen(false);
-    setArmedKey(null);
   };
 
   const onMenuKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -218,20 +213,6 @@ export function KebabMenu({
     return false;
   };
 
-  const clearArmTimer = () => {
-    if (armIntervalRef.current) {
-      clearInterval(armIntervalRef.current);
-      armIntervalRef.current = null;
-    }
-  };
-
-  useEffect(
-    () => () => {
-      if (armIntervalRef.current) clearInterval(armIntervalRef.current);
-    },
-    [],
-  );
-
   useEffect(() => {
     if (!popoverOpen) return;
     const onOutsideClick = (e: MouseEvent) => {
@@ -243,13 +224,12 @@ export function KebabMenu({
       // Keep it on the trigger. A press on a control still focuses that
       // control: that is where the user meant to go.
       if (!(target instanceof Element && target.closest(FOCUSABLE_TARGET))) e.preventDefault();
-      clearArmTimer();
+      disarmItem();
       setOpen(false);
-      setArmedKey(null);
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [popoverOpen]);
+  }, [popoverOpen, disarmItem]);
 
   // Issue #1399 — re-read the trigger's rect when the iOS visual viewport
   // pans/resizes while open: `.app` (and this trigger with it) moves with the
@@ -293,7 +273,7 @@ export function KebabMenu({
     }
   }, [popoverOpen, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
 
-  const handleItemClick = (item: KebabMenuItem) => {
+  const handleItemClick = (item: KebabMenuItem, e?: React.MouseEvent) => {
     if (item.disabled) return;
     // The action is about to take focus somewhere else (another overlay).
     // Tell the focus trap not to pull it back to this menu's trigger when
@@ -302,26 +282,12 @@ export function KebabMenu({
     // (Escape, a press outside) must still return focus to the trigger.
     if (item.confirm) {
       if (armedKey === item.key) {
+        if (!confirmItem(item.key, e)) return;
         if (item.opensOverlay) suppressRestore();
-        clearArmTimer();
-        setArmedKey(null);
         setOpen(false);
         item.onClick();
       } else {
-        clearArmTimer();
-        setArmedKey(item.key);
-        armSecondsRef.current = ARM_SECONDS;
-        setArmSecondsLeft(ARM_SECONDS);
-        armIntervalRef.current = setInterval(() => {
-          armSecondsRef.current -= 1;
-          if (armSecondsRef.current <= 0) {
-            clearArmTimer();
-            setArmedKey(null);
-            setArmSecondsLeft(ARM_SECONDS);
-          } else {
-            setArmSecondsLeft(armSecondsRef.current);
-          }
-        }, 1000);
+        armItem(item.key);
       }
       return;
     }
@@ -421,7 +387,7 @@ export function KebabMenu({
           // this inert; aria-disabled is presentation + a11y only.
           aria-disabled={item.disabled || undefined}
           title={item.title}
-          onClick={() => handleItemClick(item)}
+          onClick={(e) => handleItemClick(item, e)}
         >
           {item.icon}
           <span style={{ flex: 1 }}>
@@ -463,8 +429,7 @@ export function KebabMenu({
             setTriggerRect(btnRef.current.getBoundingClientRect());
           }
           setOpen((v) => !v);
-          clearArmTimer();
-          setArmedKey(null);
+          disarmItem();
         }}
         onKeyDown={(e) => {
           // APG: Down Arrow opens the menu and lands on its first item

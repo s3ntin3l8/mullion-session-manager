@@ -16,6 +16,8 @@ import {
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
 import { formatRelativeUntil } from "../../relativeTime.js";
 import { KebabMenu } from "../../ui/KebabMenu.js";
+import { useArmConfirm } from "../../hooks/useArmConfirm.js";
+import { useCoarsePointer } from "../../lib/layoutTier.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { CloseIcon, GearIcon, HostsIcon, MoonIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
 import {
@@ -263,6 +265,13 @@ export function HostsSection() {
   const [ackError, setAckError] = useState<string | null>(null);
   const [approving, setApproving] = useState<Record<string, boolean>>({});
   const [approvalError, setApprovalError] = useState<string | null>(null);
+  const coarse = useCoarsePointer();
+  const {
+    armedKey: armedRejectHostId,
+    arm: armReject,
+    disarm: disarmReject,
+    confirm: confirmReject,
+  } = useArmConfirm();
 
   // Issue #647 / roadmap 7.8 — per-host update state, keyed like pingStatus
   // above (one global updater's worth of state, per host, not a single flat
@@ -766,10 +775,25 @@ export function HostsSection() {
                             Approve
                           </SecondaryButton>{" "}
                           <SecondaryButton
-                            onClick={() => handleReject(host)}
+                            className={armedRejectHostId === host.id ? "danger armed" : undefined}
+                            onClick={(e) => {
+                              if (armedRejectHostId === host.id) {
+                                if (!confirmReject(host.id, e)) return;
+                                handleReject(host);
+                              } else {
+                                armReject(host.id);
+                              }
+                            }}
+                            onBlur={() => {
+                              if (armedRejectHostId === host.id) disarmReject();
+                            }}
                             disabled={approving[host.id] === true}
                           >
-                            Reject
+                            {armedRejectHostId === host.id
+                              ? coarse
+                                ? "Tap again to reject"
+                                : "Click again to reject"
+                              : "Reject"}
                           </SecondaryButton>
                         </span>
                       </>
