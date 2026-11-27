@@ -239,6 +239,63 @@ describe("ChannelSocket (#2571)", () => {
     expect(peer.readyState).toBe(peer.CLOSED);
   });
 
+  it("keeps the notice off a half-written frame header (#3402)", () => {
+    // A frame's HEADER can be half on the wire too, when the peer's window
+    // is smaller than the five header bytes. The notice may not be spliced
+    // into it: the peer would read the notice's bytes as the rest of the
+    // header, and then wait for a frame that never comes. So the notice
+    // waits for the header — and for the frame it belongs to — to finish,
+    // and goes out on the frame boundary after it.
+    const f = fakeChannel(2);
+    const s = new ChannelSocket({ expectHead: false });
+    s.notices = true;
+    s.bind(f.ch);
+    s.send(Buffer.alloc(10, 1));
+    s.send(Buffer.alloc(10, 2));
+    const local: Error[] = [];
+    s.on("error", (e: Error) => local.push(e));
+    s.send(Buffer.alloc(AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES + 1, 3));
+    expect(local[0]).toBeInstanceOf(ChannelStreamFailure);
+    expect((local[0] as ChannelStreamFailure).code).toBe(CHANNEL_FAILURE_TOO_LARGE);
+    // The header of the first frame is half on the wire: the notice waits.
+    expect(Buffer.concat(f.sent)).toHaveLength(2);
+    expect(s.readyState).toBe(s.CLOSING);
+
+    f.grant(3);
+    f.grant(10);
+    f.grant(100);
+    const out = Buffer.concat(f.sent);
+    // The header that was on the wire is completed, not cut into by the
+    // notice: its length still reads as the payload's.
+    expect(out.readUInt32BE(1)).toBe(10);
+    // The frame that was on the wire goes out first; the notice follows it,
+    // on the frame boundary.
+    const noticeAt = 5 + 10;
+    expect(out[noticeAt]).toBe(2); // the failure-notice flag
+    const length = out.readUInt32BE(noticeAt + 1);
+    expect(JSON.parse(out.subarray(noticeAt + 5, noticeAt + 5 + length).toString("utf8"))).toEqual({
+      code: CHANNEL_FAILURE_TOO_LARGE,
+      reason: "message too large",
+    });
+    // The frame the peer had not started is dropped with the stream.
+    expect(out.length).toBe(noticeAt + 5 + length);
+
+    // And the peer reads it: the one frame that was on the wire arrives,
+    // and the notice after it is the failure it raises.
+    const peer = new ChannelSocket({ expectHead: false });
+    peer.bind(fakeChannel(1 << 20).ch);
+    const remote: Error[] = [];
+    peer.on("error", (e: Error) => remote.push(e));
+    const messages: Buffer[] = [];
+    peer.on("message", (d: Buffer) => messages.push(d));
+    peer.ingest(out);
+    expect(remote[0]).toBeInstanceOf(ChannelStreamFailure);
+    expect((remote[0] as ChannelStreamFailure).code).toBe(CHANNEL_FAILURE_TOO_LARGE);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.length).toBe(10);
+    expect(peer.readyState).toBe(peer.CLOSED);
+  });
+
   it("puts the notice ahead of the frames the peer has not started (#3402)", () => {
     // The window is shut before anything of the queued frame is on the wire,
     // so the notice goes ahead of it: the frame has not started, and the
