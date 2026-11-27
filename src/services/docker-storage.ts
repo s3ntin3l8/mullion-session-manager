@@ -17,6 +17,11 @@ export type {
 const OUTPUT_LIMIT_BYTES = 1024 * 1024;
 const VERBOSE_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 const COMMAND_TIMEOUT_MS = 30_000;
+// A prune deletes what it frees, which on a host with gigabytes of images and
+// build cache takes minutes, not seconds: under the 30 s read timeout an
+// aggressive `system prune --all` was killed mid-run and reported as a failure.
+// The cleanup runs as a background job, so a long wait blocks nothing.
+export const PRUNE_TIMEOUT_MS = 15 * 60_000;
 const SAFE_CONTAINER_AGE_MS = 168 * 60 * 60 * 1000;
 // Build cache is cheap to regenerate and piles up fastest, so safe cleanup
 // frees it after a day instead of a week (issue #1607). Today's cache stays.
@@ -228,10 +233,18 @@ export function parseDockerVolumes(verboseJson: string): DockerVolumesSummary {
   return summary;
 }
 
+interface RunDockerOptions {
+  outputLimitBytes?: number;
+  timeoutMs?: number;
+}
+
+/** What a Docker command that ran out of time rejects with. */
+export const DOCKER_TIMEOUT_ERROR = "Docker command timed out";
+
 async function runDocker(
   args: readonly string[],
   spawnDocker: SpawnDocker = (command, commandArgs) => spawn(command, commandArgs),
-  outputLimitBytes: number = OUTPUT_LIMIT_BYTES,
+  { outputLimitBytes = OUTPUT_LIMIT_BYTES, timeoutMs = COMMAND_TIMEOUT_MS }: RunDockerOptions = {},
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawnDocker("docker", args);
@@ -248,8 +261,8 @@ async function runDocker(
     };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      finish(new Error("Docker command timed out"));
-    }, COMMAND_TIMEOUT_MS);
+      finish(new Error(DOCKER_TIMEOUT_ERROR));
+    }, timeoutMs);
     timer.unref();
     const append = (current: string, chunk: Buffer) => {
       outputBytes += chunk.byteLength;
@@ -281,7 +294,9 @@ async function estimateTiers(spawnDocker?: SpawnDocker): Promise<{
 } | null> {
   try {
     const [verbose, dangling] = await Promise.all([
-      runDocker(DOCKER_VERBOSE_USAGE_ARGS, spawnDocker, VERBOSE_OUTPUT_LIMIT_BYTES),
+      runDocker(DOCKER_VERBOSE_USAGE_ARGS, spawnDocker, {
+        outputLimitBytes: VERBOSE_OUTPUT_LIMIT_BYTES,
+      }),
       runDocker(DOCKER_DANGLING_IMAGES_ARGS, spawnDocker),
     ]);
     const ids = new Set(
@@ -392,7 +407,7 @@ export async function pruneDockerStorage(
     for (const args of steps) {
       let stepOutput: string;
       try {
-        stepOutput = await runDocker(args, spawnDocker);
+        stepOutput = await runDocker(args, spawnDocker, { timeoutMs: PRUNE_TIMEOUT_MS });
       } catch (error) {
         if (completedSteps === 0) throw error;
         return {
@@ -410,7 +425,9 @@ export async function pruneDockerStorage(
     const blocked = await volumePruneBlockedReason(spawnDocker);
     if (blocked) return { output, reclaimedBytes, note: blocked };
     try {
-      const volumeOutput = await runDocker(DOCKER_VOLUME_PRUNE_ARGS, spawnDocker);
+      const volumeOutput = await runDocker(DOCKER_VOLUME_PRUNE_ARGS, spawnDocker, {
+        timeoutMs: PRUNE_TIMEOUT_MS,
+      });
       output += volumeOutput;
       reclaimedBytes += parseReclaimed(volumeOutput);
     } catch (error) {
