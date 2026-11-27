@@ -6,6 +6,7 @@ import { DockSidebarView } from "./DockSidebarView.js";
 import { Dock } from "../Dock.js";
 import type { RightSidebarActions } from "./views.js";
 import { useDashboardStore } from "../store/index.js";
+import { CheckoutPrepareError } from "../store/slices/sessions.js";
 import { ApiError } from "../api/index.js";
 import type { GitBranchesResult, Session } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
@@ -433,6 +434,19 @@ describe("DockSidebarView (#3012)", () => {
           await screen.findByText(
             "no eligible host (the project has no checkout on a matching host)",
           ),
+        ).toBeInTheDocument();
+
+        // A checkout that could not be prepared on the host says why, too.
+        createSession.mockRejectedValueOnce(
+          new CheckoutPrepareError("Could not prepare a checkout on Mac mini: clone failed"),
+        );
+        await userEvent.click(
+          within(screen.getByRole("group", { name: "dev actions" })).getByRole("button", {
+            name: "Start",
+          }),
+        );
+        expect(
+          await screen.findByText("Could not prepare a checkout on Mac mini: clone failed"),
         ).toBeInTheDocument();
       });
     });

@@ -7,6 +7,7 @@ import type {
   Session,
 } from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
+import { CheckoutPrepareError } from "../store/slices/sessions.js";
 import { useShallow } from "zustand/react/shallow";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { dockerServiceStatus, isUpdateStillAvailable } from "../dockerServiceStatus.js";
@@ -734,7 +735,10 @@ export function useDockProject(
             ...(Number.isInteger(holder) ? { holderSessionId: holder } : {}),
             message: err.message,
           });
-        } else if (err instanceof ApiError && err.statusCode >= 400 && err.statusCode < 500) {
+        } else if (
+          (err instanceof ApiError && err.statusCode >= 400 && err.statusCode < 500) ||
+          err instanceof CheckoutPrepareError
+        ) {
           // #3556 — the server refused this start (e.g. a locked host with no
           // checkout any more: POST /api/sessions answers 409 with no `code`).
           // Retrying cannot help; its reason says what to do.
