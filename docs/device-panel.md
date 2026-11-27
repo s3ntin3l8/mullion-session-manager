@@ -227,9 +227,21 @@ talks to), which works on an emulator and on a USB or wireless physical device a
 (an emulator's own `10.0.2.2` alias does not exist on a phone). The mapping is
 **removed when the device is stopped** (`Device.teardownProcess`, best-effort with a
 2-second bound), so a phone left connected does not keep pointing its loopback port at
-the host. A port already mapped by something else (`adb reverse` from a shell) is
-replaced by the same mapping and removed with it. A URL on any other host (a Mullion
-preview URL) is opened as is.
+the host. The bookkeeping is in memory, so this holds within one backend run: a mapping
+made before a backend restart, or during a boot that then failed, stays until adb drops
+the device (`adb -s <serial> reverse --remove-all` clears it by hand). A port already
+mapped by something else (`adb reverse` from a shell) is replaced by the same mapping and
+removed with it. A loopback URL on the scheme's default port (80/443) needs adbd to bind
+a privileged port on the device, which usually fails on an unrooted phone with a 502
+naming `adb reverse`; give the dev server a port above 1023. A URL on any other host (a
+Mullion preview URL) is opened as is. Verified on an `android-35` emulator on this
+host: the VIEW intent opened Chrome on `http://127.0.0.1:<port>`, the host's server
+logged the request, `reverse --list` showed the mapping, and it was gone after stop.
+
+The Preview menu lists an Android device only while its live status is not `exited` or
+`error`, and disables its rows while it is `starting` or `booting`. An iOS Simulator's
+live status describes its idb video stream rather than its boot, so it is not consulted:
+the rows stay usable while the stream is reconnecting.
 
 Live H.264 video and HID input come from `idb_companion` over gRPC
 (`@grpc/grpc-js`, one companion process per device), which is restarted after

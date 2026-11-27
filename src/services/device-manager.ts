@@ -466,7 +466,10 @@ export class Device {
    * on the device reaches the dev server on this host. Removed again in
    * teardownProcess(): a physical device keeps its adbd running after Mullion
    * lets go of it, and a mapping left behind would keep pointing the device's
-   * own loopback port at this host. */
+   * own loopback port at this host. In memory only, so best-effort within one
+   * backend run: a mapping made before a backend restart, or by an action
+   * during a boot that then failed (those paths close adb without
+   * teardownProcess), stays until adb drops the device. */
   private reversedPorts = new Set<number>();
 
   constructor(
@@ -527,8 +530,10 @@ export class Device {
   async reversePort(port: number): Promise<void> {
     const adb = this.adb;
     if (!adb) throw new Error(`device ${this.id} has no live adb connection`);
-    await adb.reverse.addExternal(`tcp:${port}`, `tcp:${port}`);
+    // Tracked before the request, so a teardown racing it still removes the
+    // mapping (removing one that never landed is a harmless failure).
     this.reversedPorts.add(port);
+    await adb.reverse.addExternal(`tcp:${port}`, `tcp:${port}`);
   }
 
   /** Starts the emulator's systemd scope, waits for adb to see it, then

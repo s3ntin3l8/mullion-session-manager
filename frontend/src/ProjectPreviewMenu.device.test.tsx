@@ -285,6 +285,14 @@ describe("Preview menu: open on a device", () => {
     expect(api.openUrlOnDevice).not.toHaveBeenCalled();
   });
 
+  it("keeps an iOS Simulator's rows enabled while its video stream is booting or failed", async () => {
+    const user = await openMenu([
+      sim({ live: { id: "7", status: "error" } as unknown as Device["live"] }),
+    ]);
+    await user.click(screen.getByRole("menuitem", { name: "Open dev server on iPhone 16" }));
+    expect(api.openUrlOnDevice).toHaveBeenCalledWith(7, "http://127.0.0.1:3005/");
+  });
+
   it("lists a booting Android device disabled until it is running", async () => {
     const user = await openMenu(
       [android({ live: { id: "9", status: "booting" } as unknown as Device["live"] })],

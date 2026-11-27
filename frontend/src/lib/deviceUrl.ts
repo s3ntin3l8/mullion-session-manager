@@ -39,9 +39,9 @@ export function deviceOpenUrl(
   return u.toString();
 }
 
-/** The slice of a device a route depends on; `live` is optional so a caller
- * that only knows the host gets the host-based answer. */
-type DeviceRef = Pick<Device, "hostId"> & Partial<Pick<Device, "live">>;
+/** The slice of a device a route depends on; `live`/`platform` are optional
+ * so a caller that only knows the host gets the host-based answer. */
+type DeviceRef = Pick<Device, "hostId"> & Partial<Pick<Device, "live" | "platform">>;
 
 /** How a device reaches a Preview-menu entry. */
 export type DeviceRoute =
@@ -60,21 +60,23 @@ export type PreviewAvailability =
 const PREVIEWS_OFF =
   "Previews are not enabled on this server (PREVIEW_BASE_HOST), so there is no preview URL to open";
 
-/** Whether the Preview menu lists a device at all: an iOS Simulator or an
- * Android emulator/phone whose row is active and that has a live process
- * which has not exited. */
+/** Whether the Preview menu lists a device at all. An iOS Simulator whose row
+ * is active with a live process, as before #3559: its `live.status` tracks the
+ * idb video stream (it can sit at `booting` or `error` while the simulator is
+ * Booted and `simctl openurl` works), so it is not consulted. An Android
+ * device additionally must not have exited or failed: there every `error`
+ * path drops the adb connection the action needs. */
 export function isOpenableDevice(d: Device): boolean {
-  return (
-    (d.platform === "ios" || d.platform === "android") &&
-    d.status === "active" &&
-    d.live != null &&
-    d.live.status !== "exited" &&
-    d.live.status !== "error"
-  );
+  if (d.status !== "active" || d.live == null) return false;
+  if (d.platform === "ios") return true;
+  return d.platform === "android" && d.live.status !== "exited" && d.live.status !== "error";
 }
 
-/** Whether the device is still starting or booting, so it cannot take a URL yet. */
+/** Whether an Android device is still starting or booting, so it cannot take a
+ * URL yet (no adb shell, or no browser). Always false for an iOS Simulator,
+ * whose `live.status` describes its video stream, not its boot. */
 export function isDeviceBooting(device: DeviceRef): boolean {
+  if (device.platform !== "android") return false;
   const status = device.live?.status;
   return status === "starting" || status === "booting";
 }

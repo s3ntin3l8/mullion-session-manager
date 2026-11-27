@@ -342,7 +342,8 @@ sessionId), not scoped to any project or session.
   `xcrun simctl openurl` on an iOS Simulator, `am start -a
 android.intent.action.VIEW -d <url>` on Android. On Android a loopback URL
   (`http://127.0.0.1:<port>`) gets an `adb reverse tcp:<port> tcp:<port>` first,
-  so it reaches the host running adb; the mapping is removed when the device stops.
+  so it reaches the host running adb; the mapping is removed when the device stops
+  (best-effort, within one backend run).
 
 `x`/`y` are in the device's native **screen pixels** — the same space as a
 `screenshot`, and independent of the (downscaled) live-panel stream. Every verb

@@ -103,21 +103,27 @@ describe("device route selection (#3491)", () => {
     }
   });
 
-  it("a device that is still starting or booting is unavailable, with the reason (#3559)", () => {
+  it("an Android device that is still starting or booting is unavailable, with the reason (#3559)", () => {
     for (const status of ["starting", "booting"] as const) {
       const live = { status } as NonNullable<Device["live"]>;
       const direct = deviceDevServerRoute(
         "http://localhost:3005/",
-        { hostId: "local", live },
+        { hostId: "local", platform: "android", live },
         "local",
         on,
       );
       expect(direct.kind === "unavailable" && direct.reason).toMatch(/still booting/);
-      const target = deviceTargetRoute({ hostId: "local", live }, on);
+      const target = deviceTargetRoute({ hostId: "local", platform: "android", live }, on);
+      // An iOS Simulator's status is its video stream's, not its boot.
+      expect(deviceTargetRoute({ hostId: "local", platform: "ios", live }, on)).toEqual({
+        kind: "preview",
+      });
       expect(target.kind === "unavailable" && target.reason).toMatch(/still booting/);
     }
     const live = { status: "streaming" } as NonNullable<Device["live"]>;
-    expect(deviceTargetRoute({ hostId: "local", live }, on)).toEqual({ kind: "preview" });
+    expect(deviceTargetRoute({ hostId: "local", platform: "android", live }, on)).toEqual({
+      kind: "preview",
+    });
   });
 });
 
@@ -161,8 +167,15 @@ describe("isOpenableDevice (#3559)", () => {
     expect(isOpenableDevice({ ...base, platform: "android", live: live("exited") } as Device)).toBe(
       false,
     );
-    expect(isOpenableDevice({ ...base, platform: "ios", live: live("error") } as Device)).toBe(
-      false,
-    );
+    expect(isOpenableDevice({ ...base, platform: "ios", live: null } as Device)).toBe(false);
+  });
+
+  it("keeps listing an iOS Simulator whose video stream is booting or failed", () => {
+    // simctl openurl works on a Booted simulator whatever its idb stream does.
+    for (const status of ["booting", "error"]) {
+      expect(isOpenableDevice({ ...base, platform: "ios", live: live(status) } as Device)).toBe(
+        true,
+      );
+    }
   });
 });
