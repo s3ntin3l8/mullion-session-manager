@@ -913,15 +913,18 @@ export class Device {
     // would otherwise wait on a transport that never answers, so the whole
     // step costs at most REVERSE_REMOVE_TIMEOUT_MS, not that per port.
     // Best-effort — an emulator that is going away takes its mappings with it.
+    // Taken and cleared before the wait, so a second teardown running
+    // concurrently (a stop overlapping another teardown path) does not repeat them.
+    const ports = [...this.reversedPorts];
+    this.reversedPorts.clear();
     const adb = this.adb;
-    if (adb) {
+    if (adb && ports.length > 0) {
       await Promise.allSettled(
-        [...this.reversedPorts].map((port) =>
+        ports.map((port) =>
           withTimeout(adb.reverse.remove(`tcp:${port}`), REVERSE_REMOVE_TIMEOUT_MS),
         ),
       );
     }
-    this.reversedPorts.clear();
     try {
       await this.scrcpyClient?.close();
     } catch {

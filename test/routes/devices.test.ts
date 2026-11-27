@@ -870,8 +870,10 @@ describe("devices routes", () => {
         await vi.waitFor(() => expect(remove).toHaveBeenCalledTimes(3), {
           timeout: REVERSE_REMOVE_TIMEOUT_MS / 2,
         });
-        // And the hanging removals do not hang the stop.
+        // And the hanging removals do not hang the stop, nor are they repeated
+        // by an overlapping teardown.
         expect((await stopping).statusCode).toBe(204);
+        expect(remove).toHaveBeenCalledTimes(3);
       });
 
       it("400s on a logcat action whose optional fields have the wrong type", async () => {
