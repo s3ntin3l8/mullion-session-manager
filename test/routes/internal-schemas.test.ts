@@ -296,6 +296,13 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           cwd: { type: "string", minLength: 1 },
           worktreePath: { type: "string", minLength: 1 },
           branchName: { type: "string", minLength: 1 },
+          // #3229 — the branches the task row records as abandoned: the
+          // agent never deletes one of them.
+          abandonedBranchNames: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+            maxItems: 50,
+          },
         },
       },
     });

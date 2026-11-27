@@ -4,6 +4,7 @@ import { TaskActions } from "../TaskActions.js";
 import { useCanPopOutTask } from "../hooks/useOpenTask.js";
 import { DeleteTaskAction } from "../DeleteTaskAction.js";
 import { canDeleteTask } from "../lib/canDeleteTask.js";
+import { describeAbandonedBranch } from "../lib/abandonedBranches.js";
 import { WorkflowChangeApproval } from "../WorkflowChangeApproval.js";
 import { goSidebarBack } from "../sidebarBack.js";
 import { epicProjectId, isPlainClick } from "../lib/sidebarLinks.js";
@@ -238,6 +239,10 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
     (task.subIssueTotal !== null && task.subIssueTotal > 0);
   const body = task.body?.trim() ?? "";
   const longBody = body.length > BODY_COLLAPSED_CHARS;
+  // #3229 — the branch a "Start fresh" abandoned, and the host it was left
+  // on: its commits are still there, and the operator has to be able to find
+  // them.
+  const abandonedBranch = describeAbandonedBranch(task.abandonedBranches);
 
   return (
     <div
@@ -405,6 +410,15 @@ export function TaskDetailView({ taskId, onBack }: { taskId: number; onBack: () 
               "none (local task)"
             )}
           </dd>
+          {abandonedBranch !== null && (
+            <>
+              <dt>Abandoned branch</dt>
+              <dd>
+                {abandonedBranch}
+                <span className="sb-dim"> · its commits stay there</span>
+              </dd>
+            </>
+          )}
         </dl>
         <TaskAgents task={task} />
         {body && (

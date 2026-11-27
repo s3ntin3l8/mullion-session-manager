@@ -583,6 +583,15 @@ const GIT_FIELD_DEFS = {
   // `cwd` via `git add -A` after writing (host-files.ts's own doc comment
   // on why this is a named, explicit flag rather than baked in unconditionally).
   stage: { type: "boolean" },
+  // Issue #3229 — the branches the task row records as ABANDONED (a "Start
+  // fresh" left them on this host, with the worker's commits). The
+  // clear-orphan route never deletes one of them. Optional everywhere it is
+  // not listed as required, so an older primary's request is unaffected.
+  abandonedBranchNames: {
+    type: "array",
+    items: { type: "string", minLength: 1 },
+    maxItems: 50,
+  },
   // Issue #1896 — the clone REPAIR's explicit opt-in. Without it the agent
   // returns the read-only PLAN of what the repair would do; with it the
   // repair runs (it moves files inside .git/objects and rewrites the
@@ -703,6 +712,8 @@ export interface GitWorktreeClearOrphanBody {
   cwd: string;
   worktreePath: string;
   branchName: string;
+  /** Issue #3229 — the branches the task row records as abandoned. */
+  abandonedBranchNames?: string[];
 }
 
 // Issue #283 — the agent-side counterpart of clearOrphanedTaskWorktree,
@@ -710,8 +721,13 @@ export interface GitWorktreeClearOrphanBody {
 // create route's optional one) — this route always deletes it when a
 // removal succeeds, so an absent value would silently no-op the half of
 // this route that actually matters for the retry-collision it exists to fix.
+//
+// Issue #3229 — `abandonedBranchNames` is optional: the branches a "Start
+// fresh" abandoned are never deleted here, and an agent that never heard of
+// the field simply has nothing to protect.
 export const gitWorktreeClearOrphanSchema = schemaFor({
   required: ["cwd", "worktreePath", "branchName"],
+  optional: ["abandonedBranchNames"],
 });
 
 export interface GitWorktreePruneBody {

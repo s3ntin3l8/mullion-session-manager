@@ -56,6 +56,7 @@ import { dependencyGate, parseBlockedBy, refreshTaskBlockers } from "./task-depe
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
+import { abandonedBranchNames, abandonedBranchesOf } from "./task-abandoned-branches.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
 import {
   resolveAgentCommand,
@@ -250,7 +251,15 @@ export async function enqueueTask(
   // and the title-slug makes the branch self-describing in `git branch`
   // and on the GitHub PR header. Frozen at claim time — title edits after
   // claim do NOT rename the branch.
-  const branchName = deriveTaskBranchName(task);
+  //
+  // Issue #3229 — a task whose "Start fresh" abandoned a branch gets a name
+  // of its own (an `-attempt-<n>` suffix): the abandoned branch keeps the
+  // commits on the host it was left on, and this claim must not land on the
+  // same name — the claim's orphan-clear would delete that branch, and the
+  // only copy of the worker's commits with it.
+  const branchName = deriveTaskBranchName(task, {
+    avoid: abandonedBranchNames(abandonedBranchesOf(task)),
+  });
   const predictedWorktreePath = deriveWorktreePath(project.cwd, branchName);
 
   const reserved = app.db.transaction((tx) => {
@@ -485,7 +494,9 @@ export async function dispatchClaimedTask(
   });
   const seedCapable = commandSupportsSeed(command);
 
-  const branchName = task.branchName ?? deriveTaskBranchName(task);
+  const branchName =
+    task.branchName ??
+    deriveTaskBranchName(task, { avoid: abandonedBranchNames(abandonedBranchesOf(task)) });
   // The start of the current run of failed attempts (issue #1997). A local, so
   // a stale hold can be dropped below without `release()` reusing its clock.
   let failingSince = task.dispatchFailingSince;
@@ -835,6 +846,10 @@ export async function dispatchClaimedTask(
           worktreePath: predictedWorktreePath,
         },
         branchName,
+        // Issue #3229 — the branches this task's "Start fresh" abandoned.
+        // The clear never deletes one of them: they hold the only copy of
+        // that worker's commits, on the host they were left on.
+        { abandonedBranchNames: abandonedBranchNames(abandonedBranchesOf(task)) },
       );
     } catch (err) {
       const unknown = unknownOutcomeMessage(err);

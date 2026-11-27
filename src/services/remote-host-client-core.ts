@@ -853,16 +853,30 @@ export class RemoteHostClient {
   /** task-claim.ts's pre-claim orphan clearing on this agent's own
    * filesystem (issue #283) — mirrors
    * /internal/git-worktree/clear-orphan's `{cwd, worktreePath, branchName}`
-   * -> `ClearOrphanedTaskWorktreeResult` shape. */
+   * -> `ClearOrphanedTaskWorktreeResult` shape.
+   *
+   * Issue #3229 — `abandonedBranchNames` names the branches the task row
+   * records as abandoned (a "Start fresh" left them on this host, with the
+   * worker's commits); the agent never deletes one of them. An agent that
+   * predates the field simply ignores it — the primary's own branch-name
+   * derivation is what keeps the two apart in the first place. */
   resolveClearOrphanedTaskWorktree(
     cwd: string,
     worktreePath: string,
     branchName: string,
+    abandonedBranchNames?: readonly string[],
   ): Promise<ClearOrphanedTaskWorktreeResult> {
     return this.request("/internal/git-worktree/clear-orphan", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cwd, worktreePath, branchName }),
+      body: JSON.stringify({
+        cwd,
+        worktreePath,
+        branchName,
+        ...(abandonedBranchNames && abandonedBranchNames.length > 0
+          ? { abandonedBranchNames }
+          : {}),
+      }),
     });
   }
 

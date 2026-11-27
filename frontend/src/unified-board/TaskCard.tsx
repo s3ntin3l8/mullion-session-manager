@@ -19,6 +19,7 @@ import {
 } from "../needsHuman.js";
 import { MergeBlockedThreadsDetail } from "../MergeBlockedThreadsDetail.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
+import { describeAbandonedBranch } from "../lib/abandonedBranches.js";
 import { isPlainClick, openEpicInSidebar } from "../lib/sidebarLinks.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
@@ -110,6 +111,9 @@ export function TaskCard({
     sessionsLoaded,
   );
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
+  // #3229 — a "Start fresh" abandoned a branch on a host: it stays there,
+  // with the worker's commits, and the operator has to be able to find it.
+  const abandonedBranch = describeAbandonedBranch(task.abandonedBranches);
 
   // Matched client-side against the project's unfiltered PR list, same
   // posture as Sidebar.tsx's own matchedPr (its doc comment explains why:
@@ -795,6 +799,14 @@ export function TaskCard({
       {startFreshError !== null && (
         <div className="task-card-hint task-card-start-fresh-error" role="status">
           {startFreshError}
+        </div>
+      )}
+      {/* #3229 — the branch a "Start fresh" abandoned, and the host it was
+          left on: the commits are still there, and the operator has to know
+          where to look for them. */}
+      {abandonedBranch !== null && (
+        <div className="task-card-hint task-card-abandoned-branch">
+          Abandoned branch {abandonedBranch} — its commits stay there
         </div>
       )}
       {/* Issue #1038 — once a round badge is showing above (autoReturnRounds

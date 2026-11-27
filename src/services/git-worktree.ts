@@ -682,15 +682,35 @@ const TASK_BRANCH_NAME_RE = /^mullion\/task-\d+(-.+)?$/;
  * Pure, synchronous, never throws. Takes only the fields it needs (not the
  * full Drizzle row) so it's trivially testable and decoupled from the
  * schema.
+ *
+ * Issue #3229 — `opts.avoid` names branches this task must NOT get back
+ * (the ones a "Start fresh" abandoned — see task-abandoned-branches.ts).
+ * The base name is used as-is when it is not among them; otherwise the
+ * claim gets a name of its own, an `-attempt-<n>` suffix, so the abandoned
+ * branch keeps the commits on it. The suffix number grows with every
+ * abandonment, so two "Start fresh" rounds can never hand the same name
+ * out twice.
  */
-export function deriveTaskBranchName(task: { id: number; title: string }): string {
+export function deriveTaskBranchName(
+  task: { id: number; title: string },
+  opts: { avoid?: readonly string[] } = {},
+): string {
   // sanitizeRefComponent has its own `"session"` empty-after-sanitize
   // fallback that's wrong for a task branch — we apply the same
   // normalization but with a task-shaped fallback so an all-emoji or
   // all-punctuation title still produces a readable branch.
   const slug = sanitizeRefComponent(task.title);
   const meaningfulSlug = slug === "session" ? "" : slug;
-  return `mullion/task-${task.id}-${meaningfulSlug.length > 0 ? meaningfulSlug : "untitled"}`;
+  const base = `mullion/task-${task.id}-${meaningfulSlug.length > 0 ? meaningfulSlug : "untitled"}`;
+  const avoided = new Set(opts.avoid ?? []);
+  if (!avoided.has(base)) return base;
+  let attempt = 2;
+  let candidate = `${base}-attempt-${attempt}`;
+  while (avoided.has(candidate)) {
+    attempt += 1;
+    candidate = `${base}-attempt-${attempt}`;
+  }
+  return candidate;
 }
 
 export interface RemoveIfCleanResult {
@@ -1064,11 +1084,19 @@ export interface ClearOrphanedTaskWorktreeResult {
  * repo, so nothing recoverable can live in it. Re-validated against the
  * same containment `deriveWorktreePath` itself would produce before
  * touching disk, since this bypasses git's own path handling entirely.
+ *
+ * Issue #3229 — `opts.abandonedBranchNames` names the branches the task
+ * row records as ABANDONED (a "Start fresh" left them on their host, with
+ * the worker's commits). One of them is never deleted here: it is the only
+ * copy of that work, and the operator abandoned it on purpose. Same
+ * posture as a branch outside the closed namespace below — never deleted,
+ * never blocks completion.
  */
 export async function clearOrphanedTaskWorktree(
   cwd: string,
   worktreePath: string,
   branchName: string,
+  opts: { abandonedBranchNames?: readonly string[] } = {},
 ): Promise<ClearOrphanedTaskWorktreeResult> {
   const removeResult = await removeWorktreeIfClean(worktreePath, cwd);
   if (!removeResult.removed && removeResult.reason !== "not-a-repo") {
@@ -1127,6 +1155,14 @@ export async function clearOrphanedTaskWorktree(
     branchName.startsWith("-") ||
     !TASK_BRANCH_NAME_RE.test(branchName)
   ) {
+    return { cleared: true };
+  }
+  // Issue #3229 — a branch the task row records as ABANDONED is never
+  // deleted here, even though it IS inside the closed namespace above: the
+  // operator left it on its host on purpose (a "Start fresh"), and it holds
+  // the only copy of that worker's commits. Same posture as a branch
+  // outside the namespace — never deleted.
+  if ((opts.abandonedBranchNames ?? []).includes(branchName)) {
     return { cleared: true };
   }
   const branchExists =

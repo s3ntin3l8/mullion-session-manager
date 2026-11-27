@@ -380,10 +380,14 @@ export interface SessionBackend {
   // Phase 6's 6.8 (issue #283) — task-claim.ts's pre-claim orphan clearing;
   // see git-worktree.ts's clearOrphanedTaskWorktree doc comment for why
   // this (unlike removeWorktreeIfClean) also deletes the branch ref.
+  //
+  // Issue #3229 — `opts.abandonedBranchNames` names the branches the task
+  // row records as abandoned: the clear never deletes one of them.
   clearOrphanedTaskWorktree(
     cwd: string,
     worktreePath: string,
     branchName: string,
+    opts?: { abandonedBranchNames?: readonly string[] },
   ): Promise<ClearOrphanedTaskWorktreeResult>;
   // Issue #442 — deletes a local branch on whichever host owns `cwd`'s
   // filesystem, for Source Control's manual branch-management UI. The
@@ -723,8 +727,9 @@ class LocalBackend implements SessionBackend {
     cwd: string,
     worktreePath: string,
     branchName: string,
+    opts: { abandonedBranchNames?: readonly string[] } = {},
   ): Promise<ClearOrphanedTaskWorktreeResult> {
-    return clearOrphanedTaskWorktree(cwd, worktreePath, branchName);
+    return clearOrphanedTaskWorktree(cwd, worktreePath, branchName, opts);
   }
 
   deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult> {
@@ -1174,10 +1179,16 @@ class RemoteBackend implements SessionBackend {
     cwd: string,
     worktreePath: string,
     branchName: string,
+    opts: { abandonedBranchNames?: readonly string[] } = {},
   ): Promise<ClearOrphanedTaskWorktreeResult> {
     return this.changedWorktrees(
       "worktree clear",
-      this.client.resolveClearOrphanedTaskWorktree(cwd, worktreePath, branchName),
+      this.client.resolveClearOrphanedTaskWorktree(
+        cwd,
+        worktreePath,
+        branchName,
+        opts.abandonedBranchNames,
+      ),
     );
   }
 

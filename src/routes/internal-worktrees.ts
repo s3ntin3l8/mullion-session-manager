@@ -543,16 +543,22 @@ export function registerWorktreeRoutes(app: FastifyInstance): void {
   // at task-claim.ts's deterministic mullion/task-<id>-<slug> path/name. See
   // clearOrphanedTaskWorktree's own doc comment for why deleting the
   // branch here is safe, unlike /internal/git-worktree/remove above.
+  //
+  // Issue #3229 — the branches the task row records as abandoned (a "Start
+  // fresh" left them on this host, with the worker's commits) are never
+  // deleted here.
   app.post<{ Body: GitWorktreeClearOrphanBody }>(
     "/internal/git-worktree/clear-orphan",
     { ...INTERNAL_RATE_LIMIT, schema: gitWorktreeClearOrphanSchema },
     async (request, reply) => {
-      const { cwd, worktreePath, branchName } = request.body;
+      const { cwd, worktreePath, branchName, abandonedBranchNames } = request.body;
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       const resolvedWorktreePath = requireWithinRoots(app, reply, worktreePath, "worktreePath");
       if (resolvedWorktreePath === null) return;
-      return await clearOrphanedTaskWorktree(resolvedCwd, resolvedWorktreePath, branchName);
+      return await clearOrphanedTaskWorktree(resolvedCwd, resolvedWorktreePath, branchName, {
+        abandonedBranchNames,
+      });
     },
   );
 

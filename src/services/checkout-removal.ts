@@ -120,16 +120,22 @@ export async function pruneCheckouts(
 /** Clears a leftover worktree (and branch) from an earlier attempt at the same
  * path, then releases the browsers keyed to that path: the new worktree reuses
  * it, and a context still keyed to the old one would point at the wrong
- * checkout. */
+ * checkout.
+ *
+ * Issue #3229 — `opts.abandonedBranchNames` names the branches the task row
+ * records as abandoned (a "Start fresh" left them on their host, with the
+ * worker's commits). The clear never deletes one of them. */
 export async function clearOrphanedCheckout(
   app: FastifyInstance,
   ref: CheckoutRemovalRef & { cwd: string },
   branchName: string,
+  opts: { abandonedBranchNames?: readonly string[] } = {},
 ): Promise<ClearOrphanedTaskWorktreeResult> {
   const result = await resolveBackend(app, ref.hostId).clearOrphanedTaskWorktree(
     ref.cwd,
     ref.worktreePath,
     branchName,
+    { abandonedBranchNames: opts.abandonedBranchNames },
   );
   if (result.cleared) await releaseBrowsers(app, ref);
   return result;

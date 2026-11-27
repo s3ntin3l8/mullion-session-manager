@@ -1588,6 +1588,13 @@ export interface Task {
   // give-up) is a backend-only fact (`tasks.retryStrandedOnHost`), because
   // only the dispatcher acts on it.
   retryHostId?: string | null;
+  // #3229 — the branches a "Start fresh" abandoned, and the hosts they were
+  // abandoned on, as JSON
+  // (`[{"hostId":"macbook","branch":"mullion/task-7-foo"}]`, oldest first).
+  // The operator needs the branch NAME and the HOST to find the commits a
+  // "Start fresh" left behind. Optional so the partial task fixtures (which
+  // predate the column) still type-check.
+  abandonedBranches?: string | null;
   prUrl: string | null;
   // Set alongside prUrl — a draft PR opened at "-> reviewing", or the PR
   // approve creates directly as a fallback for a task that reached

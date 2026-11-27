@@ -679,3 +679,27 @@ describe("TaskDetailView delete / abandon", () => {
     expect(screen.queryByRole("button", { name: "Delete task" })).toBeNull();
   });
 });
+
+// Issue #3229 — the branch a "Start fresh" abandoned stays on its host, with
+// the worker's commits: the sidebar has to name it, or the operator cannot
+// find the work they just abandoned.
+describe("TaskDetailView's abandoned branch (#3229)", () => {
+  it("names the branch and the host it was left on", () => {
+    const t = task({
+      status: "claimed",
+      abandonedBranches: JSON.stringify([
+        { hostId: "macbook", branch: "mullion/task-1-start-fresh" },
+      ]),
+    });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.getByText("mullion/task-1-start-fresh on macbook")).toBeInTheDocument();
+  });
+
+  it("says nothing about an abandoned branch when there is none", () => {
+    const t = task({ status: "claimed" });
+    setTasks([t]);
+    renderDetail(t.id);
+    expect(screen.queryByText(/Abandoned branch/)).toBeNull();
+  });
+});

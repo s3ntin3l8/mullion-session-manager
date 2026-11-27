@@ -70,9 +70,19 @@ refuses with a "resolve manually" error when a stale branch exists but no
 directory does. `deriveWorktreePath` must keep predicting the path
 `createWorktree` creates.
 
+**Exception (issue #3229).** A branch the task row records as ABANDONED is
+never force-deleted — a "Start fresh" left it on its host with the worker's
+commits, so it is the one branch whose deletion is data loss. The claim path
+therefore derives a branch name that differs from every abandoned name
+(`mullion/task-<id>-<slug>-attempt-<n>`), and the reclaim skips the abandoned
+names it is handed.
+
 **Breaks.** A claim retry loop (claim, worktree failure, retry) that recreates
 the branch each time, or deletion of a branch holding recoverable work.
 
 **Check.** For any change to claim, retry or promote cleanup, ask whether both
 halves are cleared, and whether a test asserts the branch is gone and a real
-same-name retry succeeds, not only that the directory no longer exists.
+same-name retry succeeds, not only that the directory no longer exists. For a
+change that derives or abandons branch names, ask whether an abandoned branch
+can still be deleted — and whether the claim that follows an abandonment gets
+a name of its own.
