@@ -23,7 +23,9 @@ export const setSetupRecipe = {
     "dependencies. `recipe` is the command (trimmed; at most 4096 characters), null or '' clears it. " +
     "Validated like Settings → Edit project. With `run: true` the saved recipe also runs once in " +
     "your session's working directory on its host and the reply's `run` carries the outcome, exit " +
-    "code and log tail (this replaces your session's setup log; it can take minutes).",
+    "code and log tail (this replaces your session's setup log and status). It waits for the " +
+    "recipe, up to 15 minutes; if your CLI cuts long tool calls short, run " +
+    "`mullion project setup --set '<cmd>' --run` from the shell instead.",
   inputSchema: {
     type: "object",
     properties: {

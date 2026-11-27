@@ -310,7 +310,7 @@ runs in every new worktree and checkout: `mullion project setup --set '<cmd>'`
 validated like Settings → Edit project (trimmed, at most 4096 characters, blank =
 none). Add `--run` / `run: true` to also run it once in your session's directory
 on its host; the reply's `run` has the outcome, exit code and log tail, and the
-run replaces your session's setup log. It waits for the recipe (up to 15
+run replaces your session's setup log and badge. It waits for the recipe (up to 15
 minutes).
 
 `start` runs the control's command, env and cwd from `.crs/dock.json`, a file in

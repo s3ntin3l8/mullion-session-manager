@@ -264,4 +264,47 @@ describe("projects.get_setup_recipe / set_setup_recipe (#3592)", () => {
     expect(recipeOf(projectA)).toBe("npm i");
     expect(fakes.runSetupOnHost).toHaveBeenCalledTimes(1);
   });
+  it("run: true uses the session's own directory, not the project root, and updates its setup badge", async () => {
+    const { app, projectA } = await setup();
+    fakes.runSetupOnHost.mockResolvedValue({ outcome: "failed", exitCode: 2, logPath: "/s.log" });
+    fakes.readSessionSetupLog.mockResolvedValue({ content: "boom", truncated: false });
+    const sub = path.join(cwdA, "packages", "web");
+    fs.mkdirSync(sub, { recursive: true });
+    const inSub = Number(
+      app.db.insert(sessions).values({ projectId: projectA, command: "bash", cwd: sub }).run()
+        .lastInsertRowid,
+    );
+    app.db.update(sessions).set({ setupStatus: "ok" }).where(eq(sessions.id, inSub)).run();
+    const { conn, frames } = makeConnectionState("full", null);
+    await dispatch(app, conn, {
+      id: 1,
+      op: "projects.set_setup_recipe",
+      body: { projectId: projectA, recipe: "npm ci", run: true, sessionId: String(inSub) },
+    });
+    expect((frames[0].result as { run: { cwd: string } }).run.cwd).toBe(sub);
+    expect(fakes.runSetupOnHost).toHaveBeenCalledWith(app, "local", {
+      cwd: sub,
+      recipe: "npm ci",
+      logKey: String(inSub),
+    });
+    const row = app.db.select().from(sessions).where(eq(sessions.id, inSub)).get()!;
+    expect([row.setupStatus, row.setupLogPath]).toEqual(["failed", "/s.log"]);
+    expect(fakes.broadcastTaskEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: projectA, kind: "setup" }),
+    );
+  });
+
+  it("run: true at full scope refuses a non-numeric session id after saving", async () => {
+    const { app, projectA, recipeOf } = await setup();
+    const { conn, frames } = makeConnectionState("full", null);
+    await dispatch(app, conn, {
+      id: 1,
+      op: "projects.set_setup_recipe",
+      body: { projectId: projectA, recipe: "npm ci", run: true, sessionId: "abc" },
+    });
+    expect(frames[0]).toMatchObject({ ok: false, status: 400 });
+    expect(frames[0].error).toMatch(/Invalid session id/);
+    expect(recipeOf(projectA)).toBe("npm ci");
+    expect(fakes.runSetupOnHost).not.toHaveBeenCalled();
+  });
 });

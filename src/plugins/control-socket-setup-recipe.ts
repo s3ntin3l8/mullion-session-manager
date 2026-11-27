@@ -19,8 +19,10 @@
  * runner a fresh worktree uses (runSetupOnHost), and the reply carries the exit
  * code and the log's tail. The session is the caller's own at session scope; at
  * full scope `sessionId` is required. The log key is the session id, so the run
- * replaces that session's own setup log (what Mullion shows as its setup log).
+ * replaces that session's own setup log, and its setup status badge follows.
  */
+import { eq } from "drizzle-orm";
+import { sessions } from "../db/schema.js";
 import { extractIdField, resolveTargetProjectId } from "../services/control-session-authority.js";
 import {
   executionContextErrorStatus,
@@ -92,6 +94,19 @@ async function dryRun(
     recipe,
     logKey: String(sessionId),
   });
+  // The run is this session's setup run now: keep its badge in step with the
+  // log it replaced (a busy run started nothing, so it changes neither).
+  if (result.outcome !== "busy") {
+    ctx.app.db
+      .update(sessions)
+      .set({
+        setupStatus: result.outcome,
+        ...(result.logPath ? { setupLogPath: result.logPath } : {}),
+      })
+      .where(eq(sessions.id, sessionId))
+      .run();
+    broadcastTaskEvent({ taskId: 0, projectId: Number(projectId), kind: "setup", ts: Date.now() });
+  }
   // A busy run started nothing, so the log on disk is someone else's run.
   const log =
     result.outcome === "busy" ? null : await readSessionSetupLog(ctx.app, hostId, sessionId);
