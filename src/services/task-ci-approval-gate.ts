@@ -1,7 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { tasks } from "../db/schema.js";
 import type { GitHubRepoRef } from "./git-remote.js";
-import { isRedCheckConclusion, type GitHubCiStatus } from "./github.js";
+import {
+  isPassingCheckConclusion,
+  isRedCheckConclusion,
+  latestCheckRunsByName,
+  type GitHubCiStatus,
+} from "./github.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { readPrCheckRuns, type PrCheckRuns } from "./pr-check-runs.js";
 
@@ -22,8 +27,8 @@ import { readPrCheckRuns, type PrCheckRuns } from "./pr-check-runs.js";
  *     analysis workflows GitHub loses). A run that fails workflow validation
  *     (a broken `uses:` ref) also creates no job and no check run, and would
  *     read as noise here, so any OTHER failed workflow keeps holding;
- *   - the head has check runs, GitHub answered, none is still running and none
- *     is red.
+ *   - the head has check runs, GitHub answered, and the latest run of each
+ *     check name satisfies the merge gate (success, skipped or neutral).
  *
  * Every refusal is logged with its actual reason (throttled to once per task
  * per hour — this runs each sweep tick), so a task waiting here is no longer
@@ -110,23 +115,26 @@ export async function ciAllowsAutoApproval(
               "approval-gate",
             )
           : null);
+      const latestChecks = checks?.ok ? latestCheckRunsByName(checks.runs) : [];
       if (checks === null) {
         reason = "no-token-to-read-check-runs";
       } else if (!checks.ok) {
         reason = "check-runs-unreadable";
-      } else if (checks.runs.length === 0) {
+      } else if (latestChecks.length === 0) {
         reason = "no-check-runs";
-      } else if (checks.runs.some((c) => c.conclusion === null)) {
+      } else if (latestChecks.some((c) => c.conclusion === null)) {
         reason = "check-run-still-running";
-      } else if (checks.runs.some((c) => isRedCheckConclusion(c.conclusion))) {
+      } else if (latestChecks.some((c) => isRedCheckConclusion(c.conclusion))) {
         reason = "check-run-red";
+      } else if (latestChecks.some((c) => !isPassingCheckConclusion(c.conclusion))) {
+        reason = "check-run-not-passing";
       } else {
         logOncePerHour(
           app,
           task.id,
           "warn",
           { headSha: current.headSha, failedRuns },
-          "task reconcile: auto-approve is ignoring workflow run(s) that failed without any failing check run (a run GitHub lost) — every check run on the head is green",
+          "task reconcile: auto-approve is ignoring workflow run(s) that failed without any failing check run (a run GitHub lost) — the latest run of every check name on the head is green",
         );
         return true;
       }

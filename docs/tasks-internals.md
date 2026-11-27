@@ -2542,8 +2542,10 @@ once **all** of the following hold:
    the known lost-run workflows (`LOST_RUN_WORKFLOWS`: CodeQL, Dependency
    Review; a workflow that fails validation also creates no check run, and must
    keep holding) AND a check run on the head backs the green: GitHub answered,
-   there are check runs, none is running and none is red. Anything else — any
-   other failed workflow, a red or running check run, an unreadable list, no
+   there are check runs, and the latest run of each check name satisfies the
+   merge gate (`success`, `skipped` or `neutral`). A superseded cancelled run
+   does not block a newer passing run of the same name. Anything else — any
+   other failed workflow, a red, running or cancelled latest check run, an unreadable list, no
    token, no check runs — still holds it. Without this, such a task sat approved and green forever with
    nothing in the log. The gate also logs why it is waiting, with the actual reason
    (once per task per hour), instead of returning silently.
