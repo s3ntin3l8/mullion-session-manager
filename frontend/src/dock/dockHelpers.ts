@@ -797,3 +797,46 @@ export function dockColumnProjectIds(
   }
   return ids.filter((id) => projects.some((p) => p.id === id));
 }
+
+/**
+ * #3557 — the cwd a Dock start sends when it runs on ANOTHER host than the
+ * project's own. The selector's values are paths on the project's own host
+ * (its main checkout, a directory inside it, its worktrees); sent as-is to a
+ * Mac agent they name a directory that does not exist there. The main
+ * checkout becomes "no cwd" (the server uses the project's root on that
+ * host), a directory inside it the same directory under that host's root.
+ * Anything else — a linked worktree, a path outside the checkout, a host
+ * with no root for the project — exists only on the own host: refused, so
+ * the caller can say so instead of launching into a missing directory.
+ */
+export function cwdForOtherHost(params: {
+  cwd: string | undefined;
+  projectRoot: string;
+  hostRoot: string | undefined;
+  isLinkedWorktree: boolean;
+}): { ok: true; cwd: string | undefined } | { ok: false } {
+  const { cwd, projectRoot, hostRoot, isLinkedWorktree } = params;
+  if (cwd === undefined || cwd === "") return { ok: true, cwd: undefined };
+  if (hostRoot === undefined || isLinkedWorktree) return { ok: false };
+  const trim = (p: string) => (p.length > 1 ? p.replace(/[\\/]+$/, "") : p);
+  const root = trim(projectRoot);
+  const target = trim(cwd);
+  if (target === root) return { ok: true, cwd: undefined };
+  if (!target.startsWith(`${root}/`)) return { ok: false };
+  const rel = target.slice(root.length + 1);
+  // `..` would climb out of the checkout on the other host.
+  if (rel.split("/").some((seg) => seg === "..")) return { ok: false };
+  // A Windows agent's root uses backslashes; keep the relative part in kind.
+  const windows = hostRoot.includes("\\") && !hostRoot.includes("/");
+  return {
+    ok: true,
+    cwd: `${trim(hostRoot)}${windows ? "\\" : "/"}${windows ? rel.replace(/\//g, "\\") : rel}`,
+  };
+}
+
+/** #3557 — the last `max` non-blank lines of a session's rendered output. */
+export function lastOutputLines(text: string, max: number): string[] {
+  const lines = text.split(/\r?\n/).map((l) => l.trimEnd());
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  return lines.slice(-max);
+}

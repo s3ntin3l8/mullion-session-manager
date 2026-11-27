@@ -2833,7 +2833,10 @@ you start the control (the Dock's **Run on** dropdown, `mullion dock start --hos
 MCP `host`). The project needs a checkout there (`hostCwds`), and the Browser pane
 reaches the server through the preview proxy, so `PREVIEW_BASE_HOST` must be set.
 The agent dials the dev server on its own loopback, `127.0.0.1` then `::1`. A
-simulator on that host reaches the same server at the host's localhost. Details
+simulator on that host reaches the same server at the host's localhost. The
+checkout there is its own clone, so untracked files such as `.env` have to be
+created in it. A launch that fails there, or a server that exits right after
+starting, is reported in the Dock with the host's reason and its last output. Details
 and what is not yet supported remotely:
 [dock.md](dock.md#running-a-control-on-another-host).
 

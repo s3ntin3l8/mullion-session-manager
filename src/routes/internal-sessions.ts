@@ -203,6 +203,25 @@ export function registerSessionRoutes(app: FastifyInstance): void {
         model,
         smallModel,
       });
+      // #3557 — wait for the launch itself, as LocalBackend.spawn does (B6).
+      // Without this a launch that failed on this host (a cwd that does not
+      // exist here, dtach missing) still answered 201: the primary kept a row
+      // for a session that never ran and the Dock showed nothing at all. The
+      // message is the classified one ("cwd does not exist: ..."), which the
+      // primary passes on to the caller.
+      try {
+        await session.spawnOutcome();
+      } catch (err) {
+        // Only the Session this request made: never one a later call replaced.
+        if (app.pty.get(id) === session) app.pty.kill(id);
+        // 422, not 5xx: the primary reads a 5xx as "host unreachable" and
+        // drops the body, so the reason would be lost on the way back.
+        return reply.code(422).send({
+          statusCode: 422,
+          error: "Unprocessable Entity",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
       rememberSessionBrowserTarget(app.pty, id, browserTarget, app.config.SESSIONS_DIR);
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's

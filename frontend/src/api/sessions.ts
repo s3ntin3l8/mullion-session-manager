@@ -121,6 +121,11 @@ export const sessionsApi = {
       `/api/projects/${projectId}/host-checkouts/${encodeURIComponent(hostId)}/materialize`,
     ),
 
+  // #3557 — the session's screen and scrolled-off lines as plain text, read on
+  // the host that runs it. "" when that host no longer holds its output.
+  getRenderedScrollback: (id: number) =>
+    request<{ text: string }>(`/api/sessions/${id}/scrollback?mode=rendered`),
+
   renameSession: (id: number, name: string) =>
     request<Session>(`/api/sessions/${id}`, {
       method: "PATCH",

@@ -132,6 +132,7 @@ export function DockProjectGroup({
     runningFor,
     controlView,
     stackActions,
+    endedFor,
   } = useDockProject(projectId, { surface: "bottom-dock", onOpenSession });
 
   // ---- Collapsible project section (unified-rail dock rework) ----
@@ -419,6 +420,10 @@ export function DockProjectGroup({
     ? (allRenderedControls.find((c) => dockRowKey(c) === pinnedRowKey) ?? null)
     : null;
   const pinnedSession = pinnedControl ? runningFor(pinnedControl) : undefined;
+  // #3557 — a row whose run ended right after it started shows that run's
+  // last output in place of the stream that is gone.
+  const selectedEnded = selectedControl && !selectedSession ? endedFor(selectedControl) : undefined;
+  const pinnedEnded = pinnedControl && !pinnedSession ? endedFor(pinnedControl) : undefined;
 
   return (
     <div className="dock-group">
@@ -528,8 +533,11 @@ export function DockProjectGroup({
         primaryPaneHost &&
         createPortal(
           <DockLogPane
-            key={selectedSession?.id ?? "empty"}
+            key={
+              selectedSession?.id ?? (selectedEnded ? `ended-${selectedEnded.sessionId}` : "empty")
+            }
             sessionId={selectedSession?.id ?? null}
+            ended={selectedEnded}
             minWidthPx={logPaneMinWidth}
             minHeightPx={logPaneMinHeight}
             flex={showPinnedPane ? `0 0 ${effectivePanePx}px` : undefined}
@@ -541,8 +549,11 @@ export function DockProjectGroup({
         pinnedPaneHost &&
         createPortal(
           <DockLogPane
-            key={pinnedSession?.id ?? "empty-pinned"}
+            key={
+              pinnedSession?.id ?? (pinnedEnded ? `ended-${pinnedEnded.sessionId}` : "empty-pinned")
+            }
             sessionId={pinnedSession?.id ?? null}
+            ended={pinnedEnded}
             minWidthPx={logPaneMinWidth}
             minHeightPx={logPaneMinHeight}
           />,

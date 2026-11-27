@@ -132,6 +132,13 @@ export const CAPABILITIES_REQUEST_TIMEOUT_MS = XCODE_PROBE_WORST_CASE_MS + 10_00
 // its previous answer and the next one hits the warm cache.
 export const AGENTS_REQUEST_TIMEOUT_MS = 20_000;
 
+// #3557 — the spawn call's own budget. The agent answers once the launch has
+// run (or failed: a missing cwd, dtach absent), and that launch is bounded by
+// the agent's own 30 s supervisor timeout (pty-manager.ts's
+// BOOTSTRAP_MASTER_TIMEOUT_MS) plus its socket probe. The 5 s default would
+// turn a slow but successful launch on a loaded Mac into an unknown outcome.
+export const SPAWN_REQUEST_TIMEOUT_MS = 45_000;
+
 // Test-only knob (issue #1634): a full local `make test` runs hundreds of real
 // Fastify servers in parallel, and the multi-host integration tests make REAL
 // loopback round trips whose 5s budget the resulting event-loop lag can blow
@@ -1487,11 +1494,15 @@ export class RemoteHostClient {
   }
 
   async spawn(opts: SpawnSessionOptions): Promise<SpawnResult> {
-    return this.request("/internal/sessions", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(opts),
-    });
+    return this.request(
+      "/internal/sessions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(opts),
+      },
+      SPAWN_REQUEST_TIMEOUT_MS,
+    );
   }
 
   /**

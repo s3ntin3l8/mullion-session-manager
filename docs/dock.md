@@ -116,6 +116,24 @@ starts on the project's own placement again.
 - The control is read from `.crs/dock.json` **in the checkout on that host**, so
   its command and `cwd` are that checkout's. A host the project has no checkout
   on is refused with `409 no_checkout_on_host`, before anything stops.
+- From the Dock, the worktree selector's paths are this host's: the main
+  checkout runs in the project's checkout on the chosen host, and a directory
+  inside it in the same directory there. A linked worktree exists here only, so
+  starting one on another host is refused with a message; pick a branch preview
+  instead, which is cut on that host.
+- A launch that fails on the host (a directory that does not exist there, say)
+  is reported with the host's own reason, as a toast, and the control stays
+  off. A control that exits within two minutes of its start (other than with
+  exit code 0) is reported too: a toast and, for a run on an agent host, its
+  exit code and last output in the log pane (read from that host). A run on
+  this server keeps neither once it has exited, so its report says only that
+  it ended. The
+  reason a launch failed on an agent reaches the primary only when both run
+  this version or later: an older agent answers before the launch has run,
+  and an older primary gives an agent's spawn reply only 5 s.
+- A remote checkout is its own clone: untracked files the dev server needs
+  (`.env`, local config, `node_modules`) are not copied to it. Create them in
+  that checkout; a server that exits for want of one shows it in the log pane.
 - The project's preview and its dev-server status follow the host its preview
   control runs on, so the Browser pane shows the Mac's dev server. This needs
   previews enabled (`PREVIEW_BASE_HOST`); with them off the Dock says so, because

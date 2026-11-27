@@ -901,7 +901,12 @@ export async function sessionsRoute(app: FastifyInstance) {
             sessionId: result.sessionId,
           });
         }
-        return reply.badGateway("Failed to spawn session on host");
+        // #3557 — the reason (a remote host's own refusal, a missing cwd),
+        // so the Dock and launcher can say why rather than "try again".
+        return reply.badGateway(
+          (result.reason === "spawn-failed" ? result.detail : undefined) ??
+            "Failed to spawn session on host",
+        );
       }
 
       reply.code(201);

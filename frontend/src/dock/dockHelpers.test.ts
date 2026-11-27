@@ -1,5 +1,7 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import {
+  cwdForOtherHost,
+  lastOutputLines,
   dockerSessionIdentity,
   dockColumnProjectIds,
   dockManualProjectIdsFromStorage,
@@ -854,5 +856,49 @@ describe("resolveRememberedValueFromRunning", () => {
 
   it("returns null when there is no running session", () => {
     expect(resolveRememberedValueFromRunning(undefined, OPTIONS)).toBeNull();
+  });
+});
+
+// #3557 — the Dock's selector values are paths on the project's own host.
+describe("cwdForOtherHost", () => {
+  const base = {
+    projectRoot: "/home/x/aurora",
+    hostRoot: "/Users/x/aurora",
+    isLinkedWorktree: false,
+  };
+  it("sends no cwd for the checkout itself, so the server uses that host's root", () => {
+    expect(cwdForOtherHost({ ...base, cwd: undefined })).toEqual({ ok: true, cwd: undefined });
+    expect(cwdForOtherHost({ ...base, cwd: "" })).toEqual({ ok: true, cwd: undefined });
+    expect(cwdForOtherHost({ ...base, cwd: "/home/x/aurora/" })).toEqual({
+      ok: true,
+      cwd: undefined,
+    });
+  });
+  it("moves a directory inside the checkout under that host's root", () => {
+    expect(cwdForOtherHost({ ...base, cwd: "/home/x/aurora/apps/web" })).toEqual({
+      ok: true,
+      cwd: "/Users/x/aurora/apps/web",
+    });
+    expect(
+      cwdForOtherHost({ ...base, hostRoot: "C:\\src\\aurora", cwd: "/home/x/aurora/apps/web" }),
+    ).toEqual({ ok: true, cwd: "C:\\src\\aurora\\apps\\web" });
+  });
+  it("refuses what exists on the own host only", () => {
+    expect(cwdForOtherHost({ ...base, cwd: "/home/x/aurora-other" })).toEqual({ ok: false });
+    expect(cwdForOtherHost({ ...base, cwd: "/srv/elsewhere" })).toEqual({ ok: false });
+    expect(cwdForOtherHost({ ...base, cwd: "/home/x/aurora/../secrets" })).toEqual({ ok: false });
+    expect(
+      cwdForOtherHost({ ...base, cwd: "/home/x/aurora/.wt/feature", isLinkedWorktree: true }),
+    ).toEqual({ ok: false });
+    expect(cwdForOtherHost({ ...base, hostRoot: undefined, cwd: "/home/x/aurora/web" })).toEqual({
+      ok: false,
+    });
+  });
+});
+
+describe("lastOutputLines", () => {
+  it("keeps the last lines, without the trailing blank screen", () => {
+    expect(lastOutputLines("a\r\nb  \nc\n\n\n", 2)).toEqual(["b", "c"]);
+    expect(lastOutputLines("", 5)).toEqual([]);
   });
 });

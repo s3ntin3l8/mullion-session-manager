@@ -35,7 +35,7 @@ import { forceRemoveCheckout, previewRemover } from "./checkout-removal.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { LOCAL_HOST_ID, getHostRow, isHostApproved } from "./host-registry.js";
 import { HOST_AWAITING_APPROVAL_MESSAGE } from "./remote-host-errors.js";
-import { isOutcomeUnknown } from "./remote-host-errors.js";
+import { isOutcomeUnknown, spawnFailureDetail } from "./remote-host-errors.js";
 import { resolveHostBaseRef, resolveRepoRef, viaRemote } from "./host-git.js";
 import {
   resolveSessionGithubAuth,
@@ -2100,7 +2100,7 @@ async function spawnOrRollback(
       result: {
         ok: false,
         reason: "spawn-failed",
-        detail: err instanceof Error ? err.message : undefined,
+        detail: spawnFailureDetail(getHostRow(app, placementHost)?.name ?? placementHost, err),
       },
     };
   }
