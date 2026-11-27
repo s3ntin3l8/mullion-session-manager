@@ -365,8 +365,9 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           agentToken: token,
           host: "10.0.0.5",
           port: "4000",
-          token: null,
         });
+        // Issue #3577 — no enrollment token is forwarded any more.
+        expect(rec.token).toBeUndefined();
         expect(JSON.stringify(rec.args)).not.toContain(token);
         // Reported once: the final line, and nowhere else in what is printed.
         expect(res.stdout.split(token)).toHaveLength(2);
