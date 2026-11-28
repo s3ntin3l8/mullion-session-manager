@@ -664,6 +664,7 @@ describe("App explicit split on the tablet", () => {
           groupId: null,
           position: 0,
           createdAt: "2026-01-01T00:00:00.000Z",
+          pinnedProjectIds: [],
         },
       ],
       activeWorkspaceId: 1,

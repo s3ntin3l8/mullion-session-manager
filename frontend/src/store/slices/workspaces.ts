@@ -59,6 +59,33 @@ export const createWorkspacesSlice: StateCreator<DashboardState, [], [], Workspa
     }
   },
 
+  setWorkspacePinnedProjects: async (id, pinnedProjectIds) => {
+    const previous = get().workspaces.find((w) => w.id === id)?.pinnedProjectIds;
+    const apply = (ids: number[]) =>
+      set((state) => ({
+        workspaces: state.workspaces.map((w) =>
+          w.id === id ? { ...w, pinnedProjectIds: ids } : w,
+        ),
+      }));
+    apply(pinnedProjectIds);
+    try {
+      const updated = await api.setWorkspacePinnedProjects(id, pinnedProjectIds);
+      set((state) => ({
+        workspaces: state.workspaces.map((w) => (w.id === id ? updated : w)),
+      }));
+    } catch (err) {
+      // Roll back only while the store still shows this call's own optimistic
+      // list: a later toggle may have moved it on since. Then resync, since
+      // the server holds whatever the last successful PATCH wrote.
+      const shown = get().workspaces.find((w) => w.id === id)?.pinnedProjectIds;
+      if (shown === pinnedProjectIds) apply(previous ?? []);
+      void get()
+        .refreshWorkspaces()
+        .catch(() => {});
+      throw err;
+    }
+  },
+
   refreshGroups: async () => {
     set({ groups: await api.listGroups() });
   },

@@ -323,6 +323,14 @@
   flex-shrink: 0;
 }
 
+/* #3537 — ProjectHeader's "pinned to this workspace" marker. */
+.project-workspace-pin {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
 /* FileEditorPanel.tsx — reuses .agent-rules-panel's two-pane shell; only the
    tree rows, the new-file input, the CodeMirror host and the narrow-width
    tree toggle are new. */

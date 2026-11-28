@@ -476,7 +476,8 @@ export function panelSessionId(panel: IDockviewPanel): number | undefined {
  * `workspaceProjectIds` memo is this function. The Dock and the sidebar
  * both start from that one array. A manually pinned project (the Dock's
  * "+ Add project" list) is unioned on afterwards by `dockColumnProjectIds`
- * (dockHelpers.ts), which is the membership both trees actually render —
+ * (dockHelpers.ts), which is the membership the Dock renders; the sidebar
+ * adds the workspace's own pins (#3537) through `scopedProjectIds` —
  * folding the pins into this walk would hide the distinction the Dock's
  * remove button depends on (a pin-only column versus one that is also
  * tiled).

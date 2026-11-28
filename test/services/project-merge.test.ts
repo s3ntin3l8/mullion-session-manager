@@ -18,6 +18,8 @@ import {
   sessions,
   tasks,
   webhookRegistrations,
+  workspacePinnedProjects,
+  workspaces,
 } from "../../src/db/schema.js";
 import { createPairedHost } from "../../src/services/host-registry.js";
 import { findDuplicateGroups, mergeProjects } from "../../src/services/project-merge.js";
@@ -288,6 +290,34 @@ describe("project-merge", () => {
       const all = app.db.select().from(projectTooling).all();
       expect(all).toHaveLength(1);
       expect(all[0].skill).toBe("keep");
+    });
+
+    it("re-points workspace pins onto the survivor; a workspace pinning both keeps one", () => {
+      const [both, dupOnly] = app.db
+        .insert(workspaces)
+        .values([{ name: "both" }, { name: "dup-only" }])
+        .returning()
+        .all();
+      app.db
+        .insert(workspacePinnedProjects)
+        .values([
+          { workspaceId: both.id, projectId: survivorId, position: 0 },
+          { workspaceId: both.id, projectId: dupId, position: 1 },
+          { workspaceId: dupOnly.id, projectId: dupId, position: 0 },
+        ])
+        .run();
+      expect(merge().ok).toBe(true);
+      const pins = app.db
+        .select({ w: workspacePinnedProjects.workspaceId, p: workspacePinnedProjects.projectId })
+        .from(workspacePinnedProjects)
+        .all();
+      expect(pins).toHaveLength(2);
+      expect(pins).toEqual(
+        expect.arrayContaining([
+          { w: both.id, p: survivorId },
+          { w: dupOnly.id, p: survivorId },
+        ]),
+      );
     });
 
     it("moves the duplicate's webhook row when the survivor has none", () => {

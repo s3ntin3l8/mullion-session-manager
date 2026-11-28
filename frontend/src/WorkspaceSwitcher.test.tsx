@@ -37,6 +37,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     position: 0,
     layout: { views: [{ params: { sessionId: 7 } }] },
     createdAt: "2026-01-01T00:00:00.000Z",
+    pinnedProjectIds: [],
     ...overrides,
   };
 }

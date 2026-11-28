@@ -7,6 +7,7 @@ import {
   lastOutputLines,
   dockerSessionIdentity,
   dockColumnProjectIds,
+  scopedProjectIds,
   dockManualProjectIdsFromStorage,
   readDockManualProjectIds,
   subscribeDockManualProjectIds,
@@ -1003,5 +1004,25 @@ describe("remoteSelectorDisplay (#3589)", () => {
       remoteHostRoot: undefined,
     });
     expect(unknown.options[0].label).toBe("Main checkout");
+  });
+});
+
+describe("scopedProjectIds (#3537)", () => {
+  const projects = [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
+
+  it("orders tiled ids, then workspace pins, then Dock pins", () => {
+    expect(scopedProjectIds([3], [1], [2], projects)).toEqual([3, 1, 2]);
+  });
+
+  it("de-duplicates across all three sources, keeping the first position", () => {
+    expect(scopedProjectIds([2, 1], [1, 3, 3], [3, 2, 4], projects)).toEqual([2, 1, 3, 4]);
+  });
+
+  it("drops ids whose project no longer exists", () => {
+    expect(scopedProjectIds([9], [1, 8], [7, 2], projects)).toEqual([1, 2]);
+  });
+
+  it("is empty with nothing tiled or pinned", () => {
+    expect(scopedProjectIds([], [], [], projects)).toEqual([]);
   });
 });

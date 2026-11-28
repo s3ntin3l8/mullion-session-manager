@@ -12,6 +12,7 @@ import {
   GlobeIcon,
   HostsIcon,
   ListIcon,
+  PinIcon,
   PlusIcon,
   RightSidebarIcon,
   SkillIcon,
@@ -115,6 +116,9 @@ export interface PaletteCommandOpeners {
   openSessionOnBranch: (projectId: number, branch: string) => void;
   queueIssue: (projectId: number, number: number) => void;
   prune: (projectId: number) => void;
+  // #3537 — pins the palette's project to the active workspace, or unpins it.
+  // Optional: omitted where the sidebar is not workspace-scoped (phone).
+  toggleWorkspacePin?: (projectId: number) => void;
 }
 
 export interface PaletteCommandContext {
@@ -141,6 +145,9 @@ export interface PaletteCommandContext {
   // "Go to PR" / "Open session on branch" rows. Empty until loaded.
   prs?: { number: number; title: string }[];
   branches?: string[];
+  // #3537 — whether the palette's project is pinned to the active workspace;
+  // null (or absent) leaves the pin command out.
+  workspacePinned?: boolean | null;
 }
 
 // The empty-query list: two groups, in this order. `id`s of the `top` rows.
@@ -159,6 +166,7 @@ export function buildPaletteCommands({
   activeSessionTitleContext,
   prs = [],
   branches = [],
+  workspacePinned = null,
 }: PaletteCommandContext): PaletteCommand[] {
   const name = projectName ?? "this project";
   const commands: PaletteCommand[] = [];
@@ -264,6 +272,22 @@ export function buildPaletteCommands({
         breadcrumb: "Project",
         run: () => open.skills(id),
       },
+      ...(open.toggleWorkspacePin && workspacePinned != null
+        ? [
+            {
+              id: "workspace-pin",
+              title: workspacePinned ? "Unpin from this workspace" : "Pin to this workspace",
+              subtitle: workspacePinned
+                ? "Stop keeping it in this workspace's sidebar"
+                : "Keep it in this workspace's sidebar with nothing tiled",
+              icon: PinIcon,
+              keywords: ["pin", "unpin", "workspace", "sidebar"],
+              placement: "project" as const,
+              breadcrumb: "Project",
+              run: () => open.toggleWorkspacePin?.(id),
+            },
+          ]
+        : []),
       {
         id: "file-editor",
         title: "Edit project files",

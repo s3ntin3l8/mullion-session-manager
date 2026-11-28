@@ -1026,8 +1026,9 @@ export function App() {
   // set, and it is not handed through while it is still unknowable. Manual
   // "+ Add project" pins are NOT folded in here: the Dock still has to tell
   // a pin-only column from a tiled one (its remove button). The sidebar
-  // unions those pins itself, through the same dockColumnProjectIds helper
-  // the Dock's columns use.
+  // unions those pins itself, plus the workspace's own pins (#3537), through
+  // scopedProjectIds, which builds on the dockColumnProjectIds helper the
+  // Dock's columns use.
   //
   // Hermes review, PR #727 — deliberately walks ALL panels, not
   // `mobilePanels` (which is tiled-only). `<Dock>` below renders on desktop
@@ -1734,6 +1735,7 @@ export function App() {
           onOpenBrowserUrl={onOpenBrowserUrl}
           onShowWorkspace={handleSelectWorkspace}
           onOpenTasks={onOpenTasks}
+          workspacePinScoped={scopedWorkspaceProjectIds != null}
         />
       </Presence>
       <ProjectSettingsHost phone={isMobile} backStack={compact} />

@@ -5,7 +5,9 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
+import { eq } from "drizzle-orm";
 import { DEFAULT_WORKSPACE_NAME } from "../../src/routes/workspaces.js";
+import { workspacePinnedProjects } from "../../src/db/schema.js";
 
 // Workspaces are pure view metadata (a saved dockview layout) — no
 // node-pty/dtach bootstrap involved, so unlike test/helpers/sessions-routes.ts this file
@@ -290,5 +292,145 @@ describe("workspaces route — default workspace bootstrap", () => {
     expect(rows[0]).toMatchObject({ name: DEFAULT_WORKSPACE_NAME, layout: null });
     expect(rows[0].id).not.toBe(id);
     await app.close();
+  });
+  describe("pinned projects (#3537)", () => {
+    type App = Awaited<ReturnType<typeof buildApp>>;
+
+    async function mkProject(app: App, name: string): Promise<number> {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { allowDuplicate: true, createDir: true, name, cwd: "/tmp" },
+      });
+      expect(res.statusCode).toBe(201);
+      return res.json().id as number;
+    }
+
+    async function mkWorkspace(app: App, name = "pins"): Promise<number> {
+      const res = await app.inject({ method: "POST", url: "/api/workspaces", payload: { name } });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().pinnedProjectIds).toEqual([]);
+      return res.json().id as number;
+    }
+
+    const pin = (app: App, id: number, payload: Record<string, unknown>) =>
+      app.inject({ method: "PATCH", url: `/api/workspaces/${id}`, payload });
+
+    async function listedPins(app: App, id: number): Promise<number[] | undefined> {
+      const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
+      return (listed.json() as Array<{ id: number; pinnedProjectIds: number[] }>).find(
+        (w) => w.id === id,
+      )?.pinnedProjectIds;
+    }
+
+    it("sets, reorders, de-duplicates and clears the pins; GET returns them in order", async () => {
+      const app = await buildApp();
+      const [a, b, c] = [
+        await mkProject(app, "a"),
+        await mkProject(app, "b"),
+        await mkProject(app, "c"),
+      ];
+      const ws = await mkWorkspace(app);
+
+      const set = await pin(app, ws, { pinnedProjectIds: [b, a, b, c] });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().pinnedProjectIds).toEqual([b, a, c]);
+      expect(await listedPins(app, ws)).toEqual([b, a, c]);
+
+      const reordered = await pin(app, ws, { pinnedProjectIds: [c, b] });
+      expect(reordered.json().pinnedProjectIds).toEqual([c, b]);
+      expect(await listedPins(app, ws)).toEqual([c, b]);
+
+      // Omitting the field leaves the pins as they are.
+      const renamed = await pin(app, ws, { name: "renamed" });
+      expect(renamed.json()).toMatchObject({ name: "renamed", pinnedProjectIds: [c, b] });
+
+      const cleared = await pin(app, ws, { pinnedProjectIds: [] });
+      expect(cleared.json().pinnedProjectIds).toEqual([]);
+      expect(await listedPins(app, ws)).toEqual([]);
+      await app.close();
+    });
+
+    it("a pins-only PATCH leaves the name and layout alone", async () => {
+      const app = await buildApp();
+      const a = await mkProject(app, "a");
+      const ws = await mkWorkspace(app, "keep-me");
+      const layout = { grid: { root: { type: "leaf" } } };
+      await pin(app, ws, { layout });
+
+      const res = await pin(app, ws, { pinnedProjectIds: [a] });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ name: "keep-me", layout, pinnedProjectIds: [a] });
+      await app.close();
+    });
+
+    it("refuses an unknown project id with a 400 and changes nothing", async () => {
+      const app = await buildApp();
+      const a = await mkProject(app, "a");
+      const ws = await mkWorkspace(app, "before");
+      await pin(app, ws, { pinnedProjectIds: [a] });
+
+      const res = await pin(app, ws, { name: "after", pinnedProjectIds: [a, 999999] });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toContain("999999");
+
+      const listed = await app.inject({ method: "GET", url: "/api/workspaces" });
+      const row = (listed.json() as Array<{ id: number; name: string }>).find((w) => w.id === ws);
+      expect(row).toMatchObject({ name: "before", pinnedProjectIds: [a] });
+      await app.close();
+    });
+
+    it("rejects a non-integer pin list", async () => {
+      const app = await buildApp();
+      const ws = await mkWorkspace(app);
+      expect((await pin(app, ws, { pinnedProjectIds: ["x"] })).statusCode).toBe(400);
+      expect((await pin(app, ws, { pinnedProjectIds: 3 })).statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("404s a pins-only PATCH of a missing workspace", async () => {
+      const app = await buildApp();
+      const a = await mkProject(app, "a");
+      expect((await pin(app, 999999, { pinnedProjectIds: [a] })).statusCode).toBe(404);
+      // A missing workspace wins over an unknown project.
+      expect((await pin(app, 999999, { pinnedProjectIds: [888888] })).statusCode).toBe(404);
+      await app.close();
+    });
+
+    it("deleting the workspace removes its pin rows", async () => {
+      const app = await buildApp();
+      const a = await mkProject(app, "a");
+      const ws = await mkWorkspace(app);
+      await pin(app, ws, { pinnedProjectIds: [a] });
+
+      await app.inject({ method: "DELETE", url: `/api/workspaces/${ws}` });
+      const rows = app.db
+        .select()
+        .from(workspacePinnedProjects)
+        .where(eq(workspacePinnedProjects.workspaceId, ws))
+        .all();
+      expect(rows).toEqual([]);
+      await app.close();
+    });
+
+    it("deleting a project removes its pin rows from every workspace", async () => {
+      const app = await buildApp();
+      const [a, b] = [await mkProject(app, "a"), await mkProject(app, "b")];
+      const [w1, w2] = [await mkWorkspace(app, "w1"), await mkWorkspace(app, "w2")];
+      await pin(app, w1, { pinnedProjectIds: [a, b] });
+      await pin(app, w2, { pinnedProjectIds: [a] });
+
+      const deleted = await app.inject({ method: "DELETE", url: `/api/projects/${a}` });
+      expect(deleted.statusCode).toBeLessThan(300);
+      expect(await listedPins(app, w1)).toEqual([b]);
+      expect(await listedPins(app, w2)).toEqual([]);
+      const rows = app.db
+        .select()
+        .from(workspacePinnedProjects)
+        .where(eq(workspacePinnedProjects.projectId, a))
+        .all();
+      expect(rows).toEqual([]);
+      await app.close();
+    });
   });
 });

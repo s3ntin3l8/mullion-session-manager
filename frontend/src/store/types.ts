@@ -634,6 +634,9 @@ export interface WorkspacesSlice {
   // the restore effect (App.tsx:281) reads fresh data on workspace switch.
   // Does NOT trigger a full workspaces refresh (called frequently).
   saveWorkspaceLayout: (id: number, layout: Record<string, unknown>) => Promise<void>;
+  // #3537 — replaces a workspace's pinned projects. Applied optimistically,
+  // then the server's row; rolled back and rethrown on failure.
+  setWorkspacePinnedProjects: (id: number, pinnedProjectIds: number[]) => Promise<void>;
   createGroup: (name: string, color?: string) => Promise<Group>;
   updateGroup: (
     id: number,

@@ -3,6 +3,8 @@ import type { getDb } from "../db/client.js";
 import { workspaces } from "../db/schema.js";
 
 type Db = ReturnType<typeof getDb>;
+// A transaction handle exposes the same query builder as the db itself.
+type DbOrTx = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 export type WorkspaceRow = typeof workspaces.$inferSelect;
 
@@ -51,7 +53,7 @@ export function createWorkspace(db: Db, name: string): WorkspaceRow {
 
 /** The updated row, or undefined when no workspace has this id. */
 export function updateWorkspace(
-  db: Db,
+  db: DbOrTx,
   id: number,
   patch: WorkspacePatch,
 ): WorkspaceRow | undefined {
@@ -67,6 +69,11 @@ export function updateWorkspace(
     .returning()
     .all();
   return updated[0];
+}
+
+/** The row, or undefined when no workspace has this id. */
+export function getWorkspace(db: DbOrTx, id: number): WorkspaceRow | undefined {
+  return db.select().from(workspaces).where(eq(workspaces.id, id)).get();
 }
 
 /** True when a row was deleted. */
