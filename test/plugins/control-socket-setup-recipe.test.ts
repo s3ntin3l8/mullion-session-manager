@@ -196,9 +196,24 @@ describe("projects.get_setup_recipe / set_setup_recipe (#3592)", () => {
     expect(recipeOf(projectA)).toBe("npm ci");
   });
 
-  it("run: true reports a busy run without reading someone else's log", async () => {
-    const { app, conn, frames } = await setup();
-    fakes.runSetupOnHost.mockResolvedValue({ outcome: "busy", exitCode: null, logPath: "" });
+  it("run: true reports a busy run without reading someone else's log, and restores the badge", async () => {
+    const { app, conn, frames, agent } = await setup();
+    const status = () =>
+      app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, Number(agent)))
+        .get()!.setupStatus;
+    app.db
+      .update(sessions)
+      .set({ setupStatus: "ok" })
+      .where(eq(sessions.id, Number(agent)))
+      .run();
+    const during: (string | null)[] = [];
+    fakes.runSetupOnHost.mockImplementation(async () => {
+      during.push(status());
+      return { outcome: "busy", exitCode: null, logPath: "" };
+    });
     await dispatch(app, conn, {
       id: 1,
       op: "projects.set_setup_recipe",
@@ -210,6 +225,9 @@ describe("projects.get_setup_recipe / set_setup_recipe (#3592)", () => {
       logTruncated: false,
     });
     expect(fakes.readSessionSetupLog).not.toHaveBeenCalled();
+    // `running` while the recipe runs, then back to what it was.
+    expect(during).toEqual(["running"]);
+    expect(status()).toBe("ok");
   });
 
   it("run: true needs a recipe, and a session at full scope; a refused run saves nothing", async () => {
@@ -294,7 +312,7 @@ describe("projects.get_setup_recipe / set_setup_recipe (#3592)", () => {
     );
   });
 
-  it("run: true at full scope refuses a non-numeric session id after saving", async () => {
+  it("run: true at full scope refuses a non-numeric session id before saving", async () => {
     const { app, projectA, recipeOf } = await setup();
     const { conn, frames } = makeConnectionState("full", null);
     await dispatch(app, conn, {
@@ -303,8 +321,8 @@ describe("projects.get_setup_recipe / set_setup_recipe (#3592)", () => {
       body: { projectId: projectA, recipe: "npm ci", run: true, sessionId: "abc" },
     });
     expect(frames[0]).toMatchObject({ ok: false, status: 400 });
-    expect(frames[0].error).toMatch(/Invalid session id/);
-    expect(recipeOf(projectA)).toBe("npm ci");
+    expect(frames[0].error).toBe("Invalid session id");
+    expect(recipeOf(projectA)).toBeNull();
     expect(fakes.runSetupOnHost).not.toHaveBeenCalled();
   });
 });

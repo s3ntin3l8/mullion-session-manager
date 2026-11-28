@@ -67,9 +67,29 @@ function dryRunSessionId(
 ): { ok: true; id: string } | { ok: false; reply: ReplyPayload } {
   if (ctx.conn.scope === "session") return { ok: true, id: ctx.conn.sessionId! };
   const id = extractIdField(ctx.body, "sessionId");
-  return id === null
-    ? { ok: false, reply: bad(400, "'sessionId' is required for 'run' at full scope") }
-    : { ok: true, id };
+  if (id === null) {
+    return { ok: false, reply: bad(400, "'sessionId' is required for 'run' at full scope") };
+  }
+  // Checked here, before the write, so a refused run saves nothing.
+  if (!Number.isInteger(Number(id))) return { ok: false, reply: bad(400, "Invalid session id") };
+  return { ok: true, id };
+}
+
+/** Records a session's setup status (and log) and rings the `setup` doorbell,
+ * as startSetupRecipe does for a fresh worktree's run. */
+function markSetup(
+  ctx: OpContext,
+  projectId: number,
+  sessionId: number,
+  status: string | null,
+  logPath?: string,
+): void {
+  ctx.app.db
+    .update(sessions)
+    .set({ setupStatus: status, ...(logPath ? { setupLogPath: logPath } : {}) })
+    .where(eq(sessions.id, sessionId))
+    .run();
+  broadcastTaskEvent({ taskId: 0, projectId, kind: "setup", ts: Date.now() });
 }
 
 async function dryRun(
@@ -79,7 +99,6 @@ async function dryRun(
   recipe: string,
 ): Promise<{ ok: true; run: Record<string, unknown> } | { ok: false; reply: ReplyPayload }> {
   const sessionId = Number(sessionIdRaw);
-  if (!Number.isInteger(sessionId)) return { ok: false, reply: bad(400, "Invalid session id") };
   const resolved = await resolveExecutionContext(ctx.app, {
     projectId: Number(projectId),
     sessionId,
@@ -89,24 +108,23 @@ async function dryRun(
     return { ok: false, reply: bad(status, resolved.error.message) };
   }
   const { hostId, cwd } = resolved.context;
+  // The run is this session's setup run now: its badge says `running` while
+  // the log is being rewritten, then follows the outcome. A busy run started
+  // nothing, so the badge goes back to what it was.
+  const before =
+    ctx.app.db
+      .select({ setupStatus: sessions.setupStatus })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .get()?.setupStatus ?? null;
+  markSetup(ctx, Number(projectId), sessionId, "running");
   const result = await runSetupOnHost(ctx.app, hostId, {
     cwd,
     recipe,
     logKey: String(sessionId),
   });
-  // The run is this session's setup run now: keep its badge in step with the
-  // log it replaced (a busy run started nothing, so it changes neither).
-  if (result.outcome !== "busy") {
-    ctx.app.db
-      .update(sessions)
-      .set({
-        setupStatus: result.outcome,
-        ...(result.logPath ? { setupLogPath: result.logPath } : {}),
-      })
-      .where(eq(sessions.id, sessionId))
-      .run();
-    broadcastTaskEvent({ taskId: 0, projectId: Number(projectId), kind: "setup", ts: Date.now() });
-  }
+  if (result.outcome === "busy") markSetup(ctx, Number(projectId), sessionId, before);
+  else markSetup(ctx, Number(projectId), sessionId, result.outcome, result.logPath);
   // A busy run started nothing, so the log on disk is someone else's run.
   const log =
     result.outcome === "busy" ? null : await readSessionSetupLog(ctx.app, hostId, sessionId);
