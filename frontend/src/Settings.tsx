@@ -76,6 +76,8 @@ export function Settings({
       // defaulting to "appearance") starts on the phone's nav list. A deep
       // link that targets Appearance itself starts on the list: one extra tap.
       startOnContent={initialSection !== "appearance"}
+      // The phone's tab bar stays on screen and usable under Settings.
+      modal={!phone}
       phone={phone}
       backStack={backStack}
       navTop={

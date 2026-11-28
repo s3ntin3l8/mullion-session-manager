@@ -71,6 +71,23 @@ export function PhoneModeBar({
   const [inboxHost, setInboxHost] = useState<HTMLElement | null>(null);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxCloseSeq, setInboxCloseSeq] = useState(0);
+  // Settings or a view opened from somewhere other than this bar (a banner's
+  // link, a task notification's tap) while the Inbox page shows: the page
+  // would lie over the view, or the bar would name Inbox under Settings. The
+  // page gives way. Adjusted during render, as React asks of state derived
+  // from a prop change.
+  // Each is compared with its own last value: Settings closing because the
+  // Inbox opened must not read as the view under it opening.
+  const shownView = useDashboardStore((s) => (s.rightSidebarOpen ? s.rightSidebarView : null));
+  const [lastSettingsOpen, setLastSettingsOpen] = useState(settingsOpen);
+  const [lastShownView, setLastShownView] = useState(shownView);
+  if (settingsOpen !== lastSettingsOpen || shownView !== lastShownView) {
+    const opened =
+      (settingsOpen && !lastSettingsOpen) || (shownView !== null && shownView !== lastShownView);
+    setLastSettingsOpen(settingsOpen);
+    setLastShownView(shownView);
+    if (opened && inboxOpen) setInboxCloseSeq((n) => n + 1);
+  }
   // What a tap on any other entry leaves: the Inbox page and Settings.
   const leavePages = () => {
     setInboxCloseSeq((n) => n + 1);

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -520,6 +521,42 @@ describe("PhoneModeBar with a sidebar view open", () => {
       await userEvent.click(inbox());
       expect(onCloseSettings).toHaveBeenCalledTimes(1);
       expect(page()).not.toBeNull();
+    });
+
+    it("gives way to Settings or a view opened from elsewhere", async () => {
+      const { rerender } = render(<Harness />);
+      await userEvent.click(inbox());
+      // A banner's link opens Settings (App's own state).
+      rerender(<Harness settingsOpen />);
+      expect(page()).toBeNull();
+      expect(pressed()).toEqual(["More"]);
+
+      rerender(<Harness />);
+      await userEvent.click(inbox());
+      // A task notification's tap opens the task in the sidebar.
+      openView("tasks");
+      expect(page()).toBeNull();
+      expect(pressed()).toEqual(["More"]);
+
+      // Opened over a view that is already there, the page stays.
+      await userEvent.click(inbox());
+      expect(page()).not.toBeNull();
+    });
+
+    it("stays open when it took Settings' place over a view", async () => {
+      // More → Git, More → Settings, then Inbox: Settings closes as the page
+      // opens, which leaves the view under it as it was.
+      function Shell() {
+        const [settingsOpen, setSettingsOpen] = useState(true);
+        return (
+          <Harness settingsOpen={settingsOpen} onCloseSettings={() => setSettingsOpen(false)} />
+        );
+      }
+      render(<Shell />);
+      openView("git");
+      await userEvent.click(inbox());
+      expect(page()).not.toBeNull();
+      expect(pressed()).toEqual(["Inbox"]);
     });
 
     it("asks nothing of Settings while it is closed", async () => {

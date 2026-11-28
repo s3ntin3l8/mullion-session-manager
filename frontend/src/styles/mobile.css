@@ -896,7 +896,8 @@
 /* The Tasks tab drew the desktop's sizes on the phone: 10-12px text in the
    cards and in a task's detail, and 22px action buttons. On the phone the
    primary line of a card or a row is 14-15px, secondary text 12-13px, nothing
-   is under 12px, and every control is 44px tall or has a 44px hit area. The
+   is under 12px, and every control is 44px tall or has a hit area larger than
+   it draws (44px wherever its neighbours leave room). The
    phone tier only: the board's columns and the docked sidebar have no room
    for these sizes at larger widths. */
 .app[data-tier="phone"] {
@@ -940,17 +941,18 @@
     font-size: 0.8125rem;
   }
   /* The issue and PR links are one 12px line inside a card that is itself a
-     tap target, so a near miss opened the task instead. Their hit area grows
-     to 44px without moving the row. */
+     tap target, so a near miss opened the task instead. Their box grows to
+     44px without moving the row: padding with the same negative margin (they
+     clip their own overflow, so a pseudo-element could not). Mostly downward,
+     over the project line: upward it stops in the gap under the title, so a
+     tap on the title still opens the task. */
   a.task-card-issue,
   a.task-card-pr {
+    /* Above the lines after it, which would otherwise take the taps. */
     position: relative;
-  }
-  a.task-card-issue::after,
-  a.task-card-pr::after {
-    content: "";
-    position: absolute;
-    inset: -15px -5px;
+    z-index: 1;
+    padding: 7px 5px 21px;
+    margin: -7px -5px -21px;
   }
   .kanban-column-title,
   .kanban-column-count,
@@ -1030,6 +1032,13 @@
     .session-timeline-kind-group-head {
       font-size: 0.75rem;
     }
+    /* Five steps share the width: at 12px "In progress" no longer fits its
+       fifth on one line, so a label wraps rather than being cut off. */
+    .sb-step-name {
+      overflow: visible;
+      white-space: normal;
+      line-height: 1.2;
+    }
     .sb-kv {
       grid-template-columns: 96px minmax(0, 1fr);
       gap: 8px 12px;
@@ -1068,7 +1077,8 @@
       font-size: 0.875rem;
     }
     /* Chips and links that are buttons keep their size in the row and get a
-       44px hit area around it. */
+       larger hit area around it: 44px high where the rows around them leave
+       room, and never under 28px where two such rows sit close together. */
     button.sb-chip,
     .sb-link {
       position: relative;

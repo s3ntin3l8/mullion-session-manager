@@ -30,6 +30,10 @@ export interface SettingsShellProps<Id extends string> {
   /** Starts on the section's content rather than the phone's nav list. */
   startOnContent: boolean;
   phone?: boolean;
+  /** False where the frame leaves the rest of the page usable: Settings on
+   * the phone ends above the tab bar (mobile.css's .settings-host). Project
+   * settings covers the whole screen at every size and stays modal. */
+  modal?: boolean;
   backStack?: boolean;
   /** Above the nav items (Settings' search box). */
   navTop?: ReactNode;
@@ -65,6 +69,7 @@ export function SettingsShell<Id extends string>({
   listLabel,
   startOnContent,
   phone = false,
+  modal = true,
   backStack = false,
   navTop,
   navEmpty,
@@ -140,10 +145,7 @@ export function SettingsShell<Id extends string>({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onTrapKeyDown}
         role="dialog"
-        // Not modal on the phone: the tab bar stays on screen and usable
-        // below it (mobile.css's .settings-host), so the rest of the page is
-        // not inert there.
-        aria-modal={phone ? undefined : "true"}
+        aria-modal={modal ? "true" : undefined}
         aria-label={title}
       >
         <div className="settings-modal-header">
