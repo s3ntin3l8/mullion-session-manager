@@ -135,24 +135,26 @@ export async function buildApp() {
   // Issue #245 / roadmap 7.1 (and #3437 for pairing-code identities) relaxes
   // this to an *either/or*: the original manual MULLION_AGENT_TOKEN (today's
   // Settings → Add host flow, checked as an inbound bearer token by
-  // internal.ts), or MULLION_PRIMARY_URL with either MULLION_ENROLLMENT_TOKEN
-  // (agent-enrollment.ts's onReady hook uses it to self-register with the
-  // primary and obtain a rotating session credential) or a stored
-  // agent-identity.json redeemed from a one-time pairing code. An enrolled or
-  // paired agent legitimately boots with MULLION_AGENT_TOKEN (and, after
-  // pairing, MULLION_ENROLLMENT_TOKEN) empty; what's never legitimate is no
-  // credential path configured at all.
+  // internal.ts), or MULLION_PRIMARY_URL with a stored agent-identity.json
+  // redeemed once from a one-time pairing code (agent-enrollment.ts's onReady
+  // hook uses it to self-register with the primary and obtain a rotating
+  // session credential). Issue #3577 removed the legacy
+  // MULLION_ENROLLMENT_TOKEN bootstrap: an agent with no stored identity now
+  // has no way to register itself, so it must be paired. A paired agent
+  // legitimately boots with MULLION_AGENT_TOKEN empty; what's never
+  // legitimate is no credential path configured at all.
   const hasManualToken = app.config.MULLION_AGENT_TOKEN.trim() !== "";
   const hasPrimaryUrl = app.config.MULLION_PRIMARY_URL.trim() !== "";
-  const hasEnrollmentToken = app.config.MULLION_ENROLLMENT_TOKEN.trim() !== "";
   const hasStoredIdentity =
     hasPrimaryUrl && loadAgentIdentity(identityStatePath(app.config.SESSIONS_DIR)) !== null;
-  const hasEnrollmentPath = hasPrimaryUrl && (hasEnrollmentToken || hasStoredIdentity);
-  if (app.config.MULLION_ROLE === "agent" && !hasManualToken && !hasEnrollmentPath) {
+  if (app.config.MULLION_ROLE === "agent" && !hasManualToken && !hasStoredIdentity) {
     throw new Error(
       "MULLION_ROLE=agent requires either MULLION_AGENT_TOKEN, or MULLION_PRIMARY_URL " +
-        "with either MULLION_ENROLLMENT_TOKEN or a stored agent-identity.json, to be set — " +
-        "refusing to boot an agent with no path to a shared secret at all (see issues #26 and #245).",
+        "with a stored agent-identity.json, to be set — refusing to boot an agent with no " +
+        "path to a shared secret at all (see issues #26 and #245). To pair this agent, run " +
+        "install.sh with a one-time pairing code (MULLION_AGENT_PAIRING_CODE_STDIN=1; add " +
+        "MULLION_AGENT_PAIRING_FORCE=1 on an existing install) — see deploy/README.md, " +
+        '"Automating agent deploys".',
     );
   }
 
@@ -453,8 +455,8 @@ export async function buildApp() {
     // internalRoutes' own onRequest gate additively checks alongside the
     // static MULLION_AGENT_TOKEN (issue #245 / roadmap 7.1). Inert
     // (registers no onReady/timer at all) unless MULLION_PRIMARY_URL is set
-    // with either MULLION_ENROLLMENT_TOKEN or a stored agent-identity.json —
-    // a manual-token-only agent is completely unaffected.
+    // with a stored agent-identity.json — a manual-token-only agent is
+    // completely unaffected.
     await app.register(agentEnrollmentPlugin);
     await app.register(agentChannelClientPlugin);
     // Before internalRoutes: decorates app.requestNonceStore, which

@@ -21,10 +21,10 @@ binary to install. The role flag changes what the process does at startup
   sessions on that host) and a token/session-gated internal API
   (`src/routes/internal.ts`) that the primary calls to control it. An agent
   refuses to boot at all unless it has a path to a shared credential —
-  either `MULLION_AGENT_TOKEN` (manual), or `MULLION_PRIMARY_URL` with either
-  `MULLION_ENROLLMENT_TOKEN` (self-registration, see below) or a paired
-  `agent-identity.json` (one-time pairing code) — see `src/app.ts`'s
-  fail-closed check.
+  either `MULLION_AGENT_TOKEN` (manual), or `MULLION_PRIMARY_URL` with a
+  paired `agent-identity.json` (redeemed once from a one-time pairing code,
+  see below) — see `src/app.ts`'s fail-closed check. There is no bootstrap
+  token in the environment any more (issue #3577).
 
 The primary never parses or trusts anything about a remote host beyond that
 internal API; from the primary's point of view, a session either runs on its
@@ -47,19 +47,19 @@ hosts without manual per-host UI steps), mint one-off pairing codes via
 section for the full deploy-tooling contract (`install.sh --role agent`,
 the systemd unit, an example Ansible role); the protocol itself is
 documented here. (Legacy fleet-secret enrollment via `MULLION_ENROLLMENT_SECRET`
-and manual registration via `POST /api/hosts` were removed in issue #3535;
-existing hosts created by those paths continue to work.)
+and manual registration via `POST /api/hosts` were removed in issue #3535, and
+the agent-side `MULLION_ENROLLMENT_TOKEN` bootstrap in issue #3577.)
 
-### Pre-provisioned host claim (`MULLION_ENROLLMENT_TOKEN`)
+### What the paired agent boots with
 
-An existing pre-provisioned host row with a per-host token can still be claimed
-via `POST /api/internal/register` on boot, with **no `MULLION_AGENT_TOKEN` at
-all**. Set, on the agent:
+A pairing code is the only way an agent obtains an identity. `install.sh`
+redeems it once into `$SESSIONS_DIR/agent-identity.json`; the agent's `.env`
+then needs only the primary's address (and the usual role settings), with
+**no `MULLION_AGENT_TOKEN` at all**:
 
 ```bash
 MULLION_ROLE=agent
 MULLION_PRIMARY_URL=https://primary.example.com
-MULLION_ENROLLMENT_TOKEN=<per-host token matching the existing host row>
 MULLION_AGENT_ADVERTISE_URL=http://192.168.1.20:4000   # optional; leave unset for an outbound-only agent (below)
 MULLION_AGENT_NAME=home-server                          # optional; defaults to the hostname
 ```
@@ -75,21 +75,20 @@ Set `MULLION_AGENT_ADVERTISE_URL` only for a primary that must dial this agent.
 > is `http://` and not loopback; it does not refuse to run (a trusted LAN is a
 > legitimate setup), so terminate TLS in front of the primary for anything else.
 
-On boot the agent presents `MULLION_ENROLLMENT_TOKEN` to the primary's
-register endpoint; the primary **claims** an existing host row whose own
-`MULLION_AGENT_TOKEN` matches (fleet-secret enrollment via
-`MULLION_ENROLLMENT_SECRET` was removed in #3535, so any unmatched token
-answers `401`). The primary issues a short-lived session (`session_id`, 24 h
-TTL, expiry enforced on renewal too — not just advisory) that becomes the
-agent's _inbound_ credential from then on — the enrollment token is used
-exactly once per boot, never accepted as a bearer token itself. A
-`session_secret` is issued and stored alongside it — the HMAC signing key
-that every request covered by "Request signing" below is signed with; unlike
-`session_id`, it's never re-sent after issuance or presented as a request
-credential itself.
-The agent renews its session at ~50% of its TTL, and re-runs the full
-registration call (with retry/backoff, so a briefly-down primary never blocks
-the agent's own boot) if a renewal ever comes back `401`.
+On boot the agent presents `{hostId, machineCredential}` from
+`agent-identity.json` to the primary's register endpoint. The primary issues a
+short-lived session (`session_id`, 24 h TTL, expiry enforced on renewal too —
+not just advisory) that becomes the agent's _inbound_ credential from then
+on. A `session_secret` is issued and stored alongside it — the HMAC signing
+key that every request covered by "Request signing" below is signed with;
+unlike `session_id`, it's never re-sent after issuance or presented as a
+request credential itself.
+The agent renews its session at ~50% of its TTL. If a renewal fails
+transiently (a 5xx, a network blip) it re-runs the full registration call with
+retry/backoff, so a briefly-down primary never blocks the agent's own boot; a
+`401` means the identity itself was rejected, and the agent stops and asks to be
+re-paired rather than retrying forever. With no identity at all the agent
+refuses to boot rather than running uncredentialed.
 
 Newly-enrolled hosts are distinguishable from manually-registered ones via
 the API's `origin: "enrolled" | "manual"` field on `GET /api/hosts` —
@@ -100,20 +99,19 @@ shipped yet; the data is there for a follow-up to render it.
 #### Machine identity and machine credentials
 
 An agent that has registered once keeps a **persistent machine identity**
-that does not depend on its URL. On the first successful registration (a
-claim or an enrollment) the primary issues a **machine credential** bound to
-the host's id: a long-lived, renewable secret, stored encrypted and kept
-apart from the 24 h request-signing session. It is returned **exactly once**
-in `machine_credential`.
+that does not depend on its URL. Redeeming a pairing code issues a **machine
+credential** bound to the host's id: a long-lived, renewable secret, stored
+encrypted and kept apart from the 24 h request-signing session. It is
+returned **exactly once** in `machine_credential`.
 
 - **State file.** The agent writes `{hostId, machineCredential}` to
   `agent-identity.json` in its data dir (`SESSIONS_DIR`). The file is mode
   `0600` (on Windows, an ACL granting only the current user), written
   atomically (temp file + rename), and never logged or passed as a process
   argument.
-- **Re-registration by identity.** On every later boot the agent presents
-  `{hostId, machineCredential}` instead of the bootstrap token, and the
-  primary matches the host by id, never by `baseUrl`. Repeated registration
+- **Re-registration by identity.** On every boot the agent presents
+  `{hostId, machineCredential}` and the primary matches the host by id, never
+  by `baseUrl`. Repeated registration
   therefore keeps one row, and two agents that advertise the same URL get
   distinct identities (each enrollment by a credential-aware agent creates
   its own row). The advertised URL, hostname and platform follow the agent
@@ -157,24 +155,12 @@ in `machine_credential`.
   a host that still holds an identity ignores a supplied pairing code, issue
   #3498); redeeming a host-bound code issues a fresh session and machine
   credential in place and rejects any displaced credential immediately (no
-  grace period). Alternatively, to re-enroll an agent that uses the fleet
-  secret as a **new** host, stop it, delete `agent-identity.json`, and restart
-  it. For an older per-host-token agent that cannot redeem a pairing code,
-  rotate the host's token (`POST /api/hosts/:id/rotate-token`, which re-arms
-  the row), put the new token in the agent's `.env`
-  (`MULLION_ENROLLMENT_TOKEN`; the variable `install.sh` reads it from is
-  `MULLION_AGENT_ENROLLMENT_TOKEN`), delete `agent-identity.json`, then
-  **restart the agent unit** (a rejected agent is terminal in memory, so
-  nothing short of a restart re-reads either file; `install.sh` restarts a
-  unit that was running when it rewrote the `.env`). The legacy recipe is
-  tested through the real boot path
-  (`test/plugins/agent-restart-reenroll.test.ts`). It only works while the row
-  holds **no** live identity (a revoked or expired one): since issue #3439 a
-  row with a live identity refuses a claim, so rotating the token and pasting
-  it in cannot replace a live identity — that needs a re-pair. Do this at
-  repair time so the agent has the current token. A credential unused for
-  90 days is rejected the same way as a revoked one, so the agent log's
-  "revoked or unknown" can also mean expiry.
+  grace period). The redeemed identity can be re-paired even when a stored
+  one is still present, with `MULLION_AGENT_PAIRING_FORCE=1`. There is no
+  token in the `.env` to rotate instead: the agent-side enrollment-token
+  bootstrap is gone (issue #3577). A credential unused for 90 days is
+  rejected the same way as a revoked one, so the agent log's "revoked or
+  unknown" can also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
   credential is compared, so a caller who guesses an id can tell a revoked host
@@ -413,13 +399,12 @@ replacement to the same host row.
 
 **Rotate token** (click twice to confirm) mints a new token, shows it once and
 clears the host's session. Update and restart the agent with the new value.
-For a host installed with a generated token, set `MULLION_ENROLLMENT_TOKEN`,
-leave `MULLION_AGENT_TOKEN` empty and keep the existing `MULLION_PRIMARY_URL`.
-For a host added with **Use my own token**, set `MULLION_AGENT_TOKEN`. The
-dialog shows both options. The installer preserves an existing `.env`, so
-edit it directly to apply the new value. An enrolling agent without an
-identity that sees its bootstrap token rejected can also pick up the new
-`.env` value without a restart.
+For a host added with **Use my own token**, set `MULLION_AGENT_TOKEN`. A
+paired agent has no token in its `.env` to rotate: replace its identity with
+**Re-pair** and a fresh one-time pairing code (the agent-side
+`MULLION_ENROLLMENT_TOKEN` bootstrap was removed in issue #3577). The
+installer preserves an existing `.env`, so edit it directly to apply a new
+manual token.
 
 ### Generated token (deprecated)
 
@@ -1174,10 +1159,10 @@ self-registered one — gates `/internal/ws/attach`, which runs
 `${SHELL} -lc "<command>"` for any request bearing a valid one: a leaked
 credential is arbitrary command execution on that host. For manual tokens,
 generate them with real entropy (`openssl rand -hex 32`) and use a different
-one per agent. `MULLION_ENROLLMENT_TOKEN`/`MULLION_ENROLLMENT_SECRET` are a
-different kind of secret — bootstrap-only, never an inbound credential — but
-still worth the same handling (real entropy, restrict who can read the env
-file, rotate like you would an SSH key with shell access to the fleet).
+one per agent. A pairing code is one-time and is never an inbound bearer
+credential; the `agent-identity.json` it is redeemed into is long-lived and
+renews itself, so treat it as the durable secret it is — real entropy, an
+owner-only file, and re-pair rather than copy it to another host.
 
 Task Master's promotion path (`#484`) sends a **GitHub credential** (the
 shared PAT/OAuth token, or a short-lived App installation token when one is
@@ -1411,8 +1396,8 @@ backend is chosen from the **host's own** platform, never negotiated between
 hosts, so a primary and its agents never have to agree on anything.
 
 **The topology is OS-agnostic.** The enrollment protocol is
-agent-dials-primary (`MULLION_PRIMARY_URL` / `MULLION_ENROLLMENT_TOKEN`) and
-carries no OS assumption. So **macOS-primary + Linux-agents** is a valid
+agent-dials-primary (`MULLION_PRIMARY_URL` plus the paired
+`agent-identity.json`) and carries no OS assumption. So **macOS-primary + Linux-agents** is a valid
 topology: the `hosts` table's `local` row simply becomes the Mac, and
 `resolveSessionHostId` keeps working unchanged. A session an agent runs shows
 up in the primary's list under the **agent's** host id, and the terminal
@@ -2755,17 +2740,15 @@ How it works:
 The SSH agent bridge is **not** this path — see
 [`ssh-agent.md`](ssh-agent.md#not-the-github-auth-path).
 
-### Headless enrollment: stdin token and the descoped items (issue #2703)
+### Headless enrollment: stdin pairing code and the descoped items (issue #2703)
 
-- `install.sh --role agent` reads the enrollment token from the first line of
-  stdin when `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1` (the shell counterpart of
-  the Windows bootstrap's `-TokenFromStdin`, which has its own test in
-  `test/scripts/windows-mullion-install.test.ts`), or a one-time pairing code
-  from the first line of stdin when `MULLION_AGENT_PAIRING_CODE_STDIN=1` (redeemed
-  immediately into `agent-identity.json` without writing any secret to `.env`).
-  Neither ever appears in a process argument or the install log; an empty first
-  line is refused. Tested in a sandbox in `test/scripts/install-identity.test.ts`.
-  This closes the stdin token item of #2452; nothing about it is descoped.
+- `install.sh --role agent` reads a one-time pairing code from the first line
+  of stdin when `MULLION_AGENT_PAIRING_CODE_STDIN=1` (redeemed immediately into
+  `agent-identity.json` without writing any secret to `.env`). It never appears
+  in a process argument or the install log; an empty first line is refused.
+  Tested in a sandbox in `test/scripts/install-identity.test.ts`. The legacy
+  `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN` / `-TokenFromStdin` inputs are
+  accepted but ignored (issue #3577), with one notice.
 - The Ansible example task and the revoked-agent recipe as tasks are in
   `deploy/README.md` ("Reruns, upgrades and changing credentials").
 - The headless test (`test/plugins/headless-agent-control.test.ts`) carries a

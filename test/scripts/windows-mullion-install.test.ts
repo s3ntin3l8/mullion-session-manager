@@ -212,8 +212,9 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         "  name: e.MULLION_AGENT_NAME || null,",
         "  projects: e.MULLION_AGENT_PROJECTS_ROOTS || null,",
         "  advertise: e.MULLION_AGENT_ADVERTISE_URL || null,",
-        "  token: e.MULLION_AGENT_ENROLLMENT_TOKEN || null,",
         "  agentToken: e.MULLION_AGENT_TOKEN || null,",
+        "  enrollmentToken: e.MULLION_AGENT_ENROLLMENT_TOKEN || null,",
+        "  enrollmentTokenStdin: e.MULLION_AGENT_ENROLLMENT_TOKEN_STDIN || null,",
         "  host: e.MULLION_AGENT_HOST || null,",
         "  port: e.MULLION_AGENT_PORT || null,",
         "  gitBash: e.MULLION_INSTALL_GIT_BASH || null,",
@@ -300,19 +301,23 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           name: "my pc",
           projects: "C:/src,D:/work",
           advertise: "http://10.0.0.5:3000",
-          token: "s3cr3t-token",
           // A Git Bash that was already installed is not pinned into the .env.
           gitBash: null,
         });
-        // The token travels in the environment only, never in the command line
-        // or in what the script prints.
-        expect(res.stdout).not.toContain("s3cr3t-token");
+        // Issue #3577 — the removed enrollment token is never forwarded, and it
+        // is cleared from the installer's environment so only this script
+        // prints the "ignored" notice (mullion-install.sh would print a second
+        // one for the same inherited value).
+        expect(rec.enrollmentToken).toBeNull();
+        expect(rec.enrollmentTokenStdin).toBeNull();
+        expect(res.events.filter((e) => e.detail.includes("ignored"))).toHaveLength(1);
+        expect(res.stdout + res.stderr).not.toContain("s3cr3t-token");
       },
       180_000,
     );
 
     it.skipIf(!gitBash || !hasNode26)(
-      "takes the enrollment token from the first line of stdin",
+      "accepts the removed -TokenFromStdin switch and forwards no token",
       async () => {
         const release = fakeRelease();
         const res = await bootstrap(
@@ -327,7 +332,13 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! }, input: "from-stdin\nignored\n" },
         );
         expect(res.code).toBe(0);
-        expect(JSON.parse(fs.readFileSync(release.record, "utf8")).token).toBe("from-stdin");
+        // Issue #3577 — the switch is accepted so an old caller still exits 0,
+        // but the value is never read, logged, or passed to the installer.
+        expect(res.events.filter((e) => e.detail.includes("ignored"))).toHaveLength(1);
+        const rec = JSON.parse(fs.readFileSync(release.record, "utf8"));
+        expect(rec.enrollmentToken).toBeNull();
+        expect(rec.enrollmentTokenStdin).toBeNull();
+        expect(res.stdout + res.stderr).not.toContain("from-stdin");
       },
       180_000,
     );
@@ -363,8 +374,9 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           agentToken: token,
           host: "10.0.0.5",
           port: "4000",
-          token: null,
         });
+        // Issue #3577 — no enrollment token is forwarded any more.
+        expect(rec.token).toBeUndefined();
         expect(JSON.stringify(rec.args)).not.toContain(token);
         // Reported once: the final line, and nowhere else in what is printed.
         expect(res.stdout.split(token)).toHaveLength(2);
@@ -391,7 +403,7 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
     );
 
     it.skipIf(!gitBash || !hasNode26)(
-      "generates nothing when a token, an enrollment path or an existing .env is there",
+      "generates nothing when a token, a primary URL or an existing .env is there",
       async () => {
         const cases: Array<{
           name: string;
@@ -400,11 +412,6 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           env0?: boolean;
         }> = [
           { name: "agent token", args: [], env: { MULLION_AGENT_TOKEN: "given-by-caller" } },
-          {
-            name: "enrollment token",
-            args: [],
-            env: { MULLION_AGENT_ENROLLMENT_TOKEN: "enroll-tok" },
-          },
           { name: "primary url", args: ["-PrimaryUrl", "https://primary.example"], env: {} },
           { name: "existing .env with a credential", args: [], env: {}, env0: true },
         ];
@@ -447,6 +454,100 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         const token = String(res.events.at(-1)!.agentToken);
         expect(token).toMatch(/^[0-9a-f]{64}$/);
         expect(JSON.parse(fs.readFileSync(release.record, "utf8")).agentToken).toBe(token);
+      },
+      180_000,
+    );
+
+    // Issue #3577 review — MULLION_PRIMARY_URL alone is not a credential: the
+    // agent needs a loadable agent-identity.json beside it, or src/app.ts's
+    // fail-closed check crash-loops it. A re-run must generate and report the
+    // manual token for such an .env instead of assuming it is paired.
+    it.skipIf(!gitBash || !hasNode26)(
+      "generates a token for an existing .env whose primary URL has no paired identity",
+      async () => {
+        for (const identity of [null, "{}"]) {
+          const release = fakeRelease();
+          const root = installRoot();
+          const sessions = path.join(root, "data", "sessions");
+          fs.mkdirSync(sessions, { recursive: true });
+          if (identity !== null) {
+            fs.writeFileSync(path.join(sessions, "agent-identity.json"), identity);
+          }
+          fs.writeFileSync(
+            path.join(root, ".env"),
+            `MULLION_ROLE=agent\nSESSIONS_DIR=${sessions}\nMULLION_PRIMARY_URL=https://primary.example\n`,
+          );
+          const res = await bootstrap(
+            ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", release.url],
+            { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+          );
+          expect(res.code, String(identity)).toBe(0);
+          const token = String(res.events.at(-1)!.agentToken);
+          expect(token, String(identity)).toMatch(/^[0-9a-f]{64}$/);
+          expect(JSON.parse(fs.readFileSync(release.record, "utf8")).agentToken).toBe(token);
+        }
+      },
+      240_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
+      "leaves an existing .env whose primary URL has a loadable identity alone",
+      async () => {
+        const release = fakeRelease();
+        const root = installRoot();
+        const sessions = path.join(root, "data", "sessions");
+        fs.mkdirSync(sessions, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessions, "agent-identity.json"),
+          JSON.stringify({ hostId: "host-1", machineCredential: "ab".repeat(32) }), // pragma: allowlist secret
+        );
+        fs.writeFileSync(
+          path.join(root, ".env"),
+          `MULLION_ROLE=agent\nSESSIONS_DIR=${sessions}\nMULLION_PRIMARY_URL=https://primary.example\n`,
+        );
+        const res = await bootstrap(
+          ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", release.url],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(res.code).toBe(0);
+        expect(res.events.at(-1)!.agentToken).toBeUndefined();
+        expect(JSON.parse(fs.readFileSync(release.record, "utf8")).agentToken).toBeNull();
+      },
+      180_000,
+    );
+
+    // Issue #3577 review — install.sh reads the .env under Git Bash, so a
+    // hand-written SESSIONS_DIR such as /c/Users/me/Mullion/data/sessions is a
+    // path it can resolve, though Windows' own path rules call it rooted and
+    // would look under C:\c\Users\... The script must read the same value the
+    // same way, or it decides the identity is missing, generates a token, and
+    // reports one install.sh (which finds the identity) never wrote.
+    it.skipIf(!gitBash || !hasNode26)(
+      "reads a quoted, Git-Bash-path SESSIONS_DIR the way install.sh does",
+      async () => {
+        const release = fakeRelease();
+        const root = installRoot();
+        const sessions = path.join(root, "data", "sessions");
+        fs.mkdirSync(sessions, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessions, "agent-identity.json"),
+          JSON.stringify({ hostId: "host-1", machineCredential: "cd".repeat(32) }), // pragma: allowlist secret
+        );
+        const drive = /^([A-Za-z]):[\\/](.*)$/.exec(sessions);
+        expect(drive).not.toBeNull();
+        const posix = `/${drive![1]!.toLowerCase()}/${drive![2]!.replaceAll("\\", "/")}`;
+        fs.writeFileSync(
+          path.join(root, ".env"),
+          `MULLION_ROLE=agent\nSESSIONS_DIR="${posix}"  # a Git Bash path\n` +
+            "MULLION_PRIMARY_URL=https://primary.example\n",
+        );
+        const res = await bootstrap(
+          ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", release.url],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(res.code).toBe(0);
+        expect(res.events.at(-1)!.agentToken).toBeUndefined();
+        expect(JSON.parse(fs.readFileSync(release.record, "utf8")).agentToken).toBeNull();
       },
       180_000,
     );

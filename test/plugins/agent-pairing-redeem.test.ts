@@ -29,7 +29,6 @@ async function waitUntil(check: () => boolean, timeoutMs = 5000): Promise<void> 
 const AGENT_ENV = [
   "MULLION_ROLE",
   "MULLION_PRIMARY_URL",
-  "MULLION_ENROLLMENT_TOKEN",
   "MULLION_AGENT_TOKEN",
   "MULLION_AGENT_ADVERTISE_URL",
   "PROJECTS_ROOTS",
@@ -110,7 +109,6 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
   async function bootAgentWithoutBootstrapToken() {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
-    delete process.env.MULLION_ENROLLMENT_TOKEN;
     delete process.env.MULLION_AGENT_TOKEN;
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
@@ -474,16 +472,17 @@ describe("headless agent pairing-code redeem (issue #3437)", () => {
     expect(loadAgentIdentity(statePath)).toBeNull();
   });
 
-  it("src/app.ts refuses to boot an agent with neither token nor identity file", async () => {
+  it("src/app.ts refuses to boot an agent with no identity and tells the operator to pair it", async () => {
     newSessionsDir();
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
-    delete process.env.MULLION_ENROLLMENT_TOKEN;
     delete process.env.MULLION_AGENT_TOKEN;
     process.env.PROJECTS_ROOTS = os.tmpdir();
     process.env.SESSIONS_DIR = sessionsDir;
 
     await expect(buildApp()).rejects.toThrow(/refusing to boot an agent/i);
+    await expect(buildApp()).rejects.toThrow(/MULLION_AGENT_PAIRING_CODE_STDIN=1/);
+    await expect(buildApp()).rejects.toThrow(/Automating agent deploys/);
   });
 
   it("handles invalid primary URLs, HTTP 429/500, and malformed pairing responses", async () => {

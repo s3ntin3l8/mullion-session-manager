@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildApp } from "../../src/app.js";
-import { loadDotenvOverrides, reloadDotenvOverrides } from "../../src/plugins/env.js";
+import {
+  loadDotenvOverrides,
+  reloadDotenvOverrides,
+  setDotenvPathForTests,
+} from "../../src/plugins/env.js";
 
 describe("env plugin", () => {
   // Load-bearing: PORT/LOG_LEVEL are set by "respects environment variable
@@ -66,6 +70,33 @@ describe("env plugin", () => {
     expect(app.config.BROWSER_DATA_DIR).toBe("./data/browsers");
     expect(app.config.MULLION_SOCKET_PATH).toBe("");
     await app.close();
+  });
+
+  // Issue #3577 — MULLION_ENROLLMENT_TOKEN is no longer part of the schema.
+  // An existing install's .env still carries the line, and it must be ignored:
+  // env-schema validates the keys it knows and leaves an unknown one alone, so
+  // a leftover value must neither fail boot nor reach app.config.
+  it("ignores a leftover MULLION_ENROLLMENT_TOKEN in .env instead of failing boot", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-leftover-"));
+    const fixturePath = path.join(tmpDir, ".env");
+    fs.writeFileSync(
+      fixturePath,
+      "MULLION_ENROLLMENT_TOKEN=leftover-token\nMULLION_AGENT_NAME=leftover-name\n", // pragma: allowlist secret
+    );
+    setDotenvPathForTests(fixturePath);
+    try {
+      const app = await buildApp();
+      try {
+        // The other line in the same file WAS loaded, so the file was read.
+        expect(app.config.MULLION_AGENT_NAME).toBe("leftover-name");
+        expect(app.config).not.toHaveProperty("MULLION_ENROLLMENT_TOKEN");
+      } finally {
+        await app.close();
+      }
+    } finally {
+      setDotenvPathForTests(null);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   // The default-values test above can't assert this one directly:
@@ -350,10 +381,10 @@ describe("env plugin", () => {
 
     it("reads $MULLION_HOME/.env — the file the launchd launcher sources", () => {
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-plugin-test-"));
-      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_ENROLLMENT_TOKEN=rotated\n");
+      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_AGENT_TOKEN=rotated\n");
 
       expect(reloadDotenvOverrides(tmpDir)).toEqual({
-        MULLION_ENROLLMENT_TOKEN: "rotated",
+        MULLION_AGENT_TOKEN: "rotated",
       });
     });
 
@@ -363,7 +394,7 @@ describe("env plugin", () => {
       // never overwrite app.config's credentials with them).
       process.env.NODE_ENV = "test";
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-plugin-test-"));
-      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_ENROLLMENT_TOKEN=developer\n");
+      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_AGENT_TOKEN=developer\n");
       const originalCwd = process.cwd();
       process.chdir(tmpDir);
       try {
@@ -376,12 +407,12 @@ describe("env plugin", () => {
     it("reads the default .env outside test mode", () => {
       process.env.NODE_ENV = "development";
       tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "env-plugin-test-"));
-      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_ENROLLMENT_TOKEN=developer\n");
+      fs.writeFileSync(path.join(tmpDir, ".env"), "MULLION_AGENT_TOKEN=developer\n");
       const originalCwd = process.cwd();
       process.chdir(tmpDir);
       try {
         expect(reloadDotenvOverrides()).toEqual({
-          MULLION_ENROLLMENT_TOKEN: "developer",
+          MULLION_AGENT_TOKEN: "developer",
         });
       } finally {
         process.chdir(originalCwd);

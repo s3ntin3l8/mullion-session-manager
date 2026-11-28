@@ -284,44 +284,32 @@ truthy_flag() {
   return 1
 }
 
-# Issue #2703 — the enrollment token from stdin, for a caller that must not put
-# it in an environment (a `ssh host install.sh` pipeline, a CI secret store):
-# MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1 reads the FIRST LINE of stdin into
-# MULLION_AGENT_ENROLLMENT_TOKEN (the Windows bootstrap's -TokenFromStdin does
-# the same). It never appears in a process argument. Agent role only, so a
-# primary install never consumes stdin it was not asked to.
+# Issue #3577 — the agent-side enrollment-token bootstrap is gone. An old
+# Ansible role (or a caller) that still sets either variable must not break a
+# converge: the run carries on, writes no token, and prints ONE notice. The
+# value itself is never echoed, and never written to .env or a process
+# argument.
+if [ "$ROLE" = "agent" ] && { [ -n "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" ] || [ -n "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" ]; }; then
+  echo "NOTICE: MULLION_AGENT_ENROLLMENT_TOKEN/MULLION_AGENT_ENROLLMENT_TOKEN_STDIN are ignored — the agent-side enrollment-token bootstrap has been removed. Pair this host with a one-time pairing code instead (MULLION_AGENT_PAIRING_CODE_STDIN=1); see deploy/README.md, \"Automating agent deploys\"." >&2
+fi
+
+# Issue #2703 / #3437 — the one-time pairing code from stdin, for a caller that
+# must not put it in an environment (a `ssh host install.sh` pipeline, a CI
+# secret store): MULLION_AGENT_PAIRING_CODE_STDIN=1 reads the FIRST LINE of
+# stdin. It never appears in a process argument. Agent role only, so a primary
+# install never consumes stdin it was not asked to.
 #
-# Issue #3498 — both *_STDIN flags are read through truthy_flag, not through
-# an exact `= "1"` comparison: a role that templates a YAML boolean
+# Issue #3498 — the *_STDIN flag is read through truthy_flag, not through an
+# exact `= "1"` comparison: a role that templates a YAML boolean
 # (`mullion_pairing_code_stdin: true`) delivers "True", and the exact
 # comparison then read NOTHING — the piped pairing code was never taken, so
 # the install fell through to the "no complete credential path" warning and
 # left an agent that crash-loops.
-STDIN_ENROLLMENT_TOKEN=false
 STDIN_PAIRING_CODE=false
 if [ "$ROLE" = "agent" ]; then
-  if truthy_flag MULLION_AGENT_ENROLLMENT_TOKEN_STDIN "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" "the enrollment token is not read from stdin"; then
-    STDIN_ENROLLMENT_TOKEN=true
-  fi
   if truthy_flag MULLION_AGENT_PAIRING_CODE_STDIN "${MULLION_AGENT_PAIRING_CODE_STDIN:-}" "the pairing code is not read from stdin"; then
     STDIN_PAIRING_CODE=true
   fi
-  if [ "$STDIN_ENROLLMENT_TOKEN" = true ] && [ "$STDIN_PAIRING_CODE" = true ]; then
-    echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN and MULLION_AGENT_PAIRING_CODE_STDIN cannot both be set." >&2
-    exit 1
-  fi
-fi
-if [ "$STDIN_ENROLLMENT_TOKEN" = true ]; then
-  stdin_token=""
-  IFS= read -r stdin_token || true
-  stdin_token="${stdin_token%$'\r'}"
-  if [ -z "${stdin_token//[[:space:]]/}" ]; then
-    echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN was set but stdin carried no token on its first line." >&2
-    exit 1
-  fi
-  MULLION_AGENT_ENROLLMENT_TOKEN="$stdin_token"
-  export MULLION_AGENT_ENROLLMENT_TOKEN
-  unset stdin_token
 fi
 if [ "$STDIN_PAIRING_CODE" = true ]; then
   stdin_code=""
@@ -687,8 +675,16 @@ if [ -f "$MULLION_HOME/.env" ]; then
     # re-running the installer with them is not a silent no-op.
     if [ -n "${MULLION_AGENT_HOST:-}" ]; then set_env_value HOST "$MULLION_AGENT_HOST"; echo "==> set HOST in $MULLION_HOME/.env"; fi
     if [ -n "${MULLION_AGENT_PORT:-}" ]; then set_env_value PORT "$MULLION_AGENT_PORT"; echo "==> set PORT in $MULLION_HOME/.env"; fi
+    # Issue #3577 — "no credential" is not the same as "no primary URL". A
+    # pre-removal agent's .env kept MULLION_PRIMARY_URL next to the
+    # now-ignored MULLION_ENROLLMENT_TOKEN and has no agent-identity.json, so a
+    # URL alone leaves it unable to boot (src/app.ts's fail-closed check). A
+    # URL is only a credential when a loadable identity sits where the agent
+    # reads it; otherwise the caller's manual token is exactly what this
+    # repair exists to write.
     if [ -n "${MULLION_AGENT_TOKEN:-}" ] && is_blank "$(env_value MULLION_AGENT_TOKEN)" &&
-      { is_blank "$(env_value MULLION_PRIMARY_URL)" || is_blank "$(env_value MULLION_ENROLLMENT_TOKEN)"; }; then
+      { is_blank "$(env_value MULLION_PRIMARY_URL)" ||
+        ! identity_file_is_usable "$(pair_identity_file "$PAIR_SESSIONS_DIR")"; }; then
       set_env_value MULLION_AGENT_TOKEN "$MULLION_AGENT_TOKEN"
       echo "==> set MULLION_AGENT_TOKEN in $MULLION_HOME/.env (it had no credential)"
     fi
@@ -696,8 +692,7 @@ if [ -f "$MULLION_HOME/.env" ]; then
   # Hermes review, PR #529: content untouched, but permissions still
   # tightened — a legacy .env written at the ambient umask (644), or one
   # an operator hand-templated per this section's own docs, can hold
-  # MULLION_ENROLLMENT_TOKEN/MULLION_AGENT_TOKEN just as much as a
-  # freshly-generated one.
+  # MULLION_AGENT_TOKEN just as much as a freshly-generated one.
   chmod 600 "$MULLION_HOME/.env"
 elif [ "$ROLE" = "primary" ]; then
   echo "==> Writing $MULLION_HOME/.env (primary)"
@@ -776,7 +771,7 @@ EOF
   chmod 600 "$MULLION_HOME/.env"
   # Issue #1458 — mirrors app.ts's ACTUAL boot condition (same "must mirror
   # the real check, not just 'is anything set'" lesson as the agent
-  # branch's own HAS_MANUAL_TOKEN/HAS_ENROLLMENT_PATH check above, Hermes
+  # branch's own HAS_MANUAL_TOKEN/HAS_PAIRING_IDENTITY check above, Hermes
   # review PR #529 fourth round): AUTH_TOKEN with no SESSION_SECRET is
   # still a fail-closed boot, not a configured one, so it must not silently
   # suppress this warning. Without one of the two complete paths above (or
@@ -798,19 +793,19 @@ else
   # Issue #245 / roadmap 7.1 + 7.7 — deliberately NO DATABASE_URL,
   # DB_ENCRYPTION_KEY, or FRONTEND_DIST: an agent is DB-less and serves no
   # frontend (src/app.ts's agent branch never registers dbPlugin/
-  # staticPlugin). The four MULLION_AGENT_*/MULLION_PRIMARY_URL/
-  # MULLION_ENROLLMENT_* values below are read from this script's own
-  # environment if the caller (e.g. an Ansible task) already exported them,
-  # so a fully automated deploy needs no manual edit of this file at all —
-  # see deploy/README.md's "Automating agent deploys" section. Left blank
-  # (with the schema's own empty-string default) otherwise, for an operator
-  # to fill in by hand; src/app.ts refuses to boot with neither auth path
-  # configured, so an incomplete file fails loudly on first start rather
-  # than silently.
+  # staticPlugin). The MULLION_AGENT_*/MULLION_PRIMARY_URL values below are
+  # read from this script's own environment if the caller (e.g. an Ansible
+  # task) already exported them, so a fully automated deploy needs no manual
+  # edit of this file at all — see deploy/README.md's "Automating agent
+  # deploys" section. Left blank (with the schema's own empty-string default)
+  # otherwise, for an operator to fill in by hand; src/app.ts refuses to boot
+  # with neither auth path configured, so an incomplete file fails loudly on
+  # first start rather than silently. The enrolling credential itself is never
+  # written here: a pairing code is redeemed once into agent-identity.json
+  # (issue #3437).
   # Independent review, PR #529: same umask-077-in-a-subshell reasoning as
-  # the primary branch above — this file can hold the fleet-wide
-  # MULLION_ENROLLMENT_TOKEN, so it must never exist at the ambient umask
-  # even momentarily.
+  # the primary branch above — this file can hold MULLION_AGENT_TOKEN, so it
+  # must never exist at the ambient umask even momentarily.
   #
   # Hermes review, PR #529 (fifth round): an earlier version of this
   # interpolated every MULLION_AGENT_* value directly inside an unquoted
@@ -854,14 +849,10 @@ EOF
 
 # Path 1 (recommended): one-time pairing code (from Settings -> Hosts -> Add host
 # or an automation token) redeemed during install into $SESSIONS_DIR/agent-identity.json
-# (only MULLION_PRIMARY_URL is set here; MULLION_ENROLLMENT_TOKEN and MULLION_AGENT_TOKEN
-# stay empty).
-# Legacy per-host bootstrap: set MULLION_ENROLLMENT_TOKEN for an existing
-# pre-provisioned host row (fleet-secret enrollment via MULLION_ENROLLMENT_SECRET
-# has been removed).
+# (only MULLION_PRIMARY_URL is set here; MULLION_AGENT_TOKEN stays empty).
+# The legacy MULLION_ENROLLMENT_TOKEN bootstrap has been removed (issue #3577).
 EOF
     printf 'MULLION_PRIMARY_URL=%s\n' "${MULLION_AGENT_PRIMARY_URL:-}" >>"$MULLION_HOME/.env"
-    printf 'MULLION_ENROLLMENT_TOKEN=%s\n' "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" >>"$MULLION_HOME/.env"
     # Issue #2572: an agent that dials the primary needs no advertised address
     # (nor an inbound port), so none is generated. Only a caller-supplied value
     # is written; otherwise the key stays out, with a pointer for the inbound case.
@@ -893,24 +884,21 @@ EOF
     echo "WARNING: PROJECTS_ROOTS is empty in the generated .env — this agent will boot but have no discoverable projects. Set MULLION_AGENT_PROJECTS_ROOTS before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
   # Hermes review, PR #529 (fourth round): must mirror src/app.ts's ACTUAL
-  # condition (hasManualToken OR (hasPrimaryUrl AND hasEnrollmentToken)),
-  # not just "both vars empty" — MULLION_AGENT_ENROLLMENT_TOKEN alone,
-  # with MULLION_AGENT_PRIMARY_URL forgotten, previously passed this check
-  # silently while app.ts's own boot-time check still refuses to start.
-  # is_blank (hoisted above the role branches, issue #1458) mirrors
-  # src/app.ts's `.trim() === ""` check using the same bash-native
-  # whitespace strip as EXISTING_ROLE above (no sed, no dialect ambiguity).
+  # condition (hasManualToken OR (hasPrimaryUrl AND a stored
+  # agent-identity.json)), not just "both vars empty". Issue #3577 removed
+  # the MULLION_ENROLLMENT_TOKEN bootstrap, so a primary URL alone is no
+  # longer a credential path. is_blank (hoisted above the role branches,
+  # issue #1458) mirrors src/app.ts's `.trim() === ""` check using the same
+  # bash-native whitespace strip as EXISTING_ROLE above (no sed, no dialect
+  # ambiguity).
   HAS_MANUAL_TOKEN=false
   is_blank "${MULLION_AGENT_TOKEN:-}" || HAS_MANUAL_TOKEN=true
-  HAS_ENROLLMENT_PATH=false
-  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && ! is_blank "${MULLION_AGENT_ENROLLMENT_TOKEN:-}"; then
-    HAS_ENROLLMENT_PATH=true
-  fi
   HAS_PAIRING_IDENTITY=false
-  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" && [ -f "$(pair_identity_file "$PAIR_SESSIONS_DIR")" ]; then
+  if ! is_blank "${MULLION_AGENT_PRIMARY_URL:-}" &&
+    identity_file_is_usable "$(pair_identity_file "$PAIR_SESSIONS_DIR")"; then
     HAS_PAIRING_IDENTITY=true
   fi
-  if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_ENROLLMENT_PATH" = false ] && [ "$HAS_PAIRING_IDENTITY" = false ]; then
+  if [ "$HAS_MANUAL_TOKEN" = false ] && [ "$HAS_PAIRING_IDENTITY" = false ]; then
     # Unlike PROJECTS_ROOTS, this one IS fail-closed — but only at
     # process-boot time (src/app.ts's own check), which under
     # `Restart=on-failure` means `enable --now` below starts a unit that
@@ -918,13 +906,12 @@ EOF
     # than install.sh itself catching it up front. Warning here so that
     # noisy journald spam isn't the first sign something's missing. Names
     # the .env KEYS the operator would actually grep for
-    # (MULLION_ENROLLMENT_TOKEN/MULLION_AGENT_TOKEN, written via the
-    # printf appends above), not the install.sh-side input variable names.
-    echo "WARNING: this agent has no complete credential path in the generated .env — neither MULLION_AGENT_TOKEN, nor MULLION_PRIMARY_URL with MULLION_ENROLLMENT_TOKEN or a paired agent-identity.json, are set. It will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_AGENT_TOKEN, or MULLION_AGENT_PRIMARY_URL with MULLION_AGENT_PAIRING_CODE (recommended) or MULLION_AGENT_ENROLLMENT_TOKEN, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
+    # (MULLION_AGENT_TOKEN, written via the printf append above), not the
+    # install.sh-side input variable names.
+    echo "WARNING: this agent has no complete credential path in the generated .env — neither MULLION_AGENT_TOKEN, nor MULLION_PRIMARY_URL with a paired agent-identity.json, are set. It will fail to boot at all (src/app.ts's fail-closed check) and crash-loop under systemd until one full path is configured. Set MULLION_AGENT_TOKEN, or MULLION_AGENT_PRIMARY_URL with MULLION_AGENT_PAIRING_CODE, before running this script, or edit \$MULLION_HOME/.env by hand." >&2
   fi
-  # Hermes review, PR #529: this file holds the fleet-wide
-  # MULLION_ENROLLMENT_TOKEN (or a per-agent MULLION_AGENT_TOKEN) — real
-  # secrets, written with whatever the default umask happens to be
+  # Hermes review, PR #529: this file holds a per-agent MULLION_AGENT_TOKEN
+  # — a real secret, written with whatever the default umask happens to be
   # otherwise. Same restriction as the primary's .env above.
   chmod 600 "$MULLION_HOME/.env"
 fi

@@ -934,17 +934,17 @@ system-wide:
   skipped with a note, not an error;
 - re-running it is safe: it reuses what is there and re-runs the installer.
 
-| Parameter                                                                                       | Meaning                                                                                                                                                                                                                                                                                                                               |
-| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `-InstallRoot`                                                                                  | where it goes (default `%LOCALAPPDATA%\Mullion`)                                                                                                                                                                                                                                                                                      |
-| `-PrimaryUrl`, `-AgentName`                                                                     | the primary this agent registers with, and the name it registers under                                                                                                                                                                                                                                                                |
-| `-ProjectsRoots`                                                                                | comma-separated folders to look for projects in (forward slashes)                                                                                                                                                                                                                                                                     |
-| `-AdvertiseUrl`                                                                                 | the URL the primary should use to reach this agent (see below)                                                                                                                                                                                                                                                                        |
-| `-BindHost`, `-Port`                                                                            | the address and port the agent listens on (written to the `.env` as `HOST` and `PORT`; default `127.0.0.1:3000`, see below)                                                                                                                                                                                                           |
-| `-Version`                                                                                      | install this release instead of the latest (`0.3.51`)                                                                                                                                                                                                                                                                                 |
-| `MULLION_AGENT_ENROLLMENT_TOKEN` / `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1` / `-TokenFromStdin` | per-host bootstrap token for an existing pre-provisioned host row only (fleet-secret enrollment via `MULLION_ENROLLMENT_SECRET` and the Add-host token flow have been removed; use pairing codes for new hosts): an environment variable, or the first line of stdin — never a parameter, which every process on the machine can read |
-| `-Uninstall` `[-Purge]` `[-Force]`                                                              | see below                                                                                                                                                                                                                                                                                                                             |
-| `-Json`                                                                                         | machine-readable output (below)                                                                                                                                                                                                                                                                                                       |
+| Parameter                                                                                       | Meaning                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-InstallRoot`                                                                                  | where it goes (default `%LOCALAPPDATA%\Mullion`)                                                                                                                                                                            |
+| `-PrimaryUrl`, `-AgentName`                                                                     | the primary this agent registers with, and the name it registers under                                                                                                                                                      |
+| `-ProjectsRoots`                                                                                | comma-separated folders to look for projects in (forward slashes)                                                                                                                                                           |
+| `-AdvertiseUrl`                                                                                 | the URL the primary should use to reach this agent (see below)                                                                                                                                                              |
+| `-BindHost`, `-Port`                                                                            | the address and port the agent listens on (written to the `.env` as `HOST` and `PORT`; default `127.0.0.1:3000`, see below)                                                                                                 |
+| `-Version`                                                                                      | install this release instead of the latest (`0.3.51`)                                                                                                                                                                       |
+| `MULLION_AGENT_ENROLLMENT_TOKEN` / `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1` / `-TokenFromStdin` | **removed** (issue #3577): accepted only so an old caller does not break, prints one notice, and is otherwise ignored. Enroll with a one-time pairing code instead (`MULLION_AGENT_PAIRING_CODE_STDIN=1` for the installer) |
+| `-Uninstall` `[-Purge]` `[-Force]`                                                              | see below                                                                                                                                                                                                                   |
+| `-Json`                                                                                         | machine-readable output (below)                                                                                                                                                                                             |
 
 **For a program driving it** (a tray app's install button, a provisioning
 script): there is no prompt, ever, and with `-Json` stdout is one JSON object
@@ -959,17 +959,20 @@ either `done`/`ok` carrying the contents of `install.json` (plus `gitBash`, and
 download or its checksum failed; `4` the release's installer failed; `5` an
 uninstall was refused because sessions are still running.
 
-**Registering the agent on the primary.** Either give the installer the
-primary's `-PrimaryUrl` and an enrollment token (the agent then registers itself
-each time it starts, [docs/multi-host.md](../docs/multi-host.md)), or give it
-neither and register the host by hand. In that second case a **fresh** install
-generates a random per-agent token (`MULLION_AGENT_TOKEN` in the `.env`) and
-shows it **once** — as the last line of the output, or as `agentToken` on the
-final `-Json` line. Paste it into Settings → Hosts → Add host on the primary,
-with the base URL you gave `-AdvertiseUrl`. A re-run leaves an existing `.env`
-alone, so it reports no token (read it from the `.env` if you need it again) —
-except that an `.env` with no credential at all, such as one left by a first run
-that failed halfway, gets the new token filled in.
+**Registering the agent on the primary.** Generate a one-time pairing code
+(Settings → Hosts → Add host, or an automation token that mints one), give the
+installer the primary's `-PrimaryUrl` and pipe the code in with
+`MULLION_AGENT_PAIRING_CODE_STDIN=1`; it redeems the code once into
+`agent-identity.json` and the agent registers itself each time it starts
+([docs/multi-host.md](../docs/multi-host.md)). Without either, register the
+host by hand: a **fresh** install generates a random per-agent token
+(`MULLION_AGENT_TOKEN` in the `.env`) and shows it **once** — as the last line
+of the output, or as `agentToken` on the final `-Json` line. Paste it into
+Settings → Hosts → Add host on the primary, with the base URL you gave
+`-AdvertiseUrl`. A re-run leaves an existing `.env` alone, so it reports no
+token (read it from the `.env` if you need it again) — except that an `.env`
+with no credential at all, such as one left by a first run that failed halfway,
+gets the new token filled in.
 
 **Reaching the agent.** The agent listens on `127.0.0.1` by default, so the
 primary cannot dial it from another machine as it is. To let it connect, bind a
@@ -993,8 +996,10 @@ curl -fsSL -o mullion-install.sh \
   https://github.com/s3ntin3l8/mullion-session-manager/releases/latest/download/mullion-install.sh
 MULLION_AGENT_PROJECTS_ROOTS="C:/Users/me/code" \
 MULLION_AGENT_PRIMARY_URL="https://mullion.example.com" \
-MULLION_AGENT_ENROLLMENT_TOKEN="…" \
-  sh mullion-install.sh --role agent ~/AppData/Local/Mullion
+MULLION_AGENT_PAIRING_CODE_STDIN=1 \
+  sh mullion-install.sh --role agent ~/AppData/Local/Mullion <<'MULLION_PAIRING_CODE'
+<one-time pairing code from Settings → Hosts → Add host>
+MULLION_PAIRING_CODE
 ```
 
 The variables are the same as for any agent ([Automating agent
@@ -1146,11 +1151,11 @@ step by pre-creating it):
 | Variable                           | Required?                                                      | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ---------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `MULLION_AGENT_PROJECTS_ROOTS`     | recommended (warn-only)                                        | comma-separated dirs on this host to scan for project discovery — written to `.env`'s `PROJECTS_ROOTS`. Not fail-closed like the credential paths below: an agent boots fine with this empty, it just has nothing to discover — `install.sh` prints a warning, doesn't refuse to install                                                                                                                                                                                                                                                                                              |
-| `MULLION_AGENT_PRIMARY_URL`        | yes, for pairing or self-registration                          | the primary's base URL — written to `.env`'s `MULLION_PRIMARY_URL`. Use `https://` outside a trusted network: the outbound channel carries the machine credential, and the agent warns at startup on a non-loopback `http://`                                                                                                                                                                                                                                                                                                                                                         |
-| `MULLION_AGENT_PAIRING_CODE`       | recommended for a single new host                              | one-time 64-hex pairing code from `POST /api/host-pairings` (or Settings → Hosts & SSH bridges → Add host → _Generate pairing code_). `install.sh` redeems it once into `$SESSIONS_DIR/agent-identity.json` (`0600`); the code is never written, and `MULLION_ENROLLMENT_TOKEN` is left empty in `.env`. A rerun never redeems it for an already-paired host: when a valid identity exists the code is **ignored** (see `MULLION_AGENT_PAIRING_FORCE`). Prefer `MULLION_AGENT_PAIRING_CODE_STDIN=1` to keep it out of the environment                                                 |
+| `MULLION_AGENT_PRIMARY_URL`        | yes, for pairing                                               | the primary's base URL — written to `.env`'s `MULLION_PRIMARY_URL`. Use `https://` outside a trusted network: the outbound channel carries the machine credential, and the agent warns at startup on a non-loopback `http://`                                                                                                                                                                                                                                                                                                                                                         |
+| `MULLION_AGENT_PAIRING_CODE`       | recommended for a single new host                              | one-time 64-hex pairing code from `POST /api/host-pairings` (or Settings → Hosts & SSH bridges → Add host → _Generate pairing code_). `install.sh` redeems it once into `$SESSIONS_DIR/agent-identity.json` (`0600`); the code is never written to `.env`. A rerun never redeems it for an already-paired host: when a valid identity exists the code is **ignored** (see `MULLION_AGENT_PAIRING_FORCE`). Prefer `MULLION_AGENT_PAIRING_CODE_STDIN=1` to keep it out of the environment                                                                                               |
 | `MULLION_AGENT_PAIRING_CODE_STDIN` | optional (`1`)                                                 | reads the first line of stdin and pipes it straight to the redeem step, so the code never appears in an environment block, in `.env` or in a process argument. The flag is read like `MULLION_AGENT_PAIRING_FORCE` below: trimmed and case-insensitive, `1`, `true`, `yes` and `on` all enable it — a YAML boolean templated by Ansible/Jinja arrives as `True`, not `true`, and an unrecognised value is treated as off but warns                                                                                                                                                    |
 | `MULLION_AGENT_PAIRING_FORCE`      | optional (`1`)                                                 | re-pairs on purpose: `install.sh` redeems a supplied pairing code **even when** `$SESSIONS_DIR/agent-identity.json` already holds a valid identity, replacing it (issue #3498). Off by default, so a rerun of the role below cannot spend the code or swap the agent's host row. The value is case-insensitive and trimmed, and `1`, `true`, `yes` and `on` all enable it — a YAML boolean templated by Ansible/Jinja arrives as `True`, not `true`. `0`, `false`, `no` and `off` are recognised as off; any other value is treated as off too, but warns instead of failing silently |
-| `MULLION_AGENT_ENROLLMENT_TOKEN`   | only for legacy per-host token claims                          | per-host bootstrap token for an existing pre-provisioned host row — written to `.env`'s `MULLION_ENROLLMENT_TOKEN` (fleet-secret enrollment via `MULLION_ENROLLMENT_SECRET` has been removed; new automated deploys should use pairing codes). `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN` reads it from the first line of stdin instead (the same truthy spellings as `MULLION_AGENT_PAIRING_CODE_STDIN` above)                                                                                                                                                                           |
+| `MULLION_AGENT_ENROLLMENT_TOKEN`   | **removed** (issue #3577)                                      | no longer read, never written to `.env`. Still accepted (like `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN`) so an old Ansible variable does not break a converge: the install exits 0 and prints one notice that it is ignored. Use a pairing code                                                                                                                                                                                                                                                                                                                                          |
 | `MULLION_AGENT_ADVERTISE_URL`      | optional                                                       | this agent's own reachable base URL, only for a primary that must dial it. Not needed (and not written) for an outbound-capable agent: it dials the primary and needs no inbound port; see docs/multi-host.md's "Outbound-only agents"                                                                                                                                                                                                                                                                                                                                                |
 | `MULLION_AGENT_HOST`               | optional                                                       | the address the agent listens on — written to `.env`'s `HOST`. Unset keeps the server default (`127.0.0.1`), which the primary cannot reach from another machine                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `MULLION_AGENT_PORT`               | optional                                                       | the port the agent listens on — written to `.env`'s `PORT`. Unset keeps the server default (3000)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -1158,16 +1163,17 @@ step by pre-creating it):
 | `MULLION_AGENT_TOKEN`              | yes, for the manual-token path _instead of_ pairing/enrollment | a pre-provisioned static token, registered by hand on the primary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 `src/app.ts` refuses to boot an agent with neither a manual token, nor
-`MULLION_PRIMARY_URL` with either `MULLION_ENROLLMENT_TOKEN` or a paired
-`$SESSIONS_DIR/agent-identity.json` — an incomplete `.env` fails loudly on first
-start, not silently. If you template `.env` yourself instead of letting
-`install.sh` generate it, also set `SESSIONS_DIR` to an absolute path outside
-`current` (e.g. `~/opt/mullion/data/sessions`, which `install.sh` writes) so
+`MULLION_PRIMARY_URL` with a paired `$SESSIONS_DIR/agent-identity.json` — an
+incomplete `.env` fails loudly on first start, not silently. If you template
+`.env` yourself instead of letting `install.sh` generate it, also set
+`SESSIONS_DIR` to an absolute path outside `current` (e.g.
+`~/opt/mullion/data/sessions`, which `install.sh` writes) so
 `agent-identity.json` survives release upgrades.
 
 **Example Ansible role** (recommended for a single new host: one-time pairing
-code via stdin — no bootstrap secret in `.env`; for a zero-touch fleet, swap
-`MULLION_AGENT_PAIRING_CODE_STDIN` + `stdin:` for `MULLION_AGENT_ENROLLMENT_TOKEN`):
+code via stdin — no bootstrap secret in `.env`; for a fleet, mint one code per
+host with a loop from `POST /api/host-pairings` or a host-pairing automation
+token):
 
 ```yaml
 # roles/mullion_agent/tasks/main.yml
@@ -1212,14 +1218,13 @@ code via stdin — no bootstrap secret in `.env`; for a zero-touch fleet, swap
   # Settings → Hosts row; see "Updating an agent" below). It is NOT a
   # general config-drift fixer, though: install.sh
   # leaves an existing .env completely untouched (see above), so changing
-  # mullion_primary_url/mullion_enrollment_token/MULLION_AGENT_PROJECTS_ROOTS
-  # in your role vars and re-running this play silently does nothing —
-  # this is the exact zero-touch flow docs/multi-host.md sells token
-  # rotation as a real response to a suspected leak on, so don't assume a
-  # reconverge alone rotates a compromised enrollment token. To actually
-  # change this agent's config, remove its existing .env first (or have
-  # this role template .env directly, in which case skip install.sh's own
-  # .env generation by pre-creating the file).
+  # mullion_primary_url/MULLION_AGENT_PROJECTS_ROOTS in your role vars and
+  # re-running this play silently does nothing. To actually change this
+  # agent's config, remove its existing .env first (or have this role
+  # template .env directly, in which case skip install.sh's own .env
+  # generation by pre-creating the file). The enrolled credential lives in
+  # $SESSIONS_DIR/agent-identity.json, not in .env: re-pair with
+  # MULLION_AGENT_PAIRING_FORCE=1 (below) when it must be replaced.
   ansible.builtin.command:
     cmd: ./deploy/install.sh --role agent /home/{{ ansible_user }}/opt/mullion
     chdir: /home/{{ ansible_user }}/mullion-src
@@ -1236,9 +1241,9 @@ code via stdin — no bootstrap secret in `.env`; for a zero-touch fleet, swap
     MULLION_AGENT_PROJECTS_ROOTS: "/home/{{ ansible_user }}/projects"
     MULLION_AGENT_PRIMARY_URL: "{{ mullion_primary_url }}"
     MULLION_AGENT_PAIRING_CODE_STDIN: "1"
-    # For a zero-touch fleet instead of a one-time pairing code, omit
-    # MULLION_AGENT_PAIRING_CODE_STDIN / stdin and set:
-    # MULLION_AGENT_ENROLLMENT_TOKEN: "{{ mullion_enrollment_token }}"
+    # For a fleet, mint one pairing code per host (POST /api/host-pairings,
+    # or a host-pairing automation token) and pass it the same way; the
+    # removed MULLION_AGENT_ENROLLMENT_TOKEN no longer enrolls anything.
     #
     # MULLION_AGENT_PAIRING_FORCE: "1" re-pairs on purpose — it makes
     # install.sh redeem the code even when this host is already paired,
@@ -1307,17 +1312,17 @@ not touch:
 | Secrets in process arguments and install logs | None: every credential travels in the environment, in the `.env` (mode `600`) or through the installer's stdin pipe (the pairing code), never in a command line, and `install.sh` does not print them. Keep `no_log: true` on the task.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 Once an agent has enrolled it authenticates with its **machine credential**,
-which it rotates on every renewal; the `MULLION_ENROLLMENT_TOKEN` in `.env` is
-only used to enroll. So a changed token in your role variables does not move
-an enrolled agent, and is not a way to take over another host: the primary
-matches a rerun by host id, never by advertised URL. That held for the fleet
-secret and for renewals — a **per-host** token was different: it never expires
-and is never cleared, so a leaked one could still claim the host it belonged
-to. Since issue #3439 a host that holds a live machine identity refuses such a
-claim: the registration is answered with the same `401` as an unknown token,
-the row is left exactly as it was, and the primary logs one warning per host.
-Replace an agent with a **re-pair** (a host-bound pairing code), not with a
-token.
+which it rotates on every renewal. So a changed role variable does not move an
+enrolled agent, and is not a way to take over another host: the primary matches
+a rerun by host id, never by advertised URL. A **per-host** token was
+different: it never expires and is never cleared, so a leaked one could still
+claim the host it belonged to. Since issue #3439 a host that holds a live
+machine identity refuses such a claim: the registration is answered with the
+same `401` as an unknown token, the row is left exactly as it was, and the
+primary logs one warning per host. Replace an agent with a **re-pair** (a
+host-bound pairing code), not with a token. The agent-side enrollment-token
+bootstrap is gone (issue #3577): a pairing code redeemed into
+`agent-identity.json` is the only way an agent gets an identity.
 
 A **pairing code** is one-time, so a rerun must not redeem it a second time:
 `install.sh` ignores a supplied code when `$SESSIONS_DIR/agent-identity.json`
@@ -1327,16 +1332,16 @@ back — needs `MULLION_AGENT_PAIRING_FORCE=1`.
 
 To change something on purpose, from Ansible:
 
-| Goal                                                 | Do this                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Change `.env` settings (primary URL, roots, name)    | Delete `{{ mullion_home }}/.env` in a task before `install.sh` (or template the whole file). Leave `agent-identity.json` alone to keep the same host row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Cut off a lost or compromised agent                  | `POST /api/hosts/:id/revoke` on the primary. Final: the agent gets `401`, does not fall back to its bootstrap token, and cannot re-claim that row without re-pairing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| Bring a revoked agent back                           | **Recommended (host-bound pairing code):** Settings → Hosts → row menu → _Re-pair_ (or `POST /api/host-pairings` with `{"hostId": "<id>"}`), then run the agent-side redeem with the code (e.g. `install.sh` with `MULLION_AGENT_PAIRING_CODE_STDIN=1` **and `MULLION_AGENT_PAIRING_FORCE=1`** — the force flag is required, because a host that still holds an identity ignores the supplied code (issue #3498)). The redeem overwrites `$SESSIONS_DIR/agent-identity.json` and restarts an active unit, so no manual restart is needed. Redeeming a host-bound code keeps the same host row and disconnects any displaced agent immediately (no grace period). **Legacy per-host token agents that cannot redeem:** `POST /api/hosts/:id/rotate-token` on the primary (re-arms the row and returns a new bootstrap token), then on the agent: (1) delete `$SESSIONS_DIR/agent-identity.json`; (2) put the new token in `{{ mullion_home }}/.env` as `MULLION_ENROLLMENT_TOKEN` (or delete the `.env` and re-run `install.sh` with the new token in `MULLION_AGENT_ENROLLMENT_TOKEN`, which writes a fresh one); (3) **restart the agent unit** (`systemctl --user restart mullion-agent.service`). The restart is not optional: a rejected agent is terminal in memory and stops retrying, and `.env` wins over the environment, so a running agent keeps presenting the old, dead token (HTTP 401) until it restarts. `install.sh` restarts a unit that was already running when it rewrote the `.env`, so deleting the `.env` and re-running it covers (2) and (3). Old secrets stay dead. |
-| Re-register an agent that lost `agent-identity.json` | Pair the host again with a one-time pairing code (Settings → Hosts → **Add host** → _Generate pairing code_, or mint one from an automation token; use a host-bound code via _Re-pair_ / `{"hostId": "<id>"}` to keep the existing row, or an unbound code and remove the old offline row with _Delete host_). Fleet-secret enrollment (`MULLION_ENROLLMENT_SECRET`) and `MULLION_ALLOW_LEGACY_HOSTS` have been removed (issue #3535).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Goal                                                 | Do this                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Change `.env` settings (primary URL, roots, name)    | Delete `{{ mullion_home }}/.env` in a task before `install.sh` (or template the whole file). Leave `agent-identity.json` alone to keep the same host row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Cut off a lost or compromised agent                  | `POST /api/hosts/:id/revoke` on the primary. Final: the agent gets `401`, does not fall back to any other credential, and cannot re-claim that row without re-pairing.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Bring a revoked agent back                           | Settings → Hosts → row menu → _Re-pair_ (or `POST /api/host-pairings` with `{"hostId": "<id>"}`), then run the agent-side redeem with the code (e.g. `install.sh` with `MULLION_AGENT_PAIRING_CODE_STDIN=1` **and `MULLION_AGENT_PAIRING_FORCE=1`** — the force flag is required, because a host that still holds an identity ignores the supplied code (issue #3498)). The redeem overwrites `$SESSIONS_DIR/agent-identity.json` and restarts an active unit, so no manual restart is needed. Redeeming a host-bound code keeps the same host row and disconnects any displaced agent immediately (no grace period). The legacy per-host-token enrollment path is gone (issue #3577), so there is no token to rotate into the `.env`. |
+| Re-register an agent that lost `agent-identity.json` | Pair the host again with a one-time pairing code (Settings → Hosts → **Add host** → _Generate pairing code_, or mint one from an automation token; use a host-bound code via _Re-pair_ / `{"hostId": "<id>"}` to keep the existing row, or an unbound code and remove the old offline row with _Delete host_). Fleet-secret enrollment (`MULLION_ENROLLMENT_SECRET`) and `MULLION_ALLOW_LEGACY_HOSTS` have been removed (issue #3535).                                                                                                                                                                                                                                                                                                 |
 
-The legacy per-host-token path in that table only works while the row holds **no**
-live identity (a revoked or expired one). Since issue #3439 a row with a live
-identity refuses a claim, so replacing _that_ agent needs the re-pair above.
+A per-host token claim only works while the row holds **no** live identity (a
+revoked or expired one). Since issue #3439 a row with a live identity refuses a
+claim, so replacing _that_ agent needs the re-pair above.
 
 There is deliberately no operator "rotate machine credential" endpoint:
 renewal rotates it already (the previous credential stays valid for 24 h so a
@@ -1345,9 +1350,10 @@ suspected leak. Never put the machine credential or `agent-identity.json` in
 inventory, a playbook or a log; the file is owner-only (`0600`) and written by
 the agent alone.
 
-The revoked-agent recipe as Ansible tasks (the example task above, run after
-`rotate-token`; the variable carrying the new token is
-`MULLION_AGENT_ENROLLMENT_TOKEN`):
+The revoked-agent recipe as Ansible tasks (run the "Install as a
+self-registering agent" task above with a NEW host-bound pairing code and
+`MULLION_AGENT_PAIRING_FORCE=1`; the code arrives through
+`MULLION_AGENT_PAIRING_CODE_STDIN`):
 
 ```yaml
 - name: Forget the revoked machine identity and the stale .env
@@ -1359,31 +1365,30 @@ The revoked-agent recipe as Ansible tasks (the example task above, run after
     # substitute your configured absolute SESSIONS_DIR if different.
     - "{{ mullion_home }}/data/sessions/agent-identity.json"
     - "{{ mullion_home }}/.env"
-# Then run the "Install as a self-registering agent" task above with the NEW token in
-# MULLION_AGENT_ENROLLMENT_TOKEN. It writes a fresh .env and restarts the
-# unit it finds running.
+# Then run the "Install as a self-registering agent" task above with the NEW
+# pairing code. It writes a fresh .env and restarts the unit it finds running.
 ```
 
 This recipe forgets the identity first, so the run enrolls from scratch. A
-**pairing-code** re-pair keeps the identity instead: it must set
-`MULLION_AGENT_PAIRING_FORCE=1`, because `install.sh` ignores a supplied code
-for an already-paired host (issue #3498).
+re-pair without deleting it works too, as long as it sets
+`MULLION_AGENT_PAIRING_FORCE=1`: `install.sh` ignores a supplied code for an
+already-paired host (issue #3498).
 
-To keep the token out of the task's `environment:` entirely, pipe it in on
-stdin instead: set `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1` and give the task
-`stdin: "{{ mullion_enrollment_token }}"` (with `stdin_add_newline: true`).
+To keep the code out of the task's `environment:` entirely, pipe it in on
+stdin instead: set `MULLION_AGENT_PAIRING_CODE_STDIN=1` and give the task
+`stdin: "{{ mullion_pairing_code }}"` (with `stdin_add_newline: true`).
 `install.sh` reads the first line, never a command-line argument.
 
-`mullion_primary_url` and `mullion_enrollment_token` (if using a legacy
-per-host token) are ordinary role/group variables — keep the token in your vault
-(`ansible-vault`), not committed alongside the playbook. For new hosts,
-fleet-secret self-registration (`MULLION_ENROLLMENT_SECRET`,
-`MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS`, `MULLION_ALLOW_LEGACY_HOSTS`) has been
-removed (issue #3535): `POST /api/internal/register` answers **401** for a
-fleet secret and creates no host row. Mint a one-time pairing code per agent
-instead (from Settings → Hosts → **Add host** or an automation token;
-automation tokens with `requireApproval` leave new hosts in **Awaiting
-approval** until an operator approves them).
+`mullion_primary_url` and `mullion_pairing_code` are ordinary role/group
+variables — keep the code in your vault (`ansible-vault`), not committed
+alongside the playbook. Fleet-secret self-registration
+(`MULLION_ENROLLMENT_SECRET`, `MULLION_ENROLLMENT_AUTO_APPROVE_CIDRS`,
+`MULLION_ALLOW_LEGACY_HOSTS`) has been removed (issue #3535):
+`POST /api/internal/register` answers **401** for a fleet secret and creates no
+host row. A one-time pairing code per agent is the enrollment path (from
+Settings → Hosts → **Add host** or an automation token; automation tokens with
+`requireApproval` leave new hosts in **Awaiting approval** until an operator
+approves them).
 
 **Updating an agent:** as of issue #647 / roadmap 7.8, an agent has its own
 self-update surface — see "Layout and updates" above and
