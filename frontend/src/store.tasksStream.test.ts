@@ -145,6 +145,18 @@ describe("store /ws/tasks integration (#488)", () => {
     stop();
   });
 
+  it("refetches the projects list on a project-settings frame (#3592)", async () => {
+    const refreshProjects = vi.fn(async () => {});
+    useDashboardStore.setState({ refreshProjects });
+    const stop = useDashboardStore.getState().startTasksStream();
+    instances[0].__open();
+    instances[0].__message(JSON.stringify({ taskId: 0, projectId: 1, kind: "project", ts: 1 }));
+    expect(refreshProjects).toHaveBeenCalledTimes(1);
+    instances[0].__message(JSON.stringify({ taskId: 0, projectId: 1, kind: "setup", ts: 2 }));
+    expect(refreshProjects).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
   it("ignores a malformed frame without throwing", () => {
     const stop = useDashboardStore.getState().startTasksStream();
     instances[0].__open();

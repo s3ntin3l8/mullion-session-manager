@@ -263,6 +263,8 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       const handle = connectTasksStream((kind) => {
         // #2245 — a setup-recipe status change lives on the session row.
         if (kind === "setup") void get().refreshSessions();
+        // #3592 — a project's settings changed (an agent set its setup recipe).
+        if (kind === "project") void get().refreshProjects();
         if (tasksEventRefreshTimer) clearTimeout(tasksEventRefreshTimer);
         tasksEventRefreshTimer = setTimeout(() => {
           tasksEventRefreshTimer = null;

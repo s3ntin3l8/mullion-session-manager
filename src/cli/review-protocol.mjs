@@ -26,6 +26,14 @@ export const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
 // title sync. 240s leaves margin over all of that.
 export const TASK_PUSH_REQUEST_TIMEOUT_MS = 240_000;
 
+// #3592 — `set_setup_recipe` with `run: true` waits for the recipe to finish,
+// which the runner caps at DEFAULT_SETUP_TIMEOUT_MS (15 min,
+// setup-recipe-shared.ts). On a remote host the primary itself waits that plus
+// a minute (remote-host-client-core.ts), and the op adds a PATCH, a worktree
+// lookup and a log read around it: three minutes of margin, so the server's
+// own "host unreachable" answer arrives before the client gives up.
+export const SETUP_RECIPE_RUN_REQUEST_TIMEOUT_MS = 18 * 60 * 1000;
+
 /**
  * What `review_status` adds about a review that is not the relay's own run, and
  * about a stuck one (#2634). Shared with the CLI's `review status`, which prints

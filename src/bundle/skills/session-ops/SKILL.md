@@ -174,13 +174,20 @@ need this.
 
 ## Dev servers and the dock — the honest, scope-limited version
 
-Dock controls (`dock start/stop/list`, `project dock`, and the MCP
-`start_dock_session`/`stop_dock_session` tools) are **full scope only**:
-dock control is operator-facing, not something a session can drive about
-itself. On a host with authentication enabled, you cannot start or stop a
-dev server through the dock from inside a session — don't build a workflow
-that assumes you can. (If auth is disabled on this host, this limitation
-doesn't apply — see the Mullion host skill's scope caveat.)
+Your **own project's** dock controls are session-reachable: `dock list/start/stop/logs/switch`
+(MCP `list_dock_controls`, `start_dock_session`, `stop_dock_session`,
+`get_dock_logs`, `wait_for_dock_output`, `switch_dock_branch`), and you can
+edit the dock itself with `dock config get/set` (MCP `get_dock_config` /
+`set_dock_config`). Another project's dock, `project dock` (the merged operator
+view) and Docker-discovered controls stay **full scope**.
+
+If a dev server or branch preview dies in a fresh worktree because its
+dependencies are missing (`node_modules` absent), set your project's **setup
+recipe** — the command Mullion runs in every new worktree and checkout — with
+`mullion project setup --set '<cmd>'` (MCP `set_setup_recipe`, read it with
+`get_setup_recipe`; `--clear` / `recipe: null` removes it). Add `--run` /
+`run: true` to run it once in your session's directory and get the exit code
+and log tail back before you rely on it.
 
 What you _can_ do for a dev-server-shaped task, at session scope:
 

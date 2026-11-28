@@ -43,6 +43,7 @@ const TASK_EVENT_KINDS: Record<TaskEvent["kind"], true> = {
   "workflow-hold": true,
   nudge: true,
   setup: true,
+  project: true,
 };
 
 function isTaskWireMessage(value: unknown): boolean {

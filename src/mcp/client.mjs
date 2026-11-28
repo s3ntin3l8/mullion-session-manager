@@ -10,6 +10,7 @@ import {
 } from "../cli/client.mjs";
 import {
   REVIEW_REQUEST_TIMEOUT_MS,
+  SETUP_RECIPE_RUN_REQUEST_TIMEOUT_MS,
   TASK_PUSH_REQUEST_TIMEOUT_MS,
 } from "../cli/review-protocol.mjs";
 
@@ -487,6 +488,29 @@ export class MullionClient {
       ...(upsert !== undefined ? { upsert } : {}),
       ...(remove !== undefined ? { remove } : {}),
     });
+  }
+
+  /** The project's setup recipe, `{projectId, setupRecipe}` (#3592). */
+  getSetupRecipe(projectId) {
+    return this.controlRequest(
+      "projects.get_setup_recipe",
+      projectId !== undefined ? { projectId } : {},
+    );
+  }
+
+  /** Set (a string) or clear (null) the setup recipe; `run` also runs it once,
+   * which can take as long as the runner's budget (#3592). */
+  setSetupRecipe(projectId, { recipe, run, sessionId } = {}) {
+    return this.controlRequest(
+      "projects.set_setup_recipe",
+      {
+        ...(projectId !== undefined ? { projectId } : {}),
+        ...(recipe !== undefined ? { recipe } : {}),
+        ...(run !== undefined ? { run } : {}),
+        ...(sessionId !== undefined ? { sessionId } : {}),
+      },
+      run === true ? SETUP_RECIPE_RUN_REQUEST_TIMEOUT_MS : undefined,
+    );
   }
 
   /** The caller's own project's dock controls and what is running (#2494). */

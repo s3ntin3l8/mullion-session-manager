@@ -62,7 +62,7 @@ mullion session list|get|children|wait|prompt|create|spawn-child|kill|rename|log
 mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
                 download|unbind
-mullion project list|actions|targets|dock|tooling
+mullion project list|actions|targets|dock|tooling|setup
 mullion review [--pr <n>] [--repo <owner/name>] [--branch <b>] [--force]
 mullion review status [--pr <n>] [--repo <owner/name>] [--branch <b>]
 mullion review stop <runId>
@@ -214,6 +214,17 @@ $M browser screenshot $S --out /tmp/shot.png
   project (session scope); full scope must pass it explicitly.
 - `project dock <id>` — full scope only; lists this project's dock controls
   (see `mullion dock start` below).
+- `project setup [<id>] [--set <cmd> [--run] | --clear]` — the project's
+  setup recipe (#3592), the shell command Mullion runs in every fresh worktree
+  and new checkout. Reachable at **session scope** for your own project (`<id>`
+  omitted; another project is a 403); full scope must pass `<id>`. With no flag
+  it prints `{projectId, setupRecipe}`; `--set` saves the command (trimmed, at
+  most 4096 characters, blank = none) and `--clear` removes it. `--run` (with
+  `--set`) also runs it once in the session's directory on its host and adds
+  `run: {outcome, exitCode, detail, cwd, hostId, logTail, logTruncated}`; it
+  waits for the recipe (up to 15 minutes), replaces the session's setup log and
+  status, and at full scope needs the global `--session <id>`. MCP:
+  `get_setup_recipe` / `set_setup_recipe`.
 - `project tooling <id> [--briefing <path|->] [--skill <path|->] [--reviewer <path|->]`
   — the read and write halves have different scope requirements. Without
   any of the write flags, this **reads** the project's `project_tooling` row

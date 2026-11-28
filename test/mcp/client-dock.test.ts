@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import net from "node:net";
 import path from "node:path";
 import os from "node:os";
@@ -237,6 +237,37 @@ describe("MullionClient dock methods", () => {
       ["projects.get_dock_config", {}],
       ["projects.set_dock_config", { projectId: "2", upsert: { id: "a" } }],
       ["projects.set_dock_config", { remove: "a" }],
+    ]);
+  });
+  it("getSetupRecipe / setSetupRecipe use projects.get_setup_recipe / set_setup_recipe (#3592)", async () => {
+    const ops: unknown[] = [];
+    const socketPath = await startControlServer((msg, socket) => {
+      ops.push([msg.op, msg.body]);
+      socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 200, result: {} })}\n`);
+    });
+    const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+    await client.getSetupRecipe();
+    await client.getSetupRecipe("2");
+    await client.setSetupRecipe(undefined, { recipe: "npm ci" });
+    await client.setSetupRecipe("2", { recipe: null });
+    await client.setSetupRecipe(undefined, { recipe: "npm ci", run: true, sessionId: "7" });
+    // A missing recipe is sent as missing (the op 400s), never as a clear.
+    await client.setSetupRecipe(undefined, {});
+    // Only a run waits longer than the default request budget.
+    const spy = vi.spyOn(client, "controlRequest");
+    await client.setSetupRecipe(undefined, { recipe: "a" });
+    await client.setSetupRecipe(undefined, { recipe: "a", run: true });
+    expect(spy.mock.calls[0][2]).toBeUndefined();
+    expect(spy.mock.calls[1][2]).toBeGreaterThan(16 * 60 * 1000);
+    expect(ops).toEqual([
+      ["projects.get_setup_recipe", {}],
+      ["projects.get_setup_recipe", { projectId: "2" }],
+      ["projects.set_setup_recipe", { recipe: "npm ci" }],
+      ["projects.set_setup_recipe", { projectId: "2", recipe: null }],
+      ["projects.set_setup_recipe", { recipe: "npm ci", run: true, sessionId: "7" }],
+      ["projects.set_setup_recipe", {}],
+      ["projects.set_setup_recipe", { recipe: "a" }],
+      ["projects.set_setup_recipe", { recipe: "a", run: true }],
     ]);
   });
 });
