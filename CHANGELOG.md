@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.71](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.70...v0.3.71) (2026-11-28)
+
+
+### Features
+
+* **devices:** open the dev server and preview URLs on an Android device ([#3580](https://github.com/s3ntin3l8/mullion-session-manager/issues/3580)) ([5965007](https://github.com/s3ntin3l8/mullion-session-manager/commit/5965007afc7e8c0a61617edfd55146dd65951057))
+* **hosts:** mark hosts on removed-soon paths as needing re-pair ([7a33648](https://github.com/s3ntin3l8/mullion-session-manager/commit/7a336489f912b760b47dd32a6ffd9d966c684f46))
+* **hosts:** remove the agent-side enrollment-token bootstrap and the installer token variables ([23a1cef](https://github.com/s3ntin3l8/mullion-session-manager/commit/23a1cef253df897dbe4d99e143fa4d3db4ece88f))
+* **hosts:** remove the gated legacy host paths ([1dc5507](https://github.com/s3ntin3l8/mullion-session-manager/commit/1dc5507b18275628e8377634ea93f69d4de1d0bd))
+* **projects:** let a session set its own project's setup recipe ([#3597](https://github.com/s3ntin3l8/mullion-session-manager/issues/3597)) ([51060cf](https://github.com/s3ntin3l8/mullion-session-manager/commit/51060cf5fa541d024c0f3a9709863c0bd8341ee8))
+* **uiux:** pin a project to a workspace so it stays in the sidebar and right-sidebar pickers ([#3598](https://github.com/s3ntin3l8/mullion-session-manager/issues/3598)) ([ca2701c](https://github.com/s3ntin3l8/mullion-session-manager/commit/ca2701c6a64bc5a10f2db63c2d95c6c5ec63aabd)), closes [#3537](https://github.com/s3ntin3l8/mullion-session-manager/issues/3537)
+
+
+### Bug Fixes
+
+* **dock:** a dock dev server waits for the setup recipe before it starts ([#3600](https://github.com/s3ntin3l8/mullion-session-manager/issues/3600)) ([af7bcc8](https://github.com/s3ntin3l8/mullion-session-manager/commit/af7bcc80e676cd43a2538c6fcff155d8ed40dfb5))
+* **dock:** a duplicate import and a duplicate helper break the frontend build on main ([25a7082](https://github.com/s3ntin3l8/mullion-session-manager/commit/25a7082f5e591af0ff0cf5165a0f50feddab8298))
+* **dock:** compact Dock header, unclipped host tooltip, remote checkout label and Open in browser ([#3589](https://github.com/s3ntin3l8/mullion-session-manager/issues/3589)) ([#3595](https://github.com/s3ntin3l8/mullion-session-manager/issues/3595)) ([92024ec](https://github.com/s3ntin3l8/mullion-session-manager/commit/92024ec8c01f233636d657855dc642ed9ac06f50))
+* **hosts:** Reject on a pending host needs a confirmation like the other destructive actions ([caa11ba](https://github.com/s3ntin3l8/mullion-session-manager/commit/caa11baee46f08ea791653881cdc8921a8c7e279))
+* **hosts:** show a revoked machine identity on the Settings → Hosts row ([0911e27](https://github.com/s3ntin3l8/mullion-session-manager/commit/0911e2763b2895b76262176a9c4d380ab16da770))
+* **hosts:** stop polling update status for hosts that cannot answer ([f437259](https://github.com/s3ntin3l8/mullion-session-manager/commit/f437259cc6b65c35afad91fc136d9a980f917356))
+* **hosts:** the Settings → Hosts row never shows the deprecation qualifier ([980bc3b](https://github.com/s3ntin3l8/mullion-session-manager/commit/980bc3bc5b40e8c6c5baa21a31600a08ec73f860))
+* **tasks:** a cancelled required check is not a coverage stall ([5b4c689](https://github.com/s3ntin3l8/mullion-session-manager/commit/5b4c689fb2981c7226c1df03b2a534d71f38b5c5))
+* **tasks:** the auto-approve gate approves a head whose check run was cancelled ([66d5c19](https://github.com/s3ntin3l8/mullion-session-manager/commit/66d5c1935bbe707f65f5177a6a6ae8fa43ed4e0b))
+* **tasks:** the board card shortens a parked red-CI note to the check name or count ([#3583](https://github.com/s3ntin3l8/mullion-session-manager/issues/3583)) ([c3e6a87](https://github.com/s3ntin3l8/mullion-session-manager/commit/c3e6a872a0e035fa07ce16cfa8c50ca6d8059c75))
+* **tasks:** validate check runs before auto-approving successful workflow aggregates ([de7cf06](https://github.com/s3ntin3l8/mullion-session-manager/commit/de7cf06e90ba8272ca3009f27fb6858cdfc32d86))
+
 ## [0.3.70](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.69...v0.3.70) (2026-11-27)
 
 
