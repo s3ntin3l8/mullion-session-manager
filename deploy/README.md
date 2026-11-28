@@ -1423,21 +1423,23 @@ Use the **Add host** pairing flow (Settings → Hosts → **Add host** → _Gene
 | **fleet-secret enrollment** (`MULLION_ENROLLMENT_SECRET`) | **removed** (`POST /api/internal/register` answers 401 and creates no host row)                                                                        | **Automation tokens** (Settings → Hosts → _Automation tokens_) or the **Add host** pairing flow, which mint one-off pairing codes                                                   |
 
 **How to move a host that is already on the list.** The row menu's _Re-pair_
-entry only appears once a host holds a machine identity (or had one revoked),
-so a host that is still fully on a legacy path has no _Re-pair_ entry yet:
+entry is available for these hosts in Settings → Hosts:
 
-- **legacy agent** — upgrade the agent to v0.3.59 or later and set
-  `MULLION_PRIMARY_URL` in its `.env`; it registers with a machine identity and
-  the qualifier clears by itself. To replace the host instead, mint a one-time
-  pairing code (Settings → Hosts → _Add host_ → _Generate pairing code_)
-  and redeem it on the agent (`install.sh` with
-  `MULLION_AGENT_PAIRING_CODE_STDIN=1`); the new host row holds a machine
-  identity, and the old row goes with _Delete host_.
-- **manual-token host** — mint a **host-bound** code with
-  `POST /api/host-pairings` and `{"hostId": "<id>"}` and redeem it on the agent
-  (with `MULLION_PRIMARY_URL` set in the agent's `.env`, because the redeem
-  dials out to the primary). The same row then holds a machine identity and the
-  static token is no longer used; drop it from the agent's `.env`. An unbound
+- **legacy agent** — use **Re-pair** in the host row menu (Settings → Hosts) to
+  pair a replacement/current agent, or upgrade/install a current agent
+  (v0.3.59 or later) and set `MULLION_PRIMARY_URL` in its `.env` so it
+  registers with a machine identity and the qualifier clears by itself. To
+  replace the host with a new row instead, mint an unbound one-time pairing
+  code (Settings → Hosts → _Add host_ → _Generate pairing code_) and redeem it
+  on the agent (`install.sh` with `MULLION_AGENT_PAIRING_CODE_STDIN=1`); the old
+  row goes with _Delete host_.
+- **manual-token host** — use **Re-pair** in the host row menu (Settings →
+  Hosts) — which mints a **host-bound** one-time pairing code — or call
+  `POST /api/host-pairings` with `{"hostId": "<id>"}`, and redeem it on the
+  agent (with `MULLION_PRIMARY_URL` set in the agent's `.env`, because the
+  redeem dials out to the primary), or install a current agent with that pairing
+  code. The same row then holds a machine identity and the static token is no
+  longer used; drop `MULLION_AGENT_TOKEN` from the agent's `.env`. An unbound
   code (the _Generate pairing code_ button) creates a _new_ host row instead —
   remove the old one with _Delete host_.
 
@@ -1446,16 +1448,30 @@ that row is stale (offline for `hosts.staleAfterDays`) or flagged a duplicate �
 both entries delete the row.
 
 The host's status chip — the one beside a host name in a session row or a pane
-tab, and the one on the Settings → Hosts row — carries a "(deprecated)"
-qualifier for the first two kinds, and the primary logs a warning at startup if
-`MULLION_ENROLLMENT_SECRET` is still set in `.env` or the environment.
+tab, and the one on the Settings → Hosts row — reads `"needs re-pair"` for the
+first two kinds. At startup, the primary logs one warning per process listing
+any hosts on a deprecated connection path (and still logs a warning if
+`MULLION_ENROLLMENT_SECRET` is set in `.env` or the environment).
 
-**What keeps working.** Every existing host row keeps working: its renewals,
-its outbound channel, and a pre-provisioned host claiming its own row with its
-per-host token (`claimHost`). What is gone is creating new hosts via
-`POST /api/hosts` (404) or `MULLION_ENROLLMENT_SECRET` (401). Mint a one-time
-pairing code instead (_Add host_ → **Generate pairing code**, or an automation
-token) and redeem it on the agent.
+**What keeps working in this release.** Every existing host row keeps working:
+its renewals, its outbound channel, and a pre-provisioned host claiming its own
+row with its per-host token (`claimHost`). What is already gone is creating new
+hosts via `POST /api/hosts` (404) or `MULLION_ENROLLMENT_SECRET` (401). Mint a
+one-time pairing code instead (_Add host_ → **Generate pairing code**, or an
+automation token) and redeem it on the agent.
+
+**What stops working in the next release.** The release after this one removes:
+
+- **Per-host-token claims** (`claimHost`)
+- **`POST /api/hosts/:id/rotate-token`**
+- **Inbound dialling** by the primary of a stored `baseUrl`
+- **The static `MULLION_AGENT_TOKEN` gate**
+
+**Who is affected:** any host row with a non-null `deprecatedKind`
+(`legacy-agent` or `manual-token`, shown as `"needs re-pair"` in the UI and
+logged once at primary startup). Hosts that already hold a machine identity are
+unaffected. Re-pair (or install a current agent) before upgrading to the next
+release so those hosts do not stop working.
 
 ## What still needs a real, live check
 

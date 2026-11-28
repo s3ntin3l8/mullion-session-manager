@@ -157,12 +157,14 @@ describe("HostsSection", () => {
       ],
     });
     render(<HostsSection />);
-    const badge = screen.getByText("outdated agent (deprecated)");
+    const badge = screen.getByText("needs re-pair");
     expect(badge).toHaveAttribute("title", expect.stringMatching(/v0\.3\.50.*v0\.3\.62/s));
-    expect(screen.getAllByText("outdated agent (deprecated)")).toHaveLength(1);
+    expect(badge).toHaveAttribute("title", expect.stringMatching(/release after this one/));
+    expect(badge).toHaveAttribute("title", expect.stringMatching(/Re-pair/));
+    expect(screen.getAllByText("needs re-pair")).toHaveLength(1);
   });
 
-  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969, #3573)", () => {
+  it("tells a current-build legacy agent to set MULLION_PRIMARY_URL, not to upgrade (issue #2969, #3573, #3578)", () => {
     stubFetch({});
     useDashboardStore.setState({
       hosts: [
@@ -176,14 +178,16 @@ describe("HostsSection", () => {
       ],
     });
     render(<HostsSection />);
-    const label = screen.getByText("not registered (deprecated)");
+    const label = screen.getByText("needs re-pair");
     expect(label).toHaveAttribute("title", expect.stringMatching(/MULLION_PRIMARY_URL/));
+    expect(label).toHaveAttribute("title", expect.stringMatching(/release after this one/));
+    expect(label).toHaveAttribute("title", expect.stringMatching(/Re-pair/));
     expect(screen.queryByText(/outdated agent/)).toBeNull();
   });
 
-  // Issue #3573 — the row shows the same chip as the places that name a host,
-  // so a deprecated host says so where the operator looks.
-  it("qualifies a manual-token host's chip as deprecated on the row (issue #3573)", () => {
+  // Issue #3573 / #3578 — the row shows the same chip as the places that name
+  // a host, so a deprecated host says "needs re-pair" where the operator looks.
+  it("shows needs re-pair for a manual-token host that is also a legacy agent (issue #3573, #3578)", () => {
     stubFetch({});
     useDashboardStore.setState({
       hosts: [
@@ -198,15 +202,16 @@ describe("HostsSection", () => {
       ],
     });
     render(<HostsSection />);
-    const chip = screen.getByText("outdated agent · manual token (deprecated)");
-    expect(chip).toHaveAttribute("title", expect.stringContaining("Deprecated:"));
+    const chip = screen.getByText("needs re-pair");
+    expect(chip).toHaveAttribute("title", expect.stringContaining("release after this one"));
+    expect(chip).toHaveAttribute("title", expect.stringContaining("Re-pair"));
     // The hover names the credential that has to change.
     expect(chip).toHaveAttribute("title", expect.stringContaining("MULLION_AGENT_TOKEN"));
     // The unqualified legacy-agent words are never the chip on their own.
     expect(screen.queryByText(/^outdated agent$/)).toBeNull();
   });
 
-  it("shows a chip for a manual-token host that is not a legacy agent (issue #3573)", () => {
+  it("shows needs re-pair for a manual-token host that is not a legacy agent (issue #3573, #3578)", () => {
     stubFetch({});
     useDashboardStore.setState({
       hosts: [
@@ -220,11 +225,12 @@ describe("HostsSection", () => {
       ],
     });
     render(<HostsSection />);
-    const chip = screen.getByText("manual token (deprecated)");
-    expect(chip).toHaveAttribute("title", expect.stringContaining("Deprecated:"));
+    const chip = screen.getByText("needs re-pair");
+    expect(chip).toHaveAttribute("title", expect.stringContaining("release after this one"));
+    expect(chip).toHaveAttribute("title", expect.stringContaining("Re-pair"));
   });
 
-  it("shows no chip for a host with a live machine identity (issue #3573)", () => {
+  it("shows no chip for a host with a live machine identity (issue #3573, #3578)", () => {
     stubFetch({});
     useDashboardStore.setState({
       hosts: [
@@ -240,11 +246,11 @@ describe("HostsSection", () => {
       ],
     });
     render(<HostsSection />);
-    expect(screen.queryByText(/deprecated/)).toBeNull();
+    expect(screen.queryByText(/needs re-pair/)).toBeNull();
     expect(screen.queryByText(/outdated agent/)).toBeNull();
   });
 
-  it("shows the same chip and hover as the places that name a host (issue #3573)", () => {
+  it("shows the same chip and hover as the places that name a host (issue #3573, #3578)", () => {
     // The row and the sidebar read the same chip from one shared function,
     // so they cannot drift apart again.
     stubFetch({});
@@ -257,10 +263,10 @@ describe("HostsSection", () => {
     });
     useDashboardStore.setState({ hosts: [host] });
     render(<HostsSection />);
-    const rowChip = screen.getByText("manual token (deprecated)");
+    const rowChip = screen.getByText("needs re-pair");
 
     const label = render(<HostStatusLabel host={host} />);
-    const labelChip = within(label.container).getByText("manual token (deprecated)");
+    const labelChip = within(label.container).getByText("needs re-pair");
 
     expect(labelChip.textContent).toBe(rowChip.textContent);
     expect(labelChip.getAttribute("title")).toBe(rowChip.getAttribute("title"));
