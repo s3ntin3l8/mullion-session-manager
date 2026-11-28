@@ -2558,7 +2558,9 @@ once **all** of the following hold:
    in the log (a run GitHub lost), or be approved on a head GitHub refuses to
    merge (a cancelled required check). The gate also logs why it is waiting,
    with the actual reason (once per task per hour), instead of returning
-   silently.
+   silently: `check-run-cancelled` (a cancelled required check — it needs a
+   CI/CD re-run, not a fix), `check-run-red`, `check-run-still-running`,
+   `no-check-runs`, `check-runs-unreadable` and `no-token-to-read-check-runs`.
 
 5. **The PR's `mergeable` field reads exactly `true` (`#1334`)** —
    `mergeable === null` ("unknown," GitHub still computing after a push) is

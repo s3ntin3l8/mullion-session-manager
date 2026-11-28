@@ -104,7 +104,17 @@ describe("ciAllowsAutoApproval", () => {
     ]);
 
     await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(false);
-    expect(holdReason(log)).toBe("check-run-not-passing");
+    // A cancelled required check needs a CI/CD re-run, not a fix — it gets its
+    // own reason so an operator reading the log can tell it from a red check.
+    expect(holdReason(log)).toBe("check-run-cancelled");
+  });
+
+  it("holds the success path when a latest check run is red", async () => {
+    const { app, log } = appWithLog();
+    mockFetchCheckRunsForHead.mockResolvedValue([{ name: "lint-and-test", conclusion: "failure" }]);
+
+    await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("check-run-red");
   });
 
   it("holds the success path while a check run is still running", async () => {
@@ -177,7 +187,7 @@ describe("ciAllowsAutoApproval", () => {
         conclusion !== "cancelled",
       );
       if (conclusion === "cancelled") {
-        expect(holdReason(log)).toBe("check-run-not-passing");
+        expect(holdReason(log)).toBe("check-run-cancelled");
         expect(log.warn).not.toHaveBeenCalled();
       }
     },

@@ -253,7 +253,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
         if (latest === "cancelled") {
           expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
           expect(infoSpy).toHaveBeenCalledWith(
-            expect.objectContaining({ taskId, reason: "check-run-not-passing" }),
+            expect.objectContaining({ taskId, reason: "check-run-cancelled" }),
             expect.stringContaining("waiting on CI"),
           );
           expect(warnSpy).not.toHaveBeenCalledWith(
@@ -307,7 +307,7 @@ describe("reconcileTasks — auto-approve sweep", () => {
       expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
       expect((await getTask(app, taskId)).status).toBe("reviewing");
       expect(infoSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ taskId, reason: "check-run-not-passing" }),
+        expect.objectContaining({ taskId, reason: "check-run-cancelled" }),
         expect.stringContaining("waiting on CI"),
       );
     });

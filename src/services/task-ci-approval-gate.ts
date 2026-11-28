@@ -180,14 +180,27 @@ async function evaluateLatestChecks(
   if (latestChecks.length === 0) {
     return { ok: false, reason: "no-check-runs" };
   }
-  if (latestChecks.some((c) => c.conclusion === null)) {
-    return { ok: false, reason: "check-run-still-running" };
-  }
-  if (latestChecks.some((c) => isRedCheckConclusion(c.conclusion))) {
-    return { ok: false, reason: "check-run-red" };
-  }
   if (latestChecks.some((c) => !isPassingCheckConclusion(c.conclusion))) {
-    return { ok: false, reason: "check-run-not-passing" };
+    // At least one latest check does not satisfy GitHub's merge gate. Name the
+    // reason as precisely as the conclusion allows:
+    //   - a running check needs time;
+    //   - a CANCELLED check is NOT red (`isRedCheckConclusion` excludes it:
+    //     the red-CI return must not send the worker back for it), but it is
+    //     not passing either — GitHub's merge gate refuses the head until the
+    //     job is re-run. It gets its own reason because it needs a CI/CD
+    //     re-run, not a fix, and an operator reading the log must be able to
+    //     tell the two;
+    //   - everything else that does not pass is red: `isRedCheckConclusion`
+    //     covers every remaining conclusion (and any GitHub adds later), so
+    //     this is also the safety net for a conclusion the merge gate
+    //     rejects but the red path does not.
+    if (latestChecks.some((c) => c.conclusion === null)) {
+      return { ok: false, reason: "check-run-still-running" };
+    }
+    if (latestChecks.some((c) => c.conclusion === "cancelled")) {
+      return { ok: false, reason: "check-run-cancelled" };
+    }
+    return { ok: false, reason: "check-run-red" };
   }
   return { ok: true };
 }
