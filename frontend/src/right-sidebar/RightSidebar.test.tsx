@@ -196,6 +196,32 @@ describe("RightSidebar", () => {
     expect(screen.getByRole("button", { name: "Fetch" })).toBeTruthy();
   });
 
+  it("lists a project pinned to the active workspace in the picker with nothing tiled (#3537)", async () => {
+    useDashboardStore.setState({
+      projects: [PROJECT, { ...PROJECT, id: 2, name: "pinned-one" }],
+      workspaces: [
+        {
+          id: 5,
+          name: "w",
+          layout: null,
+          groupId: null,
+          position: 0,
+          createdAt: "",
+          pinnedProjectIds: [2],
+        },
+      ],
+      activeWorkspaceId: 5,
+    });
+    const user = userEvent.setup();
+    render(<RightSidebar tier="desktop" actions={actions} workspaceProjectIds={[]} />);
+    await user.click(screen.getByRole("button", { name: "Git" }));
+
+    await user.click(screen.getByRole("combobox", { name: "Project" }));
+    expect(await screen.findByRole("option", { name: "pinned-one" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: PROJECT.name })).toBeNull();
+    useDashboardStore.setState({ workspaces: [], activeWorkspaceId: null });
+  });
+
   it("shows a changed-file count badge on the rail", () => {
     useDashboardStore.setState({
       gitStatuses: {

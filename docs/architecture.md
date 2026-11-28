@@ -775,6 +775,16 @@ sidebar still mounts there, hidden, because it loads projects, sessions, hosts
 and tasks and owns the GitHub subscriptions. A forced `tablet` layout mode
 resolves to the two-halves band, so it gets no left sidebar either.
 
+The tree lists the workspace's projects: the tiled ones, then the projects
+pinned to the active workspace (`workspace_pinned_projects`, one row per
+workspace and project with a `position`, carried on each workspace as
+`pinnedProjectIds` and replaced through `PATCH /api/workspaces/:id`), then the
+Dock's localStorage pins (`scopedProjectIds` in `dock/dockHelpers.ts`, #3537).
+The right sidebar's project picker uses the same list. The Dock's own columns
+leave the workspace pins out (`dockColumnProjectIds`). The pins sit beside the
+layout, not inside it, so `workspaces.layout` stays an opaque blob. Either
+side's delete cascades the pin, and a project merge moves it to the survivor.
+
 The project tree renders plainly (one `ProjectSection` per project) until it
 holds more than 20 sessions or more than 30 projects (the workspace's own plus
 "Other projects"), and from there as one flattened list windowed by

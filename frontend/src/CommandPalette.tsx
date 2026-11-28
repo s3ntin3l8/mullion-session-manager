@@ -1,4 +1,5 @@
 import type { SettingsSection } from "./settings/settingsSections.js";
+import { toggleActiveWorkspacePin } from "./hooks/useWorkspacePinnedProjects.js";
 import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
@@ -212,6 +213,10 @@ interface CommandPaletteProps {
   // to calling the store directly) so callers that don't care about the
   // overlay — and every existing test — don't need to pass it.
   onShowWorkspace?: (workspaceId: number) => void;
+  // #3537 — true where the sidebar is workspace-scoped (desktop with a
+  // restored workspace): the project drill-in then offers "Pin to this
+  // workspace". Omitted or false leaves the command out (phone).
+  workspacePinScoped?: boolean;
 }
 
 // The parent (App.tsx) only mounts this component while the palette is
@@ -244,6 +249,7 @@ export function CommandPalette({
   onToggleRightSidebar,
   onOpenBrowserUrl,
   onShowWorkspace,
+  workspacePinScoped = false,
 }: CommandPaletteProps) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription). `createSession`/`refreshProjectUrls` are pure
@@ -528,7 +534,15 @@ export function CommandPalette({
   const titleContexts = useDashboardStore(selectSessionTitleContexts);
   const activeSession =
     sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed") ?? null;
+  const workspacePinned = useDashboardStore((s) => {
+    if (!workspacePinScoped || effectiveProjectId === null || s.activeWorkspaceId == null) {
+      return null;
+    }
+    const workspace = s.workspaces.find((w) => w.id === s.activeWorkspaceId);
+    return workspace ? (workspace.pinnedProjectIds ?? []).includes(effectiveProjectId) : null;
+  });
   const commands = buildPaletteCommands({
+    workspacePinned,
     projectId: effectiveProjectId,
     projectName: projects.find((p) => p.id === effectiveProjectId)?.name ?? null,
     favoriteUrls:
@@ -577,6 +591,12 @@ export function CommandPalette({
       goToPr: (projectId, number) =>
         useDashboardStore.getState().openRightSidebarPr(projectId, number),
       prune: (projectId) => useDashboardStore.getState().openRightSidebarPrune(projectId),
+      toggleWorkspacePin: (projectId) => {
+        void toggleActiveWorkspacePin(projectId).then((error) => {
+          if (error)
+            useDashboardStore.getState().reportError("Could not update the workspace pin", error);
+        });
+      },
       openSessionOnBranch: (projectId, branch) => {
         void openSessionOn(projectId, { branch }).catch((err: unknown) =>
           useDashboardStore

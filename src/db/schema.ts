@@ -2309,6 +2309,38 @@ export const workspacePendingOpens = sqliteTable(
   ],
 );
 
+// #3537 — projects pinned to a workspace: the sidebar tree and the right
+// sidebar's project picker keep listing them while that workspace is active,
+// even with nothing of theirs tiled. Per workspace and server-side, unlike
+// the Dock's "+ Add project" pins (global, per-browser localStorage), and
+// they never add Dock columns. Stored beside the layout, not inside it:
+// `workspaces.layout` stays an opaque blob. Either side's delete removes the
+// pin; project-merge.ts re-points pins onto the surviving project.
+export const workspacePinnedProjects = sqliteTable(
+  "workspace_pinned_projects",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    workspaceId: integer("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    position: integer("position").notNull().default(0),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("workspace_pinned_projects_workspace_project_unique").on(
+      table.workspaceId,
+      table.projectId,
+    ),
+    // The project-side cascade and project-merge.ts look pins up by project.
+    index("workspace_pinned_projects_project_idx").on(table.projectId),
+  ],
+);
+
 // #95 prerequisite — a single, auto-generated VAPID keypair for Web Push,
 // not an env var: src/plugins/env.ts's @fastify/env schema has `required: []`
 // (every var optional-with-default), so an env-var-only VAPID design would be

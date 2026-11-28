@@ -35,6 +35,13 @@ export const workspacesApi = {
       body: JSON.stringify({ groupId, ...(position !== undefined ? { position } : {}) }),
     }),
 
+  // #3537 — replaces the workspace's pinned projects; [] clears them.
+  setWorkspacePinnedProjects: (id: number, pinnedProjectIds: number[]) =>
+    request<Workspace>(`/api/workspaces/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ pinnedProjectIds }),
+    }),
+
   deleteWorkspace: (id: number) => request<void>(`/api/workspaces/${id}`, { method: "DELETE" }),
 
   // #3033 — sessions opened on the fold or the phone, for a desktop client to

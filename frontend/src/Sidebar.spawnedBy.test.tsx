@@ -96,6 +96,7 @@ function storeState() {
     projectsLoaded,
     projectsError,
     activeWorkspaceId,
+    workspaces: [],
     reportError,
   };
 }

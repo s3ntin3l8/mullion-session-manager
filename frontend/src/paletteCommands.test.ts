@@ -554,3 +554,43 @@ describe("command placement", () => {
     },
   );
 });
+
+describe("buildPaletteCommands — workspace pin (#3537)", () => {
+  it("offers Pin to this workspace under the project drill-in and runs the toggle", () => {
+    const { context } = ctx({ workspacePinned: false });
+    const toggleWorkspacePin = vi.fn();
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, toggleWorkspacePin },
+    });
+    const pin = commands.find((c) => c.id === "workspace-pin")!;
+    expect(pin.title).toBe("Pin to this workspace");
+    expect(pin.placement).toBe("project");
+    pin.run();
+    expect(toggleWorkspacePin).toHaveBeenCalledWith(5);
+  });
+
+  it("reads Unpin when the project is already pinned", () => {
+    const { context } = ctx({ workspacePinned: true });
+    const commands = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, toggleWorkspacePin: vi.fn() },
+    });
+    expect(commands.find((c) => c.id === "workspace-pin")?.title).toBe("Unpin from this workspace");
+  });
+
+  it("leaves the command out without a scoped workspace or an opener", () => {
+    const unscoped = ctx({ workspacePinned: null }).context;
+    expect(
+      buildPaletteCommands({
+        ...unscoped,
+        open: { ...unscoped.open, toggleWorkspacePin: vi.fn() },
+      }).some((c) => c.id === "workspace-pin"),
+    ).toBe(false);
+    expect(
+      buildPaletteCommands(ctx({ workspacePinned: false }).context).some(
+        (c) => c.id === "workspace-pin",
+      ),
+    ).toBe(false);
+  });
+});

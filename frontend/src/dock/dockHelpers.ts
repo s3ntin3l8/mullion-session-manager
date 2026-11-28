@@ -799,6 +799,26 @@ export function dockColumnProjectIds(
 }
 
 /**
+ * #3537 — the projects the sidebar tree and the right sidebar's picker list
+ * in a workspace: the tiled (workspace-derived) ids first, then the active
+ * workspace's own pins, then the global Dock pins, de-duplicated, dropping
+ * ids whose project no longer exists. The Dock's columns deliberately do not
+ * use this: workspace pins never add a Dock column (dockColumnProjectIds).
+ */
+export function scopedProjectIds(
+  workspaceProjectIds: readonly number[],
+  workspacePinnedIds: readonly number[],
+  manualIds: readonly number[],
+  projects: readonly { id: number }[],
+): number[] {
+  const ids = [...workspaceProjectIds];
+  for (const id of workspacePinnedIds) {
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return dockColumnProjectIds(ids, manualIds, projects);
+}
+
+/**
  * #3557 — the cwd a Dock start sends when it runs on ANOTHER host than the
  * project's own. The selector's values are paths on the project's own host
  * (its main checkout, a directory inside it, its worktrees); sent as-is to a

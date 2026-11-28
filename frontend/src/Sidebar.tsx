@@ -30,10 +30,14 @@ import {
 } from "./ui/icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
 import {
-  dockColumnProjectIds,
   readDockManualProjectIds,
+  scopedProjectIds,
   subscribeDockManualProjectIds,
 } from "./dock/dockHelpers.js";
+import {
+  WorkspacePinScopeContext,
+  useActiveWorkspacePinnedIds,
+} from "./hooks/useWorkspacePinnedProjects.js";
 import { taskLinkedSessionIds } from "./boardLanes.js";
 import { buildHierarchicalRows } from "./sidebarHierarchy.js";
 import { SourceControlSection } from "./SourceControlSection.js";
@@ -116,9 +120,9 @@ export interface SidebarProps {
   // the live layout. null means "do not scope" — the phone tier, which has
   // no workspaces, and desktop until that set is actually knowable (the
   // layout restored and GET /api/sessions resolved). An empty array is a
-  // real workspace with nothing tiled into it yet. Manual Dock pins are
-  // not in this array; the tree unions them itself via dockColumnProjectIds,
-  // the same helper Dock.tsx builds its columns with.
+  // real workspace with nothing tiled into it yet. The workspace's own pins
+  // (#3537) and manual Dock pins are not in this array; the tree unions them
+  // itself via scopedProjectIds. Dock.tsx's columns take the Dock pins only.
   workspaceProjectIds?: number[] | null;
   // Terminal panes already in that same layout. null means "don't mark"
   // (phone, or a caller that isn't workspace-scoped). Activating one of
@@ -260,18 +264,27 @@ export function Sidebar({
 
   // Issue #1877 — null means "do not scope" (the phone tier, and desktop
   // until App knows the workspace). An array is the panel-derived project
-  // ids, in that order. Manual Dock pins are not in the array;
-  // dockColumnProjectIds unions them the same way Dock.tsx builds its
-  // columns, so a project pinned with nothing tiled still appears here,
-  // sessions and all. A project the dashboard knows about that is neither
-  // tiled nor pinned is not in this list.
+  // ids, in that order. The active workspace's own pins (#3537) and the
+  // manual Dock pins are not in the array; scopedProjectIds unions them on
+  // (workspace pins first), so a project pinned with nothing tiled still
+  // appears here, sessions and all. A project the dashboard knows about that
+  // is neither tiled nor pinned is not in this list. Unlike the Dock's
+  // columns, which leave workspace pins out.
   const manualProjectIds = useSyncExternalStore(
     subscribeDockManualProjectIds,
     readDockManualProjectIds,
   );
+  const workspacePinnedIds = useActiveWorkspacePinnedIds();
+  // A workspace refresh or layout save hands back a new array with the same ids.
+  const workspacePinnedKey = workspacePinnedIds.join(",");
   const treeProjects = useMemo(() => {
     if (workspaceProjectIds == null) return projects;
-    const ids = dockColumnProjectIds(workspaceProjectIds, manualProjectIds, projects);
+    const ids = scopedProjectIds(
+      workspaceProjectIds,
+      workspacePinnedIds,
+      manualProjectIds,
+      projects,
+    );
     const byId = new Map(projects.map((p) => [p.id, p]));
     const scoped: Project[] = [];
     for (const id of ids) {
@@ -279,7 +292,9 @@ export function Sidebar({
       if (project) scoped.push(project);
     }
     return scoped;
-  }, [projects, workspaceProjectIds, manualProjectIds]);
+    // workspacePinnedKey stands in for workspacePinnedIds' identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, workspaceProjectIds, manualProjectIds, workspacePinnedKey]);
   // #2075 — every project the tree does not list as tiled/pinned. They
   // follow in the collapsible "Other projects" section, header rows only:
   // session lists stay scoped to this workspace.
@@ -594,11 +609,12 @@ export function Sidebar({
   ]);
 
   return (
-    <div className="sidebar" ref={sidebarRef}>
-      <>
-        <div className="sidebar-section-header">
-          <h2 className="sidebar-section-title">Projects</h2>
-          {/* Issue #1889 — this caption was the bare word "sessions":
+    <WorkspacePinScopeContext.Provider value={workspaceProjectIds != null}>
+      <div className="sidebar" ref={sidebarRef}>
+        <>
+          <div className="sidebar-section-header">
+            <h2 className="sidebar-section-title">Projects</h2>
+            {/* Issue #1889 — this caption was the bare word "sessions":
                 a label with no number, or a number that never got filled
                 in. It is the count now, with its unit, so it reads as the
                 total of the per-project numbers below it.
@@ -607,134 +623,134 @@ export function Sidebar({
                 declutter rule the per-project badge follows ("a project
                 with no sessions at all doesn't need a '0' sitting in its
                 header"). */}
-          {sectionSessionCount > 0 && (
-            <span className="sidebar-section-count">
-              <span className="sidebar-section-count-value">{sectionSessionCount}</span>{" "}
-              <span className="sidebar-section-count-unit">
-                {sectionSessionCount === 1 ? "session" : "sessions"}
+            {sectionSessionCount > 0 && (
+              <span className="sidebar-section-count">
+                <span className="sidebar-section-count-value">{sectionSessionCount}</span>{" "}
+                <span className="sidebar-section-count-unit">
+                  {sectionSessionCount === 1 ? "session" : "sessions"}
+                </span>
               </span>
-            </span>
-          )}
-          <button
-            className="toolbar-icon-btn"
-            style={{ width: 22, height: 22 }}
-            title="Add project"
-            onClick={openAddProject}
-          >
-            <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
-          </button>
-        </div>
-        {/* The list below is the last-known-good one when a refresh
+            )}
+            <button
+              className="toolbar-icon-btn"
+              style={{ width: 22, height: 22 }}
+              title="Add project"
+              onClick={openAddProject}
+            >
+              <PlusIcon size={15} strokeLinecap="round" strokeWidth={1.9} />
+            </button>
+          </div>
+          {/* The list below is the last-known-good one when a refresh
               failed, which is the right thing to keep on screen — but the
               user has to be told it is stale, or a project added on another
               device silently never appears here. */}
-        {projectsError && projects.length > 0 && (
-          <ErrorText style={{ margin: "0 0 6px" }}>
-            Could not refresh projects — showing the last known list. {projectsError}
-          </ErrorText>
-        )}
-        {/* U3 — sticky at the top of the scrollable sidebar (see
+          {projectsError && projects.length > 0 && (
+            <ErrorText style={{ margin: "0 0 6px" }}>
+              Could not refresh projects — showing the last known list. {projectsError}
+            </ErrorText>
+          )}
+          {/* U3 — sticky at the top of the scrollable sidebar (see
         .sidebar-filter-bar's own `position: sticky` rule in styles.css) so
         it stays reachable while scrolled deep into a long session list —
         exactly the scenario ("past ~20 sessions") this filter exists for.
         Only shown once the section is actually listing a project — an empty
         dashboard, and a workspace with nothing tiled into it, have nothing
         to filter. */}
-        {treeProjects.length > 0 && (
-          <div className="sidebar-filter-bar">
-            <div className="sidebar-filter-search ui-input-wrap">
-              <SearchIcon size={13} strokeWidth={1.9} />
-              <TextInput
-                small
-                placeholder="Filter sessions…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                aria-label="Filter sessions"
-              />
-              {searchQuery !== "" && (
-                <button
-                  type="button"
-                  className="sidebar-filter-clear"
-                  title="Clear filter"
-                  onClick={() => setSearchQuery("")}
-                >
-                  <CloseIcon size={10} />
-                </button>
-              )}
+          {treeProjects.length > 0 && (
+            <div className="sidebar-filter-bar">
+              <div className="sidebar-filter-search ui-input-wrap">
+                <SearchIcon size={13} strokeWidth={1.9} />
+                <TextInput
+                  small
+                  placeholder="Filter sessions…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  aria-label="Filter sessions"
+                />
+                {searchQuery !== "" && (
+                  <button
+                    type="button"
+                    className="sidebar-filter-clear"
+                    title="Clear filter"
+                    onClick={() => setSearchQuery("")}
+                  >
+                    <CloseIcon size={10} />
+                  </button>
+                )}
+              </div>
+              <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
+                {SIDEBAR_FILTER_CHIPS.map((chip) => (
+                  <button
+                    key={chip.id}
+                    type="button"
+                    className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
+                    aria-pressed={selectedChips.has(chip.id)}
+                    onClick={() => toggleChip(chip.id)}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="sidebar-filter-chips" role="group" aria-label="Filter by status">
-              {SIDEBAR_FILTER_CHIPS.map((chip) => (
-                <button
-                  key={chip.id}
-                  type="button"
-                  className={`sidebar-filter-chip${selectedChips.has(chip.id) ? " active" : ""}`}
-                  aria-pressed={selectedChips.has(chip.id)}
-                  onClick={() => toggleChip(chip.id)}
-                >
-                  {chip.label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-        {projects.length === 0 ? (
-          projectsError ? (
-            // The fetch FAILED — not "you have no projects". This used to
-            // render the "Welcome to Mullion" first-run state forever,
-            // which told a user with a working dashboard and a flaky
-            // connection that they had never added a project (audit
-            // finding 14).
-            <EmptyState>
-              <WarningTriangleIcon size={26} className="ui-empty-state-mark" />
-              <EmptyStateTitle>Could not load your projects</EmptyStateTitle>
-              <ErrorText style={{ marginBottom: 8 }}>{projectsError}</ErrorText>
-              <EmptyStateActions>
-                <button
-                  className="ui-empty-state-btn-primary"
-                  disabled={retryingProjects}
-                  aria-busy={retryingProjects || undefined}
-                  onClick={retryProjects}
-                >
-                  <RefreshIcon size={12} strokeWidth={2} />
-                  {retryingProjects ? "Retrying…" : "Retry"}
-                </button>
-              </EmptyStateActions>
-            </EmptyState>
-          ) : !projectsLoaded ? (
-            // Still loading — the first run's "Welcome to Mullion" is the
-            // wrong thing to show for a list that is on its way.
-            <EmptyState>
-              <MullionMark size={32} className="ui-empty-state-mark" />
-              <EmptyStateTitle>Loading projects…</EmptyStateTitle>
-            </EmptyState>
+          )}
+          {projects.length === 0 ? (
+            projectsError ? (
+              // The fetch FAILED — not "you have no projects". This used to
+              // render the "Welcome to Mullion" first-run state forever,
+              // which told a user with a working dashboard and a flaky
+              // connection that they had never added a project (audit
+              // finding 14).
+              <EmptyState>
+                <WarningTriangleIcon size={26} className="ui-empty-state-mark" />
+                <EmptyStateTitle>Could not load your projects</EmptyStateTitle>
+                <ErrorText style={{ marginBottom: 8 }}>{projectsError}</ErrorText>
+                <EmptyStateActions>
+                  <button
+                    className="ui-empty-state-btn-primary"
+                    disabled={retryingProjects}
+                    aria-busy={retryingProjects || undefined}
+                    onClick={retryProjects}
+                  >
+                    <RefreshIcon size={12} strokeWidth={2} />
+                    {retryingProjects ? "Retrying…" : "Retry"}
+                  </button>
+                </EmptyStateActions>
+              </EmptyState>
+            ) : !projectsLoaded ? (
+              // Still loading — the first run's "Welcome to Mullion" is the
+              // wrong thing to show for a list that is on its way.
+              <EmptyState>
+                <MullionMark size={32} className="ui-empty-state-mark" />
+                <EmptyStateTitle>Loading projects…</EmptyStateTitle>
+              </EmptyState>
+            ) : (
+              <EmptyState>
+                <MullionMark size={32} className="ui-empty-state-mark" />
+                <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
+                <EmptyStateBody>
+                  Add a project folder to start — sessions run there and survive across restarts.
+                </EmptyStateBody>
+                <EmptyStateActions>
+                  <button
+                    className="ui-empty-state-btn-primary"
+                    onClick={() => setAddProjectOpen(true)}
+                  >
+                    <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+                    Add a project
+                  </button>
+                  <button
+                    className="ui-empty-state-btn-secondary"
+                    onClick={() => setDiscoverCollapsed(false)}
+                  >
+                    <SearchIcon size={12} strokeWidth={2} />
+                    Scan for repos
+                  </button>
+                </EmptyStateActions>
+              </EmptyState>
+            )
           ) : (
-            <EmptyState>
-              <MullionMark size={32} className="ui-empty-state-mark" />
-              <EmptyStateTitle>Welcome to Mullion</EmptyStateTitle>
-              <EmptyStateBody>
-                Add a project folder to start — sessions run there and survive across restarts.
-              </EmptyStateBody>
-              <EmptyStateActions>
-                <button
-                  className="ui-empty-state-btn-primary"
-                  onClick={() => setAddProjectOpen(true)}
-                >
-                  <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
-                  Add a project
-                </button>
-                <button
-                  className="ui-empty-state-btn-secondary"
-                  onClick={() => setDiscoverCollapsed(false)}
-                >
-                  <SearchIcon size={12} strokeWidth={2} />
-                  Scan for repos
-                </button>
-              </EmptyStateActions>
-            </EmptyState>
-          )
-        ) : (
-          <>
-            {/* U3 — the live GitHub CI subscription used to live inside
+            <>
+              {/* U3 — the live GitHub CI subscription used to live inside
             ProjectSection's own effect, one per mounted instance. Split out
             so it has exactly one owner regardless of which rendering path
             below is active (ProjectSection isn't mounted at all once
@@ -742,169 +758,175 @@ export function Sidebar({
             unconditionally (not just `visibleProjects`) since a filtered-out
             project's CI status should keep updating in the background, the
             same as it always has. */}
-            {projects.map((project) => (
-              <ProjectGitHubSubscription key={project.id} projectId={project.id} />
-            ))}
-            {filterActive && visibleProjects.length === 0 ? (
-              <EmptyState>
-                <EmptyStateTitle>No sessions match</EmptyStateTitle>
-                <EmptyStateBody>
-                  Try a different search, or clear the status filters above.
-                </EmptyStateBody>
-              </EmptyState>
-            ) : shouldVirtualize ? (
-              <VirtualizedProjectTree
-                rows={flatRows}
-                hosts={hosts}
-                spansHostsByProject={spansHostsByProject}
-                openSessionIds={openSessionIdSet}
-                onOpenSession={onOpenSession}
-                onOpenSpawnParent={openSpawnParent}
-                scrollRequest={scrollRequest}
-                onScrollServed={scrollServed}
-                onOpenSessionAsFloat={onOpenSessionAsFloat}
-                onSessionEnded={onSessionEnded}
-                onOpenProjectLauncher={onOpenProjectLauncher}
-                onToggleCollapsed={toggleProjectCollapsedVirtualized}
-                onToggleOtherProjects={toggleOtherProjects}
-                onOpenProjectSetup={onOpenProjectSetup}
-              />
-            ) : (
-              visibleProjects.map((project) => (
-                <ProjectSection
-                  key={project.id}
-                  project={project}
+              {projects.map((project) => (
+                <ProjectGitHubSubscription key={project.id} projectId={project.id} />
+              ))}
+              {filterActive && visibleProjects.length === 0 ? (
+                <EmptyState>
+                  <EmptyStateTitle>No sessions match</EmptyStateTitle>
+                  <EmptyStateBody>
+                    Try a different search, or clear the status filters above.
+                  </EmptyStateBody>
+                </EmptyState>
+              ) : shouldVirtualize ? (
+                <VirtualizedProjectTree
+                  rows={flatRows}
                   hosts={hosts}
-                  onOpenSessionAsFloat={onOpenSessionAsFloat}
-                  sessions={filteredSessionsByProject.get(project.id) ?? []}
-                  allSessions={baseSessionsByProject.get(project.id) ?? []}
-                  spansHosts={spansHostsByProject.get(project.id) ?? false}
-                  onOpenSession={onOpenSession}
-                  onSessionEnded={onSessionEnded}
-                  onOpenLauncher={() => onOpenProjectLauncher(project.id)}
-                  onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
-                  forceExpanded={filterActive}
+                  spansHostsByProject={spansHostsByProject}
                   openSessionIds={openSessionIdSet}
+                  onOpenSession={onOpenSession}
                   onOpenSpawnParent={openSpawnParent}
-                  revealNonce={reveal?.projectId === project.id ? reveal.nonce : 0}
+                  scrollRequest={scrollRequest}
+                  onScrollServed={scrollServed}
+                  onOpenSessionAsFloat={onOpenSessionAsFloat}
+                  onSessionEnded={onSessionEnded}
+                  onOpenProjectLauncher={onOpenProjectLauncher}
+                  onToggleCollapsed={toggleProjectCollapsedVirtualized}
+                  onToggleOtherProjects={toggleOtherProjects}
+                  onOpenProjectSetup={onOpenProjectSetup}
                 />
-              ))
-            )}
-            {!shouldVirtualize && showOtherProjects && (
-              <div className="sidebar-other-projects">
-                <OtherProjectsHeader
-                  count={otherProjects.length}
-                  expanded={otherExpanded}
-                  onToggle={toggleOtherProjects}
-                />
-                {otherExpanded &&
-                  otherProjects.map((project) => (
-                    <OtherProjectRow
-                      key={project.id}
-                      project={project}
-                      hosts={hosts}
-                      onOpenLauncher={() => onOpenProjectLauncher(project.id)}
-                      onSessionEnded={onSessionEnded}
-                      onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
-                    />
-                  ))}
-              </div>
-            )}
-          </>
-        )}
-        {showSourceControl && <SourceControlSection onOpenGit={onOpenGit} />}
-        <DiscoverProjects
-          collapsed={discoverCollapsed}
-          onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
-          onOpenSettingsProjects={onOpenSettingsProjects}
-          hosts={hosts}
-        />
-      </>
-      <Presence when={addProjectOpen}>
-        <CreateProjectModal
-          hosts={hosts}
-          initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
-          onClose={() => {
-            setAddProjectOpen(false);
-            // Phase 4 (Gap F) — only surface the offer once the modal
-            // actually finishes closing, so it never renders underneath a
-            // still-open modal (the confirm-first PROJECT_DIR_MISSING
-            // retry path resolves onCreate but keeps the modal open for a
-            // second confirm — see CreateProjectModal's own gitInitFailed
-            // handling — so onClose, not onCreate, is the right trigger).
-            if (newProjectRef.current !== null) {
-              setScaffoldOfferProject(newProjectRef.current);
-              newProjectRef.current = null;
-            }
-          }}
-          onCreate={async ({
-            name,
-            cwd,
-            hostId,
-            createDir,
-            gitInit,
-            placement,
-            allowDuplicate,
-          }) => {
-            const project = await useDashboardStore
-              .getState()
-              // Issue #1726 / roadmap 8.12 — the placement mode rides in the
-              // same opts bag as createDir/gitInit.
-              .createProject(name, cwd, hostId, { createDir, gitInit, placement, allowDuplicate });
-            newProjectRef.current = { id: project.id, name: project.name };
-            return project;
-          }}
-        />
-      </Presence>
-      {scaffoldOfferProject && (
-        <div className="scaffold-offer-banner">
-          <div className="scaffold-offer-banner-header">
-            <SkillIcon size={14} style={{ color: "var(--b)", flexShrink: 0 }} />
-            <span className="scaffold-offer-banner-title">
-              Set up Mullion&rsquo;s conventions in &ldquo;{scaffoldOfferProject.name}&rdquo;?
-            </span>
-            <span
-              className="scaffold-offer-banner-dismiss"
-              role="button"
-              tabIndex={0}
-              onClick={() => setScaffoldOfferProject(null)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  setScaffoldOfferProject(null);
-                }
-              }}
-              title="Dismiss"
-            >
-              ×
-            </span>
-          </div>
-          {/* Plan's own "with the project's conventions preview inline" —
+              ) : (
+                visibleProjects.map((project) => (
+                  <ProjectSection
+                    key={project.id}
+                    project={project}
+                    hosts={hosts}
+                    onOpenSessionAsFloat={onOpenSessionAsFloat}
+                    sessions={filteredSessionsByProject.get(project.id) ?? []}
+                    allSessions={baseSessionsByProject.get(project.id) ?? []}
+                    spansHosts={spansHostsByProject.get(project.id) ?? false}
+                    onOpenSession={onOpenSession}
+                    onSessionEnded={onSessionEnded}
+                    onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                    onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
+                    forceExpanded={filterActive}
+                    openSessionIds={openSessionIdSet}
+                    onOpenSpawnParent={openSpawnParent}
+                    revealNonce={reveal?.projectId === project.id ? reveal.nonce : 0}
+                  />
+                ))
+              )}
+              {!shouldVirtualize && showOtherProjects && (
+                <div className="sidebar-other-projects">
+                  <OtherProjectsHeader
+                    count={otherProjects.length}
+                    expanded={otherExpanded}
+                    onToggle={toggleOtherProjects}
+                  />
+                  {otherExpanded &&
+                    otherProjects.map((project) => (
+                      <OtherProjectRow
+                        key={project.id}
+                        project={project}
+                        hosts={hosts}
+                        onOpenLauncher={() => onOpenProjectLauncher(project.id)}
+                        onSessionEnded={onSessionEnded}
+                        onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
+                      />
+                    ))}
+                </div>
+              )}
+            </>
+          )}
+          {showSourceControl && <SourceControlSection onOpenGit={onOpenGit} />}
+          <DiscoverProjects
+            collapsed={discoverCollapsed}
+            onToggleCollapsed={() => setDiscoverCollapsed((v) => !v)}
+            onOpenSettingsProjects={onOpenSettingsProjects}
+            hosts={hosts}
+          />
+        </>
+        <Presence when={addProjectOpen}>
+          <CreateProjectModal
+            hosts={hosts}
+            initialPath={settingsLoaded ? (settings.projectRoots[0] ?? "") : ""}
+            onClose={() => {
+              setAddProjectOpen(false);
+              // Phase 4 (Gap F) — only surface the offer once the modal
+              // actually finishes closing, so it never renders underneath a
+              // still-open modal (the confirm-first PROJECT_DIR_MISSING
+              // retry path resolves onCreate but keeps the modal open for a
+              // second confirm — see CreateProjectModal's own gitInitFailed
+              // handling — so onClose, not onCreate, is the right trigger).
+              if (newProjectRef.current !== null) {
+                setScaffoldOfferProject(newProjectRef.current);
+                newProjectRef.current = null;
+              }
+            }}
+            onCreate={async ({
+              name,
+              cwd,
+              hostId,
+              createDir,
+              gitInit,
+              placement,
+              allowDuplicate,
+            }) => {
+              const project = await useDashboardStore
+                .getState()
+                // Issue #1726 / roadmap 8.12 — the placement mode rides in the
+                // same opts bag as createDir/gitInit.
+                .createProject(name, cwd, hostId, {
+                  createDir,
+                  gitInit,
+                  placement,
+                  allowDuplicate,
+                });
+              newProjectRef.current = { id: project.id, name: project.name };
+              return project;
+            }}
+          />
+        </Presence>
+        {scaffoldOfferProject && (
+          <div className="scaffold-offer-banner">
+            <div className="scaffold-offer-banner-header">
+              <SkillIcon size={14} style={{ color: "var(--b)", flexShrink: 0 }} />
+              <span className="scaffold-offer-banner-title">
+                Set up Mullion&rsquo;s conventions in &ldquo;{scaffoldOfferProject.name}&rdquo;?
+              </span>
+              <span
+                className="scaffold-offer-banner-dismiss"
+                role="button"
+                tabIndex={0}
+                onClick={() => setScaffoldOfferProject(null)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setScaffoldOfferProject(null);
+                  }
+                }}
+                title="Dismiss"
+              >
+                ×
+              </span>
+            </div>
+            {/* Plan's own "with the project's conventions preview inline" —
               the same install-wide text ProjectSetupPanel.tsx's own
               disclosure reads (see its comment for why this is not a
               second source of truth: computeScaffold resolves and commits
               the SAME text server-side). Empty when unconfigured — the
               scaffold still has SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS to fall
               back to, so this stays worth offering either way. */}
-          {settings.sessions.workflowConventionsText && (
-            <div className="scaffold-offer-banner-preview">
-              {settings.sessions.workflowConventionsText}
+            {settings.sessions.workflowConventionsText && (
+              <div className="scaffold-offer-banner-preview">
+                {settings.sessions.workflowConventionsText}
+              </div>
+            )}
+            <div className="scaffold-offer-banner-actions">
+              <button
+                className="scaffold-offer-banner-accept"
+                onClick={() => {
+                  onOpenProjectSetup(scaffoldOfferProject.id);
+                  setScaffoldOfferProject(null);
+                }}
+              >
+                Scaffold Mullion
+              </button>
             </div>
-          )}
-          <div className="scaffold-offer-banner-actions">
-            <button
-              className="scaffold-offer-banner-accept"
-              onClick={() => {
-                onOpenProjectSetup(scaffoldOfferProject.id);
-                setScaffoldOfferProject(null);
-              }}
-            >
-              Scaffold Mullion
-            </button>
           </div>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </WorkspacePinScopeContext.Provider>
   );
 }
 

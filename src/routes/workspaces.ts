@@ -3,6 +3,7 @@ import {
   DEFAULT_WORKSPACE_NAME,
   createWorkspace,
   deleteWorkspace,
+  getWorkspace,
   listWorkspacesSeeded,
   updateWorkspace,
   type WorkspaceRow,
@@ -14,6 +15,12 @@ import {
   workspaceExists,
   type PendingOpenRow,
 } from "../services/workspace-pending-opens.js";
+import {
+  pinnedProjectIds,
+  pinnedProjectIdsByWorkspace,
+  replacePinnedProjects,
+  unknownProjectIds,
+} from "../services/workspace-pinned-projects.js";
 
 interface CreateWorkspaceBody {
   name: string;
@@ -28,6 +35,9 @@ interface UpdateWorkspaceBody {
   // null ungroups the workspace; omit to leave its group membership as-is.
   groupId?: number | null;
   position?: number;
+  // #3537 — replaces the workspace's pinned projects (in this order); omit to
+  // leave them as-is, [] to clear them. Duplicates are dropped.
+  pinnedProjectIds?: number[];
 }
 
 const createWorkspaceSchema = {
@@ -51,6 +61,7 @@ const updateWorkspaceSchema = {
       layout: { type: "object", additionalProperties: true },
       groupId: { type: ["integer", "null"] },
       position: { type: "integer" },
+      pinnedProjectIds: { type: "array", items: { type: "integer" } },
     },
   },
 };
@@ -75,10 +86,12 @@ function serializePendingOpen(row: PendingOpenRow) {
   };
 }
 
-function serialize(row: WorkspaceRow) {
+function serialize(row: WorkspaceRow, pinned: number[]) {
   return {
     ...row,
     layout: row.layout ? (JSON.parse(row.layout) as Record<string, unknown>) : null,
+    // #3537 — ordered by position.
+    pinnedProjectIds: pinned,
   };
 }
 
@@ -105,7 +118,8 @@ export async function workspacesRoute(app: FastifyInstance) {
   // to auth.ts's "a bare GET can't mutate state" premise; see the note there.
   app.get("/api/workspaces", async () => {
     const rows = listWorkspacesSeeded(app.db);
-    return rows.map(serialize);
+    const pins = pinnedProjectIdsByWorkspace(app.db);
+    return rows.map((row) => serialize(row, pins.get(row.id) ?? []));
   });
 
   app.post<{ Body: CreateWorkspaceBody }>(
@@ -114,7 +128,7 @@ export async function workspacesRoute(app: FastifyInstance) {
     async (request, reply) => {
       const created = createWorkspace(app.db, request.body.name);
       reply.code(201);
-      return serialize(created);
+      return serialize(created, []);
     },
   );
 
@@ -125,15 +139,40 @@ export async function workspacesRoute(app: FastifyInstance) {
       const workspaceId = Number(request.params.id);
       if (!Number.isInteger(workspaceId)) return reply.badRequest("Invalid workspace id");
 
-      const { name, layout, groupId, position } = request.body;
-      const updated = updateWorkspace(app.db, workspaceId, {
-        name,
-        layout: layout !== undefined ? JSON.stringify(layout) : undefined,
-        groupId,
-        position,
+      const { name, layout, groupId, position, pinnedProjectIds: pins } = request.body;
+      const hasWorkspaceFields =
+        name !== undefined ||
+        layout !== undefined ||
+        groupId !== undefined ||
+        position !== undefined;
+      // One transaction: an unknown project id is refused before anything is
+      // written, so a 400 leaves the name, layout and pins as they were. A
+      // missing workspace is a 404 first, whatever the pin list says.
+      const result = app.db.transaction((tx) => {
+        if (pins !== undefined) {
+          if (!getWorkspace(tx, workspaceId)) return { kind: "not-found" as const };
+          const unknown = unknownProjectIds(tx, pins);
+          if (unknown.length > 0) return { kind: "unknown-projects" as const, unknown };
+        }
+        // A pins-only PATCH never runs an empty UPDATE ... SET; it reads the
+        // row instead, which doubles as the 404 check.
+        const row = hasWorkspaceFields
+          ? updateWorkspace(tx, workspaceId, {
+              name,
+              layout: layout !== undefined ? JSON.stringify(layout) : undefined,
+              groupId,
+              position,
+            })
+          : getWorkspace(tx, workspaceId);
+        if (!row) return { kind: "not-found" as const };
+        if (pins !== undefined) replacePinnedProjects(tx, workspaceId, pins);
+        return { kind: "ok" as const, row, pinned: pinnedProjectIds(tx, workspaceId) };
       });
-      if (!updated) return reply.notFound();
-      return serialize(updated);
+      if (result.kind === "unknown-projects") {
+        return reply.badRequest(`Unknown project id(s): ${result.unknown.join(", ")}`);
+      }
+      if (result.kind === "not-found") return reply.notFound();
+      return serialize(result.row, result.pinned);
     },
   );
 

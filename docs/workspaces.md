@@ -17,6 +17,40 @@ and groups are listed by name.
 - **The docked sidebar's Workspaces section** (desktop) lists the same tree,
   with collapsible groups.
 
+## Pinning a project to a workspace
+
+On desktop, the left sidebar's project tree and the right sidebar's project
+picker list only the projects in the current workspace: the ones with a
+session open in its layout, plus any project pinned to the Dock. Every other
+project sits in the tree's collapsible "Other projects" section. Once you
+close a project's last session in a workspace, it drops out of the tree and
+the picker.
+
+**Pin the project to the workspace** to keep it in both places, even with
+nothing of it open:
+
+- In the tree, open the project's "⋯" menu and choose **Pin to this
+  workspace**. This works on a project under "Other projects" too.
+- In the ⌘K palette, open **Project:** _name_ and choose **Pin to this
+  workspace**. The palette can switch to any project.
+
+A pinned project shows a small pin next to its name. Choose **Unpin from this
+workspace** from the same menus to remove the pin. Pinned projects come after
+the projects with open sessions, in the order you pinned them. A workspace
+with nothing open but with pins lists the pinned projects instead of an empty
+tree.
+
+A workspace pin is not a Dock pin:
+
+|                    | Workspace pin                             | Dock pin ("+ Add project")              |
+| ------------------ | ----------------------------------------- | --------------------------------------- |
+| Where it applies   | This workspace only                       | Every workspace                         |
+| Where it is stored | On the server: every browser and device   | In this browser only                    |
+| What it adds       | The sidebar tree and right-sidebar picker | A Dock column, plus the tree and picker |
+
+Workspace pins never add a Dock column. Deleting the workspace or the project
+removes its pins. The phone shows every project and has no pin option.
+
 ## The workspace picker
 
 Each group is a section: a header with the group's colour, its name, the

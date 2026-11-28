@@ -796,6 +796,10 @@ export interface Workspace {
   groupId: number | null;
   position: number;
   createdAt: string;
+  // #3537 — projects pinned to this workspace, in order: the sidebar tree and
+  // the right sidebar's project picker keep listing them while it is active.
+  // Server-side and per workspace, unlike the Dock's global localStorage pins.
+  pinnedProjectIds: number[];
 }
 
 export interface Group {

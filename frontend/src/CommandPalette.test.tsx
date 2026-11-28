@@ -152,6 +152,83 @@ describe("CommandPalette -> Integrations section", () => {
     expect(onOpenFileEditor).toHaveBeenCalledWith(PROJECT.id);
   });
 
+  describe("workspace pin (#3537)", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      useDashboardStore.setState({ workspaces: [], activeWorkspaceId: null });
+    });
+    const renderScoped = (workspacePinScoped: boolean) =>
+      render(
+        <CommandPalette
+          scope="project"
+          projectId={PROJECT.id}
+          onClose={vi.fn()}
+          onOpenSession={vi.fn()}
+          onOpenGitHub={vi.fn()}
+          onOpenAgentRules={vi.fn()}
+          onOpenFileEditor={vi.fn()}
+          onOpenExternalFile={vi.fn()}
+          onOpenProjectBriefing={vi.fn()}
+          onOpenProjectSetup={vi.fn()}
+          onOpenDockConfig={vi.fn()}
+          onOpenSkills={vi.fn()}
+          onOpenBrowser={vi.fn()}
+          onOpenBlankBrowser={vi.fn()}
+          onOpenSettingsSection={vi.fn()}
+          onOpenTasks={vi.fn()}
+          onOpenBrowserUrl={vi.fn()}
+          workspacePinScoped={workspacePinScoped}
+        />,
+      );
+
+    it("pins the palette's project to the active workspace", async () => {
+      const patch = vi
+        .spyOn(api, "setWorkspacePinnedProjects")
+        .mockImplementation(async (id, ids) => makeWorkspace({ id, pinnedProjectIds: ids }));
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 4 })],
+        activeWorkspaceId: 4,
+      });
+      const user = userEvent.setup();
+      renderScoped(true);
+
+      await user.click(await screen.findByText(/Project: mullion/));
+      await user.click(await screen.findByText("Pin to this workspace"));
+      await waitFor(() => expect(patch).toHaveBeenCalledWith(4, [PROJECT.id]));
+    });
+
+    it("reports a failed pin", async () => {
+      vi.spyOn(api, "setWorkspacePinnedProjects").mockRejectedValue(new Error("gone"));
+      const reportError = vi.spyOn(useDashboardStore.getState(), "reportError");
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 4, pinnedProjectIds: [PROJECT.id] })],
+        activeWorkspaceId: 4,
+        reportError,
+      });
+      const user = userEvent.setup();
+      renderScoped(true);
+
+      await user.click(await screen.findByText(/Project: mullion/));
+      await user.click(await screen.findByText("Unpin from this workspace"));
+      await waitFor(() =>
+        expect(reportError).toHaveBeenCalledWith("Could not update the workspace pin", "gone"),
+      );
+    });
+
+    it("offers no pin where the sidebar is not workspace-scoped", async () => {
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 4 })],
+        activeWorkspaceId: 4,
+      });
+      const user = userEvent.setup();
+      renderScoped(false);
+
+      await user.click(await screen.findByText(/Project: mullion/));
+      await screen.findByText("Edit project files");
+      expect(screen.queryByText("Pin to this workspace")).toBeNull();
+    });
+  });
+
   it("opens the dock-config editor for the current project (U4)", async () => {
     const onOpenDockConfig = vi.fn();
     const user = userEvent.setup();

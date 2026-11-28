@@ -673,6 +673,11 @@ out the dock's own width — that's what this design replaces.
 | **Resize the rail**                         | Drag the divider between the rail and the log pane (`col-resize` cursor), or focus it (Tab) and use ←/→ (16px), Home (min), End (max)  |
 | **Resize the two log panes**                | Drag the divider between the primary and pinned log panes (`col-resize` cursor), or focus it and use ←/→ (16px), Home (min), End (max) |
 
+A project pinned to a _workspace_ from the sidebar's "⋯" menu
+([`workspaces.md`](workspaces.md#pinning-a-project-to-a-workspace)) stays in
+the sidebar tree and right-sidebar picker but never gets a Dock column. Only
+the "+ Add project" pins above add columns.
+
 Dock state persists to `localStorage`: collapsed state, region height,
 manually pinned project IDs, rail width, each project's own selected rail
 row (`crs.dockSelectedRows`, per project), which project is active

@@ -314,8 +314,10 @@ export function Dock({
   // Workspace-derived projects first (in their existing order), then any
   // manually-pinned project not already in that set — dropping ids for
   // projects that no longer exist (e.g. deleted since the id was pinned).
-  // dockColumnProjectIds is that rule; the sidebar calls the same helper,
-  // so a pin cannot stay in this rail and vanish from the project tree.
+  // dockColumnProjectIds is that rule; the sidebar builds on the same helper
+  // (scopedProjectIds), so a pin cannot stay in this rail and vanish from the
+  // project tree. The sidebar also lists the workspace's own pins (#3537);
+  // those never add a column here.
   // `null` is unscoped, the same as the sidebar: every project, not "nothing
   // tiled". Collapsing it to `[]` here is what printed the empty copy while
   // the tree still listed everything.

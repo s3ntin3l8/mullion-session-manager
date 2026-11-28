@@ -39,6 +39,13 @@ let gitStatuses: Record<number, GitStatus | null>;
 let projectsLoaded: boolean;
 let projectsError: string | null;
 let activeWorkspaceId: number | null;
+// #3537 — the workspaces' own project pins.
+let workspaces: { id: number; pinnedProjectIds: number[] }[];
+const setWorkspacePinnedProjects = vi.fn(async (id: number, ids: number[]) => {
+  workspaces = workspaces.map((w) => (w.id === id ? { ...w, pinnedProjectIds: ids } : w));
+  storeEpoch += 1;
+  for (const listener of [...storeListeners]) listener();
+});
 const setShowTaskSessions = vi.fn();
 const refreshProjects = vi.fn().mockResolvedValue(undefined);
 const refreshSessions = vi.fn().mockResolvedValue(undefined);
@@ -101,6 +108,8 @@ function storeState() {
     projectsLoaded,
     projectsError,
     activeWorkspaceId,
+    workspaces,
+    setWorkspacePinnedProjects,
     reportError,
   };
 }
@@ -285,6 +294,8 @@ beforeEach(() => {
   // A fresh workspace per test: the Other-projects open state is kept per
   // workspace for the page's lifetime.
   activeWorkspaceId = ++workspaceCounter;
+  workspaces = [];
+  setWorkspacePinnedProjects.mockClear();
   reportError.mockClear();
   renameSession.mockReset();
   renameSession.mockResolvedValue(undefined);

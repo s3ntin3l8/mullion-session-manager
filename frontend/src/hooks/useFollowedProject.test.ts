@@ -9,7 +9,13 @@ const project = (id: number, name: string) => ({ id, name }) as Project;
 const session = (id: number, projectId: number) => ({ id, projectId }) as Session;
 
 afterEach(() => {
-  useDashboardStore.setState({ projects: [], sessions: [], activePanelId: null });
+  useDashboardStore.setState({
+    projects: [],
+    sessions: [],
+    activePanelId: null,
+    workspaces: [],
+    activeWorkspaceId: null,
+  });
 });
 
 describe("useFollowedProject", () => {
@@ -157,5 +163,56 @@ describe("useFollowedProject", () => {
       const { result } = renderHook(() => useFollowedProject(null));
       expect(result.current.dropdownOptions).toHaveLength(4);
     });
+  });
+});
+
+describe("useFollowedProject — workspace pins (#3537)", () => {
+  const ws = (id: number, pinnedProjectIds: number[]) =>
+    ({
+      id,
+      name: `w${id}`,
+      layout: null,
+      groupId: null,
+      position: 0,
+      createdAt: "",
+      pinnedProjectIds,
+    }) as never;
+  const labels = (r: { current: ReturnType<typeof useFollowedProject> }) =>
+    r.current.dropdownOptions.slice(1).map((o) => o.label);
+
+  it("offers the active workspace's pinned project with nothing tiled", () => {
+    useDashboardStore.setState({
+      projects: [project(1, "a"), project(2, "b"), project(3, "c")],
+      workspaces: [ws(1, [3]), ws(2, [2])],
+      activeWorkspaceId: 1,
+    });
+
+    const { result } = renderHook(() => useFollowedProject([]));
+
+    expect(labels(result)).toEqual(["c"]);
+    expect(result.current.effectiveProjectId).toBe(3);
+  });
+
+  it("follows a workspace switch to that workspace's pins", () => {
+    useDashboardStore.setState({
+      projects: [project(1, "a"), project(2, "b"), project(3, "c")],
+      workspaces: [ws(1, [3]), ws(2, [2])],
+      activeWorkspaceId: 1,
+    });
+    const { result } = renderHook(() => useFollowedProject([1]));
+    expect(labels(result)).toEqual(["a", "c"]);
+
+    act(() => useDashboardStore.setState({ activeWorkspaceId: 2 }));
+    expect(labels(result)).toEqual(["a", "b"]);
+  });
+
+  it("ignores pins when unscoped (phone)", () => {
+    useDashboardStore.setState({
+      projects: [project(1, "a"), project(2, "b")],
+      workspaces: [ws(1, [2])],
+      activeWorkspaceId: 1,
+    });
+    const { result } = renderHook(() => useFollowedProject(null));
+    expect(labels(result)).toEqual(["a", "b"]);
   });
 });

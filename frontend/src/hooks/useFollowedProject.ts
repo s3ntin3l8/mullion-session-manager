@@ -2,10 +2,11 @@ import { useMemo, useState, useSyncExternalStore } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { resolveActiveProjectId } from "../panelUtils.js";
 import {
-  dockColumnProjectIds,
   readDockManualProjectIds,
+  scopedProjectIds,
   subscribeDockManualProjectIds,
 } from "../dock/dockHelpers.js";
+import { useActiveWorkspacePinnedIds } from "./useWorkspacePinnedProjects.js";
 
 // Sentinel Dropdown value meaning "go back to following the active panel" —
 // distinct from any real project id (Dropdown is generic over string, and
@@ -30,7 +31,8 @@ export interface FollowedProject {
 //
 // Issue #1877 — `workspaceProjectIds` (App's scopedWorkspaceProjectIds, the
 // same list the left Sidebar scopes its tree by) narrows the picker to the
-// workspace's projects, plus manual Dock pins. null means "do not scope"
+// workspace's projects, plus the projects pinned to that workspace (#3537)
+// and manual Dock pins. null means "do not scope"
 // (phone, or before App knows the workspace). A pinned or followed project
 // outside the scope still gets its own option, so the Dropdown value never
 // points at nothing.
@@ -42,14 +44,20 @@ export function useFollowedProject(
     subscribeDockManualProjectIds,
     readDockManualProjectIds,
   );
+  const workspacePinnedIds = useActiveWorkspacePinnedIds();
   const scopeKey = workspaceProjectIds?.join(",") ?? null;
+  // A workspace refresh or layout save hands back a new array with the same ids.
+  const workspacePinnedKey = workspacePinnedIds.join(",");
   const scopedProjects = useMemo(() => {
     if (workspaceProjectIds == null) return projects;
-    const ids = new Set(dockColumnProjectIds(workspaceProjectIds, manualProjectIds, projects));
+    const ids = new Set(
+      scopedProjectIds(workspaceProjectIds, workspacePinnedIds, manualProjectIds, projects),
+    );
     return projects.filter((p) => ids.has(p.id));
-    // scopeKey stands in for the array's identity (App rebuilds it per render).
+    // scopeKey and workspacePinnedKey stand in for the arrays' identities
+    // (App rebuilds the scope per render).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, scopeKey, manualProjectIds]);
+  }, [projects, scopeKey, workspacePinnedKey, manualProjectIds]);
   const sessions = useDashboardStore((s) => s.sessions);
   const activePanelId = useDashboardStore((s) => s.activePanelId);
 

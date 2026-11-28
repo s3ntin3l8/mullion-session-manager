@@ -13,6 +13,7 @@ import {
   sessions,
   tasks,
   webhookRegistrations,
+  workspacePinnedProjects,
 } from "../db/schema.js";
 import { parseHostCwds, serializeHostCwds } from "./placement.js";
 import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
@@ -523,6 +524,30 @@ export function mergeProjects(
         .where(eq(webhookRegistrations.projectId, from))
         .run();
     }
+
+    // #3537 — workspace pins: unique (workspace_id, project_id). A workspace
+    // that pins both keeps the survivor's pin; every other pin moves over, so
+    // the cascade on the duplicate's delete below drops nothing.
+    const survivorPinWorkspaces = tx
+      .select({ workspaceId: workspacePinnedProjects.workspaceId })
+      .from(workspacePinnedProjects)
+      .where(eq(workspacePinnedProjects.projectId, to))
+      .all()
+      .map((r) => r.workspaceId);
+    if (survivorPinWorkspaces.length > 0) {
+      tx.delete(workspacePinnedProjects)
+        .where(
+          and(
+            eq(workspacePinnedProjects.projectId, from),
+            inArray(workspacePinnedProjects.workspaceId, survivorPinWorkspaces),
+          ),
+        )
+        .run();
+    }
+    tx.update(workspacePinnedProjects)
+      .set({ projectId: to })
+      .where(eq(workspacePinnedProjects.projectId, from))
+      .run();
 
     // tasks: unique (project_id, issue_number).
     const movedTaskIds: number[] = [];

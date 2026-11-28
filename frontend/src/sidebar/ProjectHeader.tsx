@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { KebabMenu } from "../ui/KebabMenu.js";
 import { deleteProjectAndEndSessions, gitPullState, pullProject } from "./projectActions.js";
@@ -12,12 +12,17 @@ import {
   CloseIcon,
   FolderIcon,
   HostsIcon,
+  PinIcon,
   PlusIcon,
   PullIcon,
   RenameIcon,
   SkillIcon,
 } from "../ui/icons.js";
 import { Presence } from "../ui/Presence.js";
+import {
+  WorkspacePinScopeContext,
+  toggleActiveWorkspacePin,
+} from "../hooks/useWorkspacePinnedProjects.js";
 
 // Above this many commits behind origin, the badge switches to a louder
 // color (issue #433 scope A's "color the badge to draw attention" ask) — an
@@ -92,6 +97,17 @@ export function ProjectHeader({
   // surfaces the same shape there — keep parity.
   const [pullError, setPullError] = useState<string | null>(null);
   const hostPull = useHostPull(project, hosts);
+  // #3537 — pin this project to the active workspace, so the scoped tree and
+  // the right sidebar's picker keep it with nothing tiled. Offered only where
+  // the tree is workspace-scoped (WorkspacePinScopeContext).
+  const canPinToWorkspace = useContext(WorkspacePinScopeContext);
+  const workspacePinned = useDashboardStore((s) =>
+    s.activeWorkspaceId == null
+      ? false
+      : (s.workspaces
+          .find((w) => w.id === s.activeWorkspaceId)
+          ?.pinnedProjectIds?.includes(project.id) ?? false),
+  );
 
   const attentionCount = sessions.filter((s) => s.attention).length;
   // Only a remote project needs a badge at all — the common single-host
@@ -194,6 +210,16 @@ export function ProjectHeader({
         >
           {project.name}
         </span>
+        {canPinToWorkspace && workspacePinned && (
+          <span
+            className="project-workspace-pin"
+            title="Pinned to this workspace"
+            aria-label="Pinned to this workspace"
+            role="img"
+          >
+            <PinIcon size={11} />
+          </span>
+        )}
         <span className={`project-git-dot ${gitDotClass}`} title={gitDotTitle} />
         {/* Issue #433 scope A — ahead/behind vs. origin, already computed
           server-side into gitStatus.ahead/behind and already polled via
@@ -266,6 +292,29 @@ export function ProjectHeader({
                 // Opens the Edit-project modal, which traps focus itself.
                 opensOverlay: true,
               },
+              ...(canPinToWorkspace
+                ? [
+                    {
+                      key: "workspace-pin",
+                      label: workspacePinned
+                        ? "Unpin from this workspace"
+                        : "Pin to this workspace",
+                      icon: <PinIcon size={14} style={{ color: "var(--muted)" }} />,
+                      // Through the app-wide channel, not inline state: the
+                      // toggle moves this row between the tree and "Other
+                      // projects", which unmounts this header before a
+                      // failure could be shown here.
+                      onClick: async () => {
+                        const error = await toggleActiveWorkspacePin(project.id);
+                        if (error) {
+                          useDashboardStore
+                            .getState()
+                            .reportError("Could not update the workspace pin", error);
+                        }
+                      },
+                    },
+                  ]
+                : []),
               {
                 key: "git-pull",
                 // Issue #431-adjacent — sidebar shortcut for `git pull`,
