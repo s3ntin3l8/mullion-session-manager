@@ -5,6 +5,11 @@
 // ended `failure` with its jobs never created, and refuses to retry it). No check
 // run was red, so the red-CI return correctly did nothing, and the approval
 // returned silently. The gate now cross-checks the CHECK RUNS.
+//
+// The other direction (#3591): the workflow-run aggregate EXCLUDES a cancelled
+// run, so a cancelled required check left it reading `success` — and the gate
+// approved a head GitHub's merge gate refuses. Both paths read the check runs
+// now: the latest run of every check name must satisfy the merge gate.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -57,10 +62,94 @@ describe("ciAllowsAutoApproval", () => {
     resetPrCheckRunsWarningsForTests();
   });
 
-  it("allows approval when every workflow run is green, without reading check runs", async () => {
+  it("allows approval when every workflow run is green AND every latest check passes", async () => {
     const { app } = appWithLog();
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "test-node / lint-and-test", conclusion: "success" },
+      { name: "analyze / setup", conclusion: "success" },
+    ]);
+
     await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(true);
+    // #3591 — the aggregate EXCLUDES a cancelled run, so the success path
+    // reads the check runs too: GitHub's merge gate reads those, not the
+    // workflow-run aggregate.
+    expect(mockFetchCheckRunsForHead).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["success", "skipped", "neutral"])(
+    "allows approval on the success path when every latest check is %s",
+    async (conclusion) => {
+      const { app } = appWithLog();
+      mockFetchCheckRunsForHead.mockResolvedValue([{ name: "lint-and-test", conclusion }]);
+
+      await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(true);
+    },
+  );
+
+  it("allows the success path when a newer passing run supersedes a cancelled one of the same name", async () => {
+    const { app } = appWithLog();
+    // GitHub returns the newest run of a name first.
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "lint-and-test", conclusion: "success" },
+      { name: "lint-and-test", conclusion: "cancelled" },
+    ]);
+
+    await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(true);
+  });
+
+  it("holds the success path when the latest check run was cancelled", async () => {
+    const { app, log } = appWithLog();
+    mockFetchCheckRunsForHead.mockResolvedValue([
+      { name: "lint-and-test", conclusion: "cancelled" },
+    ]);
+
+    await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("check-run-not-passing");
+  });
+
+  it("holds the success path while a check run is still running", async () => {
+    const { app, log } = appWithLog();
+    mockFetchCheckRunsForHead.mockResolvedValue([{ name: "lint-and-test", conclusion: null }]);
+
+    await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("check-run-still-running");
+  });
+
+  it("holds the success path when the head has no check runs at all", async () => {
+    const { app, log } = appWithLog();
+
+    await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("no-check-runs");
+  });
+
+  it("holds the success path when the check-run lookup cannot be answered", async () => {
+    const { app, log } = appWithLog();
+    mockFetchCheckRunsForHead.mockRejectedValue(new Error("HTTP 502"));
+
+    await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("check-runs-unreadable");
+  });
+
+  it("holds the success path when there is no token to read check runs with", async () => {
+    const { app, log } = appWithLog();
+    mockResolveGitHubToken.mockResolvedValue(null);
+
+    await expect(ciAllowsAutoApproval(app, task, current("success"))).resolves.toBe(false);
+    expect(holdReason(log)).toBe("no-token-to-read-check-runs");
     expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+  });
+
+  it("reuses the check runs the red-CI return already read, on the success path too", async () => {
+    const { app } = appWithLog();
+    await expect(
+      ciAllowsAutoApproval(
+        app,
+        task,
+        current("success", [], { ok: true, runs: [{ name: "a", conclusion: "success" }] }),
+      ),
+    ).resolves.toBe(true);
+    expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+    expect(mockResolveGitHubToken).not.toHaveBeenCalled();
   });
 
   it("ignores a failed workflow run that no check run reflects (a run GitHub lost), and says so", async () => {

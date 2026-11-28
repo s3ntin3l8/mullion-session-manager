@@ -270,6 +270,80 @@ describe("reconcileTasks — auto-approve sweep", () => {
       },
     );
 
+    // #3591 — `computeCiStatus` EXCLUDES a cancelled workflow run from its
+    // aggregate, so a cancelled CI/CD next to a green CodeQL leaves the
+    // aggregate `success`. GitHub's merge gate reads the CHECK RUNS, where
+    // the cancelled required check is still cancelled — so the gate must
+    // read them before approving a head GitHub will refuse to merge.
+    function workflowRun(name: string, conclusion: "success" | "cancelled") {
+      return {
+        name,
+        status: "completed" as const,
+        conclusion,
+        htmlUrl: "https://x/1",
+        headSha: "sha-head",
+      };
+    }
+
+    it("does not auto-approve a head whose cancelled CI/CD leaves the workflow-run aggregate green", async () => {
+      const { resetCiApprovalGateLogsForTests } =
+        await import("../../src/services/task-ci-approval-gate.js");
+      resetCiApprovalGateLogsForTests();
+      const app = await openTestApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue([
+        workflowRun("CI/CD", "cancelled"),
+        workflowRun("CodeQL", "success"),
+      ]);
+      reconcilerMocks.mockFetchCheckRunsForHead.mockResolvedValue([
+        { name: "test-node / lint-and-test", conclusion: "cancelled" },
+        { name: "analyze / setup", conclusion: "success" },
+      ]);
+      const infoSpy = vi.spyOn(app.log, "info");
+
+      await reconcileTasks(app);
+
+      expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, reason: "check-run-not-passing" }),
+        expect.stringContaining("waiting on CI"),
+      );
+    });
+
+    it("auto-approves when a newer passing check supersedes the cancelled one of the same name", async () => {
+      const { resetCiApprovalGateLogsForTests } =
+        await import("../../src/services/task-ci-approval-gate.js");
+      resetCiApprovalGateLogsForTests();
+      const app = await openTestApp();
+      const { taskId } = await createAutoApproveCandidate(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+      mockFetchRunsForHead.mockResolvedValue([
+        workflowRun("CI/CD", "cancelled"),
+        workflowRun("CodeQL", "success"),
+      ]);
+      // GitHub returns the newest run of a name first, superseded attempts
+      // included: the cancelled attempt must not speak for the head.
+      reconcilerMocks.mockFetchCheckRunsForHead.mockResolvedValue([
+        { name: "test-node / lint-and-test", conclusion: "success" },
+        { name: "test-node / lint-and-test", conclusion: "cancelled" },
+        { name: "analyze / setup", conclusion: "success" },
+      ]);
+      mockPromoteTaskToPR.mockResolvedValueOnce({
+        ok: true,
+        prUrl: "https://github.com/o/r/pull/9",
+        prNumber: 9,
+      });
+
+      await reconcileTasks(app);
+
+      expect(mockPromoteTaskToPR).toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("done");
+      expect(row.prUrl).toBe("https://github.com/o/r/pull/9");
+    });
+
     it("records the transition via 'auto-approve', distinct from a human's 'approve'", async () => {
       const app = await openTestApp();
       const { taskId } = await createAutoApproveCandidate(app);

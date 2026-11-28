@@ -20,6 +20,7 @@ const {
   mockFetchPullRequestReviewThreads,
   mockResolveReviewThread,
   mockFetchRunsForHead,
+  mockFetchCheckRunsForHead,
   mockPromoteTaskToPR,
 } = vi.hoisted(() => ({
   mockResolveRepoRef: vi.fn(),
@@ -34,6 +35,7 @@ const {
   mockFetchPullRequestReviewThreads: vi.fn(),
   mockResolveReviewThread: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
+  mockFetchCheckRunsForHead: vi.fn(),
   mockPromoteTaskToPR: vi.fn(),
 }));
 
@@ -66,6 +68,10 @@ vi.mock("../../src/services/github.js", async (importOriginal) => {
       ok: true,
       runs: await mockFetchRunsForHead(...args),
     }),
+    // #3591 — the auto-approve gate reads the head's check runs on the
+    // success path too (the workflow-run aggregate excludes a cancelled run),
+    // so a green head needs a green check run here as well.
+    fetchCheckRunsForHead: mockFetchCheckRunsForHead,
   };
 });
 vi.mock("../../src/services/task-promote.js", async (importOriginal) => ({
@@ -216,6 +222,9 @@ describe("a review post lost to a transient GitHub failure (#2749)", () => {
         headSha: "sha-head",
       },
     ]);
+    mockFetchCheckRunsForHead
+      .mockReset()
+      .mockResolvedValue([{ name: "CI / test", conclusion: "success" }]);
     mockPromoteTaskToPR.mockReset().mockResolvedValue({
       ok: true,
       prUrl: "https://github.com/o/r/pull/9",

@@ -301,15 +301,22 @@ describe("reconcileTasks — auto-approve red required CI (#755)", () => {
       await app.close();
     });
 
-    it("does not fetch check runs at all when the coarse Workflow Run status isn't red (avoids an extra GitHub call on the common green path)", async () => {
+    it("reads the check runs exactly once on the green path — the red-CI return stands down, the approval gate reads them", async () => {
       const app = await buildApp();
       await createRedCiCandidate(app);
       mockGetPullRequestByNumber.mockResolvedValue(mockPr());
       mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "success"));
+      // The approval gate now promotes this task; this test is about the
+      // lookups, so the promotion fails harmlessly instead.
+      mockPromoteTaskToPR.mockResolvedValue({ ok: false, reason: "no-worktree" });
 
       await reconcileTasks(app);
 
-      expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+      // #3591 — the red-CI return stands down on a green status (it adds no
+      // lookup of its own), but the auto-approve gate reads the head's check
+      // runs: the workflow-run aggregate excludes a cancelled run, so only the
+      // check runs say whether GitHub's merge gate will accept the head.
+      expect(mockFetchCheckRunsForHead).toHaveBeenCalledTimes(1);
 
       await app.close();
     });
