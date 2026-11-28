@@ -21,7 +21,7 @@
  * full scope `sessionId` is required. The log key is the session id, so the run
  * replaces that session's own setup log, and its setup status badge follows.
  */
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import { extractIdField, resolveTargetProjectId } from "../services/control-session-authority.js";
 import {
@@ -32,6 +32,7 @@ import {
   SETUP_RECIPE_MAX_LENGTH,
   readSessionSetupLog,
   runSetupOnHost,
+  type SetupStatus,
 } from "../services/setup-recipe.js";
 import { broadcastTaskEvent } from "../services/task-events.js";
 import {
@@ -76,18 +77,23 @@ function dryRunSessionId(
 }
 
 /** Records a session's setup status (and log) and rings the `setup` doorbell,
- * as startSetupRecipe does for a fresh worktree's run. */
+ * as startSetupRecipe does for a fresh worktree's run. `onlyOver` makes it a
+ * no-op unless the row still holds that status (someone else wrote first). */
 function markSetup(
   ctx: OpContext,
   projectId: number,
   sessionId: number,
-  status: string | null,
-  logPath?: string,
+  status: SetupStatus | null,
+  opts: { logPath?: string; onlyOver?: SetupStatus } = {},
 ): void {
   ctx.app.db
     .update(sessions)
-    .set({ setupStatus: status, ...(logPath ? { setupLogPath: logPath } : {}) })
-    .where(eq(sessions.id, sessionId))
+    .set({ setupStatus: status, ...(opts.logPath ? { setupLogPath: opts.logPath } : {}) })
+    .where(
+      opts.onlyOver === undefined
+        ? eq(sessions.id, sessionId)
+        : and(eq(sessions.id, sessionId), eq(sessions.setupStatus, opts.onlyOver)),
+    )
     .run();
   broadcastTaskEvent({ taskId: 0, projectId, kind: "setup", ts: Date.now() });
 }
@@ -111,20 +117,22 @@ async function dryRun(
   // The run is this session's setup run now: its badge says `running` while
   // the log is being rewritten, then follows the outcome. A busy run started
   // nothing, so the badge goes back to what it was.
-  const before =
-    ctx.app.db
-      .select({ setupStatus: sessions.setupStatus })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId))
-      .get()?.setupStatus ?? null;
+  const before = (ctx.app.db
+    .select({ setupStatus: sessions.setupStatus })
+    .from(sessions)
+    .where(eq(sessions.id, sessionId))
+    .get()?.setupStatus ?? null) as SetupStatus | null;
   markSetup(ctx, Number(projectId), sessionId, "running");
   const result = await runSetupOnHost(ctx.app, hostId, {
     cwd,
     recipe,
     logKey: String(sessionId),
   });
-  if (result.outcome === "busy") markSetup(ctx, Number(projectId), sessionId, before);
-  else markSetup(ctx, Number(projectId), sessionId, result.outcome, result.logPath);
+  if (result.outcome === "busy") {
+    markSetup(ctx, Number(projectId), sessionId, before, { onlyOver: "running" });
+  } else {
+    markSetup(ctx, Number(projectId), sessionId, result.outcome, { logPath: result.logPath });
+  }
   // A busy run started nothing, so the log on disk is someone else's run.
   const log =
     result.outcome === "busy" ? null : await readSessionSetupLog(ctx.app, hostId, sessionId);

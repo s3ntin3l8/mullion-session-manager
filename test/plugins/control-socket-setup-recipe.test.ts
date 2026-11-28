@@ -230,6 +230,24 @@ describe("projects.get_setup_recipe / set_setup_recipe (#3592)", () => {
     expect(status()).toBe("ok");
   });
 
+  it("a busy run does not overwrite a status someone else settled meanwhile", async () => {
+    const { app, conn, agent } = await setup();
+    const id = Number(agent);
+    fakes.runSetupOnHost.mockImplementation(async () => {
+      // The session's own start run finishes while ours is being refused.
+      app.db.update(sessions).set({ setupStatus: "failed" }).where(eq(sessions.id, id)).run();
+      return { outcome: "busy", exitCode: null, logPath: "" };
+    });
+    await dispatch(app, conn, {
+      id: 1,
+      op: "projects.set_setup_recipe",
+      body: { recipe: "npm ci", run: true },
+    });
+    expect(app.db.select().from(sessions).where(eq(sessions.id, id)).get()!.setupStatus).toBe(
+      "failed",
+    );
+  });
+
   it("run: true needs a recipe, and a session at full scope; a refused run saves nothing", async () => {
     const { app, conn, frames, projectA, recipeOf } = await setup();
     await dispatch(app, conn, {
