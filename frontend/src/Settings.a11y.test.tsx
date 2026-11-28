@@ -60,6 +60,39 @@ describe("Settings modal — focus management (P11)", () => {
     expect(dialog.querySelector(".settings-modal-close")).toHaveFocus();
   });
 
+  it("on the phone lets Tab leave for the tab bar, and gives focus back only if nothing took it", async () => {
+    const user = userEvent.setup();
+    function Shell({ open }: { open: boolean }) {
+      return (
+        <>
+          <button>Opener</button>
+          <button>Tasks</button>
+          {open && <Settings onClose={vi.fn()} phone />}
+        </>
+      );
+    }
+    const opener = () => screen.getByRole("button", { name: "Opener" });
+    const { rerender } = render(<Shell open={false} />);
+    opener().focus();
+    rerender(<Shell open />);
+    // No trap: Shift+Tab from the first control leaves the dialog.
+    await user.tab({ shift: true });
+    expect(screen.getByRole("dialog", { name: "Settings" })).not.toContainElement(
+      document.activeElement as HTMLElement,
+    );
+    // Closed with focus inside it: back to what opened it.
+    screen.getByRole("button", { name: "Close settings" }).focus();
+    rerender(<Shell open={false} />);
+    expect(opener()).toHaveFocus();
+
+    // Closed by a tab bar entry, which focused itself: it keeps the focus.
+    rerender(<Shell open />);
+    const tasks = screen.getByRole("button", { name: "Tasks" });
+    tasks.focus();
+    rerender(<Shell open={false} />);
+    expect(tasks).toHaveFocus();
+  });
+
   it("restores focus to the trigger element on close", () => {
     render(
       <button

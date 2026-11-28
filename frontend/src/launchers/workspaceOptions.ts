@@ -36,7 +36,8 @@ export function workspaceOptions(
  * The workspace a new session of `projectId` joins by default on the phone:
  * a workspace the project is pinned to (#3537), else the active one. A
  * project pinned to the active workspace stays there, and one pinned to
- * several others takes the first in the list's order.
+ * several others takes the first of them in the store's order (the server's,
+ * which is not the Workspace row's grouped order).
  */
 export function defaultLaunchWorkspaceId(
   workspaces: readonly Pick<Workspace, "id" | "pinnedProjectIds">[],

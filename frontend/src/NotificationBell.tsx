@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useId, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
@@ -362,6 +362,7 @@ export function NotificationBell({
   // session sets `pageKeepFocus` first, so the session keeps the focus it is
   // about to take (the side panel's `suppressRestore`, U7). An entry tapped
   // in the tab bar focuses itself, and is left alone here.
+  const pageTitleId = useId();
   const pageKeepFocus = useRef(false);
   useEffect(() => {
     if (!page || !open) return;
@@ -596,6 +597,29 @@ export function NotificationBell({
       ))
     );
   const pageTarget = pageHost === undefined ? document.body : pageHost;
+  // The page is not modal, but it covers everything except the tab bar, so
+  // Tab off either end goes to its own entry there rather than into the
+  // shell hidden behind it, where this handler's Escape would not be heard.
+  const onPageKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setOpen(false);
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const stops = panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const active = document.activeElement;
+    const leaving = e.shiftKey
+      ? active === panel || active === stops[0]
+      : active === stops[stops.length - 1];
+    if (!leaving) return;
+    e.preventDefault();
+    btnRef.current?.focus();
+  };
   const emptySessions = !items.some((i) => i.type === "event") && (
     <div className="notif-empty">
       {sessionsFilter === "all" && items.length === 0
@@ -646,16 +670,15 @@ export function NotificationBell({
             ref={panelRef}
             // `.mobile-notif-sheet` carries the feed's touch sizes (sidebar.css).
             className={`${pageHost === undefined ? `${themeClassName(theme)} ` : ""}phone-inbox-page mobile-notif-sheet`}
-            aria-label="Notifications"
+            // Named by its visible heading ("Inbox" in the tab bar).
+            aria-labelledby={pageTitleId}
             tabIndex={-1}
-            onKeyDown={(e) => {
-              if (e.key !== "Escape") return;
-              e.stopPropagation();
-              setOpen(false);
-            }}
+            onKeyDown={onPageKeyDown}
           >
             <div className="phone-inbox-head">
-              <h2 className="phone-inbox-title">{label ?? "Notifications"}</h2>
+              <h2 id={pageTitleId} className="phone-inbox-title">
+                {label ?? "Notifications"}
+              </h2>
               {readAllButton("mobile-notif-readall")}
             </div>
             {controls}

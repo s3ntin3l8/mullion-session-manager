@@ -130,11 +130,26 @@ export function SettingsShell<Id extends string>({
   // link the (desktop-hidden) back chevron comes first in DOM order, and
   // focusing a `display: none` element is a silent no-op.
   const closeBtnRef = useRef<HTMLButtonElement>(null);
+  // Only while modal: on the phone the tab bar under Settings stays usable,
+  // so Tab must be able to leave the frame for it, as `aria-modal` says.
   const { onKeyDown: onTrapKeyDown } = useFocusTrap({
-    active: true,
+    active: modal,
     containerRef: modalRef,
     initialFocusRef: closeBtnRef,
   });
+  // Not modal: focus still moves in as the frame opens, and back to what
+  // opened it as it closes, but only when nothing else took it. A tab bar
+  // entry tapped to leave Settings focuses itself first and keeps the focus;
+  // the trap's own restore would have taken it back to the opener.
+  useEffect(() => {
+    if (modal) return;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeBtnRef.current?.focus();
+    return () => {
+      const active = document.activeElement;
+      if ((!active || active === document.body) && opener?.isConnected) opener.focus();
+    };
+  }, [modal]);
 
   return (
     <div className="settings-backdrop" onClick={onClose}>
@@ -143,7 +158,7 @@ export function SettingsShell<Id extends string>({
         ref={modalRef}
         className="settings-modal"
         onClick={(e) => e.stopPropagation()}
-        onKeyDown={onTrapKeyDown}
+        onKeyDown={modal ? onTrapKeyDown : undefined}
         role="dialog"
         aria-modal={modal ? "true" : undefined}
         aria-label={title}

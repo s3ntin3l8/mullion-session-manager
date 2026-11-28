@@ -12,7 +12,7 @@ import { makeSession } from "./test/fixtures.js";
 import { resetStore } from "./test/resetStore.js";
 
 const entry = () => screen.getByRole("button", { name: /^(Notifications|Inbox),/ });
-const page = () => screen.queryByRole("region", { name: "Notifications" });
+const page = () => screen.queryByRole("region", { name: /^(Notifications|Inbox)$/ });
 const tap = (el: Element) =>
   act(() => {
     fireEvent.click(el);
@@ -58,6 +58,27 @@ describe("the phone's Inbox page", () => {
     render(<Bell />);
     tap(entry());
     expect(screen.getByRole("heading", { name: "Notifications" })).toBeInTheDocument();
+  });
+
+  it("is named by its heading, and Tab off either end goes to its entry", () => {
+    render(<Bell label="Inbox" />);
+    tap(entry());
+    expect(screen.getByRole("region", { name: "Inbox" })).toBe(page());
+    const stops = page()!.querySelectorAll<HTMLElement>("button");
+    // From the page itself (where focus lands) and from its first control.
+    for (const from of [page()!, stops[0]]) {
+      from.focus();
+      fireEvent.keyDown(from, { key: "Tab", shiftKey: true });
+      expect(document.activeElement).toBe(entry());
+    }
+    const last = stops[stops.length - 1];
+    last.focus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(document.activeElement).toBe(entry());
+    // Inside the page, Tab is the browser's.
+    stops[0].focus();
+    fireEvent.keyDown(stops[0], { key: "Tab" });
+    expect(document.activeElement).toBe(stops[0]);
   });
 
   it("mounts in the host it is given, and nowhere until that host exists", () => {

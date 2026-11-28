@@ -183,13 +183,13 @@ describe("PhoneModeBar", () => {
     const inbox = screen.getByRole("button", { name: "Inbox, nothing needs you" });
     expect(inbox).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(inbox);
-    const sheet = screen.getByRole("region", { name: "Notifications" });
+    const sheet = screen.getByRole("region", { name: "Inbox" });
     // Beside the bar, not over it: mounted in the bar's host, outside <nav>.
     expect(document.querySelector(".phone-inbox-host")).toContainElement(sheet);
     expect(screen.getByRole("navigation", { name: "Primary" })).not.toContainElement(sheet);
     expect(document.querySelector(".mobile-session-backdrop")).toBeNull();
     fireEvent.keyDown(sheet, { key: "Escape" });
-    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Inbox" })).toBeNull();
     expect(document.activeElement).toBe(inbox);
   });
 
@@ -306,7 +306,7 @@ describe("PhoneModeBar", () => {
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
     expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
-    expect(screen.getByRole("region", { name: "Notifications" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Inbox" })).toBeInTheDocument();
   });
 
   it("returns focus to New only once the keyboard is down and the bar shows again", async () => {
@@ -348,8 +348,8 @@ describe("PhoneModeBar", () => {
     stubClientHeight(450);
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
-    fireEvent.keyDown(screen.getByRole("region", { name: "Notifications" }), { key: "Escape" });
-    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("region", { name: "Inbox" }), { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "Inbox" })).toBeNull();
     // The page's own restore cannot reach the trigger inside the hidden bar
     // (jsdom refuses it too), so focus is on <body> now.
     expect(document.activeElement).toBe(document.body);
@@ -374,7 +374,7 @@ describe("PhoneModeBar", () => {
     stubClientHeight(450);
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
-    fireEvent.keyDown(screen.getByRole("region", { name: "Notifications" }), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("region", { name: "Inbox" }), { key: "Escape" });
     const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
     elsewhere.focus();
     stubClientHeight(800);
@@ -452,7 +452,7 @@ describe("PhoneModeBar with a sidebar view open", () => {
   // entry is current, and tapping another one leaves the page.
   describe("the Inbox page and Settings", () => {
     const inbox = () => screen.getByRole("button", { name: /^Inbox/ });
-    const page = () => screen.queryByRole("region", { name: "Notifications" });
+    const page = () => screen.queryByRole("region", { name: "Inbox" });
     const bar = () => within(screen.getByRole("navigation", { name: "Primary" }));
     const pressed = () =>
       bar()

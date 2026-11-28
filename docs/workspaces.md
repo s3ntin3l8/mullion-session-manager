@@ -51,8 +51,9 @@ A workspace pin is not a Dock pin:
 Workspace pins never add a Dock column. Deleting the workspace or the project
 removes its pins. The phone shows every project and has no pin option, but it
 uses the pins: its New session launcher preselects a workspace the chosen
-project is pinned to (the active one if it is pinned there, else the first in
-the list), and the active workspace for a project pinned nowhere. Picking a
+project is pinned to, and the active workspace for a project pinned nowhere.
+A project pinned to the active workspace stays there. One pinned to several
+others goes to one of them, which need not be the first the row lists. Picking a
 workspace in the launcher's Workspace row overrides that for the launch.
 
 ## The workspace picker
