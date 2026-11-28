@@ -43,7 +43,13 @@ export const reconcilerMocks = {
   mockDeleteRemoteBranch: vi.fn(),
   mockUpdatePullRequestTitle: vi.fn(),
   mockFetchRunsForHead: vi.fn(),
-  mockFetchCheckRunsForHead: vi.fn().mockResolvedValue([]),
+  // The default head is GREEN — one passing check run. The auto-approve gate
+  // reads the head's check runs on the success path too (#3591), so an empty
+  // list would read as "this head has no checks" and hold every approval.
+  // A test that needs another head overrides this.
+  mockFetchCheckRunsForHead: vi
+    .fn()
+    .mockResolvedValue([{ name: "CI / test", conclusion: "success" }]),
   mockCreatePullRequestReview: vi.fn().mockResolvedValue({
     id: 1,
     htmlUrl: "https://github.com/o/r/pull/9#pullrequestreview-1",
@@ -160,7 +166,9 @@ export function restorePassThroughMocks(): void {
       passThroughImpls.detectReleasePleaseConfig,
     );
   }
-  reconcilerMocks.mockFetchCheckRunsForHead.mockReset().mockResolvedValue([]);
+  reconcilerMocks.mockFetchCheckRunsForHead
+    .mockReset()
+    .mockResolvedValue([{ name: "CI / test", conclusion: "success" }]);
   reconcilerMocks.mockCreatePullRequestReview.mockReset().mockResolvedValue({
     id: 1,
     htmlUrl: "https://github.com/o/r/pull/9#pullrequestreview-1",

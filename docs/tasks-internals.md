@@ -2533,22 +2533,35 @@ once **all** of the following hold:
    thrown lookup all simply mean "not yet," forever. A repo with no CI
    configured therefore never auto-approves — the right default for a gate
    whose whole job is to be a gate, not a formality that eventually
-   rubber-stamps itself. The one exception (`ciAllowsAutoApproval`,
-   `task-ci-approval-gate.ts`): the aggregate comes from the head's
-   _workflow runs_, but GitHub's own merge gate reads _check runs_, and the two
-   can disagree when GitHub loses a run (a CodeQL or dependency-review run that
-   ends `failure` with its jobs never created, which it may refuse to retry).
-   A `failure` is therefore only overridden when every failed workflow is one of
-   the known lost-run workflows (`LOST_RUN_WORKFLOWS`: CodeQL, Dependency
-   Review; a workflow that fails validation also creates no check run, and must
-   keep holding) AND a check run on the head backs the green: GitHub answered,
-   there are check runs, and the latest run of each check name satisfies the
-   merge gate (`success`, `skipped` or `neutral`). A superseded cancelled run
-   does not block a newer passing run of the same name. Anything else — any
-   other failed workflow, a red, running or cancelled latest check run, an unreadable list, no
-   token, no check runs — still holds it. Without this, such a task sat approved and green forever with
-   nothing in the log. The gate also logs why it is waiting, with the actual reason
-   (once per task per hour), instead of returning silently.
+   rubber-stamps itself. The aggregate comes from the head's _workflow runs_,
+   but GitHub's own merge gate reads _check runs_, and the two can disagree in
+   BOTH directions, so `ciAllowsAutoApproval` (`task-ci-approval-gate.ts`)
+   verifies the check runs on _both_ paths:
+   - a `success` aggregate is not enough on its own (`#3591`).
+     `computeCiStatus` EXCLUDES a cancelled run from its aggregate, so a
+     cancelled required check (CI/CD cancelled, the other workflows green)
+     leaves the aggregate green while GitHub's merge gate still refuses the
+     head — approving it approves a merge GitHub rejects. The latest run of
+     EVERY check name must therefore satisfy the merge gate (`success`,
+     `skipped` or `neutral`);
+   - a `failure` is only overridden when every failed workflow is one of
+     the known lost-run workflows (`LOST_RUN_WORKFLOWS`: CodeQL, Dependency
+     Review; a workflow that fails validation also creates no check run, and must
+     keep holding) AND a check run on the head backs the green: GitHub answered,
+     there are check runs, and the latest run of each check name satisfies the
+     merge gate (`success`, `skipped` or `neutral`).
+
+   A superseded cancelled run does not block a newer passing run of the same
+   name. Anything else — any other failed workflow, a red, running or cancelled
+   latest check run, an unreadable list, no token, no check runs — still holds
+   it. Without this, a task could sit approved and green forever with nothing
+   in the log (a run GitHub lost), or be approved on a head GitHub refuses to
+   merge (a cancelled required check). The gate also logs why it is waiting,
+   with the actual reason (once per task per hour), instead of returning
+   silently: `check-run-cancelled` (a cancelled required check — it needs a
+   CI/CD re-run, not a fix), `check-run-red`, `check-run-still-running`,
+   `no-check-runs`, `check-runs-unreadable` and `no-token-to-read-check-runs`.
+
 5. **The PR's `mergeable` field reads exactly `true` (`#1334`)** —
    `mergeable === null` ("unknown," GitHub still computing after a push) is
    neither confirmed-clean nor confirmed-dirty, and this gate mirrors the
@@ -2559,8 +2572,9 @@ once **all** of the following hold:
    (feeding the CI-return and PR-comment-return auto-return checks below),
    then steps 2 and 3 (round ingestion, approving verdict), then the
    dirty/mergeable check right below, then step 5 (`mergeable === true`),
-   and only then step 4 (`ciAllowsAutoApproval`: `status === "success"`, or the
-   lost-run exception above) as the final gate before `approveTask` runs. If the PR is `dirty` or `mergeable === false` once
+   and only then step 4 (`ciAllowsAutoApproval`: `status === "success"` with
+   every latest check passing, or the lost-run exception above) as the final
+   gate before `approveTask` runs. If the PR is `dirty` or `mergeable === false` once
    steps 2/3 pass, `project.autoApprove` + an unspent `rebaseAttempts`
    budget triggers [Auto-rebase](#auto-rebase-758) right there — on the
    still-`reviewing` task, before it has ever been approved — instead of

@@ -1931,7 +1931,12 @@ async function processReleaseRequests(app: FastifyInstance): Promise<void> {
 //      round's verdict, never a stale one from an earlier round).
 //   3. That round's verdict (tasks.lastReviewVerdict, written alongside
 //      ingestion in processReviewingTasks above) is "clean".
-//   4. CI on the PR head reads an explicit "success" (`ciAllowsAutoApproval`).
+//   4. CI on the PR head reads an explicit "success" AND the latest run of
+//      every check name on the head satisfies GitHub's merge gate
+//      (`ciAllowsAutoApproval`). The aggregate alone is not enough: it
+//      EXCLUDES a cancelled workflow run, so a cancelled required check
+//      leaves it green while GitHub's own merge gate still refuses the head
+//      (#3591).
 //   5. The task is still "reviewing" at the moment of the write — enforced
 //      by approveTask's own CAS, not checked here; a human racing the
 //      sweep simply wins.
@@ -1952,7 +1957,11 @@ async function processReleaseRequests(app: FastifyInstance): Promise<void> {
 // since the whole point of this gate is to BE a gate, not a formality that
 // eventually rubber-stamps itself. "in_progress"/null status, no
 // resolvable repo/token, or a thrown lookup are all simply "not yet" here
-// — forever, until CI genuinely reports success. The one exception is a
+// — forever, until CI genuinely reports success. The `success` path is not
+// taken on the aggregate alone either: the latest run of every check name
+// must satisfy the merge gate (`success`, `skipped` or `neutral`), since the
+// aggregate EXCLUDES a cancelled run and would read green while GitHub's
+// merge gate refuses the head. The one exception is a
 // failed CodeQL / Dependency Review workflow run that no check run backs (a
 // run GitHub lost): `ciAllowsAutoApproval` (task-ci-approval-gate.ts) decides,
 // and logs why whenever it holds.
