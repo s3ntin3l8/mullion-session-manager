@@ -603,18 +603,49 @@ if ($TokenFromStdin -or $env:MULLION_AGENT_ENROLLMENT_TOKEN -or $env:MULLION_AGE
 # identity_file_is_usable FILE -- what src/services/agent-identity.ts's
 # loadAgentIdentity accepts: parseable JSON with non-empty string hostId and
 # machineCredential. A truncated, hand-mangled or otherwise malformed file
-# counts as NO identity, exactly as it does for the agent.
+# counts as NO identity, exactly as it does for the agent. Run through the same
+# Node and the same check as install.sh's identity_file_is_usable, so the two
+# installers can never disagree about whether a file is "loadable".
 function Test-IdentityUsable([string]$File) {
   if (-not (Test-Path -LiteralPath $File -PathType Leaf)) { return $false }
-  try {
-    $id = Get-Content -LiteralPath $File -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-  } catch {
-    return $false
+  # Single quotes only: Windows PowerShell drops embedded double quotes from an
+  # argument it hands a native command, which would corrupt the script.
+  $check = @'
+const fs = require('fs');
+let parsed;
+try {
+  parsed = JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));
+} catch {
+  process.exit(1);
+}
+if (!parsed || typeof parsed !== 'object') process.exit(1);
+if (typeof parsed.hostId !== 'string' || !parsed.hostId) process.exit(1);
+if (typeof parsed.machineCredential !== 'string' || !parsed.machineCredential) process.exit(1);
+'@
+  & $node -e $check $File 2>$null | Out-Null
+  return ($LASTEXITCODE -eq 0)
+}
+
+# Git Bash's POSIX -> Windows translation. install.sh runs under Git Bash, so a
+# hand-written .env may hold SESSIONS_DIR=/c/Users/... and install.sh reads it
+# fine; Windows' own path rules would call that rooted and look under C:\c\...,
+# conclude there is no identity and report a token install.sh never wrote.
+function ConvertFrom-GitBashPath([string]$Path) {
+  # Git Bash ships cygpath in <git>\usr\bin, next to (or one level above) the
+  # bash.exe this script already found. No shell involved: it would need a
+  # quoted "$1" on its command line, and Windows PowerShell drops embedded
+  # double quotes from an argument it hands a native process.
+  $dir = Split-Path -Parent $bash
+  for ($i = 0; $i -lt 3 -and $dir; $i++) {
+    $cygpath = Join-Path $dir 'usr\bin\cygpath.exe'
+    if (Test-Path -LiteralPath $cygpath) {
+      $windows = & $cygpath -w $Path 2>$null
+      if ($LASTEXITCODE -eq 0 -and $windows) { return ([string]@($windows)[0]).Trim() }
+      return $Path
+    }
+    $dir = Split-Path -Parent $dir
   }
-  if (-not $id) { return $false }
-  if ($id.hostId -isnot [string] -or [string]::IsNullOrEmpty($id.hostId)) { return $false }
-  if ($id.machineCredential -isnot [string] -or [string]::IsNullOrEmpty($id.machineCredential)) { return $false }
-  return $true
+  return $Path
 }
 
 function Test-EnvCredential([string]$EnvFile) {
@@ -623,25 +654,31 @@ function Test-EnvCredential([string]$EnvFile) {
   # not a credential -- issue #3577 removed the enrollment-token bootstrap it
   # used to pair with, so treating it as one would suppress the generated
   # token for an agent that then crash-loops on the fail-closed check.
+  #
+  # Read the way install.sh's env_value reads it -- a KEY at the start of its
+  # line, the last one winning, a quote pair or a trailing " # comment"
+  # stripped -- so this decision matches install.sh's own repair.
   $vals = @{}
   foreach ($line in @(Get-Content -LiteralPath $EnvFile -ErrorAction SilentlyContinue)) {
-    if ($line -match '^\s*([A-Za-z_]+)=(.*)$') {
-      # As dotenv reads it: a matching quote pair is stripped (so KEY="" is
-      # blank), an unquoted value ends at a ' #' comment.
+    if ($line -match '^([A-Za-z_][A-Za-z0-9_]*)=(.*)$') {
+      $key = $Matches[1]
       $v = $Matches[2].Trim()
-      if ($v -match '^"(.*)"') { $v = $Matches[1] }
-      elseif ($v -match "^'(.*)'") { $v = $Matches[1] }
+      if ($v -match '^"([^"]*)"') { $v = $Matches[1] }
+      elseif ($v -match "^'([^']*)'") { $v = $Matches[1] }
       else { $v = ($v -replace '\s+#.*$', '').Trim() }
-      $vals[$Matches[1]] = $v.Trim()
+      $vals[$key] = $v.Trim()
     }
   }
   if ($vals['MULLION_AGENT_TOKEN']) { return $true }
   if (-not $vals['MULLION_PRIMARY_URL']) { return $false }
   $sessionsDir = $vals['SESSIONS_DIR']
-  if (-not $sessionsDir) { $sessionsDir = 'data/sessions' }
-  if (-not [IO.Path]::IsPathRooted($sessionsDir)) {
-    # install.sh resolves a relative SESSIONS_DIR against $MULLION_HOME/current
-    # (the release directory the agent runs from), never the caller's cwd.
+  if (-not $sessionsDir) { $sessionsDir = './data/sessions' }
+  # install.sh's pair_identity_file: a POSIX or drive path is absolute,
+  # everything else resolves against $MULLION_HOME/current (the release
+  # directory the agent runs from), never the caller's cwd.
+  if ($sessionsDir -match '^/') {
+    $sessionsDir = ConvertFrom-GitBashPath $sessionsDir
+  } elseif ($sessionsDir -notmatch '^[A-Za-z]:[\\/]') {
     $sessionsDir = Join-Path (Join-Path $InstallRoot 'current') $sessionsDir
   }
   return Test-IdentityUsable (Join-Path $sessionsDir 'agent-identity.json')

@@ -516,6 +516,42 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
       180_000,
     );
 
+    // Issue #3577 review — install.sh reads the .env under Git Bash, so a
+    // hand-written SESSIONS_DIR such as /c/Users/me/Mullion/data/sessions is a
+    // path it can resolve, though Windows' own path rules call it rooted and
+    // would look under C:\c\Users\... The script must read the same value the
+    // same way, or it decides the identity is missing, generates a token, and
+    // reports one install.sh (which finds the identity) never wrote.
+    it.skipIf(!gitBash || !hasNode26)(
+      "reads a quoted, Git-Bash-path SESSIONS_DIR the way install.sh does",
+      async () => {
+        const release = fakeRelease();
+        const root = installRoot();
+        const sessions = path.join(root, "data", "sessions");
+        fs.mkdirSync(sessions, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessions, "agent-identity.json"),
+          JSON.stringify({ hostId: "host-1", machineCredential: "cd".repeat(32) }), // pragma: allowlist secret
+        );
+        const drive = /^([A-Za-z]):[\\/](.*)$/.exec(sessions);
+        expect(drive).not.toBeNull();
+        const posix = `/${drive![1]!.toLowerCase()}/${drive![2]!.replaceAll("\\", "/")}`;
+        fs.writeFileSync(
+          path.join(root, ".env"),
+          `MULLION_ROLE=agent\nSESSIONS_DIR="${posix}"  # a Git Bash path\n` +
+            "MULLION_PRIMARY_URL=https://primary.example\n",
+        );
+        const res = await bootstrap(
+          ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", release.url],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(res.code).toBe(0);
+        expect(res.events.at(-1)!.agentToken).toBeUndefined();
+        expect(JSON.parse(fs.readFileSync(release.record, "utf8")).agentToken).toBeNull();
+      },
+      180_000,
+    );
+
     it.skipIf(!gitBash || !hasNode26)(
       "refuses a -Port outside 1..65535 before doing anything",
       async () => {
