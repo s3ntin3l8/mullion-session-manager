@@ -121,14 +121,57 @@ runs for you:
   worker or reviewer, a dock preview or **Promote to worktree** — and (once the
   checkout-materialization job lands, #2243) after a clone. Not on a Task Master
   retry/resume, whose tree is already set up.
-- **Where it runs:** on the host that owns the tree. It never blocks the session
-  starting, has a 15-minute timeout, and only one run per directory at a time (a
-  second session in the same directory starts without its own badge).
+- **Where it runs:** on the host that owns the tree. It has a 15-minute timeout, and
+  only one run per directory at a time (a second session in the same directory
+  starts without its own badge).
+- **Agent sessions don't wait:** an agent session starts at once and the recipe
+  runs beside it.
 - **Status and log:** the session's tab and its task card show a **setup running /
   ok / failed / timed out** badge (`sessions.setup_status`); clicking it opens the
   log, which lives on the session's host at `<sessionsDir>/<sessionId>.setup.log`
   (`GET /api/sessions/:id/setup-log`). A failed or timed-out recipe never kills or
-  blocks the session — it is only flagged.
+  blocks an agent session — it is only flagged.
+
+**Dock dev servers wait for it (#3588).** A dev server exits on the first missing
+module, so a **dock** session — a Dock start, a branch preview, a control started on
+another host — waits for the recipe before its command runs, on the host it runs on
+(in-process on the primary, `POST /internal/run-setup` on an agent):
+
+- **A fresh worktree** (a branch preview, a Dock start on a branch): the recipe
+  always runs.
+- **The project's checkout on another host** (Dock **Run on: <host>**): the recipe
+  runs only when the lockfiles at the top of that checkout (`package-lock.json`,
+  `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`, `uv.lock`, `poetry.lock`,
+  `Pipfile.lock`, `Cargo.lock`, `Gemfile.lock`, `composer.lock`, `go.sum`, …)
+  differ from the last successful run there — Mullion keeps a hash of them per
+  project, host and directory (`setup_stamps`). The first start after this
+  change installs once; an unchanged checkout is not reinstalled on every start.
+  A checkout whose lockfiles can't be read (the host does not answer within
+  30 s) is installed every time; a single lockfile that exists but can't be
+  read counts as absent.
+- **The project's own checkout on its own host:** never — that is your working
+  tree, and an install there could replace `node_modules` under whatever else
+  runs in it.
+
+Meanwhile the Dock row and the preview button read **Installing dependencies…**
+(`GET /api/projects/:id/dock/setups` lists the starts waiting). A failed or
+timed-out recipe fails the start (`424 setup_failed`, the message naming the
+outcome and the last 20 lines of the log) and the command is never run; a
+worktree cut for it is removed. The log is `<sessionsDir>/dock-<n>.setup.log` on
+that host (removed after a successful local run). `mullion dock start`/`switch`
+and the `start_dock_session` tool wait up to 32 minutes for such a start (another
+run already installing in the same directory is waited out first). A second start
+of a control that is still installing is refused (`409`). The stamp also covers the
+recipe text, so changing the recipe installs again; only lockfiles at the top of the
+session's directory count — a lockfile in a subdirectory (e.g. `frontend/`) is not
+seen.
+
+**No recipe:** nothing is guessed or run. When a dock session starts in a fresh
+worktree or another host's checkout that has a lockfile, the session is marked
+(`sessions.setup_hint = "no-recipe"`), and if it then exits the Dock's report, the
+branch preview's exited page and the project's Edit project dialog and setup-recipe
+field say: "This project has no setup recipe; new worktrees and other hosts get no
+dependencies." The hint goes away once a recipe is set.
 
 ## Database and sessions
 

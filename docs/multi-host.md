@@ -776,8 +776,12 @@ runs `sh -c <recipe>` in `cwd`, writing `<sessionsDir>/<logKey>.setup.log` on th
 agent. It always answers 200 with `{outcome, exitCode, logPath, detail?}`, where
 `outcome` is `ok`, `failed`, `timeout` or `busy` (a run is already in flight in that
 directory, so nothing started); a recipe failure is an outcome, not an HTTP error. The
-primary never waits on it: the session starts at once and its `setup_status` flips
-when the call returns. `GET /internal/setup-log?logKey=` returns the log's tail for
+primary never waits on it for an agent session: the session starts at once and its
+`setup_status` flips when the call returns. A **dock** session (a dev server) is the
+exception (#3588): the primary waits for the call before it spawns the session, with
+the log keyed `dock-<n>`, and a non-`ok` outcome fails the start; on `busy` it asks
+again every 2 s until the other run is done. An agent older than #3588 rejects the
+`dock-<n>` key, which fails such a start until the agent is updated. `GET /internal/setup-log?logKey=` returns the log's tail for
 `GET /api/sessions/:id/setup-log`. An agent too old to have either route answers 404,
 reported on the session as a failed setup.
 

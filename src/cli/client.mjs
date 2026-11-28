@@ -43,6 +43,12 @@ export const CONTROL_UNAVAILABLE_MESSAGE =
 export const WAIT_DEFAULT_TIMEOUT_MS = 600_000;
 export const WAIT_MAX_TIMEOUT_MS = 3_600_000;
 export const WAIT_SOCKET_SLACK_MS = 15_000;
+/** #3588 — `docks.start`/`docks.switch` answer only once the dock session has
+ * started, and a start in a fresh worktree or on another host first waits for
+ * the project's setup recipe (src/services/dock-setup.ts): up to one recipe
+ * timeout (15 min) for another run in the same directory, then up to one more
+ * for its own. */
+export const DOCK_START_TIMEOUT_MS = 32 * 60_000;
 
 /** Discovery order from the plan: an explicit override, then the sibling of
  * the hook socket in this process's own SESSIONS_DIR (set for every spawned

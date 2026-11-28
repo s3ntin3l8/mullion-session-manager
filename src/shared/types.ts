@@ -334,6 +334,16 @@ export interface DockerServiceInfo {
   pullable: boolean;
 }
 
+/** #3588 — a dock start waiting for its project's setup recipe
+ * (`GET /api/projects/:id/dock/setups`, dock-setup.ts). */
+export interface DockSetupRun {
+  projectId: number;
+  hostId: string;
+  dockControlId: string | null;
+  branch: string | null;
+  startedAt: number;
+}
+
 export interface DockControl {
   id: string;
   title: string;

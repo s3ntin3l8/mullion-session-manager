@@ -3402,6 +3402,21 @@ button.github-panel-row.gh-issue-row {
   box-sizing: border-box;
 }
 
+/* #3588 — a preview control's branch-preview runs, under its Dock row. */
+.dock-branch-previews {
+  list-style: none;
+  margin: 0;
+  padding: 2px 8px 4px 20px;
+  font-size: 0.75rem;
+  color: var(--text-muted, inherit);
+}
+.dock-branch-preview-output pre {
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  margin: 4px 0;
+}
+
 /* Issue #2069 — "Open holder" / "Stop holder and start" on a port-in-use row. */
 .dock-monitor-port-action {
   margin-left: 6px;

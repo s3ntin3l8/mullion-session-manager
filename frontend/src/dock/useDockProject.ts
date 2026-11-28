@@ -32,6 +32,7 @@ import type { DockerStackGroup } from "./dockHelpers.js";
 import { DOCKER_STACK_SESSION_NAME_PREFIX } from "../../../src/shared/constants.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "./useArmedKill.js";
 import { useTransientStatus } from "./useTransientStatus.js";
+import { NO_SETUP_RECIPE_HINT } from "../lib/setupHint.js";
 import {
   buildHostTargetOptions,
   AUTO_VALUE,
@@ -83,6 +84,10 @@ const RECREATE_GRACE_MS = 2 * DOCKER_POLL_INTERVAL_MS + 5_000;
 // reconciler has noticed, which can take tens of seconds for a remote host.
 const EARLY_EXIT_WINDOW_MS = 2 * 60_000;
 const EARLY_EXIT_LINES = 40;
+// #3588 — how often a start in flight asks whether it is installing.
+const INSTALL_POLL_MS = 1500;
+// #3588 — branch-preview runs listed under the preview control, newest first.
+const BRANCH_PREVIEWS_SHOWN = 3;
 
 /** #3557 — a control's run that ended right after it started: what the log
  * pane shows in place of the stream that is gone. */
@@ -92,6 +97,17 @@ export interface DockEndedReport {
   hostLabel: string;
   exitCode: number | null;
   lines: string[];
+}
+
+/** #3588 — one branch-preview run of the project's preview control. */
+export interface DockBranchPreview {
+  session: Session;
+  branch: string | null;
+  previewSlug: string | null;
+  running: boolean;
+  exitCode: number | null;
+  lastOutput: string | null;
+  noRecipe: boolean;
 }
 
 // A control's state and actions, bound to it. What DockMonitor renders and
@@ -120,6 +136,10 @@ export interface DockControlCardView {
   confirmBeforeKill: boolean;
   /** #3557 — set when the control's last run ended right after it started. */
   ended: DockEndedReport | undefined;
+  /** #3588 — the start is waiting for the project's setup recipe. */
+  installing: boolean;
+  /** #3588 — branch-preview runs of this control (the preview control only). */
+  branchPreviews: DockBranchPreview[];
   /** Starts the control (from the selected worktree or branch). Resolves
    * false when the start failed; the failure is already on the row. */
   start: () => Promise<boolean>;
@@ -203,6 +223,7 @@ export function useDockProject(
     dockConfigRefreshTrigger,
     dockControlWorktrees,
     hosts,
+    previews,
   } = useDashboardStore(
     useShallow((s) => ({
       projects: s.projects,
@@ -214,10 +235,13 @@ export function useDockProject(
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
       dockControlWorktrees: s.dockControlWorktrees?.[String(projectId)],
       hosts: s.hosts,
+      previews: s.previews,
     })),
   );
   // U8 — Settings -> Session management's "Confirm before kill" toggle.
   const confirmBeforeKill = settings.sessions.confirmBeforeKill;
+  const projectHasSetupRecipe = (id: number | null) =>
+    Boolean(projects.find((p) => p.id === id)?.setupRecipe?.trim());
   // The project's controls come from ONE poll shared by every mounted copy
   // of this hook for the project (#3036, dockProjectShared.ts): the bottom
   // Dock and the Dock view see the same list and make one request per
@@ -245,6 +269,55 @@ export function useDockProject(
   // an older run is dropped once a newer one has started.
   const latestLaunchRef = useRef(new Map<string, number>());
   const [endedById, setEndedById] = useState<Record<string, DockEndedReport>>({});
+  // #3588 — controls whose start is waiting for the project's setup recipe on
+  // the server ("Installing dependencies…"), polled only while a start is in
+  // flight. The timers are cleared on unmount.
+  const [installingIds, setInstallingIds] = useState<ReadonlySet<string>>(new Set());
+  const installPollsRef = useRef(new Set<ReturnType<typeof setInterval>>());
+  useEffect(() => {
+    const polls = installPollsRef.current;
+    return () => {
+      for (const timer of polls) clearInterval(timer);
+      polls.clear();
+    };
+  }, []);
+  const setInstalling = (controlId: string, on: boolean) =>
+    setInstallingIds((prev) => {
+      if (prev.has(controlId) === on) return prev;
+      const next = new Set(prev);
+      if (on) next.add(controlId);
+      else next.delete(controlId);
+      return next;
+    });
+  /** Polls the server's in-flight installs while `launch` runs. */
+  const whileWatchingInstall = async <T>(controlId: string, launch: () => Promise<T>) => {
+    let done = false;
+    const timer = setInterval(() => {
+      api
+        .listDockSetups(projectId)
+        .then(
+          (runs) =>
+            // A poll answering after the start returned must not turn it back on.
+            !done &&
+            setInstalling(
+              controlId,
+              runs.some((r) => r.dockControlId === controlId),
+            ),
+        )
+        .catch(() => {
+          // A failed poll only hides the label; the start itself goes on.
+        });
+    }, INSTALL_POLL_MS);
+    installPollsRef.current.add(timer);
+    try {
+      return await launch();
+    } finally {
+      done = true;
+      clearInterval(timer);
+      installPollsRef.current.delete(timer);
+      setInstalling(controlId, false);
+    }
+  };
   // Issue #2069 — a start the backend refused with 409 `port_in_use`. Kept
   // until the next start attempt (not a transient tag) because it carries
   // actions: the holder may need opening or stopping, not just reading about.
@@ -439,8 +512,23 @@ export function useDockProject(
         } catch {
           // The host no longer answers for it: the report says so.
         }
+        // #3588 — the scope is gone by now; the row kept its last output.
+        if (lines.length === 0 && session.lastOutput) {
+          lines = lastOutputLines(session.lastOutput, EARLY_EXIT_LINES);
+        }
         if (latestLaunchRef.current.get(controlId) !== session.id) return;
-        const exitCode = typeof session.exitCode === "number" ? session.exitCode : null;
+        const exitCode =
+          typeof session.exitCode === "number"
+            ? session.exitCode
+            : typeof session.lastExitCode === "number"
+              ? session.lastExitCode
+              : null;
+        const noRecipe =
+          session.setupHint === "no-recipe" &&
+          !useDashboardStore
+            .getState()
+            .projects.find((p) => p.id === session.projectId)
+            ?.setupRecipe?.trim();
         setEndedById((prev) => ({
           ...prev,
           [controlId]: {
@@ -457,9 +545,11 @@ export function useDockProject(
             `${watch.title} exited right after starting on ${watch.hostLabel}${
               exitCode !== null ? ` (exit code ${exitCode})` : ""
             }.`,
-            lines.length > 0
-              ? `Last output: ${lines[lines.length - 1]}`
-              : "It left no output to show.",
+            `${
+              lines.length > 0
+                ? `Last output: ${lines[lines.length - 1]}`
+                : "It left no output to show."
+            }${noRecipe ? ` ${NO_SETUP_RECIPE_HINT}` : ""}`,
           );
       })();
     }
@@ -521,6 +611,45 @@ export function useDockProject(
     localRunningIds.join(","),
     onOpenBrowser !== undefined && localRunningIds.length > 0,
   );
+
+  // #3588 — a branch preview runs the project's preview control (the one
+  // flagged `preview`, else the only one — branch-preview.ts's
+  // pickPreviewControl) as a dock session with no control id, in a
+  // `dock-preview-*` worktree. Its runs are listed under that control, so a
+  // running or failed preview is visible from the Dock.
+  const previewControlId =
+    (
+      configuredControls.find((c) => c.preview === true) ??
+      (configuredControls.length === 1 ? configuredControls[0] : undefined)
+    )?.id ?? null;
+  const branchPreviews: DockBranchPreview[] =
+    previewControlId === null
+      ? []
+      : sessions
+          .filter(
+            (s) =>
+              s.kind === "dock" &&
+              s.projectId === projectId &&
+              !s.dockControlId &&
+              s.cwd !== null &&
+              isDockPreviewPath(s.cwd) &&
+              (s.status === "active" || s.status === "exited"),
+          )
+          .sort((a, b) => b.id - a.id)
+          .slice(0, BRANCH_PREVIEWS_SHOWN)
+          .map((session) => {
+            const preview = previews.find((p) => p.sessionId === session.id);
+            return {
+              session,
+              branch: preview?.branch ?? session.liveBranch ?? null,
+              previewSlug: preview?.slug ?? null,
+              running: session.status === "active",
+              exitCode: session.lastExitCode ?? null,
+              lastOutput: session.lastOutput ?? null,
+              noRecipe:
+                session.setupHint === "no-recipe" && !projectHasSetupRecipe(session.projectId),
+            };
+          });
   const discoveredControls = controls.filter((c) => c.source === "docker");
   const { groups: dockerStackGroups, ungrouped: ungroupedDockerControls } = groupDockerControls(
     [...liveEphemeralControls, ...heldMerge.controls],
@@ -892,7 +1021,7 @@ export function useDockProject(
         delete next[control.id];
         return next;
       });
-      const session = await launchOnHost(value);
+      const session = await whileWatchingInstall(control.id, () => launchOnHost(value));
       latestLaunchRef.current.set(control.id, session.id);
       launchWatchRef.current.set(control.id, {
         sessionId: session.id,
@@ -917,7 +1046,11 @@ export function useDockProject(
         await launchForValue(selectedValue);
         return true;
       } catch (err: unknown) {
-        if (err instanceof ApiError && err.code === "port_in_use") {
+        if (err instanceof ApiError && err.code === "setup_failed") {
+          // #3588 — the recipe failed or timed out; the command never ran.
+          showCheckStatus(control.id, "Installing dependencies failed", true);
+          reportStartFailure(err);
+        } else if (err instanceof ApiError && err.code === "port_in_use") {
           const port = Number(err.body?.port);
           const holder = Number(err.body?.holderSessionId);
           setPortConflict(control.id, {
@@ -1084,6 +1217,8 @@ export function useDockProject(
       armed: killArmedIds.has(control.id),
       confirmBeforeKill,
       ended: endedById[control.id],
+      installing: installingIds.has(control.id),
+      branchPreviews: control.id === previewControlId ? branchPreviews : [],
       start,
       stop,
       restart,

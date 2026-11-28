@@ -526,8 +526,37 @@ Starting one:
    key (a control's `env` or `POST /api/sessions` can't set it); the branch
    preview hands its port to the session create separately (`previewPort`,
    #3555), and it is stored with the session's env so a reattach replays it.
+   Before the command runs, the project's [setup recipe](configuration.md#setup-recipe-for-new-worktrees-and-clones)
+   runs in the fresh worktree, on the host the dev server runs on, and the
+   start **waits for it** (the button reads "Installing dependencies…"). A
+   failed or timed-out recipe fails the start with `424 setup_failed`, its
+   message the outcome and the last lines of the recipe's log; the dev server
+   is never started and the worktree is removed. With no recipe set nothing
+   runs; if the worktree has a lockfile, a dev server that then exits says
+   "This project has no setup recipe; …" (#3588).
 4. Binds the `(project, branch)` preview row to that session and port. The
    proxy forwards that preview's slug to the port, not to `devServerUrl`.
+
+**When the dev server exits (#3588).** A preview whose dev server exited on
+its own answers a browser (a request that accepts `text/html`) with a page
+saying so: "The dev server for `<branch>` exited (code N)", its last lines of
+output, the no-recipe hint when it applies, and a link back to the dashboard
+(`PREVIEW_AUTH_DASHBOARD_URL`, when set). API and other non-HTML clients keep
+the fixed JSON `502 preview unavailable`, and the page is sent without the
+error responses' reflected `Access-Control-Allow-Origin` (it carries the dev
+server's output). The output survives the worktree cleanup because it is a
+copy: when the reconciler finds a dock session exited, it saves the last 60
+lines (8 KB at most) of its rendered output and its exit code on the session
+row (`sessions.last_output`, `last_exit_code`) before it tears the scope down
+and removes the preview worktree. The worktree itself is not kept — the next
+start recuts it anyway. Starting the preview again replaces the page with the
+new dev server.
+
+**In the Dock.** A branch preview runs the preview control as a dock session
+of its own, so the Dock lists the control's three most recent preview runs
+under its row: a running one with **Open** (its session), an exited one with
+its exit code and a **Why it exited** disclosure (its saved output, and the
+no-recipe hint).
 
 `POST /api/previews {kind: "project", projectId, branch}` is the API;
 `POST /api/projects/:id/github/prs/:number/preview` resolves a PR's head

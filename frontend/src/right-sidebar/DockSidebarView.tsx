@@ -1,3 +1,5 @@
+import { DockBranchPreviews } from "../dock/DockBranchPreviews.js";
+import { INSTALLING_LABEL } from "../lib/setupHint.js";
 import { useEffect, useRef, useState } from "react";
 import type { DockControl } from "../api/index.js";
 import { TerminalPane } from "../TerminalPane.js";
@@ -256,11 +258,20 @@ function DockActions({ view }: { view: DockControlCardView }) {
           )}
         </div>
       )}
+      {view.installing && (
+        <div className="dock-view-status" role="status">
+          {INSTALLING_LABEL}
+        </div>
+      )}
       {view.checkStatus && (
         <div className={`dock-view-status${view.checkStatus.isError ? " error" : ""}`}>
           {view.checkStatus.message}
         </div>
       )}
+      <DockBranchPreviews
+        items={view.branchPreviews}
+        onOpenSession={(session) => useDashboardStore.getState().requestOpenSession(session.id)}
+      />
     </div>
   );
 }

@@ -142,8 +142,14 @@ not stored: a fresh Dock starts on the project's own placement again.
   this version or later: an older agent answers before the launch has run,
   and an older primary gives an agent's spawn reply only 5 s.
 - A remote checkout is its own clone: untracked files the dev server needs
-  (`.env`, local config, `node_modules`) are not copied to it. Create them in
-  that checkout; a server that exits for want of one shows it in the log pane.
+  (`.env`, local config) are not copied to it. Create them in that checkout; a
+  server that exits for want of one shows it in the log pane.
+- Its dependencies come from the project's
+  [setup recipe](configuration.md#setup-recipe-for-new-worktrees-and-clones)
+  (#3588): a start there waits for it, on that host, whenever the checkout's
+  lockfiles changed since the last successful run there (the row reads
+  "Installing dependencies…"); a failed recipe fails the start with its log's
+  tail, and the command is not run. With no recipe set, nothing installs them.
 - The project's preview and its dev-server status follow the host its preview
   control runs on, so the Browser pane shows the Mac's dev server. This needs
   previews enabled (`PREVIEW_BASE_HOST`); with them off the Dock says so, because

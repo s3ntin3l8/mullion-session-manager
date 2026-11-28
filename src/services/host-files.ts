@@ -307,11 +307,22 @@ export async function readHostFiles(
   hostId: string,
   cwd: string,
   relPaths: string[],
+  // A remote read's own budget, for a caller whose files may be large (the
+  // lockfiles a dock start fingerprints, #3588); the client default otherwise.
+  opts: { timeoutMs?: number } = {},
 ): Promise<HostGitResult<HostFileMap>> {
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: readFilesLocally(cwd, relPaths) };
   }
-  return viaRemote(app, hostId, (client) => client.readFiles(cwd, relPaths), "project-files");
+  return viaRemote(
+    app,
+    hostId,
+    (client) =>
+      opts.timeoutMs === undefined
+        ? client.readFiles(cwd, relPaths)
+        : client.readFiles(cwd, relPaths, opts.timeoutMs),
+    "project-files",
+  );
 }
 
 /**

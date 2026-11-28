@@ -3,7 +3,7 @@ import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { api } from "../api/index.js";
 import type { GitBranchDrilldown } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
-import { useBranchPreview } from "../hooks/useBranchPreview.js";
+import { INSTALLING_LABEL, useBranchPreview } from "../hooks/useBranchPreview.js";
 import { describeError } from "../lib/describeError.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
@@ -380,7 +380,12 @@ export function BranchDetail({
           }
           disabled={branchPreview.starting.has(`branch:${name}`)}
         >
-          <GlobeIcon size={12} /> {entry?.preview ? "Open preview" : "Preview"}
+          <GlobeIcon size={12} />{" "}
+          {branchPreview.installing.has(`branch:${name}`)
+            ? INSTALLING_LABEL
+            : entry?.preview
+              ? "Open preview"
+              : "Preview"}
         </Button>
         <Button onClick={() => openRightSidebarHistory(projectId, `branch:${name}`)}>
           <HistoryIcon size={12} /> History

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PROrWithChecks, Task } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
-import { useBranchPreview } from "../hooks/useBranchPreview.js";
+import { INSTALLING_LABEL, useBranchPreview } from "../hooks/useBranchPreview.js";
 import { useRunJobs } from "../hooks/useGitHubData.js";
 import { useDashboardStore } from "../store/index.js";
 import { GlobeIcon, ThreadIcon } from "../ui/icons.js";
@@ -125,7 +125,13 @@ export function PrRow({
           <>
             {task && <TaskRowActions taskId={task.id} onError={setActionError} />}
             <IconButton
-              label={links?.preview ? "Open preview" : "Preview this PR"}
+              label={
+                branchPreview.installing.has(`pr:${pr.number}`)
+                  ? INSTALLING_LABEL
+                  : links?.preview
+                    ? "Open preview"
+                    : "Preview this PR"
+              }
               onClick={() =>
                 void branchPreview.open(
                   { kind: "pr", number: pr.number, branch: pr.headBranch },

@@ -14,6 +14,9 @@ import { KebabMenu } from "../ui/KebabMenu.js";
 import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { isStartable } from "../dockerServiceStatus.js";
 import { imagePillLabel } from "./dockHelpers.js";
+import { DockBranchPreviews } from "./DockBranchPreviews.js";
+import { INSTALLING_LABEL } from "../lib/setupHint.js";
+import type { DockBranchPreview } from "./useDockProject.js";
 
 // A single dock RAIL ROW — extracted from DockColumn's own render loop
 // (Wave 5 / PR 28 of .claude/plans/can-we-do-a-warm-cocke.md), then reduced
@@ -65,6 +68,9 @@ export function DockMonitor({
   onServiceRestart,
   onServiceStop,
   onServiceStart,
+  installing = false,
+  branchPreviews = [],
+  onOpenSession,
 }: {
   control: DockControl;
   running: Session | undefined;
@@ -134,6 +140,11 @@ export function DockMonitor({
   onServiceRestart: () => void;
   onServiceStop: () => void;
   onServiceStart: () => void;
+  // #3588 — the start is waiting for the project's setup recipe.
+  installing?: boolean;
+  // #3588 — the preview control's branch-preview runs, listed under the row.
+  branchPreviews?: DockBranchPreview[];
+  onOpenSession?: (session: Session) => void;
 }) {
   // Issue #1240 — a control synthesized for a session whose own control
   // dropped out of discovery (Dock.tsx's `orphanControls`). Its `id` is set
@@ -461,6 +472,11 @@ export function DockMonitor({
               )}
             </span>
           )}
+          {installing && (
+            <span className="dock-monitor-tag dock-monitor-check-status" role="status">
+              {INSTALLING_LABEL}
+            </span>
+          )}
           {checkStatus && (
             <span
               className={`dock-monitor-tag dock-monitor-check-status${checkStatus.isError ? " error" : ""}`}
@@ -575,6 +591,7 @@ export function DockMonitor({
           }
         </div>
       </div>
+      <DockBranchPreviews items={branchPreviews} onOpenSession={onOpenSession} />
     </Fragment>
   );
 }

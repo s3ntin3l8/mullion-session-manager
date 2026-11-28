@@ -27,7 +27,7 @@ import {
   TaskChip,
 } from "../ui/sidebar/index.js";
 import { isTaskBranch, type MullionLinks } from "../hooks/useMullionLinks.js";
-import { useBranchPreview } from "../hooks/useBranchPreview.js";
+import { INSTALLING_LABEL, useBranchPreview } from "../hooks/useBranchPreview.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
 import {
   fastForwardWouldDo,
@@ -395,7 +395,11 @@ export function BranchesSection({
                       <PlayTriangleIcon size={13} />
                     </IconButton>
                     <IconButton
-                      label={`${entry?.preview ? "Open preview" : "Preview this branch"}${previewHostNote}`}
+                      label={
+                        branchPreview.installing.has(`branch:${b.name}`)
+                          ? INSTALLING_LABEL
+                          : `${entry?.preview ? "Open preview" : "Preview this branch"}${previewHostNote}`
+                      }
                       onClick={() =>
                         void branchPreview.open(
                           { kind: "branch", branch: b.name, isCurrent: b.isCurrent },

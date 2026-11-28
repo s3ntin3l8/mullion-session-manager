@@ -5,6 +5,7 @@
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { buildAuthHeaders } from "../plugins/control-socket-core.js";
+import { listDockSetups } from "../services/dock-setup.js";
 import {
   listDockControls,
   startDockControl,
@@ -38,13 +39,19 @@ export async function dockControlsRoute(app: FastifyInstance) {
     // Keep only numbers and a known code: nothing upstream is echoed back.
     const raw = res.json() as Record<string, unknown>;
     const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+    const code = raw.code === "port_in_use" || raw.code === "setup_failed" ? raw.code : undefined;
     return {
       statusCode: res.statusCode,
       body: {
         id: num(raw.id),
-        code: raw.code === "port_in_use" ? "port_in_use" : undefined,
+        code,
         port: num(raw.port),
         holderSessionId: num(raw.holderSessionId),
+        // #3588 — the one upstream text passed on: the setup recipe's outcome
+        // and log tail, which is the reason the start failed.
+        ...(code === "setup_failed" && typeof raw.message === "string"
+          ? { setupDetail: raw.message }
+          : {}),
       },
     };
   };
@@ -60,6 +67,14 @@ export async function dockControlsRoute(app: FastifyInstance) {
     "/api/projects/:id/dock/controls",
     { schema: { params: idParams } },
     async (request, reply) => send(reply, await listDockControls(app, request.params.id)),
+  );
+
+  // #3588 — the project's dock starts that are waiting for its setup recipe
+  // right now ("Installing dependencies…" on the Dock row and preview button).
+  app.get<{ Params: { id: number } }>(
+    "/api/projects/:id/dock/setups",
+    { schema: { params: idParams } },
+    async (request) => listDockSetups(request.params.id),
   );
 
   app.post<{

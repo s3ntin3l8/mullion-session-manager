@@ -231,6 +231,47 @@ describe("reconcileExitedSessions", () => {
     expect(row?.status).toBe("exited");
   });
 
+  // #3588 — a dock session that exited on its own keeps its last output and
+  // exit code on its row, read from the host before the scope is torn down.
+  it("keeps a dock session's last output and exit code when it exits on its own", async () => {
+    const app = await openTestApp();
+    const sessionId = await createSession(app);
+    const plain = await createSession(app);
+    app.db
+      .update(sessions)
+      .set({ kind: "dock", dockControlId: "dev" })
+      .where(eq(sessions.id, sessionId))
+      .run();
+    // A docker-logs session is `kind: "dock"` too, and its output is not kept.
+    app.db.update(sessions).set({ kind: "dock" }).where(eq(sessions.id, plain)).run();
+    mockMasterAlive(app, false);
+    const sessionBackend = await import("../../src/services/session-backend.js");
+    const real = sessionBackend.resolveBackend(app, "local");
+    const scrollback = vi.fn(
+      async () => "\x1b[32mstarting\x1b[0m\nError: Cannot find module 'tsx'\n\n",
+    );
+    vi.spyOn(sessionBackend, "resolveBackend").mockReturnValue(
+      Object.assign(Object.create(real), {
+        getRenderedScrollback: scrollback,
+        liveStatus: vi.fn(async (ids: string[]) =>
+          Object.fromEntries(ids.map((id) => [id, { exitCode: 1 }])),
+        ),
+      }) as ReturnType<typeof sessionBackend.resolveBackend>,
+    );
+
+    await reconcileExitedSessions(app);
+
+    const row = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).get();
+    expect(row?.status).toBe("exited");
+    expect(row?.lastOutput).toBe("starting\nError: Cannot find module 'tsx'");
+    expect(row?.lastExitCode).toBe(1);
+    // Only a dev server's output is kept.
+    const other = app.db.select().from(sessions).where(eq(sessions.id, plain)).get();
+    expect(other?.status).toBe("exited");
+    expect(other?.lastOutput).toBeNull();
+    expect(scrollback).toHaveBeenCalledTimes(1);
+  });
+
   // Issue #1771 — the END-TO-END assertion for the sessions-dir HISTORY: a
   // scope created before this install's sessions dir MOVED (an operator
   // moved SESSIONS_DIR, or TMPDIR's value changed between runs) keeps its

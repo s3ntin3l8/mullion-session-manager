@@ -258,6 +258,17 @@ describe("host-files.ts", () => {
       expect(result).toEqual({ ok: true, value: { "AGENTS.md": "remote content\n" } });
     });
 
+    it("remote: passes a caller's own read budget through (#3588)", async () => {
+      const mockReadFiles = vi.fn().mockResolvedValue({});
+      mockGetRemoteHostClient.mockReturnValue({ readFiles: mockReadFiles });
+
+      await readHostFiles(fakeApp, "remote-host-1", "/remote/cwd", ["uv.lock"], {
+        timeoutMs: 30_000,
+      });
+
+      expect(mockReadFiles).toHaveBeenCalledWith("/remote/cwd", ["uv.lock"], 30_000);
+    });
+
     it("remote: an unreachable host maps to reason 'unreachable'", async () => {
       mockGetRemoteHostClient.mockReturnValue({
         readFiles: vi.fn().mockRejectedValue(new HostUnreachableError("h1", new Error("timeout"))),
