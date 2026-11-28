@@ -14,14 +14,11 @@ import { namedHostStatus, PARKED_WORD } from "./lib/hostStatusWords.js";
  */
 export function HostStatusLabel({ host }: { host: Host }) {
   const { display, parked } = namedHostStatus(host);
-  // Issue #3476 / #3573 — the deprecation qualifier and the legacy-agent
-  // words come from ONE shared function (legacyChip), so this label and the
-  // Settings → Hosts row cannot drift apart. One chip, never two: the
-  // deprecation label carries the legacy-agent words itself when the host IS
-  // a legacy agent (so a host that is both a manual-token host and a legacy
-  // agent keeps both facts visible), and it stands alone when the host is
-  // not one. The hover gains the sentence that says what is deprecated and
-  // what replaces it.
+  // Issue #3476 / #3573 / #3578 — the chip text and hover come from ONE shared
+  // function (legacyChip), so this label and the Settings → Hosts row cannot
+  // drift apart. One chip, never two: both legacy kinds read "needs re-pair",
+  // and any legacy-agent detail plus the deprecation/Re-pair note live in the
+  // hover (`title`).
   const chip = legacyChip(host);
   if (!display?.label && !parked && !chip) return null;
   return (

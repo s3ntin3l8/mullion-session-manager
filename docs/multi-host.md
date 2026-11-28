@@ -2453,21 +2453,14 @@ address only the home network can route.
 
 **How to see it.** Wherever the app names a host — the Settings → Hosts row,
 the sidebar project header, pane tabs and session rows — it shows the SAME chip:
-`outdated agent (deprecated)` for an agent that predates the channel, or
-`not registered (deprecated)` for one that already reports v0.3.59 or later and
-is flagged anyway (upgrading would change nothing for it: it has never
-registered; see Fix). The "(deprecated)" qualifier marks the setup as on its
-way out (see "Deprecated host kinds"). A host whose agent authenticates
-with the row's own static token (`MULLION_AGENT_TOKEN`) reads
-`manual token (deprecated)` — the kind is ADDED to the chip, not swapped in: a
-host that is both (no machine identity AND a static token) reads
-`not registered · manual token (deprecated)` (or `outdated agent · manual token
-(deprecated)`), because that credential — not the agent's version — is what has
-to change. The chip says what is wrong; the hover says what to do — for a
-manual-token host, a host-bound pairing code (see "Deprecated host kinds"
-above); the Fix section below has the legacy-agent steps. Every surface has a
-hover with the agent's reported version, but only the Settings hover also gives
-the primary's version. The
+`needs re-pair` for both legacy kinds (`legacy-agent` and `manual-token`; see
+"Deprecated host kinds"). The chip text is the shared label; the hover carries
+the detail — whether the agent predates v0.3.59, reports v0.3.59 or later without
+registering a machine identity (`MULLION_PRIMARY_URL` missing or wrong), or
+authenticates with a static `MULLION_AGENT_TOKEN` — along with what to do
+(**Re-pair** in Settings → Hosts for a host-bound pairing code, or the Fix steps
+below). Every surface has a hover with the agent's reported version, while only
+the Settings hover also gives the primary's version. The
 `GET /api/hosts` field is `legacyAgent`: true for a non-local host that has a
 `baseUrl`, no machine identity and no revoked identity; `deprecatedKind` says
 which legacy path a host is on (`"legacy-agent"`, `"manual-token"`, or `null`).

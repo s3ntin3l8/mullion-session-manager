@@ -228,9 +228,9 @@ export function legacyChip(host: Host, options: LegacyChipOptions = {}): LegacyC
   const deprecatedLabel = deprecatedKindLabel(host);
   const deprecatedNote = deprecatedKindTitle(host);
   if (deprecatedLabel) {
-    // A host that is BOTH a legacy agent and a manual-token host keeps the
-    // agent words AND the kind in the chip; the hover adds the agent's own
-    // explanation next to the deprecation note.
+    // Both legacy kinds share the single "needs re-pair" chip text; when the
+    // host is also a legacy agent, the agent-specific detail is hover-only,
+    // prepended to the deprecation note in `title`.
     const legacyNote =
       host.legacyAgent === true ? legacyAgentTitle(host, options.primaryVersion) : null;
     return {
