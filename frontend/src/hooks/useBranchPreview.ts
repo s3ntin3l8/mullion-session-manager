@@ -45,7 +45,7 @@ export function previewErrorMessage(err: unknown): string {
 
 // #3588 — how often a start in flight asks whether it is installing.
 const INSTALL_POLL_MS = 1500;
-export const INSTALLING_LABEL = "Installing dependencies…";
+export { INSTALLING_LABEL } from "../lib/setupHint.js";
 
 export function targetKey(target: BranchPreviewTarget): string {
   return target.kind === "pr" ? `pr:${target.number}` : `branch:${target.branch}`;

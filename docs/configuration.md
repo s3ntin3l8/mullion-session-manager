@@ -146,7 +146,9 @@ another host — waits for the recipe before its command runs, on the host it ru
   differ from the last successful run there — Mullion keeps a hash of them per
   project, host and directory (`setup_stamps`). The first start after this
   change installs once; an unchanged checkout is not reinstalled on every start.
-  A checkout whose lockfiles can't be read is installed every time.
+  A checkout whose lockfiles can't be read (the host does not answer within
+  30 s) is installed every time; a single lockfile that exists but can't be
+  read counts as absent.
 - **The project's own checkout on its own host:** never — that is your working
   tree, and an install there could replace `node_modules` under whatever else
   runs in it.

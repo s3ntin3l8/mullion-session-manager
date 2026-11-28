@@ -1,4 +1,5 @@
 import { DockBranchPreviews } from "../dock/DockBranchPreviews.js";
+import { INSTALLING_LABEL } from "../lib/setupHint.js";
 import { useEffect, useRef, useState } from "react";
 import type { DockControl } from "../api/index.js";
 import { TerminalPane } from "../TerminalPane.js";
@@ -259,7 +260,7 @@ function DockActions({ view }: { view: DockControlCardView }) {
       )}
       {view.installing && (
         <div className="dock-view-status" role="status">
-          Installing dependencies…
+          {INSTALLING_LABEL}
         </div>
       )}
       {view.checkStatus && (

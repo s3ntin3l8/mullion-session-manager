@@ -62,6 +62,11 @@ export const LOCKFILES = [
   "go.sum",
 ] as const;
 
+/** A remote host's budget for sending the lockfiles' full content (several
+ * MB is common): the client's 5 s default would fail the read on a slow link,
+ * and an unreadable fingerprint re-runs the recipe on every start. */
+export const LOCKFILE_READ_TIMEOUT_MS = 30_000;
+
 /** How many lines of the recipe log a failed start reports. */
 export const SETUP_FAILURE_TAIL_LINES = 20;
 /** A busy directory (another run in flight there) is re-asked this often. */
@@ -142,7 +147,9 @@ export async function lockfileFingerprint(
 ): Promise<Fingerprint> {
   let read;
   try {
-    read = await readHostFiles(app, hostId, cwd, [...LOCKFILES]);
+    read = await readHostFiles(app, hostId, cwd, [...LOCKFILES], {
+      timeoutMs: LOCKFILE_READ_TIMEOUT_MS,
+    });
   } catch {
     return { ok: false };
   }

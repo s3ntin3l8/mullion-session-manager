@@ -1115,7 +1115,11 @@ export class RemoteHostClient {
    * this host yet" — the same "missing key = absent" convention
    * computeScaffold's own `existingFiles` parameter already uses locally
    * (mullion-scaffold.ts). */
-  async readFiles(cwd: string, paths: string[]): Promise<Record<string, string | undefined>> {
+  async readFiles(
+    cwd: string,
+    paths: string[],
+    timeoutMs?: number,
+  ): Promise<Record<string, string | undefined>> {
     const result = await this.request<{ files: Record<string, string | undefined> }>(
       "/internal/read-files",
       {
@@ -1123,6 +1127,7 @@ export class RemoteHostClient {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ cwd, paths }),
       },
+      timeoutMs,
     );
     return result.files;
   }

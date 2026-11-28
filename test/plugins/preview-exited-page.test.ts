@@ -89,6 +89,7 @@ describe("preview proxy: the dev server exited (#3588)", () => {
     expect(res.body).toContain("This project has no setup recipe");
     // The page carries the dev server's output: never readable cross-origin.
     expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(res.headers.vary).toBe("Accept");
   });
 
   it("drops the hint once the project has a recipe, and says when there is no output", async () => {

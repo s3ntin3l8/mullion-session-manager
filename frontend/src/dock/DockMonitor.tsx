@@ -15,6 +15,7 @@ import type { DockerStatusPresentation } from "../dockerServiceStatus.js";
 import { isStartable } from "../dockerServiceStatus.js";
 import { imagePillLabel } from "./dockHelpers.js";
 import { DockBranchPreviews } from "./DockBranchPreviews.js";
+import { INSTALLING_LABEL } from "../lib/setupHint.js";
 import type { DockBranchPreview } from "./useDockProject.js";
 
 // A single dock RAIL ROW — extracted from DockColumn's own render loop
@@ -473,7 +474,7 @@ export function DockMonitor({
           )}
           {installing && (
             <span className="dock-monitor-tag dock-monitor-check-status" role="status">
-              Installing dependencies…
+              {INSTALLING_LABEL}
             </span>
           )}
           {checkStatus && (

@@ -246,6 +246,8 @@ function sendExitedPreviewPage(
   request.raw.resume();
   // A failure path may already have set the reflected origin for its fixed body.
   reply.removeHeader("Access-Control-Allow-Origin");
+  // The same URL answers an API client with the fixed JSON 502.
+  reply.header("Vary", "Accept");
   return reply
     .code(502)
     .type("text/html; charset=utf-8")
