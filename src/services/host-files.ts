@@ -317,7 +317,10 @@ export async function readHostFiles(
   return viaRemote(
     app,
     hostId,
-    (client) => client.readFiles(cwd, relPaths, opts.timeoutMs),
+    (client) =>
+      opts.timeoutMs === undefined
+        ? client.readFiles(cwd, relPaths)
+        : client.readFiles(cwd, relPaths, opts.timeoutMs),
     "project-files",
   );
 }
