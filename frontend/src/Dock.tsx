@@ -161,6 +161,7 @@ export function Dock({
   onOpenGitHub,
   onOpenBrowser,
   onOpenBlankBrowser,
+  onOpenBrowserUrl,
   onManagePreviews,
   onOpenSession,
 }: {
@@ -175,6 +176,9 @@ export function Dock({
   // there's no server round-trip needed to know whether it's applicable.
   onOpenBrowser: (projectId: number) => void;
   onOpenBlankBrowser?: () => void;
+  // #3589 — a Dock row's "Open in browser" on a port detected in its output,
+  // when previews are off: the address itself, as the Browser quick pick does.
+  onOpenBrowserUrl?: (projectId: number, url: string, label: string) => void;
   onManagePreviews?: (projectId: number) => void;
   // Issue #2069 — "Open holder" on a port-in-use row.
   onOpenSession?: (session: Session) => void;
@@ -631,6 +635,7 @@ export function Dock({
                   onOpenGitHub={onOpenGitHub}
                   onOpenBrowser={onOpenBrowser}
                   onOpenBlankBrowser={onOpenBlankBrowser}
+                  onOpenBrowserUrl={onOpenBrowserUrl}
                   onManagePreviews={onManagePreviews}
                   onOpenSession={onOpenSession}
                   onRemove={manualOnly(id) ? () => removeColumn(id) : undefined}

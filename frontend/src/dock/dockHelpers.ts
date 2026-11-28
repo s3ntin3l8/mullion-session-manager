@@ -1,4 +1,4 @@
-import type { DockControl, DockerServiceInfo, Session } from "../api/index.js";
+import type { DockControl, DockerServiceInfo, Project, Session } from "../api/index.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "../lib/persistedState.js";
 import { legacyDotClass, statusTone } from "../lib/statusTone.js";
 
@@ -839,4 +839,74 @@ export function lastOutputLines(text: string, max: number): string[] {
   const lines = text.split(/\r?\n/).map((l) => l.trimEnd());
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines.slice(-max);
+}
+
+/** The selector value standing for a remote checkout a row runs from (#3589):
+ * not a path on the project's own host, so never launched from. */
+export const REMOTE_CHECKOUT_VALUE_PREFIX = "remote-checkout:";
+
+/**
+ * #3589 — what a row's branch selector shows. Its options are checkouts on
+ * the project's own host; a row running on another host shows where it runs
+ * instead: the branch it was started on when the selection names one, and
+ * otherwise that host's own path (the session's directory there, or the
+ * host's checkout root). Never this host's path, which is what a
+ * detached-HEAD main checkout's option is labelled with. Display only: the
+ * row's launches keep using the real `selectedValue`.
+ */
+export function remoteSelectorDisplay(params: {
+  selectedValue: string;
+  options: Array<{ value: string; label: string; branch?: string }>;
+  running: Session | undefined;
+  remote: boolean;
+  remoteHostRoot: string | undefined;
+}): { value: string; options: Array<{ value: string; label: string; branch?: string }> } {
+  const { selectedValue, options, running, remote, remoteHostRoot } = params;
+  if (!remote || !running) return { value: selectedValue, options };
+  const selected = options.find((o) => o.value === selectedValue);
+  // A branch (a worktree's, or a branch preview's) is the same on every host.
+  if (selected?.branch) return { value: selectedValue, options };
+  const ownPaths = new Set(options.map((o) => o.value));
+  const sessionCwd = running.cwd && !ownPaths.has(running.cwd) ? running.cwd : undefined;
+  const remotePath = sessionCwd ?? remoteHostRoot;
+  const label = remotePath ?? "Main checkout";
+  const value = `${REMOTE_CHECKOUT_VALUE_PREFIX}${remotePath ?? ""}`;
+  return {
+    value,
+    options: [{ value, label }, ...options.filter((o) => o.value !== selectedValue)],
+  };
+}
+
+/** The TCP port a dev server address names: a bare port ("5173"), or a URL's
+ * explicit or default port. Null when there is none to read. */
+export function devServerPort(address: string | null | undefined): number | null {
+  const text = address?.trim();
+  if (!text) return null;
+  if (/^\d+$/.test(text)) return Number(text);
+  try {
+    const url = new URL(text.includes("://") ? text : `http://${text}`);
+    if (url.port) return Number(url.port);
+    return url.protocol === "https:" ? 443 : 80;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #3589 — whether a dock control serves the project's dev server, so its row
+ * can open it in the browser: the port it binds (its `port`, or the port
+ * detected on the project when it is the project's only command) is the
+ * dev server address's. A Compose service is not: its address is its own.
+ */
+export function runsDevServer(
+  control: DockControl,
+  project: Pick<Project, "devServerUrl" | "detectedDevServerPort"> | null,
+  soleCommand: boolean,
+): boolean {
+  if (!project || control.docker || control.source === "docker") return false;
+  const devPort = devServerPort(project.devServerUrl);
+  if (devPort === null) return false;
+  const rowPort =
+    control.port ?? (soleCommand ? devServerPort(project.detectedDevServerPort) : null);
+  return rowPort === devPort;
 }

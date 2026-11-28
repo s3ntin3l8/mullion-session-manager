@@ -5,7 +5,7 @@ import { DockEndedOutput } from "../dock/DockLogPane.js";
 import { useDashboardStore } from "../store/index.js";
 import { isStartable } from "../dockerServiceStatus.js";
 import { dockRowKey, imagePillLabel } from "../dock/dockHelpers.js";
-import { DockHostPicker } from "../dock/DockHostPicker.js";
+import { DockHostPicker, DockPreviewsOffNote } from "../dock/DockHostPicker.js";
 import { useDockProject } from "../dock/useDockProject.js";
 import type { DockControlCardView, DockStackActions } from "../dock/useDockProject.js";
 import { KILL_ARM_DISARM_MS, useArmedKill } from "../dock/useArmedKill.js";
@@ -217,6 +217,11 @@ function DockActions({ view }: { view: DockControlCardView }) {
             Start
           </button>
         )}
+        {view.openInBrowser && (
+          <button type="button" disabled={disabled} onClick={view.openInBrowser}>
+            Open in browser
+          </button>
+        )}
         {view.showSelector && (
           <CustomSelect
             className="dock-view-branch"
@@ -346,6 +351,13 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
   const dock = useDockProject(projectId, {
     surface: "sidebar-view",
     onOpenSession: (session) => useDashboardStore.getState().requestOpenSession(session.id),
+    // #3589 — the rail's own Browser view, as a preview opened from the
+    // rail does (#3372).
+    onOpenBrowser: () => useDashboardStore.getState().openRailBrowserPreview(null, projectId),
+    onOpenBrowserUrl: (url) =>
+      useDashboardStore
+        .getState()
+        .openRailBrowserPreview({ kind: "external", url, projectId }, projectId),
   });
   const {
     hostPicker,
@@ -428,6 +440,7 @@ function DockSidebarViewForProject({ projectId, actions }: RightSidebarViewProps
     <div className="dock-sidebar-view rs-fill">
       <SidebarHeader label={VIEW_TITLES.dock} />
       {hostPicker && <DockHostPicker picker={hostPicker} />}
+      {hostPicker && <DockPreviewsOffNote picker={hostPicker} />}
       <div className="dock-view-list">
         {empty && (
           <EmptyStateNote>

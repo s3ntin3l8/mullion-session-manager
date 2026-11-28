@@ -1601,6 +1601,7 @@ export function App() {
                 onOpenGitHub={onOpenGitHub}
                 onOpenBrowser={onOpenBrowser}
                 onOpenBlankBrowser={onOpenBlankBrowser}
+                onOpenBrowserUrl={onOpenBrowserUrl}
                 onManagePreviews={(id) => onOpenDockConfig(id, "previews")}
                 onOpenSession={onOpenSession}
               />

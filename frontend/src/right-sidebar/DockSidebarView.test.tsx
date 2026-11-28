@@ -240,10 +240,15 @@ describe("DockSidebarView (#3012)", () => {
         renderView();
         await screen.findByRole("button", { name: "dev, stopped" });
         expect(picker()).not.toBeDisabled();
-        expect(screen.getByText("Next start on")).toBeInTheDocument();
-        expect(document.querySelector(".dock-host-picker")?.getAttribute("title")).toMatch(
-          /next Start runs/,
-        );
+        // #3589 — one label whether or not a control runs.
+        expect(screen.getByText("Run on")).toBeInTheDocument();
+        // #3589 — the shared, portaled tooltip (on document.body), never a
+        // native title the Dock's overflow can clip.
+        expect(document.querySelector(".dock-host-picker [title]")).toBeNull();
+        await userEvent.hover(document.querySelector(".dock-host-picker")!);
+        const tooltip = await screen.findByRole("tooltip");
+        expect(tooltip).toHaveTextContent(/next Start runs/);
+        expect(tooltip.parentElement).toBe(document.body);
       });
 
       it("a pick made while stopped does not override where it then runs", async () => {
@@ -267,10 +272,12 @@ describe("DockSidebarView (#3012)", () => {
         );
         expect(dd.dropdownValue(picker())).toBe("__own__");
         expect(picker()).toBeDisabled();
-        expect(screen.getByText("Running on")).toBeInTheDocument();
-        expect(document.querySelector(".dock-host-picker")?.getAttribute("title")).toBe(
+        expect(screen.getByText("Run on")).toBeInTheDocument();
+        await userEvent.hover(document.querySelector(".dock-host-picker")!);
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(
           "dev is running on this server. Stop dev to run it on another host.",
         );
+        await userEvent.unhover(document.querySelector(".dock-host-picker")!);
         // Restart keeps it where it runs, not on the stale pick.
         await userEvent.click(
           within(screen.getByRole("group", { name: "dev actions" })).getByRole("button", {
@@ -343,9 +350,11 @@ describe("DockSidebarView (#3012)", () => {
         await screen.findByRole("button", { name: "dev, running on old-box" });
         // The newest control off the project's own host decides what is shown.
         expect(dd.dropdownValue(picker())).toBe("old-box");
-        expect(document.querySelector(".dock-host-picker")?.getAttribute("title")).toBe(
+        await userEvent.hover(document.querySelector(".dock-host-picker")!);
+        expect(await screen.findByRole("tooltip")).toHaveTextContent(
           "logs and dev are running. Stop them to run them on another host.",
         );
+        await userEvent.unhover(document.querySelector(".dock-host-picker")!);
         // A stopped control starts where the selector says, even on that host.
         await userEvent.click(screen.getByRole("button", { name: /^build, stopped/ }));
         await userEvent.click(
