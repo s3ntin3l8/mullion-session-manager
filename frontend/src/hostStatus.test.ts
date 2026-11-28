@@ -232,113 +232,71 @@ describe("deriveHostStatus (issue #246)", () => {
   });
 });
 
-// Issue #3476 — the deprecation qualifier for a host that is still on a
-// legacy path. It says the setup is going away and what replaces it; it
-// refuses nothing.
-describe("the deprecation qualifier (issue #3476)", () => {
-  it("adds the qualifier to the legacy agent's own chip", () => {
+// Issue #3578 (follows #3476) — the "needs re-pair" chip for a host that is
+// still on a removed-soon legacy path.
+describe("the needs re-pair chip (issue #3578)", () => {
+  it("shows needs re-pair for both legacy-agent and manual-token hosts", () => {
     const old = makeHost({
       legacyAgent: true,
       deprecatedKind: "legacy-agent",
       mullionVersion: "0.3.50",
     });
-    expect(deprecatedKindLabel(old)).toBe("outdated agent (deprecated)");
+    expect(deprecatedKindLabel(old)).toBe("needs re-pair");
     const current = makeHost({
       legacyAgent: true,
       deprecatedKind: "legacy-agent",
       mullionVersion: "0.3.62",
     });
-    expect(deprecatedKindLabel(current)).toBe("not registered (deprecated)");
+    expect(deprecatedKindLabel(current)).toBe("needs re-pair");
+    expect(deprecatedKindLabel(makeHost({ deprecatedKind: "legacy-agent" }))).toBe("needs re-pair");
+    expect(deprecatedKindLabel(makeHost({ deprecatedKind: "manual-token" }))).toBe("needs re-pair");
+    expect(
+      deprecatedKindLabel(
+        makeHost({ deprecatedKind: "manual-token", legacyAgent: true, mullionVersion: "0.3.50" }),
+      ),
+    ).toBe("needs re-pair");
   });
 
-  it("names the legacy agent plainly when the host is not flagged as one", () => {
-    // A primary that reported the kind without the legacyAgent flag (an
-    // older primary, a row the route cleared) still gets a truthful chip.
-    const host = makeHost({ deprecatedKind: "legacy-agent" });
-    expect(deprecatedKindLabel(host)).toBe("legacy agent (deprecated)");
-  });
-
-  it("gives a manual-token host a chip of its own", () => {
-    const host = makeHost({ deprecatedKind: "manual-token" });
-    expect(deprecatedKindLabel(host)).toBe("manual token (deprecated)");
-  });
-
-  it("keeps the agent words visible for a manual-token host the primary also dials by address", () => {
-    // Such a host is BOTH: its credential is a static token AND it has no
-    // machine identity. The chip used to say "not registered" — it must not
-    // lose that, and it must name the kind that has to change.
-    const host = makeHost({
-      deprecatedKind: "manual-token",
-      legacyAgent: true,
-      mullionVersion: "0.3.62",
-    });
-    expect(deprecatedKindLabel(host)).toBe("not registered · manual token (deprecated)");
-    const old = makeHost({
-      deprecatedKind: "manual-token",
-      legacyAgent: true,
-      mullionVersion: "0.3.50",
-    });
-    expect(deprecatedKindLabel(old)).toBe("outdated agent · manual token (deprecated)");
-  });
-
-  it("has no qualifier for a host that is not deprecated", () => {
+  it("has no chip for a host that is not deprecated", () => {
     expect(deprecatedKindLabel(makeHost())).toBeNull();
     expect(deprecatedKindLabel(makeHost({ deprecatedKind: null }))).toBeNull();
     expect(deprecatedKindTitle(makeHost())).toBeNull();
     expect(deprecatedKindTitle(makeHost({ deprecatedKind: null }))).toBeNull();
   });
 
-  it("points at a migration that exists today, not at a Re-pair the row menu does not offer", () => {
-    // The row menu's Re-pair entry only appears for a host that holds (or
-    // held) a machine identity — a host that is still fully on a legacy
-    // path has no such entry, so the hover must not send the operator
-    // looking for it.
+  it("states support ends in the release after this one and names Re-pair", () => {
     const legacy = deprecatedKindTitle(makeHost({ deprecatedKind: "legacy-agent" }));
-    expect(legacy).toMatch(/Deprecated/);
+    expect(legacy).toMatch(/release after this one/);
+    expect(legacy).toMatch(/Re-pair/);
     expect(legacy).toMatch(/MULLION_PRIMARY_URL/);
-    expect(legacy).toMatch(/one-time pairing code/);
-    expect(legacy).not.toMatch(/Re-pair/);
 
     const manual = deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }));
-    expect(manual).toMatch(/Deprecated/);
+    expect(manual).toMatch(/release after this one/);
+    expect(manual).toMatch(/Re-pair/);
     expect(manual).toMatch(/MULLION_AGENT_TOKEN/);
-    expect(manual).toMatch(/one-time pairing code/);
-    expect(manual).not.toMatch(/Re-pair/);
-  });
-
-  it("names the host-bound pairing code for a manual-token host", () => {
-    // The unbound code the _Generate pairing link_ button mints creates a NEW
-    // host row and leaves the deprecated one behind, so the hover has to name
-    // the host-bound code (POST /api/host-pairings with {"hostId": ...}) that
-    // re-pairs the same row.
-    const manual = deprecatedKindTitle(makeHost({ deprecatedKind: "manual-token" }));
-    expect(manual).toMatch(/hostId/);
-    expect(manual).toMatch(/NEW host row/);
   });
 });
 
-// Issue #3573 — ONE chip for every surface that shows it: the places that
-// name a host and the Settings → Hosts row. The row used to build its own
-// from the legacy-agent words, so a deprecated host read "Outdated agent —
-// upgrade" there and never showed the qualifier.
-describe("the shared legacy chip (issue #3573)", () => {
-  it("shows the deprecation qualifier, not the bare legacy-agent words", () => {
+// Issue #3573 / #3578 — ONE chip for every surface that shows it: the places
+// that name a host and the Settings → Hosts row.
+describe("the shared legacy chip (issue #3573, #3578)", () => {
+  it("shows needs re-pair and the hover for a legacy-agent host", () => {
     const host = makeHost({
       legacyAgent: true,
-      deprecatedKind: "manual-token",
+      deprecatedKind: "legacy-agent",
       mullionVersion: "0.3.50",
     });
-    expect(legacyChip(host)).toEqual({
-      text: "outdated agent · manual token (deprecated)",
-      title: expect.stringContaining("Deprecated:"),
-    });
+    const chip = legacyChip(host);
+    expect(chip?.text).toBe("needs re-pair");
+    expect(chip?.title).toMatch(/release after this one/);
+    expect(chip?.title).toMatch(/Re-pair/);
   });
 
-  it("gives a manual-token host that is no legacy agent a chip of its own", () => {
+  it("shows needs re-pair and the hover for a manual-token host", () => {
     const chip = legacyChip(makeHost({ deprecatedKind: "manual-token" }));
-    expect(chip?.text).toBe("manual token (deprecated)");
-    expect(chip?.title).toMatch(/Deprecated:/);
-    // The hover names the credential that has to change.
+    expect(chip?.text).toBe("needs re-pair");
+    expect(chip?.title).toMatch(/release after this one/);
+    expect(chip?.title).toMatch(/Re-pair/);
     expect(chip?.title).toMatch(/MULLION_AGENT_TOKEN/);
   });
 

@@ -179,7 +179,7 @@ describe("removed legacy host entry points (issue #3535)", () => {
     process.env.MULLION_ENROLLMENT_SECRET = FLEET_SECRET;
     const app = await buildApp();
     try {
-      expect([...legacyHostDeprecationNotices()]).toEqual([LEGACY_ENROLLMENT_SECRET_WARNING]);
+      expect([...legacyHostDeprecationNotices()]).toContain(LEGACY_ENROLLMENT_SECRET_WARNING);
       const info = await app.inject({ method: "GET", url: "/api/server-info" });
       expect(info.statusCode).toBe(200);
       expect("allowLegacyHosts" in info.json()).toBe(false);

@@ -113,8 +113,8 @@ describe("HostStatusLabel (issue #1892)", () => {
     expect(screen.queryByText("outdated agent")).toBeNull();
   });
 
-  // Issue #3476 — the deprecation qualifier.
-  it("qualifies the legacy agent's chip as deprecated and says what replaces it", () => {
+  // Issue #3578 (follows #3476) — the "needs re-pair" chip.
+  it("marks a legacy agent as needs re-pair and says support ends in the next release", () => {
     render(
       <HostStatusLabel
         host={makeHost({
@@ -126,48 +126,27 @@ describe("HostStatusLabel (issue #1892)", () => {
       />,
     );
     expect(screen.getByText("online")).toBeInTheDocument();
-    const chip = screen.getByText("outdated agent (deprecated)");
-    expect(chip).toHaveAttribute("title", expect.stringMatching(/Deprecated/));
-    // The hover names a path that exists: the agent-side upgrade, not a
-    // Re-pair entry the row menu does not offer for a legacy host.
+    const chip = screen.getByText("needs re-pair");
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/release after this one/));
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/Re-pair/));
     expect(chip).toHaveAttribute("title", expect.stringMatching(/MULLION_PRIMARY_URL/));
-    expect(chip).toHaveAttribute("title", expect.stringMatching(/one-time pairing code/));
   });
 
-  it("gives a manual-token host a deprecated chip of its own", () => {
+  it("marks a manual-token host as needs re-pair and says support ends in the next release", () => {
     render(
       <HostStatusLabel host={makeHost({ health: "online", deprecatedKind: "manual-token" })} />,
     );
-    const chip = screen.getByText("manual token (deprecated)");
-    expect(chip).toHaveAttribute("title", expect.stringMatching(/MULLION_AGENT_TOKEN/));
-    expect(chip).toHaveAttribute("title", expect.stringMatching(/one-time pairing code/));
-    // The unbound pairing link mints a code for a NEW host row, so the hover
-    // names the host-bound one that re-pairs this row.
-    expect(chip).toHaveAttribute("title", expect.stringMatching(/hostId/));
-  });
-
-  it("keeps the agent words next to the deprecation on a host that is both", () => {
-    // A manual-token host the primary also dials by address is a legacy
-    // agent too: the chip must not lose the agent words it used to show.
-    render(
-      <HostStatusLabel
-        host={makeHost({
-          health: "online",
-          legacyAgent: true,
-          deprecatedKind: "manual-token",
-          mullionVersion: "0.3.62",
-        })}
-      />,
-    );
-    const chip = screen.getByText("not registered · manual token (deprecated)");
+    const chip = screen.getByText("needs re-pair");
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/release after this one/));
+    expect(chip).toHaveAttribute("title", expect.stringMatching(/Re-pair/));
     expect(chip).toHaveAttribute("title", expect.stringMatching(/MULLION_AGENT_TOKEN/));
   });
 
-  it("shows no deprecated chip for a host on the current path", () => {
+  it("shows no needs re-pair chip for a host on the current path", () => {
     const { container } = render(
       <HostStatusLabel host={makeHost({ health: "online", deprecatedKind: null })} />,
     );
-    expect(screen.queryByText(/deprecated/)).toBeNull();
-    expect(container.textContent).not.toMatch(/deprecated/);
+    expect(screen.queryByText(/needs re-pair/)).toBeNull();
+    expect(container.textContent).not.toMatch(/needs re-pair/);
   });
 });

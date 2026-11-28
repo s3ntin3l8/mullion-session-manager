@@ -102,7 +102,10 @@ import { taskBlockingAlertDismissRoute } from "./routes/task-blocking-alert-dism
 import { demoFixturesRoute } from "./routes/demo-fixtures.js";
 import { closePinnedConnectors } from "./services/pinned-connect.js";
 import { registerDispatchCleanup } from "./services/task-dispatch.js";
-import { warnLegacyEnrollmentSecretAtBoot } from "./services/legacy-host-deprecation.js";
+import {
+  warnDeprecatedHostsAtBoot,
+  warnLegacyEnrollmentSecretAtBoot,
+} from "./services/legacy-host-deprecation.js";
 import { identityStatePath, loadAgentIdentity } from "./services/agent-identity.js";
 
 export async function buildApp() {
@@ -473,6 +476,10 @@ export async function buildApp() {
   // dbPlugin must register before ptyPlugin: ptyPlugin's reconciler reads
   // app.db (via getStoredSettings) as soon as it's registered.
   await app.register(dbPlugin);
+  // Issue #3578 — warn once per process if any host row is still on a
+  // deprecated connection method (`legacy-agent` or `manual-token`) that is
+  // removed in the next release.
+  warnDeprecatedHostsAtBoot(app);
   await app.register(runtimeSettingsPlugin);
   // browserPlugin before ptyPlugin/hooksPlugin: they read app.browserEnabled,
   // resolved once at boot from the env default + the stored Settings override.
