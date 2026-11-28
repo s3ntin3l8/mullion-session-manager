@@ -53,6 +53,13 @@ describe("Settings modal — focus management (P11)", () => {
     expect(first).toHaveFocus();
   });
 
+  it("is not modal on the phone, where the tab bar stays usable below it", () => {
+    render(<Settings onClose={vi.fn()} phone />);
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    expect(dialog).not.toHaveAttribute("aria-modal");
+    expect(dialog.querySelector(".settings-modal-close")).toHaveFocus();
+  });
+
   it("restores focus to the trigger element on close", () => {
     render(
       <button

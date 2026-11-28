@@ -223,9 +223,31 @@ export function useLayoutPresentation({
     const addedSub = dockviewApi.onDidAddGroup((group) => {
       if (isTiledGroup(group)) hideIfPhone(group);
     });
+    // The phone shows one pane by maximizing its group, and dockview drops
+    // the maximize whenever a group leaves the grid (gridview.removeView
+    // exits it first). Closing the pane on screen, or killing its session,
+    // therefore left every remaining group visible at once: the desktop grid
+    // at phone width. One group left needs nothing, so this only showed with
+    // three or more. Re-applied after dockview has finished the removal and
+    // picked its next active panel, which is the one shown. The halves keep
+    // their own left pane maximized (useFoldHalves).
+    let disposed = false;
+    const removedSub = dockviewApi.onDidRemoveGroup(() => {
+      if (resolveLayoutPresentation(layoutMode) !== "phone") return;
+      queueMicrotask(() => {
+        if (disposed || resolveLayoutPresentation(layoutMode) !== "phone") return;
+        try {
+          applyLayoutPresentation(dockviewApi, "phone");
+        } catch (err) {
+          console.error("[useLayoutPresentation] re-maximize after a pane closed failed", err);
+        }
+      });
+    });
     return () => {
+      disposed = true;
       maximizedSub.dispose();
       addedSub.dispose();
+      removedSub.dispose();
     };
   }, [dockviewApi, layoutMode]);
 }

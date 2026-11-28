@@ -429,6 +429,87 @@
       "baseline": true
     },
     {
+      "name": "phone-inbox",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": ".phone-mode-inbox"
+        },
+        {
+          "waitFor": ".phone-inbox-page"
+        },
+        {
+          "click": ".phone-inbox-page .notif-section-btn:has-text(\"Tasks\")"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; } .phone-inbox-page .notif-section-btn:first-child .notif-section-count { visibility: hidden !important; }"
+      },
+      "baseline": true
+    },
+    {
+      "name": "phone-settings",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": ".phone-mode-more"
+        },
+        {
+          "waitFor": ".phone-more-row"
+        },
+        {
+          "click": ".phone-more-row:has(.phone-more-label:text-is(\"Settings\"))"
+        },
+        {
+          "waitFor": ".settings-host .settings-nav-item"
+        },
+        {
+          "wait": 600
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      },
+      "baseline": true
+    },
+    {
+      "name": "tasks-phone-detail",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["phone"],
+      "steps": [
+        {
+          "click": ".phone-mode-bar button:has-text(\"Tasks\")"
+        },
+        {
+          "waitFor": ".task-card"
+        },
+        {
+          "click": ".task-card:has-text(\"Fix focus loss in the login form\")"
+        },
+        {
+          "waitFor": ".right-sidebar-panel.phone .tasks-detail"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge, .phone-mode-inbox .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      },
+      "baseline": true
+    },
+    {
       "name": "session-list",
       "path": "/",
       "tags": ["presentation", "check", "audit"],

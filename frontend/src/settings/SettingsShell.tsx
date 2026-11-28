@@ -140,7 +140,10 @@ export function SettingsShell<Id extends string>({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onTrapKeyDown}
         role="dialog"
-        aria-modal="true"
+        // Not modal on the phone: the tab bar stays on screen and usable
+        // below it (mobile.css's .settings-host), so the rest of the page is
+        // not inert there.
+        aria-modal={phone ? undefined : "true"}
         aria-label={title}
       >
         <div className="settings-modal-header">

@@ -454,6 +454,7 @@ export function App() {
     setSettingsSection(section);
     setSettingsOpen(true);
   }, []);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
 
   // Opens the global command palette. The single enforcement point for
   // "terminals only launch from a workspace" (issue #730): gated on viewMode
@@ -1685,6 +1686,8 @@ export function App() {
       {isMobile && (
         <PhoneModeBar
           onOpenSettings={() => openSettings()}
+          settingsOpen={settingsOpen}
+          onCloseSettings={closeSettings}
           onNewSession={openNewSessionLauncher}
           onOpenSession={onOpenSession}
           onOpenTimeline={onOpenTimeline}
@@ -1767,7 +1770,11 @@ export function App() {
         // matching it here keeps that ordering unchanged now that this
         // wrapper — not `.settings-backdrop` directly — is what competes in
         // `.app`'s stacking context.
-        <div style={{ position: "fixed", inset: 0, zIndex: 60 }}>
+        //
+        // A class rather than inline styles, so the phone can end it above
+        // its tab bar (mobile.css): the bar stays on screen and is the way
+        // out, as it is for a right-sidebar view (#3216).
+        <div className="settings-host">
           <ErrorBoundary
             onReset={() => {
               setSettingsOpen(false);

@@ -30,18 +30,26 @@ import {
 // board's new-task form), and Inbox is the one NotificationBell on the phone:
 // the top bar has none (#3288).
 //
-// A right-sidebar view opened from the sheet ends above this bar (#3216), and
-// the bar is the way out of it: while one is open, "more" is the active entry,
-// and Workspace or Tasks closes the view and shows that mode, the current one
-// included.
+// Nothing the bar opens covers it. A right-sidebar view opened from the sheet
+// ends above this bar (#3216), and so do Settings and the Inbox, which is a
+// page here rather than the sheet it was (#3288). The bar is the way out of
+// each: exactly one entry is the current one (Inbox while its page shows,
+// "more" while a view or Settings does), and tapping another entry closes
+// what is open and shows that entry, the current mode included.
 export function PhoneModeBar({
   onOpenSettings,
+  settingsOpen = false,
+  onCloseSettings,
   onNewSession,
   onOpenSession,
   onOpenTimeline,
   onOpenBrowser,
 }: {
   onOpenSettings: () => void;
+  /** Settings is on screen: it ends above the bar, and "more" is current. */
+  settingsOpen?: boolean;
+  /** Another entry was tapped while Settings showed. */
+  onCloseSettings?: () => void;
   /** The new-session launcher: the session picker's New session row's action. */
   onNewSession: () => void;
   // Passed straight through to NotificationBell (see its own prop docs).
@@ -57,6 +65,17 @@ export function PhoneModeBar({
   // The rail's count (LeftRail.tsx): the one "needs you" definition, install-wide.
   const needsYou = useMemo(() => needsYouTasks(tasks).length, [tasks]);
   const [moreOpen, setMoreOpen] = useState(false);
+  // The Inbox page: mounted in a host of its own (outside the <nav>, which is
+  // `display: none` while the keyboard is up), open state mirrored here so the
+  // bar can mark the entry and close the page from its other entries.
+  const [inboxHost, setInboxHost] = useState<HTMLElement | null>(null);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxCloseSeq, setInboxCloseSeq] = useState(0);
+  // What a tap on any other entry leaves: the Inbox page and Settings.
+  const leavePages = () => {
+    setInboxCloseSeq((n) => n + 1);
+    if (settingsOpen) onCloseSettings?.();
+  };
   const newRef = useRef<HTMLButtonElement>(null);
   // Set when New opened the task form; focus comes back to New once the form
   // closes and the bar shows again (the form's title field raises the
@@ -70,14 +89,17 @@ export function PhoneModeBar({
     returnFocusToNew.current = false;
     newRef.current?.focus();
   }, [tasksMode, newTaskFormOpen, keyboardUp]);
-  // The Inbox sheet's own focus return cannot reach its trigger while the bar
-  // is hidden (a field in the sheet had the keyboard up as it closed): focus
+  // The Inbox page's own focus return cannot reach its trigger while the bar
+  // is hidden (a field in the page had the keyboard up as it closed): focus
   // falls to <body>. Set then, and Inbox takes focus back once the bar shows,
   // unless something else has taken it meanwhile.
   const navRef = useRef<HTMLElement>(null);
   const returnFocusToInbox = useRef(false);
   const onInboxOpenChange = (open: boolean) => {
+    setInboxOpen(open);
     returnFocusToInbox.current = !open && keyboardUp;
+    // The Inbox takes Settings' place, as any other entry does.
+    if (open && settingsOpen) onCloseSettings?.();
   };
   useEffect(() => {
     if (keyboardUp || !returnFocusToInbox.current) return;
@@ -93,6 +115,7 @@ export function PhoneModeBar({
     // than returning it to the view's opener). iOS does not focus a tapped
     // button by itself, so it is done here.
     button.focus();
+    leavePages();
     // Closed explicitly: RightSidebar closes the view on a mode change, but a
     // tap on the current mode changes nothing.
     store.closeRightSidebar();
@@ -103,7 +126,8 @@ export function PhoneModeBar({
     // The launcher and the form return focus to what was focused when they
     // opened; iOS does not focus a tapped button, so it is done here.
     button.focus();
-    // What New makes shows in the mode, not under a sidebar view.
+    // What New makes shows in the mode, not under a page or a sidebar view.
+    leavePages();
     store.closeRightSidebar();
     if (tasksMode) {
       const open = !store.newTaskFormOpen;
@@ -113,13 +137,17 @@ export function PhoneModeBar({
       onNewSession();
     }
   };
-  const workspaceActive = !viewOpen && !tasksMode;
-  const tasksActive = !viewOpen && tasksMode;
+  // One current entry: the Inbox page lies over a view, and Settings over both.
+  const moreActive = !inboxOpen && (viewOpen || settingsOpen);
+  const modeActive = !inboxOpen && !viewOpen && !settingsOpen;
+  const workspaceActive = modeActive && !tasksMode;
+  const tasksActive = modeActive && tasksMode;
 
   return (
     <>
+      <div ref={setInboxHost} className="phone-inbox-host" />
       {/* Hidden rather than unmounted while the keyboard is up: Inbox's
-          NotificationBell owns the feed's sheet, which must stay open while
+          NotificationBell owns the feed's page, which must stay open while
           a field in it raises the keyboard. */}
       <nav ref={navRef} className="phone-mode-bar" aria-label="Primary" hidden={keyboardUp}>
         <button
@@ -170,7 +198,9 @@ export function PhoneModeBar({
           onOpenSession={onOpenSession}
           onOpenTimeline={onOpenTimeline}
           onOpenBrowser={onOpenBrowser}
-          sheet
+          page
+          pageHost={inboxHost}
+          closeSeq={inboxCloseSeq}
           triggerClassName="phone-mode-btn phone-mode-inbox"
           label="Inbox"
           labelClassName="phone-mode-label"
@@ -179,16 +209,20 @@ export function PhoneModeBar({
         />
         <button
           type="button"
-          className={`phone-mode-btn phone-mode-more${viewOpen ? " active" : ""}`}
+          className={`phone-mode-btn phone-mode-more${moreActive ? " active" : ""}`}
           aria-label="More"
-          // The open view is one of the sheet's entries, so "more" is the
-          // current item (the generic token: it opens a sheet, not a page).
-          aria-current={viewOpen ? "true" : undefined}
+          // The open view (or Settings) is one of the sheet's entries, so
+          // "more" is the current item (the generic token: it opens a sheet,
+          // not a page).
+          aria-current={moreActive ? "true" : undefined}
           aria-haspopup="dialog"
           aria-expanded={moreOpen}
           onClick={(e) => {
             // The sheet returns focus to its opener; iOS does not focus a tap.
             e.currentTarget.focus();
+            // The sheet lists what replaces them; it would open under
+            // Settings otherwise.
+            leavePages();
             setMoreOpen(true);
           }}
         >

@@ -21,14 +21,20 @@ import { expectNameHasVisibleText } from "./test/a11y.js";
 function Harness({
   onOpenSettings = vi.fn(),
   onNewSession = vi.fn(),
+  settingsOpen,
+  onCloseSettings,
 }: {
   onOpenSettings?: () => void;
   onNewSession?: () => void;
+  settingsOpen?: boolean;
+  onCloseSettings?: () => void;
 }) {
   useVisualViewportInset();
   return (
     <PhoneModeBar
       onOpenSettings={onOpenSettings}
+      settingsOpen={settingsOpen}
+      onCloseSettings={onCloseSettings}
       onNewSession={onNewSession}
       onOpenSession={vi.fn()}
       onOpenBrowser={vi.fn()}
@@ -171,14 +177,18 @@ describe("PhoneModeBar", () => {
     expect(document.activeElement).toBe(elsewhere);
   });
 
-  it("Inbox opens the notification feed as a sheet and returns focus to it", async () => {
+  it("Inbox opens the notification feed as a page and returns focus to it", async () => {
     render(<Harness />);
     const inbox = screen.getByRole("button", { name: "Inbox, nothing needs you" });
-    expect(inbox).toHaveAttribute("aria-haspopup", "dialog");
+    expect(inbox).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(inbox);
-    const sheet = screen.getByRole("dialog", { name: "Notifications" });
+    const sheet = screen.getByRole("region", { name: "Notifications" });
+    // Beside the bar, not over it: mounted in the bar's host, outside <nav>.
+    expect(document.querySelector(".phone-inbox-host")).toContainElement(sheet);
+    expect(screen.getByRole("navigation", { name: "Primary" })).not.toContainElement(sheet);
+    expect(document.querySelector(".mobile-session-backdrop")).toBeNull();
     fireEvent.keyDown(sheet, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
     expect(document.activeElement).toBe(inbox);
   });
 
@@ -284,7 +294,7 @@ describe("PhoneModeBar", () => {
     expect(screen.getByRole("navigation", { name: "Primary" })).toBeInTheDocument();
   });
 
-  it("keeps Inbox's sheet open while the keyboard is up (the bar hides, it does not unmount)", async () => {
+  it("keeps Inbox's page open while the keyboard is up (the bar hides, it does not unmount)", async () => {
     stubClientHeight(800);
     const vv = new FakeVisualViewport(800, 0);
     Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
@@ -295,7 +305,7 @@ describe("PhoneModeBar", () => {
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
     expect(screen.queryByRole("navigation", { name: "Primary" })).toBeNull();
-    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeInTheDocument();
   });
 
   it("returns focus to New only once the keyboard is down and the bar shows again", async () => {
@@ -325,7 +335,7 @@ describe("PhoneModeBar", () => {
     expect(document.activeElement).toBe(newBtn);
   });
 
-  it("returns focus to Inbox when its sheet closed while the keyboard hid the bar", async () => {
+  it("returns focus to Inbox when its page closed while the keyboard hid the bar", async () => {
     stubClientHeight(800);
     const vv = new FakeVisualViewport(800, 0);
     Object.defineProperty(window, "visualViewport", { value: vv, configurable: true });
@@ -333,13 +343,13 @@ describe("PhoneModeBar", () => {
     await act(flushRaf);
     const inbox = screen.getByRole("button", { name: /^Inbox/ });
     fireEvent.click(inbox);
-    // A field in the sheet raises the keyboard; the bar hides.
+    // A field in the page raises the keyboard; the bar hides.
     stubClientHeight(450);
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
-    fireEvent.keyDown(screen.getByRole("dialog", { name: "Notifications" }), { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
-    // The sheet's own restore cannot reach the trigger inside the hidden bar
+    fireEvent.keyDown(screen.getByRole("region", { name: "Notifications" }), { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
+    // The page's own restore cannot reach the trigger inside the hidden bar
     // (jsdom refuses it too), so focus is on <body> now.
     expect(document.activeElement).toBe(document.body);
     stubClientHeight(800);
@@ -363,7 +373,7 @@ describe("PhoneModeBar", () => {
     stubClientHeight(450);
     act(() => vv.resizeTo(450, 0));
     await act(flushRaf);
-    fireEvent.keyDown(screen.getByRole("dialog", { name: "Notifications" }), { key: "Escape" });
+    fireEvent.keyDown(screen.getByRole("region", { name: "Notifications" }), { key: "Escape" });
     const elsewhere = screen.getByRole("textbox", { name: "Elsewhere" });
     elsewhere.focus();
     stubClientHeight(800);
@@ -435,6 +445,91 @@ describe("PhoneModeBar with a sidebar view open", () => {
     await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
     expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
     expect(useDashboardStore.getState().viewMode).toBe("kanban");
+  });
+
+  // The Inbox and Settings are pages above the bar, as a view is: exactly one
+  // entry is current, and tapping another one leaves the page.
+  describe("the Inbox page and Settings", () => {
+    const inbox = () => screen.getByRole("button", { name: /^Inbox/ });
+    const page = () => screen.queryByRole("region", { name: "Notifications" });
+    const bar = () => within(screen.getByRole("navigation", { name: "Primary" }));
+    const pressed = () =>
+      bar()
+        .queryAllByRole("button", { pressed: true })
+        .map((b) => b.textContent?.trim())
+        .concat(
+          screen.getByRole("button", { name: "More" }).getAttribute("aria-current") ? ["More"] : [],
+        );
+
+    it("marks Inbox as the one current entry while its page shows, over a view too", async () => {
+      render(<Harness />);
+      openView("git");
+      expect(pressed()).toEqual(["More"]);
+      await userEvent.click(inbox());
+      expect(page()).not.toBeNull();
+      expect(pressed()).toEqual(["Inbox"]);
+      expect(inbox()).toHaveClass("active");
+      // Tapped again, it closes, and the view under it is current again.
+      await userEvent.click(inbox());
+      expect(page()).toBeNull();
+      expect(pressed()).toEqual(["More"]);
+    });
+
+    it.each(["Workspace", "Tasks"])("%s closes the Inbox page and takes focus", async (name) => {
+      render(<Harness />);
+      await userEvent.click(inbox());
+      // In the bar: the page has a Tasks section button of its own.
+      const entry = bar().getByRole("button", { name });
+      // fireEvent: a click with no focus change, as on iOS.
+      fireEvent.click(entry);
+      expect(page()).toBeNull();
+      expect(pressed()).toEqual([name]);
+      expect(document.activeElement).toBe(entry);
+    });
+
+    it("New and More close the Inbox page", async () => {
+      const onNewSession = vi.fn();
+      render(<Harness onNewSession={onNewSession} />);
+      await userEvent.click(inbox());
+      await userEvent.click(screen.getByRole("button", { name: "New session" }));
+      expect(page()).toBeNull();
+      expect(onNewSession).toHaveBeenCalledTimes(1);
+
+      await userEvent.click(inbox());
+      await userEvent.click(screen.getByRole("button", { name: "More" }));
+      expect(page()).toBeNull();
+      expect(screen.getByRole("dialog", { name: "More" })).toBeInTheDocument();
+    });
+
+    it("marks More as current while Settings shows, and no mode", () => {
+      render(<Harness settingsOpen />);
+      expect(pressed()).toEqual(["More"]);
+      expect(screen.getByRole("button", { name: "More" })).toHaveClass("active");
+    });
+
+    it.each(["Workspace", "Tasks", "New session", "More"])("%s closes Settings", async (name) => {
+      const onCloseSettings = vi.fn();
+      render(<Harness settingsOpen onCloseSettings={onCloseSettings} />);
+      await userEvent.click(screen.getByRole("button", { name }));
+      expect(onCloseSettings).toHaveBeenCalledTimes(1);
+    });
+
+    it("the Inbox takes Settings' place, and closing it does not ask again", async () => {
+      const onCloseSettings = vi.fn();
+      render(<Harness settingsOpen onCloseSettings={onCloseSettings} />);
+      await userEvent.click(inbox());
+      expect(onCloseSettings).toHaveBeenCalledTimes(1);
+      expect(page()).not.toBeNull();
+    });
+
+    it("asks nothing of Settings while it is closed", async () => {
+      const onCloseSettings = vi.fn();
+      render(<Harness onCloseSettings={onCloseSettings} />);
+      await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
+      await userEvent.click(inbox());
+      await userEvent.click(screen.getByRole("button", { name: "More" }));
+      expect(onCloseSettings).not.toHaveBeenCalled();
+    });
   });
 
   it("More opens the sheet, and another view from it replaces the open one", async () => {

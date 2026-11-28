@@ -50,8 +50,8 @@ const setTasks = (tasks: Task[]) =>
     useDashboardStore.setState({ tasks });
   });
 
-function openBell(sheet = true) {
-  render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} sheet={sheet} />);
+function openBell(page = true) {
+  render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} page={page} />);
   act(() => {
     fireEvent.click(bell());
   });
@@ -112,7 +112,7 @@ describe("the bell's Tasks section (#3459)", () => {
   it("opens on the section with something to decide: Sessions first, Sessions when both are empty", () => {
     useDashboardStore.setState({ tasks: [failed] });
     const view = render(
-      <NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} sheet />,
+      <NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} page />,
     );
     act(() => {
       fireEvent.click(bell());

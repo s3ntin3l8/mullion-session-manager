@@ -16,6 +16,7 @@ import { ModelSelect } from "../settings/ModelPicker.js";
 import { LauncherProjectPicker, LauncherProjectView } from "./LauncherProjects.js";
 import { LauncherWorktreeRow } from "./LauncherWorktreeRow.js";
 import { LauncherWorkspaceRow } from "./LauncherWorkspaceRow.js";
+import { defaultLaunchWorkspaceId } from "./workspaceOptions.js";
 import { LauncherProjectActionsContext } from "./launcherProjectActions.js";
 import type { LauncherProjectActions } from "./launcherProjectActions.js";
 import { AUTO_VALUE, OWN_HOST_VALUE, describeAutoPreview } from "../command-palette/hostTarget.js";
@@ -343,7 +344,7 @@ function LauncherNewSession({
   // `workspaceId`: the chosen workspace when it is not the active one.
   onLaunched: (session: Session, workspaceId: number | null) => void;
 }) {
-  const { projects, sessions, settings, activePanelId, theme, activeWorkspaceId } =
+  const { projects, sessions, settings, activePanelId, theme, activeWorkspaceId, workspaces } =
     useDashboardStore(
       useShallow((s) => ({
         projects: s.projects,
@@ -352,11 +353,13 @@ function LauncherNewSession({
         activePanelId: s.activePanelId,
         theme: s.theme,
         activeWorkspaceId: s.activeWorkspaceId,
+        workspaces: s.workspaces,
       })),
     );
-  // #3246 — the workspace this launch joins, per open: preselected to the
-  // active one, and only acted on when a session is started.
-  const [workspaceId, setWorkspaceId] = useState<number | null>(activeWorkspaceId);
+  // #3246 — the workspace this launch joins, per open, and only acted on when
+  // a session is started. Null until the Workspace row is used: until then it
+  // follows the project (see `workspaceId` below).
+  const [chosenWorkspaceId, setChosenWorkspaceId] = useState<number | null>(null);
   // The project stays changeable either way: a preselected project is a
   // starting point, not a binding (unlike the palette's project scope).
   const [projectId, setProjectId] = useState<number | null>(() =>
@@ -372,6 +375,14 @@ function LauncherNewSession({
     }),
   );
   const target = projects.find((p) => p.id === projectId) ?? null;
+  // Preselected to a workspace the project is pinned to (#3537), else the
+  // active one, and re-derived when the project changes. The phone only: it
+  // is the one place the launcher sends a session to another workspace.
+  const workspaceId =
+    chosenWorkspaceId ??
+    (phone
+      ? defaultLaunchWorkspaceId(workspaces, activeWorkspaceId, target?.id ?? null)
+      : activeWorkspaceId);
   const launchTarget = useLaunchTarget(target, sessions);
   const { launchers, loaded } = useProjectLaunchers(target?.id ?? null);
   const [query, setQuery] = useState("");
@@ -660,7 +671,7 @@ function LauncherNewSession({
             <LauncherWorkspaceRow
               id={`${ids}-workspace`}
               workspaceId={workspaceId}
-              onChange={setWorkspaceId}
+              onChange={setChosenWorkspaceId}
             />
           )}
           {showHostChip && target && (

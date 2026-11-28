@@ -871,18 +871,23 @@ in Workspace mode, the palette) and the tab bar at the bottom
 (`PhoneModeBar.tsx`, #3288): Workspace · Tasks · New · Inbox · More, each an
 icon over its label. New is the mode's primary action (the new-session
 launcher, or the Tasks board's new-task form, whose open state is in the store
-for that reason); Inbox is the phone's one `NotificationBell`, its feed a
-bottom sheet; More opens a sheet that lists exactly the right rail's views and
-Settings. The bar is hidden, not unmounted, while the on-screen keyboard is up,
-so the Inbox sheet survives a field in it raising the keyboard. A view opens
-over the workspace down to the tab bar, which stays visible and is the way out
-(#3216): More shows as the active entry, Workspace or Tasks closes the view,
-and another view from the sheet replaces it. The view's head names it, with no
-back control of its own; a pushed detail (a task, a PR) keeps its Back.
+for that reason); Inbox is the phone's one `NotificationBell`, its feed a page
+(`page`, mounted in the bar's `.phone-inbox-host`, not a dialog); More opens a
+sheet that lists exactly the right rail's views and Settings. The bar is
+hidden, not unmounted, while the on-screen keyboard is up, so the Inbox page
+survives a field in it raising the keyboard. Nothing the bar opens covers it:
+a view, the Inbox page and Settings (`.settings-host`) each end above the tab
+bar, which stays visible and is the way out (#3216). Exactly one entry is
+current: Inbox while its page shows, More while a view or Settings does.
+Tapping another entry closes what is open, and another view from the sheet
+replaces the open one. A view's head names it, with no back control of its
+own; a pushed detail (a task, a PR) keeps its Back. The one-pane presentation
+is a maximized dockview group, which dockview drops when a group is removed,
+so `useLayoutPresentation` maximizes again after a pane closes.
 There is no drawer: the left sidebar still mounts, hidden, because it loads
 projects, sessions and their GitHub subscriptions. Android's back gesture
-closes the topmost sheet, then a detail, then the view
-(`hooks/usePhoneBackStack.ts`).
+closes the topmost sheet, then the Inbox page or Settings, then a detail, then
+the view (`hooks/usePhoneBackStack.ts`).
 
 **Where Devices, Browser and the Dock live.** Devices: the right sidebar's
 Devices view on every width (the phone through "⋯"), plus a device's own

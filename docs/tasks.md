@@ -484,9 +484,12 @@ New opens the new-task form. Its board shows one lane at a time
 swipe between lanes. "Needs you" is a filter chip there, a dot marks each lane
 holding such a task, and the board opens on the first of them. A task opens
 full screen with its actions at the bottom. More lists the right sidebar's
-views, then Settings; a view opens above the tab bar, which stays visible:
-Workspace or Tasks closes it, and another view from More replaces it. The back gesture closes a
-sheet, then a detail inside a view, then the view; it switches mode only to
+views, then Settings; a view, Settings and the Inbox each open above the tab bar,
+which stays visible: tapping another entry closes what is open, and another
+view from More replaces it. The board's cards, the new-task form, the filter
+sheet and a task's detail are drawn at touch size there: 14-15px for a card's
+or a row's main line, nothing under 12px, and 44px controls. The back gesture closes a
+sheet, then the Inbox or Settings, then a detail inside a view, then the view; it switches mode only to
 return to Tasks after a task's session pill took you to Workspace. Task
 status columns are the board; a task with a linked
 worker or review session renders that session's live status nested on its
