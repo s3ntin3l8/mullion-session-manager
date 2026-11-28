@@ -50,7 +50,7 @@ function seed() {
 }
 
 function renderBell(onOpenSession = vi.fn<(s: Session) => void>()) {
-  render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={() => {}} sheet />);
+  render(<NotificationBell onOpenSession={onOpenSession} onOpenBrowser={() => {}} page />);
   return onOpenSession;
 }
 const click = (el: Element) =>
@@ -125,7 +125,7 @@ describe("the bell's return path (#3463)", () => {
     click(screen.getByRole("button", { name: "Plan 1" }));
     click(screen.getByRole("button", { name: /^Plan: / }));
     expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }));
-    expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
     expect(useDashboardStore.getState().bellReturn).toEqual({
       section: "sessions",
       filter: "plan",
@@ -136,7 +136,8 @@ describe("the bell's return path (#3463)", () => {
     expect(useDashboardStore.getState().bellReturn).toBeNull();
 
     // Consumed: the next plain opening is back on the default chip.
-    click(screen.getByRole("button", { name: "Close notifications" }));
+    // The page has no close button: its tab bar entry toggles it.
+    click(bell());
     click(bell());
     expect(screen.getByRole("button", { name: "Needs you 3" })).toHaveAttribute(
       "aria-pressed",
@@ -171,11 +172,11 @@ describe("the bell's return path (#3463)", () => {
     click(bell());
     click(screen.getByRole("button", { name: "Failed 1" }));
     click(screen.getByRole("button", { name: /^Stop: / }));
-    expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
 
     // App.tsx's back handler.
     act(() => useDashboardStore.getState().requestBellReopen());
-    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Failed 1" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -204,7 +205,7 @@ describe("the bell's return path (#3463)", () => {
     click(bell());
     click(screen.getByRole("button", { name: "Approve" }));
     expect(resolve).toHaveBeenCalledWith(1, "g", "approved");
-    expect(screen.getByRole("dialog", { name: "Notifications" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Notifications" })).toBeInTheDocument();
     expect(useDashboardStore.getState().bellReturn).toBeNull();
   });
 });

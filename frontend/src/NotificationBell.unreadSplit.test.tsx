@@ -131,9 +131,9 @@ describe("NotificationBell on the real store (#3458, #3460)", () => {
   });
 
   it("opening marks only the decision-free session read; Read all leaves the open decision and its tab badge alone", async () => {
-    // The sheet: it renders every row (the popover virtualizes them, and
+    // The phone's page: it renders every row (the popover virtualizes them, and
     // jsdom has no layout).
-    render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} sheet />);
+    render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} page />);
     await act(async () => {});
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
@@ -170,7 +170,7 @@ describe("NotificationBell on the real store (#3458, #3460)", () => {
     // Muted: it counts nowhere, but its decision is still listed, so its
     // cursor must not move past it.
     useDashboardStore.setState({ mutedSessionIds: [1] });
-    render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} sheet />);
+    render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} page />);
     await act(async () => {});
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
@@ -196,7 +196,7 @@ describe("NotificationBell on the real store (#3458, #3460)", () => {
   });
 
   it("a dismissed decision also leaves the pane tab badge (the store's key, #1427)", async () => {
-    render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} sheet />);
+    render(<NotificationBell onOpenSession={() => {}} onOpenBrowser={() => {}} page />);
     await act(async () => {});
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
@@ -218,7 +218,7 @@ describe("NotificationBell on the real store (#3458, #3460)", () => {
 });
 
 // The classification's behaviour through the bell and the real store. The
-// sheet presentation renders every row (the popover virtualizes them, and
+// page presentation renders every row (the popover virtualizes them, and
 // jsdom has no layout); the logic behind both is the same.
 describe("the bell lists open decisions only (#3458)", () => {
   const S = (overrides: Partial<Session>) => makeSession(overrides);
@@ -235,7 +235,7 @@ describe("the bell lists open decisions only (#3458)", () => {
   const bellName = () => screen.getByRole("button", { name: /^Notifications,/ });
   const openSheet = (onOpenSession = vi.fn()) => {
     const view = render(
-      <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={() => {}} sheet />,
+      <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={() => {}} page />,
     );
     act(() => {
       fireEvent.click(bellName());
@@ -504,8 +504,9 @@ describe("the bell lists open decisions only (#3458)", () => {
         expect.stringContaining(", new"),
       );
       // Read, and nothing raised on the session: nothing for Read all to do.
+      // The page has no close button: its tab bar entry toggles it.
       act(() => {
-        fireEvent.click(screen.getByRole("button", { name: "Close notifications" }));
+        fireEvent.click(bellName());
       });
       act(() => {
         fireEvent.click(bellName());

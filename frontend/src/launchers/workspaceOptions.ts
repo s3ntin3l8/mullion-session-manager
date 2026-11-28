@@ -31,3 +31,23 @@ export function workspaceOptions(
   }
   return options;
 }
+
+/**
+ * The workspace a new session of `projectId` joins by default on the phone:
+ * a workspace the project is pinned to (#3537), else the active one. A
+ * project pinned to the active workspace stays there, and one pinned to
+ * several others takes the first of them in the store's order (the server's,
+ * which is not the Workspace row's grouped order).
+ */
+export function defaultLaunchWorkspaceId(
+  workspaces: readonly Pick<Workspace, "id" | "pinnedProjectIds">[],
+  activeWorkspaceId: number | null,
+  projectId: number | null,
+): number | null {
+  if (projectId === null) return activeWorkspaceId;
+  const pinned = workspaces.filter((w) => (w.pinnedProjectIds ?? []).includes(projectId));
+  if (pinned.length === 0 || pinned.some((w) => w.id === activeWorkspaceId)) {
+    return activeWorkspaceId;
+  }
+  return pinned[0].id;
+}

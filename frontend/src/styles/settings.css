@@ -96,6 +96,13 @@
     font-size: 1rem;
   }
 }
+/* Settings' own full-viewport box (App.tsx): above `.overlay-backdrop` (50),
+   level with `.settings-backdrop` inside it. */
+.settings-host {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
 .settings-backdrop {
   position: absolute;
   inset: 0;

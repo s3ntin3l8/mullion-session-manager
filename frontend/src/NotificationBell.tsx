@@ -1,7 +1,6 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useId, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { BottomSheet } from "./ui/BottomSheet.js";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import type { Range } from "@tanstack/react-virtual";
 import { useDashboardStore } from "./store/index.js";
@@ -76,7 +75,9 @@ export function NotificationBell({
   onOpenSession,
   onOpenTimeline,
   onOpenBrowser,
-  sheet = false,
+  page = false,
+  pageHost,
+  closeSeq = 0,
   touch = false,
   triggerClassName = "toolbar-icon-btn",
   label,
@@ -97,10 +98,20 @@ export function NotificationBell({
   // dev_server_detected offer is accepted, so the user lands straight on
   // the now-wired-up preview rather than having to find it themselves.
   onOpenBrowser: (projectId: number) => void;
-  // The phone: the feed is a full-height bottom sheet (#3461; tap a row =
-  // open its target, 44px targets). Everywhere else it is one full-height
-  // side panel beside the left rail that holds the bell (#3462).
-  sheet?: boolean;
+  // The phone: the feed is a page of its own between the top bar and the tab
+  // bar, which stays on screen and usable (tap a row = open its target, 44px
+  // targets). It was a full-height bottom sheet (#3461), which covered the
+  // bar. Everywhere else it is one full-height side panel beside the left
+  // rail that holds the bell (#3462).
+  page?: boolean;
+  // Where the page mounts: an element inside `.app`, so the page reads the
+  // shell's own offsets (the top bar, the tab bar's height). The trigger sits
+  // in the tab bar, which is `display: none` while the keyboard is up, so the
+  // page cannot be the trigger's sibling. `document.body` when not given;
+  // null while the host has not mounted yet.
+  pageHost?: HTMLElement | null;
+  // Bumped by the tab bar to close the page: another entry was tapped.
+  closeSeq?: number;
   // A touch tablet: the side panel is wider (480px), modal over a scrim, and
   // the back gesture closes it. A mouse-driven window gets it at 420px with
   // no scrim; Esc and an outside click close it on both.
@@ -115,8 +126,9 @@ export function NotificationBell({
   labelClassName?: string;
   // The bell's size: the tab bar's entries draw theirs at 20.
   iconSize?: number;
-  // Told when the feed opens or closes (the phone tab bar returns focus to
-  // its Inbox entry itself when the sheet closed while the bar was hidden).
+  // Told when the feed opens or closes (the phone tab bar marks Inbox as the
+  // current entry, and returns focus to it itself when the page closed while
+  // the bar was hidden).
   onOpenChange?: (open: boolean) => void;
 }) {
   const theme = useDashboardStore((s) => s.theme);
@@ -309,7 +321,7 @@ export function NotificationBell({
   });
 
   useEffect(() => {
-    if (!open || sheet) return;
+    if (!open || page) return;
     const onOutsideClick = (e: MouseEvent) => {
       const target = e.target as Node;
       if (btnRef.current?.contains(target)) return;
@@ -324,31 +336,52 @@ export function NotificationBell({
     };
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [open, sheet]);
+  }, [open, page]);
 
   // P11 — focus management for the side panel: dialog semantics, focus in on
-  // open, a Tab trap, focus back to the bell on close. The phone's sheet is a
-  // ui/BottomSheet.tsx, which runs its own instance of this same hook against
-  // the very same `panelRef`; the `!sheet` gate keeps the two from fighting.
+  // open, a Tab trap, focus back to the bell on close. The phone's page is
+  // not modal (the tab bar stays usable beside it), so it has no trap: its
+  // own effect below moves focus in and back.
   // Initial focus goes to the dialog itself (tabIndex -1 below): its rows are
   // virtualized and mount a frame after it opens, and a first-focusable
   // lookup could land on nothing and leave focus outside, where the panel's
   // own Escape handler never hears the key.
   const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
-    active: !sheet && open,
+    active: !page && open,
     containerRef: panelRef,
     initialFocusRef: panelRef,
   });
   // #3015 — stays mounted while it leaves (styles/motion.css plays the exit).
-  const { present: panelPresent, state: panelPresence } = usePresence(!sheet && open, panelRef);
+  const { present: panelPresent, state: panelPresence } = usePresence(!page && open, panelRef);
   // A touch tablet's panel is modal, so the back gesture closes it, as it
-  // closed the bottom sheet it replaces (usePhoneBackStack's compact contract).
-  usePhoneBackStack(!sheet && touch && open, () => setOpen(false));
-  // The phone sheet's own suppressRestore (a separate useFocusTrap instance,
-  // above) — written to by BottomSheet during render, read by the phone
-  // row-tap handlers below, same U7 race useFocusTrap.ts's own doc comment
-  // covers for the side panel's `suppressRestore` right above.
-  const phoneSuppressRestoreRef = useRef<(() => void) | null>(null);
+  // closed the bottom sheet it replaces (usePhoneBackStack's compact
+  // contract). The phone's page is left by the back gesture too.
+  usePhoneBackStack((page || touch) && open, () => setOpen(false));
+  // The phone's page: focus moves to it as it opens, and back to the Inbox
+  // entry as it closes when nothing else took it. A row tap that opens a
+  // session sets `pageKeepFocus` first, so the session keeps the focus it is
+  // about to take (the side panel's `suppressRestore`, U7). An entry tapped
+  // in the tab bar focuses itself, and is left alone here.
+  const pageTitleId = useId();
+  const pageKeepFocus = useRef(false);
+  useEffect(() => {
+    if (!page || !open) return;
+    pageKeepFocus.current = false;
+    panelRef.current?.focus();
+    const trigger = btnRef.current;
+    return () => {
+      if (pageKeepFocus.current) return;
+      const active = document.activeElement;
+      if (!active || active === document.body) trigger?.focus();
+    };
+  }, [page, open, pageHost]);
+  // The tab bar closes the page when another of its entries is tapped.
+  const lastCloseSeq = useRef(closeSeq);
+  useEffect(() => {
+    if (closeSeq === lastCloseSeq.current) return;
+    lastCloseSeq.current = closeSeq;
+    setOpen(false);
+  }, [closeSeq]);
   // Escape scoped to the panel's own onKeyDown (bubbling), not a window-level
   // listener: a global listener would also catch an Escape meant for some
   // other overlay (the command palette, Settings) above it.
@@ -370,7 +403,7 @@ export function NotificationBell({
     const rail = btn.closest(".left-rail") ?? btn;
     setPanelLeft(Math.round(rail.getBoundingClientRect().right));
   }, []);
-  useVisualViewportChange(open && !sheet, reposition);
+  useVisualViewportChange(open && !page, reposition);
 
   // "Read all" (#3460): the grouped lines of the sessions with no open
   // decision. Advances each to its latest seq (also clearing its tab badges)
@@ -426,10 +459,13 @@ export function NotificationBell({
 
   // Leaving the panel for whatever a row opens. `suppress` keeps the focus
   // trap from snapping focus back to the bell once the target has it (P11,
-  // PR13/U7); the sheet and the panel each have their own. `remember` runs
+  // PR13/U7); the page and the panel each have their own. `remember` runs
   // after the target opened, so a mode switch the target made (a session row
   // from Tasks mode) does not clear the return it writes (#3463).
-  const suppress = () => (sheet ? phoneSuppressRestoreRef.current?.() : suppressRestore());
+  const suppress = () => {
+    if (page) pageKeepFocus.current = true;
+    else suppressRestore();
+  };
   const leaveFor = (go: () => void) => {
     suppress();
     setOpen(false);
@@ -441,7 +477,7 @@ export function NotificationBell({
   };
   const openSessionFromRow = (session: Session) =>
     leaveFor(() => {
-      // Issue #1429 — one click destination everywhere (the sheet, push, the
+      // Issue #1429 — one click destination everywhere (the page, push, the
       // ?session= deep link): the terminal, in Workspace, marked read. The
       // timeline is a secondary action.
       markSessionRead(session.id);
@@ -490,7 +526,7 @@ export function NotificationBell({
             session={session}
             onOpen={openSessionFromRow}
             // The phone has no right sidebar: a PR row opens the terminal.
-            onOpenPr={sheet ? undefined : openPrFromRow}
+            onOpenPr={page ? undefined : openPrFromRow}
             onTimeline={openTimelineFromRow}
             onOpenBrowser={onOpenBrowser}
             // A collapsed row dismisses every folded seq, not just the
@@ -560,6 +596,30 @@ export function NotificationBell({
         />
       ))
     );
+  const pageTarget = pageHost === undefined ? document.body : pageHost;
+  // The page is not modal, but it covers everything except the tab bar, so
+  // Tab off either end goes to its own entry there rather than into the
+  // shell hidden behind it, where this handler's Escape would not be heard.
+  const onPageKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      setOpen(false);
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const stops = panel.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    const active = document.activeElement;
+    const leaving = e.shiftKey
+      ? active === panel || active === stops[0]
+      : active === stops[stops.length - 1];
+    if (!leaving) return;
+    e.preventDefault();
+    btnRef.current?.focus();
+  };
   const emptySessions = !items.some((i) => i.type === "event") && (
     <div className="notif-empty">
       {sessionsFilter === "all" && items.length === 0
@@ -572,20 +632,22 @@ export function NotificationBell({
     <>
       <button
         ref={btnRef}
-        className={triggerClassName}
+        className={page && open ? `${triggerClassName} active` : triggerClassName}
         title={
           needsYouCount > 0 ? `Notifications — ${needsYouText(needsYouCount)}` : "Nothing needs you"
         }
         // Issue #1894 — "dialog", not the generic "true", which maps to
-        // `menu`: what this opens is the notifications panel or sheet, both
-        // `role="dialog"`.
-        aria-haspopup="dialog"
-        aria-expanded={open}
+        // `menu`: what this opens is the notifications panel, a
+        // `role="dialog"`. The phone's page is one of the tab bar's entries
+        // instead, pressed while it shows, as Workspace and Tasks are.
+        {...(page
+          ? { "aria-pressed": open }
+          : { "aria-haspopup": "dialog" as const, "aria-expanded": open })}
         aria-label={`${label ?? "Notifications"}, ${needsYouText(needsYouCount)}`}
         onClick={(e) => {
           e.stopPropagation();
-          // iOS does not focus a tapped button, and the sheet returns focus to
-          // what was focused when it opened: this trigger, then (#3288).
+          // iOS does not focus a tapped button, and the feed returns focus to
+          // this trigger as it closes (#3288).
           e.currentTarget.focus();
           if (open) setOpen(false);
           else openPanel();
@@ -600,45 +662,49 @@ export function NotificationBell({
         )}
         {needsYouCount > 0 && <span className="attention-badge">{needsYouCount}</span>}
       </button>
-      {sheet && (
-        <BottomSheet
-          open={open}
-          onClose={() => setOpen(false)}
-          label="Notifications"
-          closeLabel="Close notifications"
-          title="Notifications"
-          // Full height (#3461): the section switch and the chips pinned at
-          // the top, the list scrolling under them.
-          sheetClassName="mobile-notif-sheet"
-          // The back gesture closes the sheet (usePhoneBackStack).
-          backStack
-          sheetRef={panelRef}
-          suppressRestoreRef={phoneSuppressRestoreRef}
-          headerActions={readAllButton("mobile-notif-readall")}
-        >
-          {controls}
-          <div className="mobile-notif-scroll">
-            {section === "tasks" ? (
-              taskList
-            ) : (
-              <>
-                {emptySessions}
-                {/* Direct children of the scroller, not wrapped: a wrapper
-                    would confine each sticky header to its own box. */}
-                {items.map((item) => (
-                  <Fragment
-                    key={`${item.type}-${item.sessionId}-${"event" in item ? item.event.seq : 0}`}
-                  >
-                    {renderItem(item)}
-                  </Fragment>
-                ))}
-              </>
-            )}
-          </div>
-        </BottomSheet>
-      )}
+      {page &&
+        open &&
+        pageTarget &&
+        createPortal(
+          <section
+            ref={panelRef}
+            // `.mobile-notif-sheet` carries the feed's touch sizes (sidebar.css).
+            className={`${pageHost === undefined ? `${themeClassName(theme)} ` : ""}phone-inbox-page mobile-notif-sheet`}
+            // Named by its visible heading ("Inbox" in the tab bar).
+            aria-labelledby={pageTitleId}
+            tabIndex={-1}
+            onKeyDown={onPageKeyDown}
+          >
+            <div className="phone-inbox-head">
+              <h2 id={pageTitleId} className="phone-inbox-title">
+                {label ?? "Notifications"}
+              </h2>
+              {readAllButton("mobile-notif-readall")}
+            </div>
+            {controls}
+            <div className="mobile-notif-scroll">
+              {section === "tasks" ? (
+                taskList
+              ) : (
+                <>
+                  {emptySessions}
+                  {/* Direct children of the scroller, not wrapped: a wrapper
+                      would confine each sticky header to its own box. */}
+                  {items.map((item) => (
+                    <Fragment
+                      key={`${item.type}-${item.sessionId}-${"event" in item ? item.event.seq : 0}`}
+                    >
+                      {renderItem(item)}
+                    </Fragment>
+                  ))}
+                </>
+              )}
+            </div>
+          </section>,
+          pageTarget,
+        )}
       {panelPresent &&
-        !sheet &&
+        !page &&
         panelLeft !== null &&
         createPortal(
           <>

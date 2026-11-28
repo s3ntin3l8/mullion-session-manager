@@ -13,6 +13,7 @@ import {
 import type { LayoutTier } from "../lib/layoutTier.js";
 import type { LayoutMode } from "../api/index.js";
 import type { DockviewApi } from "dockview-react";
+import { DockviewApi as RealDockviewApi, DockviewComponent } from "dockview-react";
 import type { DockviewGroupPanel } from "dockview";
 
 // A real EventTarget (not a bare vi.fn() addEventListener no-op) so the
@@ -96,6 +97,8 @@ function stubBreakpointMedia(initialTier: StubWidth) {
 function makeMockApi(options: { activePanel?: unknown } = {}) {
   const maximizedGroupListeners: Array<(e: { group: DockviewGroupPanel }) => void> = [];
   const addGroupListeners: Array<(group: DockviewGroupPanel) => void> = [];
+  const removeGroupListeners: Array<() => void> = [];
+  const removeGroupDispose = vi.fn();
   const groups: Array<{
     id: string;
     header: { hidden: boolean };
@@ -120,6 +123,10 @@ function makeMockApi(options: { activePanel?: unknown } = {}) {
     onDidAddGroup: vi.fn((cb: (group: DockviewGroupPanel) => void) => {
       addGroupListeners.push(cb);
       return { dispose: vi.fn() };
+    }),
+    onDidRemoveGroup: vi.fn((cb: () => void) => {
+      removeGroupListeners.push(cb);
+      return { dispose: removeGroupDispose };
     }),
   };
   return {
@@ -168,6 +175,8 @@ function makeMockApi(options: { activePanel?: unknown } = {}) {
       groups.push(group);
       return group;
     },
+    fireRemoveGroup: () => removeGroupListeners.forEach((cb) => cb()),
+    removeGroupDispose,
     fireMaximizedGroupChange: (group: { header: { hidden: boolean } }) =>
       maximizedGroupListeners.forEach((cb) =>
         cb({ group: group as unknown as DockviewGroupPanel }),
@@ -667,6 +676,154 @@ describe("useLayoutPresentation", () => {
       fireMaximizedGroupChange(group);
 
       expect(group.header.hidden).toBe(false);
+    });
+
+    // Dockview exits the maximize when a group is removed, which on the phone
+    // left the whole grid on screen after the open pane closed.
+    describe("a group removed while one pane is maximized", () => {
+      const tiledPanel = (id: string) => ({
+        id,
+        api: { location: { type: "grid" }, setActive: vi.fn() },
+        group: { api: { location: { type: "grid" } } },
+      });
+
+      // Real dockview, so the premise is pinned too: it does drop the
+      // maximize when a group is removed (three groups, as two leave one).
+      it("keeps one pane on screen in a real three-pane grid when the open one closes", async () => {
+        stubBreakpointMedia("phone");
+        // Dockview asks about the pointer too; the stub knows only the widths.
+        const widths = window.matchMedia;
+        vi.stubGlobal("matchMedia", (query: string) => {
+          try {
+            return widths(query);
+          } catch {
+            return new FakeMediaQueryList(query, false);
+          }
+        });
+        const container = document.createElement("div");
+        document.body.appendChild(container);
+        const component = new DockviewComponent(container, {
+          createComponent: () => ({ element: document.createElement("div"), init: () => {} }),
+        });
+        const real = new RealDockviewApi(component);
+        const first = real.addPanel({ id: "session-1", component: "terminal" });
+        real.addPanel({
+          id: "session-2",
+          component: "terminal",
+          position: { referencePanel: first, direction: "right" },
+        });
+        const open = real.addPanel({
+          id: "session-3",
+          component: "terminal",
+          position: { referencePanel: first, direction: "below" },
+        });
+        expect(real.groups).toHaveLength(3);
+        renderHook(() =>
+          useLayoutPresentation({
+            dockviewApi: real as unknown as DockviewApi,
+            layoutMode: "auto",
+            setLayoutTier: vi.fn(),
+          }),
+        );
+        expect(open.api.isActive).toBe(true);
+        expect(open.group.api.isMaximized()).toBe(true);
+
+        open.api.close();
+        expect(real.groups).toHaveLength(2);
+        // What the phone showed before this fix: every remaining group.
+        expect(real.hasMaximizedGroup()).toBe(false);
+        await Promise.resolve();
+
+        expect(real.hasMaximizedGroup()).toBe(true);
+        expect(real.activePanel?.group.api.isMaximized()).toBe(true);
+        component.dispose();
+        container.remove();
+      });
+
+      it("maximizes the pane dockview made active, on the phone", async () => {
+        stubBreakpointMedia("phone");
+        const next = tiledPanel("session-2");
+        const { api, fireRemoveGroup } = makeMockApi({ activePanel: next });
+        (api as unknown as { panels: unknown[] }).panels = [next];
+        renderHook(() =>
+          useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier: vi.fn() }),
+        );
+        (api.maximizeGroup as ReturnType<typeof vi.fn>).mockClear();
+
+        fireRemoveGroup();
+        // Deferred: dockview has not picked its next active panel yet.
+        expect(api.maximizeGroup).not.toHaveBeenCalled();
+        await Promise.resolve();
+
+        expect(api.maximizeGroup).toHaveBeenCalledWith(next);
+      });
+
+      it("leaves a group that is still maximized alone", async () => {
+        stubBreakpointMedia("phone");
+        const next = tiledPanel("session-2");
+        const { api, fireRemoveGroup } = makeMockApi({ activePanel: next });
+        renderHook(() =>
+          useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier: vi.fn() }),
+        );
+        (api.maximizeGroup as ReturnType<typeof vi.fn>).mockClear();
+        (api.hasMaximizedGroup as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+        fireRemoveGroup();
+        await Promise.resolve();
+
+        expect(api.maximizeGroup).not.toHaveBeenCalled();
+      });
+
+      it.each(["tablet", "desktop", "halves"] as const)("does nothing on %s", async (width) => {
+        stubBreakpointMedia(width);
+        const next = tiledPanel("session-2");
+        const { api, fireRemoveGroup } = makeMockApi({ activePanel: next });
+        renderHook(() =>
+          useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier: vi.fn() }),
+        );
+        (api.maximizeGroup as ReturnType<typeof vi.fn>).mockClear();
+
+        fireRemoveGroup();
+        await Promise.resolve();
+
+        expect(api.maximizeGroup).not.toHaveBeenCalled();
+      });
+
+      it("does nothing once unmounted, and drops its listener", async () => {
+        stubBreakpointMedia("phone");
+        const next = tiledPanel("session-2");
+        const { api, fireRemoveGroup, removeGroupDispose } = makeMockApi({ activePanel: next });
+        const { unmount } = renderHook(() =>
+          useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier: vi.fn() }),
+        );
+        (api.maximizeGroup as ReturnType<typeof vi.fn>).mockClear();
+
+        fireRemoveGroup();
+        unmount();
+        await Promise.resolve();
+
+        expect(api.maximizeGroup).not.toHaveBeenCalled();
+        expect(removeGroupDispose).toHaveBeenCalled();
+      });
+
+      it("logs, rather than throws, when dockview refuses the maximize", async () => {
+        stubBreakpointMedia("phone");
+        const next = tiledPanel("session-2");
+        const { api, fireRemoveGroup } = makeMockApi({ activePanel: next });
+        renderHook(() =>
+          useLayoutPresentation({ dockviewApi: api, layoutMode: "auto", setLayoutTier: vi.fn() }),
+        );
+        (api.maximizeGroup as ReturnType<typeof vi.fn>).mockImplementation(() => {
+          throw new Error("nope");
+        });
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        fireRemoveGroup();
+        await Promise.resolve();
+
+        expect(error).toHaveBeenCalled();
+        error.mockRestore();
+      });
     });
 
     it("hides a newly added group's header via onDidAddGroup while phone", () => {

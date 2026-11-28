@@ -670,20 +670,6 @@ describe("NotificationBell — the trigger's popup semantics (issue #1894)", () 
     await user.click(trigger());
     expect(trigger()).toHaveAttribute("aria-expanded", "false");
   });
-
-  it("opens a dialog on the phone too, where the panel is a bottom sheet", async () => {
-    // The phone renders the same trigger and the same `sheet` panel — a
-    // `ui/BottomSheet.tsx`, which is itself `role="dialog"`. That is what
-    // the trigger's token describes, so it is what the test pins.
-    const user = userEvent.setup();
-    render(<NotificationBell onOpenSession={vi.fn()} onOpenBrowser={vi.fn()} sheet />);
-
-    await user.click(trigger());
-
-    const sheet = await screen.findByRole("dialog");
-    expect(sheet).toHaveAttribute("aria-modal", "true");
-    expect(sheet).toHaveAttribute("aria-label", "Notifications");
-  });
 });
 
 describe("review gate Approve/Deny (issue #178)", () => {
@@ -1310,13 +1296,13 @@ describe("NotificationBell side panel (#3462)", () => {
   });
 });
 
-describe("NotificationBell phone sheet", () => {
+describe("NotificationBell phone page", () => {
   async function openPhoneSheet(
     props: Partial<Parameters<typeof NotificationBell>[0]> = {},
   ): Promise<ReturnType<typeof vi.fn>> {
     const onOpenSession = vi.fn();
     render(
-      <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} sheet {...props} />,
+      <NotificationBell onOpenSession={onOpenSession} onOpenBrowser={vi.fn()} page {...props} />,
     );
     await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
     return onOpenSession;
@@ -1330,16 +1316,20 @@ describe("NotificationBell phone sheet", () => {
     payload: { state: "waiting", prompt: "Run rm -rf /tmp/build?" },
   });
 
-  it("renders a modal bottom sheet, not the desktop popover", async () => {
+  it("renders a page that is not modal, not the desktop popover", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPhoneSheet();
-    const dialog = screen.getByRole("dialog", { name: "Notifications" });
-    expect(dialog).toHaveClass("mobile-notif-sheet");
-    expect(dialog).toHaveAttribute("aria-modal", "true");
+    const page = screen.getByRole("region", { name: "Notifications" });
+    // The feed's touch sizes hang off this class (sidebar.css).
+    expect(page).toHaveClass("phone-inbox-page", "mobile-notif-sheet");
+    expect(page).not.toHaveAttribute("aria-modal");
+    expect(document.querySelector(".mobile-session-backdrop")).toBeNull();
     expect(document.querySelector(".notif-panel")).toBeNull();
+    // Focus moves to the page, so Escape and a screen reader start there.
+    expect(document.activeElement).toBe(page);
   });
 
-  it("keeps the desktop popover when `sheet` is not set", async () => {
+  it("keeps the desktop popover when `page` is not set", async () => {
     events = { 1: [makeEvent({ seq: 1 })] };
     await openPanel();
     expect(document.querySelector(".notif-panel")).not.toBeNull();
@@ -1386,7 +1376,7 @@ describe("NotificationBell phone sheet", () => {
     expect(screen.getByText("Nothing needs you right now")).toBeInTheDocument();
   });
 
-  it("tap opens the session's TERMINAL, marks it read, and closes the sheet", async () => {
+  it("tap opens the session's TERMINAL, marks it read, and closes the page", async () => {
     events = {
       1: [makeEvent({ seq: 3 }), makeEvent({ seq: 7, kind: "title_change", payload: {} })],
     };
@@ -1399,7 +1389,7 @@ describe("NotificationBell phone sheet", () => {
     expect(markEventSeen).toHaveBeenCalledWith(1, 7);
     // Issue #1430 — tapping the row is an explicit read action.
     expect(ackAttention).toHaveBeenCalledWith(1);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
   });
 
   it("offers the timeline as its own action", async () => {
@@ -1409,7 +1399,7 @@ describe("NotificationBell phone sheet", () => {
     await userEvent.click(screen.getByRole("button", { name: "Timeline" }));
     expect(onOpenTimeline).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }));
     expect(onOpenSession).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
   });
 
   it("shows no Timeline action when the caller has no timeline", async () => {
@@ -1450,7 +1440,7 @@ describe("NotificationBell phone sheet", () => {
     expect(ackAttention).not.toHaveBeenCalledWith(1);
   });
 
-  it("approves a pending gate inline from the sheet", async () => {
+  it("approves a pending gate inline from the page", async () => {
     sessions = [
       makeSession({
         gateState: "waiting",
@@ -1464,21 +1454,6 @@ describe("NotificationBell phone sheet", () => {
     await openPhoneSheet();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(resolveReviewGate).toHaveBeenCalledWith(1, "g-1", "approved");
-  });
-
-  it("closes from the backdrop, the close button and Escape", async () => {
-    events = { 1: [makeEvent({ seq: 1 })] };
-    await openPhoneSheet();
-    await userEvent.click(document.querySelector(".mobile-session-backdrop") as HTMLElement);
-    expect(screen.queryByRole("dialog")).toBeNull();
-
-    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Close notifications" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-
-    await userEvent.click(screen.getByRole("button", { name: /^Notifications,/ }));
-    await userEvent.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("does not offer a Needs you count/filter for a session the feed has nothing to list for", async () => {
@@ -1514,11 +1489,12 @@ describe("NotificationBell phone sheet", () => {
       vi.restoreAllMocks();
     });
 
-    it("closes the phone sheet", async () => {
+    it("closes the phone page", async () => {
       await openPhoneSheet();
+      expect(screen.getByRole("region", { name: "Notifications" })).toBeInTheDocument();
       expect(pushState).toHaveBeenCalledTimes(1);
       act(() => void window.dispatchEvent(new PopStateEvent("popstate")));
-      expect(screen.queryByRole("dialog", { name: "Notifications" })).toBeNull();
+      expect(screen.queryByRole("region", { name: "Notifications" })).toBeNull();
     });
 
     it("is never touched by the desktop popover", async () => {
